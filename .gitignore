@@ -1,0 +1,20 @@
+/.idea
+/.worktrees
+/docs
+/plans
+/wavs
+__pycache__
+/.pytest_cache/
+/.pytest_tmp/
+/.omo
+/run.cmd
+/.env
+/.env.*
+/cartesia_api_key.json
+/cartesia_secret.json
+/dist/
+/build/
+/*.spec
+# Claude's data directory
+/.claude/
+/.venv
