@@ -9,7 +9,7 @@ import pytest
 import requests
 
 # Stub out external dependencies that won't be available on CI.
-# Must happen before importing tts_backends.cartesia_connect below.
+# Must happen before importing cartesia_connect below.
 from tests._stubs import CARTESIA_NATIVE_DEPS, install_module_stubs
 
 install_module_stubs(CARTESIA_NATIVE_DEPS)
@@ -21,9 +21,8 @@ except ImportError:
     class Response:
         pass
 
-from tts_backends.cartesia_connect import (
-    VoiceLabelMaps,
-    build_voice_label_maps,
+from easy_tts.tts.labels import VoiceLabelMaps, build_voice_label_maps
+from easy_tts.tts.cartesia import (
     _ensure_cartesia_config,
     _voice_specifier,
     _generation_config,
@@ -243,8 +242,8 @@ class TestLoggingTextRedactionExposure:
 
     def test_bytes_tts_debug_log_redacts_raw_text(self, caplog, monkeypatch):
         """Test that debug logs do NOT contain full user text, only length metadata."""
-        from tts_backends.cartesia_connect import CartesiaBytesTTS
-        from tts_backends.tts_engine import TTSAudioPlayer
+        from easy_tts.tts.cartesia import CartesiaBytesTTS
+        from easy_tts.tts.engine import TTSAudioPlayer
 
         mock_player = Mock(spec=TTSAudioPlayer)
         tts = CartesiaBytesTTS(
@@ -280,8 +279,8 @@ class TestLoggingTextRedactionExposure:
 
     def test_realtime_tts_debug_log_redacts_raw_text(self, caplog):
         """Test that debug logs do NOT contain full user text, only length and context_id metadata."""
-        from tts_backends.cartesia_connect import CartesiaRealtimeTTS
-        from tts_backends.tts_engine import TTSAudioPlayer
+        from easy_tts.tts.cartesia import CartesiaRealtimeTTS
+        from easy_tts.tts.engine import TTSAudioPlayer
 
         mock_player = Mock(spec=TTSAudioPlayer)
         tts = CartesiaRealtimeTTS(
@@ -343,8 +342,8 @@ class _FakeConnectionManager:
 
 
 def _make_realtime_tts():
-    from tts_backends.cartesia_connect import CartesiaRealtimeTTS
-    from tts_backends.tts_engine import TTSAudioPlayer
+    from easy_tts.tts.cartesia import CartesiaRealtimeTTS
+    from easy_tts.tts.engine import TTSAudioPlayer
 
     mock_player = Mock(spec=TTSAudioPlayer)
     mock_player.open_stream.return_value = True
@@ -455,7 +454,7 @@ class TestSharedRequestArgs:
     """Shared payload construction via CartesiaTTS._build_request_args."""
 
     def _make_bytes(self, **overrides):
-        from tts_backends.cartesia_connect import CartesiaBytesTTS
+        from easy_tts.tts.cartesia import CartesiaBytesTTS
 
         mock_player = Mock()
         kwargs = dict(api_key="fake-key", voice_id="voice-1", volume=0.5)
@@ -463,7 +462,7 @@ class TestSharedRequestArgs:
         return CartesiaBytesTTS(audio_player=mock_player, **kwargs)
 
     def _make_realtime(self, **overrides):
-        from tts_backends.cartesia_connect import CartesiaRealtimeTTS
+        from easy_tts.tts.cartesia import CartesiaRealtimeTTS
 
         mock_player = Mock()
         kwargs = dict(api_key="fake-key", voice_id="voice-1", volume=0.5)
@@ -531,7 +530,7 @@ class TestSharedRequestArgs:
             captured["timeout"] = timeout
             return _Resp()
 
-        monkeypatch.setattr("tts_backends.cartesia_connect.requests.post", _fake_post)
+        monkeypatch.setattr("easy_tts.tts.cartesia.requests.post", _fake_post)
 
         bytes_tts = self._make_bytes()
         bytes_tts.generate("hello world")
@@ -545,7 +544,7 @@ class TestSharedRequestArgs:
 
     def test_realtime_context_kwargs_use_shared_args(self):
         """CartesiaRealtimeTTS._send_and_play_once passes shared args + context_id to connection.context()."""
-        from tts_backends.cartesia_connect import CartesiaRealtimeTTS
+        from easy_tts.tts.cartesia import CartesiaRealtimeTTS
 
         mock_player = Mock()
         mock_player.open_stream.return_value = True

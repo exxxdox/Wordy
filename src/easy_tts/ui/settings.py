@@ -12,18 +12,18 @@ from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, QSize, Qt
 from PySide6.QtGui import QColor, QCloseEvent, QIcon, QKeyEvent, QMouseEvent, QPainter, QPainterPath, QPaintEvent, QPen
 from PySide6.QtWidgets import QApplication, QCheckBox, QComboBox, QDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QScrollArea, QSlider, QStyle, QTabWidget, QVBoxLayout, QWidget
 
-import secret_store
-from app_config import LOG_LEVELS, MAX_OVERLAY_OPACITY, MAX_VOLUME, MIN_OVERLAY_OPACITY, MIN_VOLUME, OVERLAY_OPACITY_STEP, TTS_BACKENDS, VOLUME_STEP
-from audio_identity import normalize_identity
-from tts_backends.voice_labels import VoiceLabelMaps, build_voice_label_maps
-from ui_theme import ACCENT_HOVER, ACCENT_PRESSED, BUTTON_ACTIVE_BG, BUTTON_BG, BUTTON_GHOST_BORDER, ELEVATED_BG, GREEN_ACCENT, SCROLLBAR_HANDLE, SCROLLBAR_HANDLE_HOVER, SEPARATOR_COLOR, SURFACE_BG, TEXT_ERROR, TEXT_MUTED, TEXT_PRIMARY, TEXT_WARNING, WINDOW_BG
-from window_focus import activate_window, center_window
+import easy_tts.secret
+from easy_tts.config import LOG_LEVELS, MAX_OVERLAY_OPACITY, MAX_VOLUME, MIN_OVERLAY_OPACITY, MIN_VOLUME, OVERLAY_OPACITY_STEP, TTS_BACKENDS, VOLUME_STEP
+from easy_tts.identity import normalize_identity
+from easy_tts.tts.labels import VoiceLabelMaps, build_voice_label_maps
+from easy_tts.ui.theme import ACCENT_HOVER, ACCENT_PRESSED, BUTTON_ACTIVE_BG, BUTTON_BG, BUTTON_GHOST_BORDER, ELEVATED_BG, GREEN_ACCENT, SCROLLBAR_HANDLE, SCROLLBAR_HANDLE_HOVER, SEPARATOR_COLOR, SURFACE_BG, TEXT_ERROR, TEXT_MUTED, TEXT_PRIMARY, TEXT_WARNING, WINDOW_BG
+from easy_tts.window import activate_window, center_window
 
 INPUT_TEXT_COLOR = GREEN_ACCENT
 SYSTEM_DEFAULT_AUDIO_OUTPUT_LABEL = "系统默认"
-DIALOG_WIDTH = 560
+DIALOG_WIDTH = 720
 DIALOG_HEIGHT = 580
-DIALOG_MIN_WIDTH = 520
+DIALOG_MIN_WIDTH = 680
 DIALOG_MIN_HEIGHT = 580
 CONTENT_MARGIN = 20
 SECTION_GAP = 12
@@ -55,6 +55,16 @@ class SettingsState:
     audio_output_devices_error: Exception | None = None
     cartesia_api_key_saved: bool = False
     log_level: str = "INFO"
+    # 音频路由状态
+    audio_routing_enabled: bool = False
+    input_devices: list[dict[str, object]] = field(default_factory=list)
+    mic_input_device: str | None = None
+    bridge_source_device: str | None = None
+    virtual_output_device: str | None = None
+    vb_cable_installed: bool = False
+    mic_gain: float = 1.0
+    bridge_gain: float = 1.0
+    tts_gain: float = 1.0
 
 
 @dataclass
@@ -72,6 +82,14 @@ class PendingSettings:
     cartesia_api_key_action: str = "unchanged"
     cartesia_api_key_value: str | None = None
     log_level: str = "INFO"
+    # 音频路由待应用配置
+    audio_routing_enabled: bool = False
+    mic_input_device: str | None = None
+    bridge_source_device: str | None = None
+    virtual_output_device: str | None = None
+    mic_gain: float = 1.0
+    bridge_gain: float = 1.0
+    tts_gain: float = 1.0
 
 
 class _SettingsDialog(QDialog):
@@ -222,12 +240,14 @@ class CheckmarkCheckBox(QCheckBox):
 class SettingsWindow:
     """应用设置窗口。"""
 
-    def __init__(self, root, state: SettingsState, on_record_hotkey: Callable[[], None], on_refresh_voices: Callable[[], None], on_apply: Callable[["SettingsWindow"], None], on_close: Callable[[], None]):
+    def __init__(self, root, state: SettingsState, on_record_hotkey: Callable[[], None], on_refresh_voices: Callable[[], None], on_apply: Callable[["SettingsWindow"], None], on_close: Callable[[], None], on_audio_route_test: Callable[[], str | None] | None = None, on_play_route_test: Callable[[], bool] | None = None):
         self.root = root
         self.on_record_hotkey = on_record_hotkey
         self.on_refresh_voices = on_refresh_voices
         self.on_apply = on_apply
         self.on_close = on_close
+        self.on_audio_route_test = on_audio_route_test
+        self.on_play_route_test = on_play_route_test
         self.pending_hotkey = (state.hotkey, state.hotkey_name)
         self.pending_voice_id = state.voice_id
         self.pending_voice_name = state.voice_name
@@ -240,6 +260,14 @@ class SettingsWindow:
         self.pending_cartesia_api_key_action = "unchanged"
         self.pending_cartesia_api_key_value: str | None = None
         self.pending_log_level = state.log_level
+        # 音频路由待应用配置
+        self.pending_audio_routing_enabled = state.audio_routing_enabled
+        self.pending_mic_input_device = state.mic_input_device
+        self.pending_bridge_source_device = state.bridge_source_device
+        self.pending_virtual_output_device = state.virtual_output_device
+        self.pending_mic_gain = state.mic_gain
+        self.pending_bridge_gain = state.bridge_gain
+        self.pending_tts_gain = state.tts_gain
         self.cartesia_api_key_saved = state.cartesia_api_key_saved
         self._audio_output_label_to_identity: dict[str, AudioOutputIdentity] = {}
         self.voice_label_to_id: dict[str, str] = {}
@@ -266,6 +294,26 @@ class SettingsWindow:
         self.opacity_value_label: QLabel = QLabel()
         self.opacity_slider: QSlider = NoWheelSlider(Qt.Orientation.Horizontal)
         self.fixed_center_check: QCheckBox = QCheckBox()
+        # 音频路由 UI
+        self.audio_route_enabled_check: QCheckBox = QCheckBox()
+        self.mic_input_combo: QComboBox = NoWheelComboBox()
+        self.bridge_source_combo: QComboBox = NoWheelComboBox()
+        self.virtual_output_combo: QComboBox = NoWheelComboBox()
+        self.mic_gain_slider: QSlider = NoWheelSlider(Qt.Orientation.Horizontal)
+        self.mic_gain_value_label: QLabel = QLabel()
+        self.bridge_gain_slider: QSlider = NoWheelSlider(Qt.Orientation.Horizontal)
+        self.bridge_gain_value_label: QLabel = QLabel()
+        self.tts_gain_slider: QSlider = NoWheelSlider(Qt.Orientation.Horizontal)
+        self.tts_gain_value_label: QLabel = QLabel()
+        self.audio_route_status_label: QLabel = QLabel()
+        self.vb_cable_install_button: QPushButton = QPushButton()
+        # 音频路由测试控件
+        self.route_test_button: QPushButton = QPushButton()
+        self.route_test_play_button: QPushButton = QPushButton()
+        self.route_test_status_label: QLabel = QLabel()
+        self._test_recording_path: str | None = None
+        self._input_device_names: list[str] = []
+        self._output_device_names: list[str] = []
 
         parent = root if isinstance(root, QWidget) else None
         self.window: _SettingsDialog | None = _SettingsDialog(self, parent)
@@ -322,7 +370,24 @@ class SettingsWindow:
         self.pending_fixed_center = self.fixed_center_check.isChecked()
         self._on_audio_output_selected(self.audio_output_combo.currentText())
         self._sync_pending_cartesia_api_key()
-        return PendingSettings(hotkey, hotkey_name, self.pending_voice_id, self.pending_voice_name, self.pending_volume, self.pending_overlay_opacity, self.pending_tts_backend, self.pending_fixed_center, self.pending_audio_output_device_name, self.pending_audio_output_device_identity, self.pending_cartesia_api_key_action, self.pending_cartesia_api_key_value, self.pending_log_level)
+        return PendingSettings(
+            hotkey, hotkey_name,
+            self.pending_voice_id, self.pending_voice_name,
+            self.pending_volume, self.pending_overlay_opacity,
+            self.pending_tts_backend, self.pending_fixed_center,
+            self.pending_audio_output_device_name,
+            self.pending_audio_output_device_identity,
+            self.pending_cartesia_api_key_action,
+            self.pending_cartesia_api_key_value,
+            self.pending_log_level,
+            audio_routing_enabled=self.pending_audio_routing_enabled,
+            mic_input_device=self.pending_mic_input_device,
+            bridge_source_device=self.pending_bridge_source_device,
+            virtual_output_device=self.pending_virtual_output_device,
+            mic_gain=self.pending_mic_gain,
+            bridge_gain=self.pending_bridge_gain,
+            tts_gain=self.pending_tts_gain,
+        )
 
     def set_recording_started(self) -> None:
         """更新为快捷键录制中状态。"""
@@ -435,6 +500,10 @@ class SettingsWindow:
         self._add_inner_gap(local_layout)
         self._build_position_section(local_layout)
         local_layout.addStretch(1)
+
+        route_layout = self._create_tab_page(tab_widget, "音频路由")
+        self._build_audio_route_section(route_layout, state)
+        route_layout.addStretch(1)
 
         log_layout = self._create_tab_page(tab_widget, "日志显示等级")
         self._build_log_level_section(log_layout)
@@ -587,6 +656,197 @@ class SettingsWindow:
         section.addWidget(self.fixed_center_check)
         section.addWidget(self._hint_label("取消勾选后，可拖动输入窗口；松开鼠标后自动记住位置。", TEXT_MUTED))
 
+    def _build_audio_route_section(self, parent_layout: QVBoxLayout, state: SettingsState) -> None:
+        section = self._create_section(parent_layout)
+        section.addWidget(self._section_title("音频路由"))
+
+        # VB-CABLE 状态
+        if state.vb_cable_installed:
+            self.audio_route_status_label = self._hint_label(
+                "VB-CABLE 虚拟驱动已安装。可将你的麦克风声音和 TTS 语音一起输出给 Discord、游戏等应用。",
+                INPUT_TEXT_COLOR,
+            )
+        else:
+            self.audio_route_status_label = self._hint_label(
+                "需要先安装 VB-CABLE 虚拟音频驱动，才能让其他应用听到你的麦克风声音和 TTS 语音。",
+                TEXT_WARNING,
+            )
+        section.addWidget(self.audio_route_status_label)
+
+        if not state.vb_cable_installed:
+            self.vb_cable_install_button = QPushButton("下载并安装 VB-CABLE")
+            self.vb_cable_install_button.clicked.connect(self._on_open_vb_cable_download)
+            section.addWidget(self.vb_cable_install_button)
+            self._add_inner_gap(parent_layout)
+
+        # 启用开关
+        self.audio_route_enabled_check = CheckmarkCheckBox("启用音频路由")
+        self.audio_route_enabled_check.setChecked(state.audio_routing_enabled)
+        self.audio_route_enabled_check.stateChanged.connect(self._on_audio_route_enabled_changed)
+        section.addWidget(self.audio_route_enabled_check)
+        section.addWidget(self._hint_label(
+            "开启后，你在 Discord / 游戏 / Zoom 里选择“CABLE Output”作为麦克风，"
+            "对方就能同时听到你说话的声音和 TTS 播放的语音。（不影响你自己耳机里的声音）",
+            TEXT_MUTED,
+        ))
+
+        # 麦克风输入选择
+        section.addWidget(self._section_title("麦克风输入"))
+        section.addWidget(self._hint_label("选择你平时说话用的麦克风。", TEXT_MUTED))
+        self.mic_input_combo = NoWheelComboBox()
+        self.mic_input_combo.setSizeAdjustPolicy(QComboBox.AdjustToContentsOnFirstShow)
+        self.mic_input_combo.setMinimumContentsLength(24)
+        self._populate_input_devices(state.input_devices, state.mic_input_device)
+        self.mic_input_combo.currentTextChanged.connect(self._on_mic_input_selected)
+        section.addWidget(self.mic_input_combo)
+
+        # 麦克风增益
+        mic_gain_header = QHBoxLayout()
+        mic_gain_header.setContentsMargins(0, 0, 0, 0)
+        mic_gain_header.addWidget(self._section_title("麦克风音量"))
+        self.mic_gain_value_label = self._body_label(f"{state.mic_gain:.2f}x", INPUT_TEXT_COLOR)
+        mic_gain_header.addWidget(self.mic_gain_value_label, 0, Qt.AlignmentFlag.AlignRight)
+        section.addLayout(mic_gain_header)
+        self.mic_gain_slider = NoWheelSlider(Qt.Orientation.Horizontal)
+        self.mic_gain_slider.setRange(0, 40)
+        self.mic_gain_slider.setValue(int(state.mic_gain * 20))
+        self.mic_gain_slider.valueChanged.connect(self._on_mic_gain_changed)
+        section.addWidget(self.mic_gain_slider)
+
+        # 桥接源选择
+        section.addWidget(self._section_title("额外混入声音（可选）"))
+        section.addWidget(self._hint_label(
+            "如果想让对方同时听到电脑里的游戏、音乐或其他声音，选择对应的输入设备。"
+            "一般不需要开启。",
+            TEXT_MUTED,
+        ))
+        self.bridge_source_combo = NoWheelComboBox()
+        self.bridge_source_combo.setSizeAdjustPolicy(QComboBox.AdjustToContentsOnFirstShow)
+        self.bridge_source_combo.setMinimumContentsLength(24)
+        self._populate_input_devices(state.input_devices, state.bridge_source_device, include_none=True)
+        self.bridge_source_combo.currentTextChanged.connect(self._on_bridge_source_selected)
+        section.addWidget(self.bridge_source_combo)
+
+        # 桥接增益
+        bridge_gain_header = QHBoxLayout()
+        bridge_gain_header.setContentsMargins(0, 0, 0, 0)
+        bridge_gain_header.addWidget(self._section_title("额外声音音量"))
+        self.bridge_gain_value_label = self._body_label(f"{state.bridge_gain:.2f}x", INPUT_TEXT_COLOR)
+        bridge_gain_header.addWidget(self.bridge_gain_value_label, 0, Qt.AlignmentFlag.AlignRight)
+        section.addLayout(bridge_gain_header)
+        self.bridge_gain_slider = NoWheelSlider(Qt.Orientation.Horizontal)
+        self.bridge_gain_slider.setRange(0, 40)
+        self.bridge_gain_slider.setValue(int(state.bridge_gain * 20))
+        self.bridge_gain_slider.valueChanged.connect(self._on_bridge_gain_changed)
+        section.addWidget(self.bridge_gain_slider)
+
+        # TTS 增益
+        tts_gain_header = QHBoxLayout()
+        tts_gain_header.setContentsMargins(0, 0, 0, 0)
+        tts_gain_header.addWidget(self._section_title("TTS 语音音量"))
+        self.tts_gain_value_label = self._body_label(f"{state.tts_gain:.2f}x", INPUT_TEXT_COLOR)
+        tts_gain_header.addWidget(self.tts_gain_value_label, 0, Qt.AlignmentFlag.AlignRight)
+        section.addLayout(tts_gain_header)
+        self.tts_gain_slider = NoWheelSlider(Qt.Orientation.Horizontal)
+        self.tts_gain_slider.setRange(0, 40)
+        self.tts_gain_slider.setValue(int(state.tts_gain * 20))
+        self.tts_gain_slider.valueChanged.connect(self._on_tts_gain_changed)
+        section.addWidget(self.tts_gain_slider)
+
+        # 测试区域
+        section.addWidget(self._section_title("效果测试"))
+        section.addWidget(self._hint_label(
+            "点击“开始测试”将录制 5 秒钟，期间会播放一段 TTS 语音。"
+            "录制完成后点击“播放返听”，可听到对方实际接收到的混合效果。",
+            TEXT_MUTED,
+        ))
+        test_button_row = QHBoxLayout()
+        test_button_row.setContentsMargins(0, 0, 0, 0)
+        test_button_row.setSpacing(INLINE_GAP)
+        self.route_test_button = QPushButton("开始测试")
+        self.route_test_button.clicked.connect(self._on_route_test_clicked)
+        test_button_row.addWidget(self.route_test_button, 0, Qt.AlignmentFlag.AlignLeft)
+        self.route_test_play_button = QPushButton("播放返听")
+        self.route_test_play_button.setEnabled(False)
+        self.route_test_play_button.clicked.connect(self._on_route_test_play_clicked)
+        test_button_row.addWidget(self.route_test_play_button, 0, Qt.AlignmentFlag.AlignLeft)
+        test_button_row.addStretch(1)
+        section.addLayout(test_button_row)
+        self.route_test_status_label = self._hint_label("", TEXT_MUTED)
+        section.addWidget(self.route_test_status_label)
+
+    def _on_route_test_clicked(self, _checked: bool = False) -> None:
+        """点击开始测试按钮。"""
+        if self.on_audio_route_test is None:
+            self.route_test_status_label.setText("当前无法启动测试")
+            return
+        self.route_test_button.setEnabled(False)
+        self.route_test_play_button.setEnabled(False)
+        self.route_test_status_label.setText("正在录制 5 秒，请对着麦克风说话...")
+        result = self.on_audio_route_test()
+        if result is None:
+            self.route_test_button.setEnabled(True)
+            self.route_test_status_label.setText("测试启动失败，请确保音频路由已启用")
+
+    def _on_route_test_play_clicked(self, _checked: bool = False) -> None:
+        """点击播放返听按钮。"""
+        if self.on_play_route_test is not None:
+            success = self.on_play_route_test()
+            if success:
+                self.route_test_status_label.setText("正在播放返听...")
+            else:
+                self.route_test_status_label.setText("播放失败")
+
+    def set_test_recording_available(self, filepath: str) -> None:
+        """通知测试录制已完成，启用播放按钮。"""
+        self._test_recording_path = filepath
+        self.route_test_button.setEnabled(True)
+        self.route_test_play_button.setEnabled(True)
+        self.route_test_status_label.setText("录制完成，点击“播放返听”检查效果")
+
+    def _populate_input_devices(self, devices: list[dict[str, object]], selected: str | None, include_none: bool = False) -> None:
+        combo = self.mic_input_combo if not include_none else self.bridge_source_combo
+        combo.blockSignals(True)
+        combo.clear()
+        if include_none:
+            combo.addItem("不启用")
+        names: list[str] = []
+        for dev in devices:
+            name = dev.get("name") if isinstance(dev, dict) else str(dev)
+            if isinstance(name, str) and name:
+                names.append(name)
+                combo.addItem(name)
+        if selected and selected in names:
+            combo.setCurrentText(selected)
+        elif include_none:
+            combo.setCurrentText("不启用")
+        combo.blockSignals(False)
+
+    def _on_open_vb_cable_download(self, _checked: bool = False) -> None:
+        from easy_tts.audio.driver import VBCableDriverManager
+        VBCableDriverManager.open_download_page()
+
+    def _on_audio_route_enabled_changed(self, state: int) -> None:
+        self.pending_audio_routing_enabled = state == Qt.CheckState.Checked.value
+
+    def _on_mic_input_selected(self, text: str) -> None:
+        self.pending_mic_input_device = text if text else None
+
+    def _on_bridge_source_selected(self, text: str) -> None:
+        self.pending_bridge_source_device = None if text == "不启用" else text
+
+    def _on_mic_gain_changed(self, value: int) -> None:
+        self.pending_mic_gain = round(value / 20.0, 2)
+        self.mic_gain_value_label.setText(f"{self.pending_mic_gain:.2f}x")
+
+    def _on_bridge_gain_changed(self, value: int) -> None:
+        self.pending_bridge_gain = round(value / 20.0, 2)
+        self.bridge_gain_value_label.setText(f"{self.pending_bridge_gain:.2f}x")
+
+    def _on_tts_gain_changed(self, value: int) -> None:
+        self.pending_tts_gain = round(value / 20.0, 2)
+        self.tts_gain_value_label.setText(f"{self.pending_tts_gain:.2f}x")
+
     def _build_log_level_section(self, parent_layout: QVBoxLayout) -> None:
         section = self._create_section(parent_layout)
         section.addWidget(self._section_title("显示等级"))
@@ -622,15 +882,6 @@ class SettingsWindow:
         apply_button.clicked.connect(lambda _checked=False: self.on_apply(self))
         button_row.addWidget(apply_button)
         parent_layout.addLayout(button_row)
-
-    def _add_separator(self, parent_layout: QVBoxLayout) -> None:
-        separator = QFrame()
-        separator.setObjectName("separator")
-        separator.setFrameShape(QFrame.Shape.HLine)
-        separator.setFixedHeight(1)
-        parent_layout.addSpacing(SECTION_GAP)
-        parent_layout.addWidget(separator)
-        parent_layout.addSpacing(SECTION_GAP)
 
     def _add_inner_gap(self, parent_layout: QVBoxLayout) -> None:
         parent_layout.addSpacing(SECTION_GAP)
@@ -744,7 +995,7 @@ class SettingsWindow:
         if self.pending_cartesia_api_key_action == "clear":
             self.pending_cartesia_api_key_value = None
             return
-        normalized = secret_store.normalize_api_key_input(self.api_key_input.text())
+        normalized = easy_tts.secret.normalize_api_key_input(self.api_key_input.text())
         if normalized:
             self.pending_cartesia_api_key_action = "set"
             self.pending_cartesia_api_key_value = normalized

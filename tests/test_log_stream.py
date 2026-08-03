@@ -21,7 +21,7 @@ def formatter() -> logging.Formatter:
 
 
 def test_handler_appends_formatted_messages_in_order(formatter: logging.Formatter) -> None:
-    from log_stream import LogRingBuffer, RingBufferQtHandler
+    from easy_tts.log import LogRingBuffer, RingBufferQtHandler
 
     buffer = LogRingBuffer(max_size=10)
     handler = RingBufferQtHandler(buffer=buffer)
@@ -43,7 +43,7 @@ def test_handler_appends_formatted_messages_in_order(formatter: logging.Formatte
 
 
 def test_buffer_caps_at_max_size_and_drops_oldest(formatter: logging.Formatter) -> None:
-    from log_stream import LogRingBuffer, RingBufferQtHandler
+    from easy_tts.log import LogRingBuffer, RingBufferQtHandler
 
     buffer = LogRingBuffer(max_size=3)
     handler = RingBufferQtHandler(buffer=buffer)
@@ -74,7 +74,7 @@ def test_qt_broadcaster_signal_emits_formatted_messages(formatter: logging.Forma
     _ = pytest.importorskip("PySide6")
     from PySide6.QtCore import QCoreApplication
 
-    from log_stream import LogRingBuffer, RingBufferQtHandler, install_log_stream
+    from easy_tts.log import LogRingBuffer, RingBufferQtHandler, install_log_stream
 
     app = QCoreApplication.instance() or QCoreApplication([])
     _ = app
@@ -102,7 +102,7 @@ def test_worker_thread_logging_is_marshalled_safely_after_process_events(formatt
     _ = pytest.importorskip("PySide6")
     from PySide6.QtCore import QCoreApplication
 
-    from log_stream import LogRingBuffer, RingBufferQtHandler, install_log_stream
+    from easy_tts.log import LogRingBuffer, RingBufferQtHandler, install_log_stream
 
     app = QCoreApplication.instance() or QCoreApplication([])
     _ = app
@@ -137,7 +137,7 @@ def test_shutdown_log_stream_removes_handler_and_clears_current_stream() -> None
     _ = pytest.importorskip("PySide6")
     from PySide6.QtCore import QCoreApplication
 
-    from log_stream import (
+    from easy_tts.log import (
         LogRingBuffer,
         RingBufferQtHandler,
         current_log_stream,
@@ -184,7 +184,7 @@ def test_shutdown_log_stream_removes_root_logger_handler() -> None:
     _ = pytest.importorskip("PySide6")
     from PySide6.QtCore import QCoreApplication
 
-    from log_stream import (
+    from easy_tts.log import (
         LogRingBuffer,
         RingBufferQtHandler,
         current_log_stream,
@@ -220,8 +220,8 @@ def test_shutdown_log_stream_removes_root_logger_handler() -> None:
 def test_shutdown_log_stream_is_safe_when_no_pipeline_installed() -> None:
     """shutdown_log_stream must be a safe no-op when no pipeline has been
     installed (e.g. tests that import log_stream but never call install)."""
-    from log_stream import current_log_stream, shutdown_log_stream
-    import log_stream as log_stream_mod
+    from easy_tts.log import current_log_stream, shutdown_log_stream
+    import easy_tts.log as log_stream_mod
 
     log_stream_mod._current_log_stream = None
     shutdown_log_stream()

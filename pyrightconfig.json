@@ -1,12 +1,13 @@
 {
-  "include": ["."],
-  "exclude": ["**/__pycache__", ".venv", ".pytest_cache", ".idea", ".omo", "wavs", "tests"],
-  "extraPaths": ["."],
+  "include": ["main.py", "src"],
+  "exclude": ["**/__pycache__", ".venv", ".pytest_cache", ".idea", ".omo", "wavs", "tests", "**/node_modules", "**/.*"],
+  "extraPaths": ["src"],
   "venvPath": ".",
   "venv": ".venv",
   "pythonVersion": "3.12",
   "pythonPlatform": "Windows",
   "typeCheckingMode": "standard",
+  "reportMissingImports": "none",
   "reportMissingTypeStubs": "none",
   "reportMissingModuleSource": "none",
   "useLibraryCodeForTypes": true

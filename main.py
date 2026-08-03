@@ -13,24 +13,25 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from queue import SimpleQueue
-from typing import Any
+from typing import cast
 
-from app_config import (
-    load_audio_output_device,
-    load_audio_output_device_name,
-    load_log_level_config,
-    load_tts_backend_config,
-    load_voice_config,
-    load_volume_config,
-)
-from audio_player import AudioPlayer
-from input_overlay import InputOverlay
-from log_stream import install_log_stream
-import secret_store
-from tray_app import TrayApp, TrayController
-from tts_backends.constants import TTS_BACKEND_CARTESIA_BYTES, TTS_BACKEND_CARTESIA_REALTIME
-from tts_backends.tts_backend_registry import create_tts_engine, resolve_tts_backend
-from tts_backends.tts_engine import BackendTTSEngine
+from pathlib import Path
+from tempfile import gettempdir
+
+import keyboard
+
+from easy_tts.config import AppSettings
+from easy_tts.audio.player import AudioPlayer, OutputDeviceSelection
+from easy_tts.audio.router import AudioRouter
+from easy_tts.audio.driver import VBCableDriverManager
+from easy_tts.ui.overlay import InputOverlay
+from easy_tts.log import install_log_stream
+import easy_tts.secret
+from easy_tts.secret import KeyringUnavailableError
+from easy_tts.ui.tray import TrayApp, TrayController
+from easy_tts.tts.constants import TTS_BACKEND_CARTESIA_BYTES, TTS_BACKEND_CARTESIA_REALTIME
+from easy_tts.tts.registry import create_tts_engine, resolve_tts_backend
+from easy_tts.tts.engine import BackendTTSEngine
 
 
 logger = logging.getLogger(__name__)
@@ -44,8 +45,8 @@ _JANITOR_JOIN_TIMEOUT_SECONDS = 30.0
 class _RetiredWorker:
     """A retired TTS worker bundle awaiting deferred cleanup by the janitor thread."""
 
-    executor: Any
-    engine: Any
+    executor: ThreadPoolExecutor
+    engine: BackendTTSEngine
 
 
 @dataclass
@@ -56,7 +57,7 @@ class _TTSWorker:
     engine: BackendTTSEngine
 
 
-def _janitor_loop_inner(janitor_queue: Any) -> None:
+def _janitor_loop_inner(janitor_queue: SimpleQueue) -> None:
     """Drain retired TTS workers FIFO, shutting down each executor before closing its engine.
 
     Exits on a ``None`` sentinel. Exceptions in ``executor.shutdown`` or
@@ -82,7 +83,7 @@ def _janitor_loop_inner(janitor_queue: Any) -> None:
 
 def configure_logging() -> None:
     """配置应用日志输出。"""
-    log_level = getattr(logging, load_log_level_config(), logging.INFO)
+    log_level = getattr(logging, AppSettings.load().log_level, logging.INFO)
     logging.basicConfig(
         level=log_level,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
@@ -96,15 +97,22 @@ class WavTransApp:
     """常驻热键输入 → TTS 生成 → 播放，新提交不主动中断上一段播放。"""
 
     def __init__(self, tts_backend: str | None = None):
+        # 音频路由引擎（先初始化为 None，避免 _create_audio_player 访问时出错）
+        self._router: AudioRouter | None = None
+        self._test_recording_path: str | None = None
+        self._settings = AppSettings.load()
         self.player = self._create_audio_player()
-        self.tts_backend = resolve_tts_backend(tts_backend or load_tts_backend_config())
+        self.tts_backend = resolve_tts_backend(tts_backend or self._settings.tts_backend)
         self.cartesia_api_key = self._load_cartesia_api_key()
-        voice_config = load_voice_config()
-        self.voice_id = voice_config["voice_id"]
-        self.volume = load_volume_config()
+        self.voice_id = self._settings.voice_id
+        self.volume = self._settings.volume
         self._install_tts_worker(self._create_tts_worker())
 
-        self._janitor_queue: Any = SimpleQueue()
+        self._init_audio_router()
+        if self._router is not None:
+            self.player.set_router(self._router)
+
+        self._janitor_queue: SimpleQueue = SimpleQueue()
         self._janitor_thread = threading.Thread(
             target=self._janitor_loop,
             name=_JANITOR_THREAD_NAME,
@@ -120,6 +128,9 @@ class WavTransApp:
             on_fetch_voices=self._fetch_voices,
             on_audio_output_change=self._on_audio_output_change,
             on_cartesia_api_key_change=self._on_cartesia_api_key_change,
+            on_audio_route_change=self._on_audio_route_change,
+            on_audio_route_test=self._on_audio_route_test,
+            on_play_route_test=self._play_route_test_recording,
             audio_player=self.player,
         )
 
@@ -127,9 +138,9 @@ class WavTransApp:
     def _load_cartesia_api_key() -> str | None:
         """从 secret_store 读取 Cartesia API key，失败时不暴露异常内容。"""
         try:
-            return secret_store.load_cartesia_api_key()
+            return easy_tts.secret.load_cartesia_api_key()
         except Exception as exc:
-            if exc.__class__.__name__ == "KeyringUnavailableError":
+            if isinstance(exc, KeyringUnavailableError):
                 return None
             raise RuntimeError("Cartesia API key 读取失败") from exc
 
@@ -143,11 +154,167 @@ class WavTransApp:
             volume=self.volume,
         )
 
-    @staticmethod
-    def _create_audio_player() -> AudioPlayer:
-        output_device = load_audio_output_device()
-        output_device_name = load_audio_output_device_name()
-        return AudioPlayer(output_device=output_device, output_device_name=output_device_name)
+    def _create_audio_player(self) -> AudioPlayer:
+        s = self._settings
+        return AudioPlayer(
+            output_device=cast(OutputDeviceSelection, s.audio_output_device) if s.audio_output_device is not None else None,
+            output_device_name=s.audio_output_device_name,
+        )
+
+    def _init_audio_router(self) -> None:
+        """根据配置初始化音频路由引擎。"""
+        s = self._settings
+        if not s.audio_routing_enabled:
+            return
+
+        if not VBCableDriverManager.is_installed():
+            logger.warning("音频路由已启用但 VB-CABLE 未安装，路由引擎未启动")
+            return
+
+        try:
+            self._router = AudioRouter(
+                mic_device=s.mic_input_device,
+                bridge_device=s.bridge_source_device,
+                virtual_output=s.virtual_output_device,
+            )
+            self._router.set_gains(
+                mic=s.mic_gain,
+                bridge=s.bridge_gain,
+                tts=s.tts_gain,
+            )
+            if self._router.start():
+                logger.info("音频路由引擎已启动")
+            else:
+                logger.warning("音频路由引擎启动失败")
+                self._router = None
+        except Exception as e:
+            logger.exception("初始化音频路由引擎失败: %s", e)
+            self._router = None
+
+    def _on_audio_route_change(self, route_config: dict[str, object]) -> None:
+        """音频路由配置变更回调。"""
+        # 如果配置中显式包含启用状态，按显式值处理；否则从当前 _router 状态推断
+        if "audio_routing_enabled" in route_config:
+            enabled = bool(route_config["audio_routing_enabled"])
+        else:
+            enabled = self._router is not None and self._router.is_running()
+
+        mic_device = route_config.get("mic_input_device")
+        bridge_device = route_config.get("bridge_source_device")
+        virtual_device = route_config.get("virtual_output_device")
+        mic_gain = route_config.get("mic_gain")
+        bridge_gain = route_config.get("bridge_gain")
+        tts_gain = route_config.get("tts_gain")
+
+        if not enabled:
+            if self._router is not None:
+                self._router.stop()
+                self._router = None
+                self.player.set_router(None)
+                logger.info("音频路由已禁用")
+            return
+
+        # 确保 VB-CABLE 已安装
+        if not VBCableDriverManager.is_installed():
+            logger.warning("VB-CABLE 未安装，无法启用音频路由")
+            return
+
+        try:
+            if self._router is None:
+                self._router = AudioRouter(
+                    mic_device=mic_device if isinstance(mic_device, str) else None,
+                    bridge_device=bridge_device if isinstance(bridge_device, str) else None,
+                    virtual_output=virtual_device if isinstance(virtual_device, str) else None,
+                )
+                if isinstance(mic_gain, (int, float)):
+                    self._router.set_gains(mic=float(mic_gain))
+                if isinstance(bridge_gain, (int, float)):
+                    self._router.set_gains(bridge=float(bridge_gain))
+                if isinstance(tts_gain, (int, float)):
+                    self._router.set_gains(tts=float(tts_gain))
+                if self._router.start():
+                    self.player.set_router(self._router)
+                    logger.info("音频路由引擎已启动")
+                else:
+                    self._router = None
+                    self.player.set_router(None)
+            else:
+                # 动态更新配置
+                if "mic_input_device" in route_config:
+                    self._router.set_mic_device(mic_device if isinstance(mic_device, str) else None)
+                if "bridge_source_device" in route_config:
+                    self._router.set_bridge_device(bridge_device if isinstance(bridge_device, str) else None)
+                if "virtual_output_device" in route_config:
+                    self._router.set_virtual_output(virtual_device if isinstance(virtual_device, str) else None)
+                if isinstance(mic_gain, (int, float)) or isinstance(bridge_gain, (int, float)) or isinstance(tts_gain, (int, float)):
+                    self._router.set_gains(
+                        mic=float(mic_gain) if isinstance(mic_gain, (int, float)) else None,
+                        bridge=float(bridge_gain) if isinstance(bridge_gain, (int, float)) else None,
+                        tts=float(tts_gain) if isinstance(tts_gain, (int, float)) else None,
+                    )
+                logger.info("音频路由配置已更新")
+        except Exception as e:
+            logger.exception("更新音频路由配置失败: %s", e)
+
+    def _on_audio_route_test(self) -> str | None:
+        """启动音频路由测试：录制 5 秒混音（含 TTS "测试测试测试"），返回临时 WAV 文件路径。"""
+        if self._router is None or not self._router.is_running():
+            logger.warning("音频路由未运行，无法启动测试")
+            return None
+
+        # 启动录制
+        self._router.start_test_recording()
+
+        # 触发 TTS "测试测试测试"
+        self._on_submit("测试测试测试")
+
+        # 5 秒后停止并保存
+        def _finish_test() -> None:
+            try:
+                router = self._router
+                if router is None:
+                    logger.warning("测试录制完成前路由引擎已停止，录制丢弃")
+                    return
+                wav_bytes = router.stop_test_recording()
+                if wav_bytes is None:
+                    logger.warning("测试录制未捕获到数据")
+                    return
+                test_path = Path(gettempdir()) / "wavtrans_route_test.wav"
+                test_path.write_bytes(wav_bytes)
+                self._test_recording_path = str(test_path)
+                logger.info("测试录制已保存到 %s", self._test_recording_path)
+                # 通知 settings_window
+                if self.overlay is not None:
+                    self.overlay.notify_route_test_finished(self._test_recording_path)
+            except Exception:
+                logger.exception("测试录制保存失败")
+
+        timer = threading.Timer(5.0, _finish_test)
+        timer.name = "RouteTestTimer"
+        timer.daemon = True
+        timer.start()
+        return "recording"
+
+    def _play_route_test_recording(self) -> bool:
+        """播放最近一次录制的测试音频。在后台线程执行以避免阻塞 UI。"""
+        path = getattr(self, "_test_recording_path", None)
+        if not path:
+            logger.warning("没有可用的测试录制文件")
+            return False
+        if not Path(path).exists():
+            logger.warning("测试录制文件不存在: %s", path)
+            return False
+
+        def _play_in_background() -> None:
+            try:
+                success = self.player.play_wav(path)
+                if not success:
+                    logger.warning("播放测试录制返回失败")
+            except Exception:
+                logger.exception("播放测试录制失败")
+
+        threading.Thread(target=_play_in_background, name="PlayRouteTest", daemon=True).start()
+        return True
 
     @staticmethod
     def _create_tts_executor() -> ThreadPoolExecutor:
@@ -203,7 +370,7 @@ class WavTransApp:
     def _on_audio_output_change(self, device: object) -> None:
         """音频输出设备变更后同步到当前播放器。"""
         if isinstance(device, dict) or device is None:
-            self.player.set_output_device(device)
+            self.player.set_output_device(cast(OutputDeviceSelection, device) if device is not None else None)
             if device is None:
                 self.player.set_output_device_name(None)
             name_value = device.get("name") if isinstance(device, dict) else None
@@ -285,19 +452,30 @@ class WavTransApp:
             if tray_app is not None:
                 tray_app.dispose()
 
+        def _stop_background_threads() -> None:
+            """在 app.quit() 之前停止后台线程，避免 Qt 清理时线程仍在运行。"""
+            if self._router is not None:
+                try:
+                    self._router.stop()
+                except Exception as e:
+                    logger.warning("停止音频路由引擎失败: %s", e)
+            self._enqueue_retire_current()
+            self._janitor_queue.put(None)
+            self._janitor_thread.join(timeout=_JANITOR_JOIN_TIMEOUT_SECONDS)
+
         try:
             if self.cartesia_api_key or self.tts_backend not in {TTS_BACKEND_CARTESIA_BYTES, TTS_BACKEND_CARTESIA_REALTIME}:
                 self.tts_engine.connect()
             self.overlay.prepare_ui()
             tray_app = TrayApp(self.overlay)
             _ = TrayController(tray_app, self.overlay)
-            self.overlay.set_pre_stop_hook(dispose_tray_once)
+            self.overlay.set_pre_stop_hook(
+                lambda: (dispose_tray_once(), _stop_background_threads())
+            )
             self.overlay.run()
         finally:
             dispose_tray_once()
-            self._enqueue_retire_current()
-            self._janitor_queue.put(None)
-            self._janitor_thread.join(timeout=_JANITOR_JOIN_TIMEOUT_SECONDS)
+            _stop_background_threads()
             alive = self._janitor_thread.is_alive()
             if alive:
                 logger.warning("TTS janitor 线程未能在 %s 秒内退出", _JANITOR_JOIN_TIMEOUT_SECONDS)

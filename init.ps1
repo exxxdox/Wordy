@@ -1,11 +1,12 @@
+# Easy TTS 环境初始化脚本（uv 版）
+# 用法：.\init.ps1 [-NoPause] [-PythonVersion 3.12]
+
 param(
-    [switch]$NoPause
+    [switch]$NoPause,
+    [string]$PythonVersion = "3.12"
 )
 
 $ErrorActionPreference = 'Stop'
-
-Write-Host '[INFO] Starting init.ps1...'
-
 Set-Location -LiteralPath $PSScriptRoot
 
 function Invoke-Pause {
@@ -14,65 +15,36 @@ function Invoke-Pause {
     }
 }
 
-$venvPath = Join-Path $PSScriptRoot '.venv'
-$pythonPath = Join-Path $venvPath 'Scripts\python.exe'
-$requirementsPath = Join-Path $PSScriptRoot 'requirements.txt'
-
-if (-not (Test-Path -LiteralPath $requirementsPath -PathType Leaf)) {
-    Write-Host '[ERROR] Cannot find requirements.txt'
+# 1. 检查 uv 是否已安装
+$uv = Get-Command uv -ErrorAction SilentlyContinue
+if (-not $uv) {
+    Write-Host '[ERROR] uv not found. Install it first:'
+    Write-Host '  powershell -c "irm https://astral.sh/uv/install.ps1 | iex"'
     Invoke-Pause
     exit 1
 }
 
-if (-not (Test-Path -LiteralPath $pythonPath -PathType Leaf)) {
-    Write-Host '[INFO] Creating Python virtual environment in .venv...'
+Write-Host "[INFO] uv $(& uv --version)"
 
-    $systemPython = Get-Command py -ErrorAction SilentlyContinue
-    if ($systemPython) {
-        & py -3 -m venv $venvPath
-    }
-    else {
-        $systemPython = Get-Command python -ErrorAction SilentlyContinue
-        if (-not $systemPython) {
-            Write-Host '[ERROR] Cannot find Python. Please install Python 3 and try again.'
-            Invoke-Pause
-            exit 1
-        }
-
-        & python -m venv $venvPath
-    }
-
-    $venvExit = $LASTEXITCODE
-    if ($venvExit -ne 0) {
-        Write-Host "[ERROR] Failed to create virtual environment with code $venvExit"
-        Invoke-Pause
-        exit $venvExit
-    }
-}
-else {
-    Write-Host '[INFO] Found existing .venv virtual environment.'
+# 2. 确保 Python 版本固定
+$pyVerFile = Join-Path $PSScriptRoot '.python-version'
+if (-not (Test-Path -LiteralPath $pyVerFile)) {
+    & uv python pin $PythonVersion
 }
 
-# Write-Host '[INFO] Upgrading pip...'
-# & $pythonPath -m pip install --upgrade pip
-# $pipUpgradeExit = $LASTEXITCODE
-# if ($pipUpgradeExit -ne 0) {
-#     Write-Host "[ERROR] pip upgrade failed with code $pipUpgradeExit"
-#     Invoke-Pause
-#     exit $pipUpgradeExit
-# }
+# 3. 同步依赖（自动创建 .venv、安装 Python、安装依赖）
+Write-Host '[INFO] Syncing dependencies...'
+& uv sync
 
-Write-Host '[INFO] Installing dependencies from requirements.txt...'
-& $pythonPath -m pip install -r $requirementsPath
-$installExit = $LASTEXITCODE
-if ($installExit -ne 0) {
-    Write-Host "[ERROR] Dependency installation failed with code $installExit"
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "[ERROR] uv sync failed with code $LASTEXITCODE"
     Invoke-Pause
-    exit $installExit
+    exit $LASTEXITCODE
 }
 
-Write-Host '[INFO] Environment initialization completed successfully.'
+Write-Host '[INFO] Environment ready.'
+Write-Host "[INFO] Activate: .\.venv\Scripts\Activate.ps1"
+Write-Host "[INFO] Run:     uv run python main.py"
 
 Invoke-Pause
-
 exit 0

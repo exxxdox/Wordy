@@ -12,7 +12,6 @@ from typing import TypedDict, cast
 import pyaudio
 
 
-
 logger = logging.getLogger(__name__)
 
 WASAPI_HOST_API_NAME = "Windows WASAPI"
@@ -38,11 +37,22 @@ class OutputDeviceInfo(TypedDict):
     is_default: bool
 
 
+class InputDeviceInfo(TypedDict):
+    """枚举出的输入设备记录。"""
+
+    index: int
+    name: str
+    host_api_index: int
+    host_api_name: str
+    display_name: str
+    is_default: bool
+
+
 class OutputDeviceSelection(TypedDict, total=False):
     """结构化输出设备选择: 通过 ``name`` + ``host_api_name`` 精确锁定 Host API 实例。"""
 
     name: str
-    host_api_name: str
+    host_api_name: str | None
 
 
 def _lookup_host_api(p, host_api_index: int) -> tuple[int, str]:
@@ -131,7 +141,7 @@ def list_output_devices() -> list[OutputDeviceInfo]:
                         index=cast(int, info["index"]),
                         name=name,
                         host_api_index=host_api_index,
-                        host_api_name=host_api_name,
+                        host_api_name=str(host_api_name),
                         display_name=display_name,
                         is_default=info["index"] == default_index,
                     )
@@ -148,23 +158,31 @@ def list_output_devices() -> list[OutputDeviceInfo]:
             except Exception as e:  # noqa: BLE001
                 logger.warning("pyaudio.terminate 失败: %s", e)
 
-
 class AudioPlayer:
-    """播放 WAV 到默认输出设备或按名称/Host API 选择的输出设备。"""
+    """播放 WAV 到默认输出设备或按名称/Host API 选择的输出设备。
+
+    支持可选的音频路由器注入，使 TTS 音频同时混入虚拟设备。
+    """
 
     def __init__(
         self,
         output_device_name: str | None = None,
         *,
         output_device: OutputDeviceSelection | None = None,
+        router: object | None = None,
     ):
         self.output_device: OutputDeviceSelection | None = output_device
         if output_device is not None and output_device_name is None:
             # 保持 ``output_device_name`` 兼容性: 结构化选择存在时同步 raw name。
             output_device_name = output_device.get("name")
         self.output_device_name = output_device_name
+        self._router = router
         self._stream_p = None
         self._stream = None
+
+    def set_router(self, router: object | None) -> None:
+        """设置音频路由器，用于 TTS 音频注入。"""
+        self._router = router
 
     def set_output_device_name(self, output_device_name: str | None) -> None:
         """更新目标输出设备名 (清空结构化选择)。传入 ``None`` 表示使用系统默认设备。"""
@@ -424,10 +442,31 @@ class AudioPlayer:
         logger.info("开始播放到 %s...", self.output_device_name or "默认输出设备")
         logger.info("按 Ctrl+C 停止播放")
 
+        # 提前解析路由器注入回调，避免每帧重复 getattr/callable
+        _inject_fn = None
+        _inject_needs_format = False
+        if self._router is not None:
+            fn = getattr(self._router, "inject_tts_from_wav", None)
+            if callable(fn):
+                _inject_fn = fn
+                _inject_needs_format = True
+            else:
+                fn = getattr(self._router, "inject_tts", None)
+                if callable(fn):
+                    _inject_fn = fn
+
         try:
             data = wf.readframes(1024)
             while data:
                 stream.write(data)
+                if _inject_fn is not None:
+                    try:
+                        if _inject_needs_format:
+                            _inject_fn(data, src_rate=framerate, src_channels=channels)
+                        else:
+                            _inject_fn(data)
+                    except Exception:
+                        logger.exception("TTS 音频注入路由器失败")
                 data = wf.readframes(1024)
 
             logger.info("播放完成!")

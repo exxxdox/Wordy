@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""Tests for input_overlay.py input normalization and hotkey recording lifecycle."""
+"""Tests for overlay.py input normalization and hotkey recording lifecycle."""
 
 import importlib
 import sys
@@ -12,6 +12,8 @@ from typing import cast
 
 import pytest
 
+import easy_tts.secret
+
 from tests._stubs import PYside6_STUBS, patch_module_stubs
 
 
@@ -20,19 +22,19 @@ def import_input_overlay_with_stubs(monkeypatch: pytest.MonkeyPatch) -> ModuleTy
         monkeypatch,
         (
             *PYside6_STUBS,
-            "native_hotkey",
-            "settings_window",
-            "window_focus",
+            "easy_tts.native_hotkey",
+            "easy_tts.ui.settings",
+            "easy_tts.window",
         ),
     )
-    original_input_overlay = sys.modules.pop("input_overlay", None)
+    original_input_overlay = sys.modules.pop("easy_tts.ui.overlay", None)
     try:
-        module = importlib.import_module("input_overlay")
-        _ = sys.modules.pop("input_overlay", None)
+        module = importlib.import_module("easy_tts.ui.overlay")
+        _ = sys.modules.pop("easy_tts.ui.overlay", None)
         return module
     finally:
         if original_input_overlay is not None:
-            sys.modules["input_overlay"] = original_input_overlay
+            sys.modules["easy_tts.ui.overlay"] = original_input_overlay
 
 
 class ThreadStub:
@@ -334,11 +336,14 @@ def test_apply_pending_settings_no_changes_does_not_save_config(monkeypatch: pyt
     overlay = _new_apply_overlay(module)
     saved_updates: list[dict[str, object]] = []
 
-    def fake_save_app_config(update: dict[str, object]) -> Path:
-        saved_updates.append(dict(update))
+    from easy_tts.config import AppSettings
+
+    def fake_update(self, **kwargs: object) -> Path:
+        saved_updates.append({str(k): v for k, v in kwargs.items()})
         return Path("updated-config.json")
 
-    monkeypatch.setattr(module, "save_app_config", fake_save_app_config)
+    monkeypatch.setattr(AppSettings, "load", lambda **kw: AppSettings())
+    monkeypatch.setattr(AppSettings, "update", fake_update)
     window = ApplySettingsWindowStub(_pending_settings(overlay))
 
     module.InputOverlay._apply_pending_settings(overlay, window)
@@ -353,11 +358,14 @@ def test_apply_pending_settings_saves_and_reports_only_changed_fields(monkeypatc
     overlay = _new_apply_overlay(module)
     saved_updates: list[dict[str, object]] = []
 
-    def fake_save_app_config(update: dict[str, object]) -> Path:
-        saved_updates.append(dict(update))
+    from easy_tts.config import AppSettings
+
+    def fake_update(self, **kwargs: object) -> Path:
+        saved_updates.append({str(k): v for k, v in kwargs.items()})
         return Path("updated-config.json")
 
-    monkeypatch.setattr(module, "save_app_config", fake_save_app_config)
+    monkeypatch.setattr(AppSettings, "load", lambda **kw: AppSettings())
+    monkeypatch.setattr(AppSettings, "update", fake_update)
     window = ApplySettingsWindowStub(_pending_settings(overlay, volume=0.75))
 
     module.InputOverlay._apply_pending_settings(overlay, window)
@@ -384,10 +392,13 @@ def test_apply_oserror_rolls_back_hotkey_and_prevents_mutation(monkeypatch: pyte
 
     overlay.try_register_hotkey = tracked_try_register
 
-    def failing_save(*_a, **_kw):
+    from easy_tts.config import AppSettings
+
+    def failing_update(self, **kwargs: object) -> Path:
         raise OSError("write failed")
 
-    monkeypatch.setattr(module, "save_app_config", failing_save)
+    monkeypatch.setattr(AppSettings, "load", lambda **kw: AppSettings())
+    monkeypatch.setattr(AppSettings, "update", failing_update)
     monkeypatch.setattr(module, "QMessageBox", type("QMB", (), {"critical": staticmethod(lambda *a, **kw: None)}))
     window = ApplySettingsWindowStub(
         _pending_settings(overlay, hotkey="f7", hotkey_name="F7", volume=0.5)
@@ -415,11 +426,14 @@ def test_apply_audio_callback_payload_structured_dict(monkeypatch: pytest.Monkey
 
     saved_updates: list[dict[str, object]] = []
 
-    def fake_save(update: dict[str, object]) -> Path:
-        saved_updates.append(dict(update))
+    from easy_tts.config import AppSettings
+
+    def fake_update(self, **kwargs: object) -> Path:
+        saved_updates.append({str(k): v for k, v in kwargs.items()})
         return Path("updated.json")
 
-    monkeypatch.setattr(module, "save_app_config", fake_save)
+    monkeypatch.setattr(AppSettings, "load", lambda **kw: AppSettings())
+    monkeypatch.setattr(AppSettings, "update", fake_update)
     structured_identity = {"name": "VB-Audio Cable", "host_api_name": "WASAPI"}
     window = ApplySettingsWindowStub(
         _pending_settings(overlay,
@@ -446,11 +460,14 @@ def test_apply_audio_callback_payload_legacy_str(monkeypatch: pytest.MonkeyPatch
 
     saved_updates: list[dict[str, object]] = []
 
-    def fake_save(update: dict[str, object]) -> Path:
-        saved_updates.append(dict(update))
+    from easy_tts.config import AppSettings
+
+    def fake_update(self, **kwargs: object) -> Path:
+        saved_updates.append({str(k): v for k, v in kwargs.items()})
         return Path("updated.json")
 
-    monkeypatch.setattr(module, "save_app_config", fake_save)
+    monkeypatch.setattr(AppSettings, "load", lambda **kw: AppSettings())
+    monkeypatch.setattr(AppSettings, "update", fake_update)
     window = ApplySettingsWindowStub(
         _pending_settings(overlay, audio_output_device_name="VB-Cable")
     )
@@ -474,11 +491,14 @@ def test_apply_audio_callback_payload_legacy_none(monkeypatch: pytest.MonkeyPatc
 
     saved_updates: list[dict[str, object]] = []
 
-    def fake_save(update: dict[str, object]) -> Path:
-        saved_updates.append(dict(update))
+    from easy_tts.config import AppSettings
+
+    def fake_update(self, **kwargs: object) -> Path:
+        saved_updates.append({str(k): v for k, v in kwargs.items()})
         return Path("updated.json")
 
-    monkeypatch.setattr(module, "save_app_config", fake_save)
+    monkeypatch.setattr(AppSettings, "load", lambda **kw: AppSettings())
+    monkeypatch.setattr(AppSettings, "update", fake_update)
     window = ApplySettingsWindowStub(
         _pending_settings(overlay, audio_output_device_name=None)
     )
@@ -498,8 +518,11 @@ def test_apply_cartesia_callback_failure_appends_status_and_does_not_raise(monke
         fallback_active = False
         backend = "keyring"
 
-    monkeypatch.setattr(module, "save_app_config", lambda _u: Path("updated.json"))
-    monkeypatch.setattr(module.secret_store, "save_cartesia_api_key", lambda *_a, **_kw: FakeStorageStatus())
+    from easy_tts.config import AppSettings
+
+    monkeypatch.setattr(AppSettings, "load", lambda **kw: AppSettings())
+    monkeypatch.setattr(AppSettings, "update", lambda self, **kw: Path("updated.json"))
+    monkeypatch.setattr(easy_tts.secret, "save_cartesia_api_key", lambda *_a, **_kw: FakeStorageStatus())
     window = ApplySettingsWindowStub(
         _pending_settings(overlay, cartesia_api_key_action="set", cartesia_api_key_value="new-key")
     )
@@ -517,8 +540,11 @@ def test_apply_cartesia_callback_failure_clear_does_not_raise(monkeypatch: pytes
     overlay = _new_apply_overlay(module)
     overlay.on_cartesia_api_key_change = lambda _key: (_ for _ in ()).throw(RuntimeError("boom"))
 
-    monkeypatch.setattr(module, "save_app_config", lambda _u: Path("updated.json"))
-    monkeypatch.setattr(module.secret_store, "delete_cartesia_api_key", lambda: None)
+    from easy_tts.config import AppSettings
+
+    monkeypatch.setattr(AppSettings, "load", lambda **kw: AppSettings())
+    monkeypatch.setattr(AppSettings, "update", lambda self, **kw: Path("updated.json"))
+    monkeypatch.setattr(easy_tts.secret, "delete_cartesia_api_key", lambda: None)
     window = ApplySettingsWindowStub(
         _pending_settings(overlay, cartesia_api_key_action="clear")
     )

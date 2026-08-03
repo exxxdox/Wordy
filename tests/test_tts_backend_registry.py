@@ -9,7 +9,7 @@ from unittest.mock import Mock
 import pytest
 
 # Stub out external dependencies that won't be available on CI.
-# Must happen before importing tts_backends modules below.
+# Must happen before importing easy_tts.tts modules below.
 from tests._stubs import CARTESIA_NATIVE_DEPS, DummyModule, install_module_stubs
 
 install_module_stubs(CARTESIA_NATIVE_DEPS)
@@ -18,9 +18,9 @@ try:
 except ImportError:
     sys.modules['requests'] = DummyModule()
 
-from tts_backends.tts_backend_registry import resolve_tts_backend, create_tts_engine
-from tts_backends.constants import DEFAULT_TTS_BACKEND
-from tts_backends.tts_engine import BackendTTSEngine, TTSAudioPlayer
+from easy_tts.tts.registry import resolve_tts_backend, create_tts_engine
+from easy_tts.tts.constants import DEFAULT_TTS_BACKEND
+from easy_tts.tts.engine import BackendTTSEngine, TTSAudioPlayer
 
 
 class FakeFakeEngine(BackendTTSEngine):
@@ -53,7 +53,7 @@ def test_resolve_tts_backend_default_when_empty():
 
 def test_resolve_tts_backend_valid():
     """Test that valid backend returns itself."""
-    from tts_backends.constants import TTS_BACKEND_CARTESIA_BYTES
+    from easy_tts.tts.constants import TTS_BACKEND_CARTESIA_BYTES
     assert resolve_tts_backend(TTS_BACKEND_CARTESIA_BYTES) == TTS_BACKEND_CARTESIA_BYTES
 
 
@@ -71,10 +71,10 @@ def test_create_tts_engine_creates_correct_instance(monkeypatch):
     fake_audio_player = Mock(spec=TTSAudioPlayer)
     
     # Monkeypatch the registry with our fake engine
-    from tts_backends import tts_backend_registry
-    original_registry = tts_backend_registry.TTS_ENGINE_REGISTRY.copy()
+    from easy_tts.tts import registry
+    original_registry = registry.TTS_ENGINE_REGISTRY.copy()
     monkeypatch.setattr(
-        tts_backend_registry,
+        registry,
         "TTS_ENGINE_REGISTRY",
         {"Fake": FakeFakeEngine, **original_registry}
     )
@@ -100,10 +100,10 @@ def test_create_tts_engine_resolves_default(monkeypatch):
     """Test that None backend resolves to default before creation."""
     fake_audio_player = Mock(spec=TTSAudioPlayer)
     
-    from tts_backends import tts_backend_registry
-    original_registry = tts_backend_registry.TTS_ENGINE_REGISTRY.copy()
+    from easy_tts.tts import registry
+    original_registry = registry.TTS_ENGINE_REGISTRY.copy()
     monkeypatch.setattr(
-        tts_backend_registry,
+        registry,
         "TTS_ENGINE_REGISTRY",
         {"Fake": FakeFakeEngine, DEFAULT_TTS_BACKEND: FakeFakeEngine}
     )

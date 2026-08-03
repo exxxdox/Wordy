@@ -1,7 +1,0 @@
-cartesia[websockets]==3.2.0
-keyboard
-pyaudio
-requests
-pytest
-PySide6>=6.6,<7
-keyring>=24,<26

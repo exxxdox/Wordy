@@ -15,17 +15,19 @@ from PySide6.QtCore import QEvent, QObject, QTimer, Qt, Signal
 from PySide6.QtGui import QColor, QKeyEvent, QMouseEvent, QPainter, QPainterPath, QPaintEvent
 from PySide6.QtWidgets import QApplication, QLabel, QLineEdit, QMessageBox, QStyle, QWidget
 
-import secret_store
-from app_config import display_hotkey, get_active_config_file, load_initial_config, save_app_config
-from audio_identity import normalize_identity  # pyright: ignore[reportMissingImports]
-from settings_window import SettingsState, SettingsWindow
-from ui_theme import ACCENT_HOVER, CONFIG_BUTTON_IDLE, GREEN_ACCENT, INPUT_BACKGROUND, INPUT_BORDER
-from window_focus import activate_window, center_window, clamp_window_position, get_cursor_position, is_left_button_down, is_point_in_widget
+import easy_tts.secret
+from easy_tts.config import AppSettings, display_hotkey, get_active_config_file
+from easy_tts.audio.capture import AudioCapture
+from easy_tts.identity import normalize_identity
+from easy_tts.audio.driver import VBCableDriverManager
+from easy_tts.ui.settings import SettingsState, SettingsWindow
+from easy_tts.ui.theme import ACCENT_HOVER, CONFIG_BUTTON_IDLE, GREEN_ACCENT, INPUT_BACKGROUND, INPUT_BORDER
+from easy_tts.window import activate_window, center_window, clamp_window_position, get_cursor_position, is_left_button_down, is_point_in_widget
 
-from qt_lifecycle import safe_qt_call
+from easy_tts.qt_lifecycle import safe_qt_call
 
 if TYPE_CHECKING:
-    from native_hotkey import NativeHotkeyListener
+    from easy_tts.native_hotkey import NativeHotkeyListener
 
 logger = logging.getLogger(__name__)
 
@@ -183,6 +185,9 @@ class InputOverlay:
         on_fetch_voices: Callable[[], list[VoiceInfo]] | None = None,
         on_audio_output_change: Callable[[object], None] | None = None,
         on_cartesia_api_key_change: Callable[[str | None], None] | None = None,
+        on_audio_route_change: Callable[[dict[str, object]], None] | None = None,
+        on_audio_route_test: Callable[[], str | None] | None = None,
+        on_play_route_test: Callable[[], bool] | None = None,
         audio_player: object | None = None,
         width: int = 540,
         height: int = 58,
@@ -191,7 +196,7 @@ class InputOverlay:
         if sys.platform != "win32":
             raise RuntimeError("InputOverlay 仅支持 Windows")
 
-        config = load_initial_config()
+        config = AppSettings.load()
         self.on_submit = on_submit
         self.on_voice_change = on_voice_change
         self.on_volume_change = on_volume_change
@@ -199,22 +204,33 @@ class InputOverlay:
         self.on_fetch_voices = on_fetch_voices
         self.on_audio_output_change = on_audio_output_change
         self.on_cartesia_api_key_change = on_cartesia_api_key_change
+        self.on_audio_route_change = on_audio_route_change
+        self.on_audio_route_test = on_audio_route_test
+        self.on_play_route_test = on_play_route_test
         self._audio_player = audio_player
         self.width = width
         self.height = height
         self.poll_interval_ms = poll_interval_ms
-        self._hotkey = config["hotkey"]
-        self._hotkey_name = config["name"]
-        self._voice_id = config["voice_id"]
-        self._voice_name = config["voice_name"]
-        self._volume = config["volume"]
-        self._overlay_opacity = config["overlay_opacity"]
-        self._tts_backend = config["tts_backend"]
-        self._log_level = config.get("log_level", "INFO")
-        self._fixed_center = config["fixed_center"]
-        self._window_position: WindowPosition | None = config["window_position"]
-        self._audio_output_device_name: str | None = config.get("audio_output_device_name") if isinstance(config, dict) else None
+        self._hotkey = config.hotkey
+        self._hotkey_name = config.name
+        self._voice_id = config.voice_id
+        self._voice_name = config.voice_name
+        self._volume = config.volume
+        self._overlay_opacity = config.overlay_opacity
+        self._tts_backend = config.tts_backend
+        self._log_level = config.log_level
+        self._fixed_center = config.fixed_center
+        self._window_position: WindowPosition | None = config.window_position
+        self._audio_output_device_name: str | None = config.audio_output_device_name
         self._audio_output_device: dict[str, object] | None = self._init_audio_output_device(config)
+        # 音频路由配置
+        self._audio_routing_enabled: bool = config.audio_routing_enabled
+        self._mic_input_device: str | None = config.mic_input_device
+        self._bridge_source_device: str | None = config.bridge_source_device
+        self._virtual_output_device: str | None = config.virtual_output_device
+        self._mic_gain: float = config.mic_gain
+        self._bridge_gain: float = config.bridge_gain
+        self._tts_gain: float = config.tts_gain
         self._closed = False
         self._hotkey_listener: NativeHotkeyListener | None = None
         self._settings_window: SettingsWindow | None = None
@@ -243,17 +259,16 @@ class InputOverlay:
         self._event_loop_started = False
 
     @staticmethod
-    def _init_audio_output_device(config: object) -> dict[str, object] | None:
-        if not isinstance(config, dict):
-            return None
-        raw = config.get("audio_output_device")
+    def _init_audio_output_device(config: AppSettings) -> dict[str, object] | None:
+        """从 AppSettings 提取音频输出设备身份信息."""
+        raw = config.audio_output_device
         if isinstance(raw, dict):
             name = raw.get("name")
             if isinstance(name, str) and name:
                 host_api = raw.get("host_api_name")
                 host_api_value = host_api if isinstance(host_api, str) and host_api else None
                 return dict(normalize_identity(name, host_api_value))
-        legacy_name = config.get("audio_output_device_name")
+        legacy_name = config.audio_output_device_name
         if isinstance(legacy_name, str) and legacy_name:
             return dict(normalize_identity(legacy_name))
         return None
@@ -332,8 +347,8 @@ class InputOverlay:
             # still running so background threads (TTS/janitor) cannot emit
             # into a destroyed QObject after app.quit().
             try:
-                import log_stream
-                log_stream.shutdown_log_stream()
+                import easy_tts.log
+                easy_tts.log.shutdown_log_stream()
             except Exception:
                 # Best-effort: never let logging-cleanup failures block the
                 # GUI shutdown path.
@@ -410,19 +425,19 @@ class InputOverlay:
 
     def _show_startup_hotkey_conflict(self, error: Exception) -> None:
         """Open settings with an actionable hotkey-conflict message."""
-        settings_window = self._active_settings_window()
-        if settings_window is None:
+        settings = self._active_settings_window()
+        if settings is None:
             self._create_settings_window()
-            settings_window = self._active_settings_window()
-        if settings_window is None:
+            settings = self._active_settings_window()
+        if settings is None:
             return
 
         message = (
             f"当前全局快捷键 {self._hotkey_name} 无法注册，可能已被其他程序占用。"
             "请录制并应用新的全局快捷键。"
         )
-        settings_window.set_hotkey_warning(message)
-        settings_window.set_apply_status(f"快捷键未启用：{error}")
+        settings.set_hotkey_warning(message)
+        settings.set_apply_status(f"快捷键未启用：{error}")
 
     def _ensure_ui(self) -> None:
         # Qt widgets must be created on the GUI thread; normal flow calls this from run/show/toggle.
@@ -497,7 +512,7 @@ class InputOverlay:
 
     def _register_hotkey(self) -> None:
         self._unregister_hotkey()
-        from native_hotkey import NativeHotkeyListener
+        from easy_tts.native_hotkey import NativeHotkeyListener
         hotkey_listener = NativeHotkeyListener(self._hotkey, self._hotkey_name, self._on_global_hotkey)
         self._hotkey_listener = hotkey_listener
         hotkey_listener.start()
@@ -579,15 +594,15 @@ class InputOverlay:
         self._is_dragging_window = False
         x, y = self._clamp_window_position(self.root.x(), self.root.y())
         self._window_position = {"x": x, "y": y}
-        config_file = save_app_config({"window_position": self._window_position})
+        config_file = AppSettings.load().update(window_position=self._window_position)
         self._last_saved_config_file = config_file
         QTimer.singleShot(100, self._clear_ignore_focus_out)
 
     def _open_settings(self) -> None:
         self._ignore_focus_out = True
-        settings_window = self._active_settings_window()
-        if settings_window is not None:
-            settings_window.lift_and_focus()
+        settings = self._active_settings_window()
+        if settings is not None:
+            settings.lift_and_focus()
             QTimer.singleShot(SETTINGS_IGNORE_FOCUS_DELAY_MS, self._clear_ignore_focus_out)
             return
         self._create_settings_window()
@@ -596,7 +611,7 @@ class InputOverlay:
     def _create_settings_window(self) -> None:
         audio_output_devices, audio_output_devices_error = self._enumerate_audio_output_devices()
         try:
-            storage_status = secret_store.get_storage_status()
+            storage_status = easy_tts.secret.get_storage_status()
             cartesia_api_key_saved = bool(storage_status.has_key)
         except Exception as error:  # pragma: no cover - defensive
             logger.warning("读取 Cartesia API Key 状态失败: %s", error)
@@ -619,6 +634,15 @@ class InputOverlay:
             audio_output_devices_error=audio_output_devices_error,
             cartesia_api_key_saved=cartesia_api_key_saved,
             log_level=self._log_level,
+            audio_routing_enabled=self._audio_routing_enabled,
+            input_devices=self._enumerate_input_devices(),
+            mic_input_device=self._mic_input_device,
+            bridge_source_device=self._bridge_source_device,
+            virtual_output_device=self._virtual_output_device,
+            vb_cable_installed=VBCableDriverManager.is_installed(),
+            mic_gain=self._mic_gain,
+            bridge_gain=self._bridge_gain,
+            tts_gain=self._tts_gain,
         )
         self._recording_hotkey = False
         self._settings_window = SettingsWindow(
@@ -628,6 +652,8 @@ class InputOverlay:
             on_refresh_voices=self._start_load_voices,
             on_apply=self._apply_pending_settings,
             on_close=self._on_settings_window_closed,
+            on_audio_route_test=self._on_audio_route_test,
+            on_play_route_test=self._on_play_route_test,
         )
 
     def _enumerate_audio_output_devices(self) -> tuple[list[object], Exception | None]:
@@ -650,7 +676,7 @@ class InputOverlay:
 
         if used_fallback:
             try:
-                import audio_player as audio_player_module
+                import easy_tts.audio.player as audio_player_module
                 module_helper = getattr(audio_player_module, "list_output_devices", None)
                 if not callable(module_helper):
                     return [], None
@@ -674,6 +700,15 @@ class InputOverlay:
                     devices.append(name_attr)
         return devices, None
 
+    def _enumerate_input_devices(self) -> list[dict[str, object]]:
+        """枚举系统输入设备，返回结构化的设备列表。"""
+        try:
+            devices = AudioCapture.list_input_devices()
+            return [dict(dev) for dev in devices]
+        except Exception as e:  # pragma: no cover - defensive
+            logger.warning("枚举输入设备失败: %s", e)
+            return []
+
     def _on_settings_window_closed(self) -> None:
         was_recording_hotkey = self._recording_hotkey
         self._recording_hotkey = False
@@ -684,13 +719,31 @@ class InputOverlay:
             except Exception as e:
                 logger.warning("设置窗口关闭后重新注册全局快捷键 %s 失败: %s", self._hotkey_name, e)
 
+    def _on_audio_route_test(self) -> str | None:
+        """启动音频路由测试录制，返回状态。"""
+        if self.on_audio_route_test is not None:
+            return self.on_audio_route_test()
+        return None
+
+    def _on_play_route_test(self) -> bool:
+        """播放最近一次测试录制的音频。"""
+        if self.on_play_route_test is not None:
+            return self.on_play_route_test()
+        return False
+
+    def notify_route_test_finished(self, filepath: str) -> None:
+        """通知设置窗口测试录制已完成。"""
+        settings = self._active_settings_window()
+        if settings is not None:
+            settings.set_test_recording_available(filepath)
+
     def _start_record_hotkey(self) -> None:
         if self._recording_hotkey:
             return
         self._recording_hotkey = True
-        settings_window = self._active_settings_window()
-        if settings_window is not None:
-            settings_window.set_recording_started()
+        settings = self._active_settings_window()
+        if settings is not None:
+            settings.set_recording_started()
         self._unregister_hotkey()
         threading.Thread(target=self._read_hotkey_worker, daemon=True).start()
 
@@ -709,7 +762,7 @@ class InputOverlay:
             signals.record_finished.emit(recorded_hotkey, None)
 
     def _finish_record_hotkey(self, hotkey: object, error: object) -> None:
-        settings_window = self._active_settings_window()
+        settings = self._active_settings_window()
         self._recording_hotkey = False
         register_error: Exception | None = None
         if self._hotkey_listener is None:
@@ -718,26 +771,26 @@ class InputOverlay:
             except Exception as e:
                 logger.warning("重新注册全局快捷键 %s 失败: %s", self._hotkey_name, e)
                 register_error = e
-        if settings_window is None:
+        if settings is None:
             return
         if register_error is not None:
-            settings_window.set_record_result(None, None, register_error)
+            settings.set_record_result(None, None, register_error)
             return
         if isinstance(error, Exception):
-            settings_window.set_record_result(None, None, error)
+            settings.set_record_result(None, None, error)
             return
         if not isinstance(hotkey, str):
-            settings_window.set_record_result(None, None)
+            settings.set_record_result(None, None)
             return
-        settings_window.set_record_result(hotkey, display_hotkey(hotkey))
+        settings.set_record_result(hotkey, display_hotkey(hotkey))
 
     def _start_load_voices(self, show_status: bool = True) -> None:
         if self._voices_loading:
             return
         self._voices_loading = True
-        settings_window = self._active_settings_window()
-        if show_status and settings_window is not None:
-            settings_window.set_voices_loading()
+        settings = self._active_settings_window()
+        if show_status and settings is not None:
+            settings.set_voices_loading()
         threading.Thread(target=self._load_voices_worker, daemon=True).start()
 
     def _load_voices_worker(self) -> None:
@@ -762,19 +815,19 @@ class InputOverlay:
         else:
             self._voices_cache = []
         self._voice_fetch_error = None
-        settings_window = self._active_settings_window()
-        if settings_window is not None:
-            settings_window.set_voices_loaded(self._voices_cache, self._voice_id)
+        settings = self._active_settings_window()
+        if settings is not None:
+            settings.set_voices_loaded(self._voices_cache, self._voice_id)
 
     def _finish_load_voices_error(self, error: object) -> None:
         self._voices_loading = False
         self._voice_fetch_error = error if isinstance(error, Exception) else RuntimeError(str(error))
-        settings_window = self._active_settings_window()
-        if settings_window is not None:
-            settings_window.set_voices_error(self._voice_fetch_error)
+        settings = self._active_settings_window()
+        if settings is not None:
+            settings.set_voices_error(self._voice_fetch_error)
 
-    def _apply_pending_settings(self, settings_window: SettingsWindow) -> None:
-        pending = settings_window.get_pending_settings()
+    def _apply_pending_settings(self, settings: SettingsWindow) -> None:
+        pending = settings.get_pending_settings()
         hotkey = pending.hotkey
         name = pending.hotkey_name
         old_hotkey = self._hotkey
@@ -783,7 +836,7 @@ class InputOverlay:
         config_update: dict[str, object] = {}
         saved_messages: list[str] = []
         if hotkey_changed and not self.try_register_hotkey(hotkey, name):
-            QMessageBox.critical(settings_window.window, "快捷键设置失败", f"无法注册 {name}，请确认快捷键未被其他程序占用。")
+            QMessageBox.critical(settings.window, "快捷键设置失败", f"无法注册 {name}，请确认快捷键未被其他程序占用。")
             return
         if hotkey_changed:
             config_update["hotkey"] = hotkey
@@ -834,17 +887,17 @@ class InputOverlay:
 
         if config_update:
             try:
-                config_file = save_app_config(config_update)
+                config_file = AppSettings.load().update(**config_update)
             except OSError as e:
                 if hotkey_changed:
                     self.try_register_hotkey(old_hotkey, old_name)
-                QMessageBox.critical(settings_window.window, "保存失败", f"无法保存设置：{e}")
+                QMessageBox.critical(settings.window, "保存失败", f"无法保存设置：{e}")
                 return
             self._last_saved_config_file = config_file
 
         if hotkey_changed:
             saved_messages.append(f"全局快捷键已更新为 {name}")
-            settings_window.current_label.setText(f"当前快捷键：{name}")
+            settings.current_label.setText(f"当前快捷键：{name}")
 
         if voice_changed and pending.voice_id and pending.voice_name:
             self._voice_id = pending.voice_id
@@ -875,6 +928,72 @@ class InputOverlay:
             self._log_level = pending_log_level
             logging.getLogger().setLevel(getattr(logging, self._log_level, logging.INFO))
             saved_messages.append(f"日志显示等级已切换为 {self._log_level}")
+
+        # 音频路由配置处理
+        route_config_changed = False
+        route_config_update: dict[str, object] = {}
+        self_audio_routing_enabled = getattr(self, "_audio_routing_enabled", False)
+        self_mic_input_device = getattr(self, "_mic_input_device", None)
+        self_bridge_source_device = getattr(self, "_bridge_source_device", None)
+        self_virtual_output_device = getattr(self, "_virtual_output_device", None)
+        self_mic_gain = getattr(self, "_mic_gain", 1.0)
+        self_bridge_gain = getattr(self, "_bridge_gain", 1.0)
+        self_tts_gain = getattr(self, "_tts_gain", 1.0)
+
+        pending_audio_routing_enabled = getattr(pending, "audio_routing_enabled", self_audio_routing_enabled)
+        pending_mic_input_device = getattr(pending, "mic_input_device", self_mic_input_device)
+        pending_bridge_source_device = getattr(pending, "bridge_source_device", self_bridge_source_device)
+        pending_virtual_output_device = getattr(pending, "virtual_output_device", self_virtual_output_device)
+        pending_mic_gain = getattr(pending, "mic_gain", self_mic_gain)
+        pending_bridge_gain = getattr(pending, "bridge_gain", self_bridge_gain)
+        pending_tts_gain = getattr(pending, "tts_gain", self_tts_gain)
+
+        if pending_audio_routing_enabled != self_audio_routing_enabled:
+            self._audio_routing_enabled = pending_audio_routing_enabled
+            route_config_update["audio_routing_enabled"] = self._audio_routing_enabled
+            route_config_changed = True
+            saved_messages.append("音频路由已启用" if self._audio_routing_enabled else "音频路由已禁用")
+
+        if pending_mic_input_device != self_mic_input_device:
+            self._mic_input_device = pending_mic_input_device
+            route_config_update["mic_input_device"] = self._mic_input_device
+            route_config_changed = True
+            if self._mic_input_device:
+                saved_messages.append(f"麦克风已切换为 {self._mic_input_device}")
+
+        if pending_bridge_source_device != self_bridge_source_device:
+            self._bridge_source_device = pending_bridge_source_device
+            route_config_update["bridge_source_device"] = self._bridge_source_device
+            route_config_changed = True
+            if self._bridge_source_device:
+                saved_messages.append(f"桥接源已切换为 {self._bridge_source_device}")
+            else:
+                saved_messages.append("桥接源已禁用")
+
+        if pending_virtual_output_device != self_virtual_output_device:
+            self._virtual_output_device = pending_virtual_output_device
+            route_config_update["virtual_output_device"] = self._virtual_output_device
+            route_config_changed = True
+
+        if pending_mic_gain != self_mic_gain:
+            self._mic_gain = pending_mic_gain
+            route_config_update["mic_gain"] = self._mic_gain
+            route_config_changed = True
+
+        if pending_bridge_gain != self_bridge_gain:
+            self._bridge_gain = pending_bridge_gain
+            route_config_update["bridge_gain"] = self._bridge_gain
+            route_config_changed = True
+
+        if pending_tts_gain != self_tts_gain:
+            self._tts_gain = pending_tts_gain
+            route_config_update["tts_gain"] = self._tts_gain
+            route_config_changed = True
+
+        if route_config_changed:
+            config_update.update(route_config_update)
+            if getattr(self, "on_audio_route_change", None) is not None:
+                self.on_audio_route_change(dict(route_config_update))
 
         if pending.fixed_center != self._fixed_center:
             self._fixed_center = pending.fixed_center
@@ -909,13 +1028,13 @@ class InputOverlay:
         self._apply_cartesia_api_key_change(pending, saved_messages)
 
         if not saved_messages:
-            settings_window.set_apply_status("没有设置变更")
+            settings.set_apply_status("没有设置变更")
             return
 
         status_text = "；".join(saved_messages)
         if config_update:
             status_text = f"{status_text}\n已保存到：{self._last_saved_config_file}"
-        settings_window.set_apply_status(status_text)
+        settings.set_apply_status(status_text)
 
     def _compute_audio_output_pending(
         self, pending: object
@@ -956,13 +1075,13 @@ class InputOverlay:
         if cartesia_action == "set":
             cartesia_value = cartesia_value_raw if isinstance(cartesia_value_raw, str) else ""
             try:
-                storage_status = secret_store.save_cartesia_api_key(
+                storage_status = easy_tts.secret.save_cartesia_api_key(
                     cartesia_value, allow_plaintext_fallback=False
                 )
-            except secret_store.SecretStoreError as error:
+            except easy_tts.secret.SecretStoreError as error:
                 saved_messages.append(f"Cartesia API Key 保存失败：{error}")
             else:
-                if storage_status.fallback_active or storage_status.backend == secret_store.STORAGE_PLAINTEXT:
+                if storage_status.fallback_active or storage_status.backend == easy_tts.secret.STORAGE_PLAINTEXT:
                     saved_messages.append(
                         "Cartesia API Key 已保存（明文回退，高风险，请尽快配置 keyring）"
                     )
@@ -976,8 +1095,8 @@ class InputOverlay:
                         saved_messages.append("Cartesia 引擎刷新失败")
         elif cartesia_action == "clear":
             try:
-                secret_store.delete_cartesia_api_key()
-            except secret_store.SecretStoreError as error:
+                easy_tts.secret.delete_cartesia_api_key()
+            except easy_tts.secret.SecretStoreError as error:
                 saved_messages.append(f"Cartesia API Key 清除失败：{error}")
             else:
                 saved_messages.append("Cartesia API Key 已清除")
@@ -994,8 +1113,8 @@ class InputOverlay:
     def _is_point_in_tracked_windows(self, x: int, y: int) -> bool:
         if self.root is not None and is_point_in_widget(self.root, x, y):
             return True
-        settings_window = self._active_settings_window()
-        if settings_window is not None and is_point_in_widget(settings_window.window, x, y):
+        settings = self._active_settings_window()
+        if settings is not None and is_point_in_widget(settings.window, x, y):
             return True
         return False
 

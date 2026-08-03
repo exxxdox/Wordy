@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""静态布局契约测试（RED）：检查 settings_window.py 的宽度/排布约束。
+"""静态布局契约测试（RED）：检查 easy_tts/ui/settings.py 的宽度/排布约束。
 
 仅使用 Python 标准库（ast、pathlib），不导入 PySide6 或 pytest。
 当生产代码尚未修复时，本测试预期失败（RED）。
@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 from typing import NoReturn
 
-SETTINGS_PATH = Path(__file__).resolve().parent.parent / "settings_window.py"
+SETTINGS_PATH = Path(__file__).resolve().parent.parent / "src" / "easy_tts" / "ui" / "settings.py"
 
 # ----- 期望阈值 -----
 MIN_DIALOG_WIDTH = 560
@@ -63,7 +63,7 @@ FORBIDDEN_QSS_SUBSTRINGS = [
 
 def _load_source() -> str:
     if not SETTINGS_PATH.exists():
-        raise AssertionError(f"settings_window.py 不存在: {SETTINGS_PATH}")
+        raise AssertionError(f"easy_tts/ui/settings.py 不存在: {SETTINGS_PATH}")
     return SETTINGS_PATH.read_text(encoding="utf-8")
 
 
@@ -150,7 +150,7 @@ def test_settings_dialog_static_width_budget_invariants() -> None:
 
     missing = [name for name in ("DIALOG_WIDTH", "DIALOG_HEIGHT", "CONTENT_MARGIN", "SECTION_GAP") if name not in consts]
     if missing:
-        _fail(f"settings_window.py 缺少顶层常量: {missing}")
+        _fail(f"easy_tts/ui/settings.py 缺少顶层常量: {missing}")
 
     width = consts["DIALOG_WIDTH"]
     height = consts["DIALOG_HEIGHT"]
@@ -236,7 +236,7 @@ def test_settings_dialog_is_resizable_with_min_size() -> None:
 
     missing = [name for name in ("DIALOG_MIN_WIDTH", "DIALOG_MIN_HEIGHT") if name not in consts]
     if missing:
-        _fail(f"settings_window.py 缺少顶层常量: {missing}")
+        _fail(f"easy_tts/ui/settings.py 缺少顶层常量: {missing}")
 
     min_width = consts["DIALOG_MIN_WIDTH"]
     min_height = consts["DIALOG_MIN_HEIGHT"]
@@ -294,7 +294,7 @@ def test_settings_dialog_does_not_lock_size() -> None:
         if token in source:
             raw_hits.append(token)
     if raw_hits:
-        _fail(f"settings_window.py 原始源码包含禁用窗口标志: {raw_hits}")
+        _fail(f"easy_tts/ui/settings.py 原始源码包含禁用窗口标志: {raw_hits}")
 
 
 def test_settings_dialog_preserves_existing_contract() -> None:
@@ -318,7 +318,7 @@ def test_settings_combos_use_no_wheel_subclass() -> None:
     """设置页三个下拉框必须使用禁用滚轮切换的 NoWheelComboBox。"""
     source = _load_source()
     if "class NoWheelComboBox" not in source:
-        _fail("settings_window.py 必须定义 NoWheelComboBox")
+        _fail("easy_tts/ui/settings.py 必须定义 NoWheelComboBox")
     if source.count("NoWheelComboBox()") < 6:
         _fail("voice/backend/audio output 的属性初始化和构建处都应使用 NoWheelComboBox()")
 
@@ -327,7 +327,7 @@ def test_settings_sliders_use_no_wheel_subclass() -> None:
     """音量和透明度滑动条必须使用禁用滚轮调整的 NoWheelSlider。"""
     source = _load_source()
     if "class NoWheelSlider" not in source:
-        _fail("settings_window.py 必须定义 NoWheelSlider")
+        _fail("easy_tts/ui/settings.py 必须定义 NoWheelSlider")
     if source.count("NoWheelSlider(Qt.Orientation.Horizontal)") < 4:
         _fail("volume/opacity 的属性初始化和构建处都应使用 NoWheelSlider(Qt.Orientation.Horizontal)")
 
@@ -336,7 +336,7 @@ def test_settings_buttons_row_is_right_aligned() -> None:
     """底部按钮应右对齐，且取消在左、应用在右，更符合设置对话框习惯。"""
     source = _load_source()
     start = source.index("    def _build_buttons")
-    end = source.index("    def _add_separator", start)
+    end = source.index("    def _add_inner_gap", start)
     body = source[start:end]
     if body.count("button_row.addStretch(1)") != 1:
         _fail("_build_buttons 应只保留一个左侧 addStretch(1) 以右对齐按钮")
@@ -442,7 +442,7 @@ def test_settings_dialog_static_drag_position_is_not_persisted() -> None:
     )
     found = [token for token in forbidden if token in source]
     if found:
-        _fail(f"settings_window.py 不得包含拖动位置持久化/配置保存代码: {found}")
+        _fail(f"easy_tts/ui/settings.py 不得包含拖动位置持久化/配置保存代码: {found}")
 
 
 # ----- 运行器 -----

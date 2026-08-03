@@ -5,7 +5,7 @@
 
 from dataclasses import dataclass
 
-from .tts_engine import VoiceInfo
+from .engine import VoiceInfo
 
 
 @dataclass

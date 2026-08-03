@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from qt_lifecycle import safe_qt_call
+from easy_tts.qt_lifecycle import safe_qt_call
 
 
 
@@ -204,7 +204,7 @@ class TrayApp:
     def log_stream(self) -> _LogStreamLike:
         stream = self._log_stream
         if stream is None:
-            module = importlib.import_module("log_stream")
+            module = importlib.import_module("easy_tts.log")
             shared = module.current_log_stream()
             stream = shared if shared is not None else module.LogStream()
             self._log_stream = stream
@@ -314,8 +314,8 @@ class TrayController:
     ``dispose()`` is idempotent and forwards exactly once to the tray app.
     """
 
-    def __init__(self, tray_app: TrayApp, overlay: object | None = None) -> None:
-        self._tray_app: TrayApp = tray_app
+    def __init__(self, tray: TrayApp, overlay: object | None = None) -> None:
+        self._tray_app: TrayApp = tray
         self._overlay: object | None = overlay
         self._disposed: bool = False
 

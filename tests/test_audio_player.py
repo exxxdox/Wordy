@@ -9,7 +9,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from audio_player import AudioPlayer
+from easy_tts.audio.player import AudioPlayer
 
 
 # ---------------------------------------------------------------------------
@@ -87,7 +87,7 @@ class FakePyAudio:
 def _patch_pyaudio(monkeypatch):
     """Inject FakePyAudio so no real audio hardware is touched."""
     fake_pa = FakePyAudio()
-    monkeypatch.setattr("audio_player.pyaudio", MagicMock(PyAudio=lambda: fake_pa))
+    monkeypatch.setattr("easy_tts.audio.player.pyaudio", MagicMock(PyAudio=lambda: fake_pa))
     return fake_pa
 
 
@@ -150,7 +150,7 @@ def test_resolve_returns_none_when_default_device_lookup_raises(monkeypatch):
         raise OSError("no default device")
 
     pa.get_default_output_device_info = _boom  # type: ignore[assignment]
-    monkeypatch.setattr("audio_player.pyaudio", MagicMock(PyAudio=lambda: pa))
+    monkeypatch.setattr("easy_tts.audio.player.pyaudio", MagicMock(PyAudio=lambda: pa))
 
     player = AudioPlayer(output_device_name="Non-Existent")
     result = player._resolve_output_device(pa, device_index=None)
@@ -165,7 +165,7 @@ def test_resolve_returns_none_when_output_device_name_none_and_default_lookup_ra
         raise OSError("no default device")
 
     pa.get_default_output_device_info = _boom  # type: ignore[assignment]
-    monkeypatch.setattr("audio_player.pyaudio", MagicMock(PyAudio=lambda: pa))
+    monkeypatch.setattr("easy_tts.audio.player.pyaudio", MagicMock(PyAudio=lambda: pa))
 
     player = AudioPlayer()
     result = player._resolve_output_device(pa, device_index=None)
@@ -178,7 +178,7 @@ def test_resolve_returns_none_when_output_device_name_none_and_default_lookup_ra
 
 def test_list_output_devices_returns_filtered_outputs_with_default_flag(_patch_pyaudio):
     """list_output_devices returns only output-capable devices with is_default flag."""
-    from audio_player import list_output_devices
+    from easy_tts.audio.player import list_output_devices
 
     devices = list_output_devices()
     assert isinstance(devices, list)
@@ -201,7 +201,7 @@ def test_list_output_devices_returns_filtered_outputs_with_default_flag(_patch_p
 
 def test_list_output_devices_each_entry_has_host_api_fields(_patch_pyaudio):
     """Every enumerated output device must carry host_api_index, host_api_name, display_name."""
-    from audio_player import list_output_devices
+    from easy_tts.audio.player import list_output_devices
 
     devices = list_output_devices()
     assert len(devices) == 2
@@ -224,10 +224,10 @@ def test_list_output_devices_each_entry_has_host_api_fields(_patch_pyaudio):
 def test_list_output_devices_returns_empty_on_pyaudio_failure(monkeypatch):
     """When pyaudio.PyAudio() raises, list_output_devices must return []."""
     monkeypatch.setattr(
-        "audio_player.pyaudio",
+        "easy_tts.audio.player.pyaudio",
         MagicMock(side_effect=RuntimeError("no audio backend")),
     )
-    from audio_player import list_output_devices
+    from easy_tts.audio.player import list_output_devices
 
     devices = list_output_devices()
     assert devices == []
@@ -268,7 +268,7 @@ class FakeDuplicateOutputPyAudio(FakePyAudio):
 def _patch_duplicate_output_pyaudio(monkeypatch):
     """Inject duplicate output devices so list_output_devices filtering is isolated."""
     fake_pa = FakeDuplicateOutputPyAudio()
-    monkeypatch.setattr("audio_player.pyaudio", MagicMock(PyAudio=lambda: fake_pa))
+    monkeypatch.setattr("easy_tts.audio.player.pyaudio", MagicMock(PyAudio=lambda: fake_pa))
     return fake_pa
 
 
@@ -276,7 +276,7 @@ def test_list_output_devices_keeps_only_wasapi_variants_when_duplicates_exist(
     _patch_duplicate_output_pyaudio,
 ):
     """Only WASAPI output variants should be shown in the user-facing device list."""
-    from audio_player import list_output_devices
+    from easy_tts.audio.player import list_output_devices
 
     devices = list_output_devices()
 
@@ -294,7 +294,7 @@ def test_list_output_devices_returns_unique_wasapi_display_names(
     _patch_duplicate_output_pyaudio,
 ):
     """Every displayed output device should be a unique Windows WASAPI label."""
-    from audio_player import list_output_devices
+    from easy_tts.audio.player import list_output_devices
 
     devices = list_output_devices()
 
@@ -322,8 +322,8 @@ def test_list_output_devices_filters_windows_mapper_aliases_english_and_chinese(
         {"index": 4, "name": "主声音驱动程序", "maxOutputChannels": 2, "hostApi": 0},
         {"index": 5, "name": "VB-Audio Virtual Cable", "maxOutputChannels": 2, "hostApi": 1},
     ]
-    monkeypatch.setattr("audio_player.pyaudio", MagicMock(PyAudio=lambda: fake_pa))
-    from audio_player import list_output_devices
+    monkeypatch.setattr("easy_tts.audio.player.pyaudio", MagicMock(PyAudio=lambda: fake_pa))
+    from easy_tts.audio.player import list_output_devices
 
     devices = list_output_devices()
 
@@ -337,7 +337,7 @@ def test_list_output_devices_mapper_filter_does_not_drop_real_duplicates(
     _patch_duplicate_output_pyaudio,
 ):
     """The mapper-alias blacklist removes only the two alias entries, never real duplicates."""
-    from audio_player import list_output_devices
+    from easy_tts.audio.player import list_output_devices
 
     devices = list_output_devices()
     names = [d["name"] for d in devices]
@@ -351,7 +351,7 @@ def test_list_output_devices_mapper_filter_does_not_drop_real_duplicates(
 
 def test_list_output_devices_default_flag_only_on_default_index(_patch_duplicate_output_pyaudio):
     """is_default must be True only for the device whose index matches the default index."""
-    from audio_player import list_output_devices
+    from easy_tts.audio.player import list_output_devices
 
     devices = list_output_devices()
 
@@ -364,7 +364,7 @@ def test_list_output_devices_default_flag_only_on_default_index(_patch_duplicate
 
 def test_list_output_devices_preserves_existing_filtered_outputs_contract(_patch_pyaudio):
     """Original fixture still returns output-capable devices and excludes input-only devices."""
-    from audio_player import list_output_devices
+    from easy_tts.audio.player import list_output_devices
 
     devices = list_output_devices()
 
@@ -605,7 +605,7 @@ def test_open_stream_terminates_pyaudio_when_device_not_found(monkeypatch):
         raise OSError("no default device")
 
     pa.get_default_output_device_info = _boom  # type: ignore[assignment]
-    monkeypatch.setattr("audio_player.pyaudio", MagicMock(PyAudio=lambda: pa))
+    monkeypatch.setattr("easy_tts.audio.player.pyaudio", MagicMock(PyAudio=lambda: pa))
 
     player = AudioPlayer()
 
@@ -623,7 +623,7 @@ def test_open_stream_terminates_pyaudio_when_p_open_raises(monkeypatch):
         raise OSError("device busy")
 
     pa.open = _boom_open  # type: ignore[assignment]
-    monkeypatch.setattr("audio_player.pyaudio", MagicMock(PyAudio=lambda: pa))
+    monkeypatch.setattr("easy_tts.audio.player.pyaudio", MagicMock(PyAudio=lambda: pa))
 
     player = AudioPlayer()
 
@@ -641,7 +641,7 @@ def test_play_wav_terminates_pyaudio_and_closes_wave_when_device_not_found(monke
         raise OSError("no default device")
 
     pa.get_default_output_device_info = _boom  # type: ignore[assignment]
-    monkeypatch.setattr("audio_player.pyaudio", MagicMock(PyAudio=lambda: pa))
+    monkeypatch.setattr("easy_tts.audio.player.pyaudio", MagicMock(PyAudio=lambda: pa))
 
     wav_path = _make_tiny_wav(tmp_path)
     player = AudioPlayer()
@@ -661,7 +661,7 @@ def test_play_wav_terminates_pyaudio_when_p_open_raises(monkeypatch, tmp_path):
         raise OSError("device busy")
 
     pa.open = _boom_open  # type: ignore[assignment]
-    monkeypatch.setattr("audio_player.pyaudio", MagicMock(PyAudio=lambda: pa))
+    monkeypatch.setattr("easy_tts.audio.player.pyaudio", MagicMock(PyAudio=lambda: pa))
 
     wav_path = _make_tiny_wav(tmp_path)
     player = AudioPlayer()
@@ -743,8 +743,8 @@ def test_list_output_devices_skips_devices_whose_info_lookup_raises(monkeypatch)
     returning the remaining successfully-queried output devices.
     """
     pa = FakePartiallyFailingPyAudio(failing_indices={1})
-    monkeypatch.setattr("audio_player.pyaudio", MagicMock(PyAudio=lambda: pa))
-    from audio_player import list_output_devices
+    monkeypatch.setattr("easy_tts.audio.player.pyaudio", MagicMock(PyAudio=lambda: pa))
+    from easy_tts.audio.player import list_output_devices
 
     devices = list_output_devices()
 
@@ -757,8 +757,8 @@ def test_list_output_devices_skips_devices_whose_info_lookup_raises(monkeypatch)
 def test_list_output_devices_returns_empty_when_all_lookups_raise(monkeypatch):
     """Characterization: all per-device exceptions still yield a clean empty list."""
     pa = FakePartiallyFailingPyAudio(failing_indices={0, 1, 2})
-    monkeypatch.setattr("audio_player.pyaudio", MagicMock(PyAudio=lambda: pa))
-    from audio_player import list_output_devices
+    monkeypatch.setattr("easy_tts.audio.player.pyaudio", MagicMock(PyAudio=lambda: pa))
+    from easy_tts.audio.player import list_output_devices
 
     devices = list_output_devices()
 
@@ -783,8 +783,8 @@ class FakeMalformedDevicePyAudio(FakePyAudio):
 def test_list_output_devices_skips_malformed_records_without_dropping_valid_devices(monkeypatch):
     """Malformed device records should not abort enumeration of later valid records."""
     pa = FakeMalformedDevicePyAudio()
-    monkeypatch.setattr("audio_player.pyaudio", MagicMock(PyAudio=lambda: pa))
-    from audio_player import list_output_devices
+    monkeypatch.setattr("easy_tts.audio.player.pyaudio", MagicMock(PyAudio=lambda: pa))
+    from easy_tts.audio.player import list_output_devices
 
     devices = list_output_devices()
 

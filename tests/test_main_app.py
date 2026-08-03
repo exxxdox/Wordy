@@ -16,8 +16,9 @@ import pytest
 # Ensure repo root is importable
 sys.path.insert(0, str(__file__).replace("/tests/test_main_app.py", ""))
 
-from tts_backends.constants import TTS_BACKEND_CARTESIA_BYTES, TTS_BACKEND_CARTESIA_REALTIME
-from tts_backends.tts_engine import BackendTTSEngine
+from easy_tts.config import AppSettings
+from easy_tts.tts.constants import TTS_BACKEND_CARTESIA_BYTES, TTS_BACKEND_CARTESIA_REALTIME
+from easy_tts.tts.engine import BackendTTSEngine
 
 
 # ---------------------------------------------------------------------------
@@ -129,10 +130,14 @@ class FakeJanitorThread:
 @pytest.fixture(autouse=True)
 def _patch_dependencies(monkeypatch):
     """Monkeypatch external dependencies before importing main."""
-    monkeypatch.setattr("secret_store.load_cartesia_api_key", lambda: "fake-api-key")
-    monkeypatch.setattr("app_config.load_tts_backend_config", lambda: TTS_BACKEND_CARTESIA_BYTES)
-    monkeypatch.setattr("app_config.load_voice_config", lambda: {"voice_id": "fake-voice", "voice_name": "Fake"})
-    monkeypatch.setattr("app_config.load_volume_config", lambda: 1.0)
+    monkeypatch.setattr("easy_tts.secret.load_cartesia_api_key", lambda: "fake-api-key")
+    # 用 AppSettings 替代已删除的独立 load 函数
+    _default_settings = AppSettings()
+    _default_settings.tts_backend = TTS_BACKEND_CARTESIA_BYTES
+    _default_settings.voice_id = "fake-voice"
+    _default_settings.voice_name = "Fake"
+    _default_settings.volume = 1.0
+    monkeypatch.setattr(AppSettings, "load", lambda **kw: _default_settings)
     # Patch InputOverlay to the fake.
     monkeypatch.setattr("main.InputOverlay", FakeInputOverlay)
     monkeypatch.setattr("main.threading.Thread", FakeJanitorThread)
@@ -728,7 +733,7 @@ def test_run_without_cartesia_api_key_does_not_eager_connect(monkeypatch):
     import main as main_mod
 
     engine = FakeTTSEngine(voice_id="fake-voice")
-    monkeypatch.setattr("secret_store.load_cartesia_api_key", lambda: None)
+    monkeypatch.setattr("easy_tts.secret.load_cartesia_api_key", lambda: None)
     monkeypatch.setattr("main.create_tts_engine", lambda *a, **kw: engine)
 
     instance = main_mod.WavTransApp()
@@ -777,7 +782,7 @@ def test_app_startup_loads_cartesia_api_key_from_secret_store(monkeypatch):
         engine_calls.append({"args": args, "kwargs": kwargs})
         return FakeTTSEngine(voice_id=kwargs.get("voice_id"))
 
-    monkeypatch.setattr("secret_store.load_cartesia_api_key", secret_loader, raising=False)
+    monkeypatch.setattr("easy_tts.secret.load_cartesia_api_key", secret_loader, raising=False)
     monkeypatch.setattr("main.create_tts_engine", factory)
 
     instance = main_mod.WavTransApp()
@@ -796,7 +801,7 @@ def test_app_startup_does_not_leak_cartesia_api_key_when_secret_loader_raises(mo
     def secret_loader() -> str:
         raise RuntimeError("secret-store unavailable")
 
-    monkeypatch.setattr("secret_store.load_cartesia_api_key", secret_loader, raising=False)
+    monkeypatch.setattr("easy_tts.secret.load_cartesia_api_key", secret_loader, raising=False)
     monkeypatch.setattr("main.create_tts_engine", lambda *a, **kw: FakeTTSEngine(voice_id="fake-voice"))
 
     with pytest.raises(RuntimeError) as exc_info:
@@ -818,7 +823,7 @@ def test_cartesia_api_key_change_rebuilds_tts_engine_without_leaking_key(monkeyp
         engine_calls.append({"args": args, "kwargs": kwargs})
         return engine
 
-    monkeypatch.setattr("secret_store.load_cartesia_api_key", lambda: "initial-secret-key", raising=False)
+    monkeypatch.setattr("easy_tts.secret.load_cartesia_api_key", lambda: "initial-secret-key", raising=False)
     monkeypatch.setattr("main.create_tts_engine", factory)
 
     instance = main_mod.WavTransApp()
@@ -858,7 +863,7 @@ def test_on_cartesia_api_key_change_engine_build_failure_does_not_corrupt_state(
     import main as main_mod
 
     initial_engine = FakeTTSEngine(voice_id="fake-voice")
-    monkeypatch.setattr("secret_store.load_cartesia_api_key", lambda: "sk_OLD_STABLE", raising=False)
+    monkeypatch.setattr("easy_tts.secret.load_cartesia_api_key", lambda: "sk_OLD_STABLE", raising=False)
     monkeypatch.setattr("main.create_tts_engine", lambda *a, **kw: initial_engine)
 
     instance = main_mod.WavTransApp()
@@ -927,9 +932,14 @@ def _patch_audio_player_factory(monkeypatch) -> list[dict[str, Any]]:
 
 
 def test_app_constructs_audio_player_with_loaded_output_device_name(monkeypatch):
-    """WavTransApp must call AudioPlayer(output_device_name=load_audio_output_device_name())."""
-    monkeypatch.setattr("app_config.load_audio_output_device_name", lambda: "VB-Audio Virtual Cable", raising=False)
-    monkeypatch.setattr("main.load_audio_output_device_name", lambda: "VB-Audio Virtual Cable", raising=False)
+    """WavTransApp must call AudioPlayer with output_device_name from AppSettings."""
+    s = AppSettings()
+    s.tts_backend = TTS_BACKEND_CARTESIA_BYTES
+    s.voice_id = "fake-voice"
+    s.voice_name = "Fake"
+    s.volume = 1.0
+    s.audio_output_device_name = "VB-Audio Virtual Cable"
+    monkeypatch.setattr(AppSettings, "load", lambda **kw: s)
     audio_player_calls = _patch_audio_player_factory(monkeypatch)
 
     import main as main_mod
@@ -947,9 +957,14 @@ def test_app_constructs_audio_player_with_loaded_output_device_name(monkeypatch)
 
 
 def test_app_constructs_audio_player_with_none_when_no_stored_device(monkeypatch):
-    """When load_audio_output_device_name() returns None, AudioPlayer must receive None."""
-    monkeypatch.setattr("app_config.load_audio_output_device_name", lambda: None, raising=False)
-    monkeypatch.setattr("main.load_audio_output_device_name", lambda: None, raising=False)
+    """When AppSettings.audio_output_device_name is None, AudioPlayer must receive None."""
+    s = AppSettings()
+    s.tts_backend = TTS_BACKEND_CARTESIA_BYTES
+    s.voice_id = "fake-voice"
+    s.voice_name = "Fake"
+    s.volume = 1.0
+    s.audio_output_device_name = None
+    monkeypatch.setattr(AppSettings, "load", lambda **kw: s)
     audio_player_calls = _patch_audio_player_factory(monkeypatch)
 
     import main as main_mod
@@ -969,8 +984,13 @@ def test_app_constructs_audio_player_with_none_when_no_stored_device(monkeypatch
 
 def test_on_audio_output_change_updates_player_device_name(monkeypatch):
     """_on_audio_output_change(name) must propagate the name to the audio player."""
-    monkeypatch.setattr("app_config.load_audio_output_device_name", lambda: None, raising=False)
-    monkeypatch.setattr("main.load_audio_output_device_name", lambda: None, raising=False)
+    s = AppSettings()
+    s.tts_backend = TTS_BACKEND_CARTESIA_BYTES
+    s.voice_id = "fake-voice"
+    s.voice_name = "Fake"
+    s.volume = 1.0
+    s.audio_output_device_name = None
+    monkeypatch.setattr(AppSettings, "load", lambda **kw: s)
     _ = _patch_audio_player_factory(monkeypatch)
 
     import main as main_mod
@@ -993,8 +1013,13 @@ def test_on_audio_output_change_updates_player_device_name(monkeypatch):
 
 def test_on_audio_output_change_to_none_clears_player_device_name(monkeypatch):
     """_on_audio_output_change(None) must clear the player's output device name."""
-    monkeypatch.setattr("app_config.load_audio_output_device_name", lambda: "Initial", raising=False)
-    monkeypatch.setattr("main.load_audio_output_device_name", lambda: "Initial", raising=False)
+    s = AppSettings()
+    s.tts_backend = TTS_BACKEND_CARTESIA_BYTES
+    s.voice_id = "fake-voice"
+    s.voice_name = "Fake"
+    s.volume = 1.0
+    s.audio_output_device_name = "Initial"
+    monkeypatch.setattr(AppSettings, "load", lambda **kw: s)
     _ = _patch_audio_player_factory(monkeypatch)
 
     import main as main_mod
@@ -1016,8 +1041,13 @@ def test_on_audio_output_change_to_none_clears_player_device_name(monkeypatch):
 
 def test_app_wires_on_audio_output_change_callback_to_overlay(monkeypatch):
     """WavTransApp must pass _on_audio_output_change to InputOverlay constructor."""
-    monkeypatch.setattr("app_config.load_audio_output_device_name", lambda: None, raising=False)
-    monkeypatch.setattr("main.load_audio_output_device_name", lambda: None, raising=False)
+    s = AppSettings()
+    s.tts_backend = TTS_BACKEND_CARTESIA_BYTES
+    s.voice_id = "fake-voice"
+    s.voice_name = "Fake"
+    s.volume = 1.0
+    s.audio_output_device_name = None
+    monkeypatch.setattr(AppSettings, "load", lambda **kw: s)
     _ = _patch_audio_player_factory(monkeypatch)
     monkeypatch.setattr("main.InputOverlay", _RecordingInputOverlay)
     _RecordingInputOverlay.last_kwargs = {}
@@ -1042,6 +1072,150 @@ def test_app_wires_on_audio_output_change_callback_to_overlay(monkeypatch):
     assert overlay_kwargs["audio_player"] is instance.player, (
         "audio_player kwarg must be the WavTransApp.player instance"
     )
+
+
+class _FakeAudioRouter:
+    instances: list["_FakeAudioRouter"] = []
+
+    def __init__(
+        self,
+        mic_device: str | None = None,
+        bridge_device: str | None = None,
+        virtual_output: str | None = None,
+    ) -> None:
+        self.mic_device = mic_device
+        self.bridge_device = bridge_device
+        self.virtual_output = virtual_output
+        self.started = False
+        self.stopped = False
+        self.set_mic_device_calls: list[str | None] = []
+        self.set_bridge_device_calls: list[str | None] = []
+        self.set_virtual_output_calls: list[str | None] = []
+        self.gains: list[dict[str, float | None]] = []
+        type(self).instances.append(self)
+
+    def start(self) -> bool:
+        self.started = True
+        return True
+
+    def stop(self) -> None:
+        self.started = False
+        self.stopped = True
+
+    def is_running(self) -> bool:
+        return self.started
+
+    def set_mic_device(self, device_name: str | None) -> bool:
+        self.set_mic_device_calls.append(device_name)
+        self.mic_device = device_name
+        return True
+
+    def set_bridge_device(self, device_name: str | None) -> bool:
+        self.set_bridge_device_calls.append(device_name)
+        self.bridge_device = device_name
+        return True
+
+    def set_virtual_output(self, device_name: str | None) -> bool:
+        self.set_virtual_output_calls.append(device_name)
+        self.virtual_output = device_name
+        return True
+
+    def set_gains(
+        self,
+        mic: float | None = None,
+        bridge: float | None = None,
+        tts: float | None = None,
+    ) -> None:
+        self.gains.append({"mic": mic, "bridge": bridge, "tts": tts})
+
+
+def _patch_audio_router_for_runtime_change(monkeypatch) -> type[_FakeAudioRouter]:
+    _FakeAudioRouter.instances.clear()
+    _patch_audio_player_factory(monkeypatch)
+    monkeypatch.setattr("main.AudioRouter", _FakeAudioRouter)
+    monkeypatch.setattr("main.VBCableDriverManager.is_installed", lambda: True)
+    # AppSettings.load() returns defaults for audio routing (all disabled/None)
+    s = AppSettings()
+    s.tts_backend = TTS_BACKEND_CARTESIA_BYTES
+    s.voice_id = "fake-voice"
+    s.voice_name = "Fake"
+    s.volume = 1.0
+    monkeypatch.setattr(AppSettings, "load", lambda **kw: s)
+    return _FakeAudioRouter
+
+
+def test_enabling_audio_route_runtime_attaches_router_to_player(monkeypatch):
+    """Runtime audio-route enable must inject the new router into AudioPlayer."""
+    router_cls = _patch_audio_router_for_runtime_change(monkeypatch)
+
+    import main as main_mod
+
+    engine = FakeTTSEngine(voice_id="fake-voice")
+    monkeypatch.setattr("main.create_tts_engine", lambda *a, **kw: engine)
+    app = main_mod.WavTransApp()
+
+    app._on_audio_route_change(
+        {
+            "audio_routing_enabled": True,
+            "mic_input_device": "Mic",
+            "bridge_source_device": "Bridge",
+            "virtual_output_device": "Cable",
+        }
+    )
+
+    assert router_cls.instances
+    router = router_cls.instances[-1]
+    assert router.started is True
+    app.player.set_router.assert_called_with(router)
+
+
+def test_disabling_audio_route_runtime_detaches_router_from_player(monkeypatch):
+    """Disabling audio routing must clear AudioPlayer's stale router reference."""
+    router_cls = _patch_audio_router_for_runtime_change(monkeypatch)
+
+    import main as main_mod
+
+    engine = FakeTTSEngine(voice_id="fake-voice")
+    monkeypatch.setattr("main.create_tts_engine", lambda *a, **kw: engine)
+    app = main_mod.WavTransApp()
+    app._on_audio_route_change({"audio_routing_enabled": True})
+    router = router_cls.instances[-1]
+    app.player.set_router.reset_mock()
+
+    app._on_audio_route_change({"audio_routing_enabled": False})
+
+    assert router.stopped is True
+    assert app._router is None
+    app.player.set_router.assert_called_once_with(None)
+
+
+def test_audio_route_runtime_update_can_clear_optional_devices(monkeypatch):
+    """Explicit None updates from settings must clear bridge and virtual devices."""
+    router_cls = _patch_audio_router_for_runtime_change(monkeypatch)
+
+    import main as main_mod
+
+    engine = FakeTTSEngine(voice_id="fake-voice")
+    monkeypatch.setattr("main.create_tts_engine", lambda *a, **kw: engine)
+    app = main_mod.WavTransApp()
+    app._on_audio_route_change(
+        {
+            "audio_routing_enabled": True,
+            "bridge_source_device": "Bridge",
+            "virtual_output_device": "Cable",
+        }
+    )
+    router = router_cls.instances[-1]
+
+    app._on_audio_route_change(
+        {
+            "bridge_source_device": None,
+            "virtual_output_device": None,
+        }
+    )
+
+    assert router.set_bridge_device_calls[-1] is None
+    assert router.set_virtual_output_calls[-1] is None
 
 
 # ---------------------------------------------------------------------------
@@ -1084,25 +1258,28 @@ def _patch_structured_audio_player_factory(monkeypatch) -> list[dict[str, Any]]:
 
 
 def test_app_constructs_audio_player_with_structured_load_audio_output_device(monkeypatch):
-    """WavTransApp must construct AudioPlayer using load_audio_output_device() (structured dict).
+    """WavTransApp must construct AudioPlayer using AppSettings.audio_output_device (structured dict).
 
     Contract:
-      * ``main.load_audio_output_device`` is imported and called.
+      * AppSettings.load() is called and the settings instance provides audio_output_device.
       * AudioPlayer receives the structured value via an ``output_device`` kwarg
         (not the legacy ``output_device_name`` flattened to a string).
     """
     structured = {"name": "Speakers (Realtek)", "host_api_name": "WASAPI"}
     load_calls: list[None] = []
+    s = AppSettings()
+    s.tts_backend = TTS_BACKEND_CARTESIA_BYTES
+    s.voice_id = "fake-voice"
+    s.voice_name = "Fake"
+    s.volume = 1.0
+    s.audio_output_device = dict(structured)
+    s.audio_output_device_name = None
 
-    def fake_load_structured() -> dict[str, Any]:
+    def fake_load(**kw: Any) -> AppSettings:
         load_calls.append(None)
-        return dict(structured)
+        return s
 
-    monkeypatch.setattr("app_config.load_audio_output_device", fake_load_structured, raising=False)
-    monkeypatch.setattr("main.load_audio_output_device", fake_load_structured, raising=False)
-    # Keep legacy loader available but ensure tests notice if app falls back to it.
-    monkeypatch.setattr("app_config.load_audio_output_device_name", lambda: None, raising=False)
-    monkeypatch.setattr("main.load_audio_output_device_name", lambda: None, raising=False)
+    monkeypatch.setattr(AppSettings, "load", fake_load)
 
     audio_player_calls = _patch_structured_audio_player_factory(monkeypatch)
 
@@ -1132,11 +1309,15 @@ def test_app_constructs_audio_player_with_structured_load_audio_output_device(mo
 
 
 def test_app_constructs_audio_player_with_none_when_load_returns_none(monkeypatch):
-    """When load_audio_output_device() returns None, AudioPlayer's output_device must be None."""
-    monkeypatch.setattr("app_config.load_audio_output_device", lambda: None, raising=False)
-    monkeypatch.setattr("main.load_audio_output_device", lambda: None, raising=False)
-    monkeypatch.setattr("app_config.load_audio_output_device_name", lambda: None, raising=False)
-    monkeypatch.setattr("main.load_audio_output_device_name", lambda: None, raising=False)
+    """When AppSettings.audio_output_device is None, AudioPlayer's output_device must be None."""
+    s = AppSettings()
+    s.tts_backend = TTS_BACKEND_CARTESIA_BYTES
+    s.voice_id = "fake-voice"
+    s.voice_name = "Fake"
+    s.volume = 1.0
+    s.audio_output_device = None
+    s.audio_output_device_name = None
+    monkeypatch.setattr(AppSettings, "load", lambda **kw: s)
 
     audio_player_calls = _patch_structured_audio_player_factory(monkeypatch)
 
@@ -1164,10 +1345,14 @@ def test_on_audio_output_change_with_structured_device_calls_set_output_device(m
     ``set_output_device`` (not the legacy ``set_output_device_name`` with just the
     bare ``name`` string).
     """
-    monkeypatch.setattr("app_config.load_audio_output_device", lambda: None, raising=False)
-    monkeypatch.setattr("main.load_audio_output_device", lambda: None, raising=False)
-    monkeypatch.setattr("app_config.load_audio_output_device_name", lambda: None, raising=False)
-    monkeypatch.setattr("main.load_audio_output_device_name", lambda: None, raising=False)
+    s = AppSettings()
+    s.tts_backend = TTS_BACKEND_CARTESIA_BYTES
+    s.voice_id = "fake-voice"
+    s.voice_name = "Fake"
+    s.volume = 1.0
+    s.audio_output_device = None
+    s.audio_output_device_name = None
+    monkeypatch.setattr(AppSettings, "load", lambda **kw: s)
     _ = _patch_structured_audio_player_factory(monkeypatch)
 
     import main as main_mod
@@ -1200,10 +1385,14 @@ def test_on_audio_output_change_with_structured_device_calls_set_output_device(m
 def test_on_audio_output_change_with_none_clears_via_set_output_device(monkeypatch):
     """_on_audio_output_change(None) must call player.set_output_device(None)."""
     initial_structured = {"name": "Initial Device", "host_api_name": "MME"}
-    monkeypatch.setattr("app_config.load_audio_output_device", lambda: dict(initial_structured), raising=False)
-    monkeypatch.setattr("main.load_audio_output_device", lambda: dict(initial_structured), raising=False)
-    monkeypatch.setattr("app_config.load_audio_output_device_name", lambda: "Initial Device", raising=False)
-    monkeypatch.setattr("main.load_audio_output_device_name", lambda: "Initial Device", raising=False)
+    s = AppSettings()
+    s.tts_backend = TTS_BACKEND_CARTESIA_BYTES
+    s.voice_id = "fake-voice"
+    s.voice_name = "Fake"
+    s.volume = 1.0
+    s.audio_output_device = dict(initial_structured)
+    s.audio_output_device_name = "Initial Device"
+    monkeypatch.setattr(AppSettings, "load", lambda **kw: s)
     _ = _patch_structured_audio_player_factory(monkeypatch)
 
     import main as main_mod

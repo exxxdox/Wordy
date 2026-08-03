@@ -15,11 +15,13 @@ import requests
 from cartesia import Cartesia
 from websockets.sync.client import ClientConnection
 
+# 向后兼容：从 cartesia_connect 模块重新导出 voice label 辅助函数
+from easy_tts.tts.labels import VoiceLabelMaps, build_voice_label_maps  # noqa: F401
+
 if TYPE_CHECKING:
     from cartesia.types.websocket_connection_options import WebsocketConnectionOptions
 
-from .tts_engine import BackendTTSEngine, TTSAudioPlayer, VoiceInfo
-from .voice_labels import VoiceLabelMaps, build_voice_label_maps
+from .engine import BackendTTSEngine, TTSAudioPlayer, VoiceInfo
 
 
 logger = logging.getLogger(__name__)
