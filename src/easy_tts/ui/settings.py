@@ -5,19 +5,33 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from typing import Callable
 
-from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, QSize, Qt
-from PySide6.QtGui import QColor, QCloseEvent, QIcon, QKeyEvent, QMouseEvent, QPainter, QPainterPath, QPaintEvent, QPen
-from PySide6.QtWidgets import QApplication, QCheckBox, QComboBox, QDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QScrollArea, QSlider, QStyle, QTabWidget, QVBoxLayout, QWidget
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QIcon
+from PySide6.QtWidgets import (
+    QApplication, QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit,
+    QPushButton, QScrollArea, QSlider, QStyle, QTabWidget, QVBoxLayout, QWidget,
+)
 
 import easy_tts.secret
-from easy_tts.config import LOG_LEVELS, MAX_OVERLAY_OPACITY, MAX_VOLUME, MIN_OVERLAY_OPACITY, MIN_VOLUME, OVERLAY_OPACITY_STEP, TTS_BACKENDS, VOLUME_STEP
+from easy_tts.config import (
+    LOG_LEVELS, MAX_OVERLAY_OPACITY, MAX_VOLUME, MIN_OVERLAY_OPACITY, MIN_VOLUME,
+    OVERLAY_OPACITY_STEP, TTS_BACKENDS, VOLUME_STEP,
+)
 from easy_tts.identity import normalize_identity
 from easy_tts.tts.labels import VoiceLabelMaps, build_voice_label_maps
-from easy_tts.ui.theme import ACCENT_HOVER, ACCENT_PRESSED, BUTTON_ACTIVE_BG, BUTTON_BG, BUTTON_GHOST_BORDER, ELEVATED_BG, GREEN_ACCENT, SCROLLBAR_HANDLE, SCROLLBAR_HANDLE_HOVER, SEPARATOR_COLOR, SURFACE_BG, TEXT_ERROR, TEXT_MUTED, TEXT_PRIMARY, TEXT_WARNING, WINDOW_BG
-from easy_tts.window import activate_window, center_window
+from easy_tts.ui.theme import (
+    GREEN_ACCENT, TEXT_ERROR, TEXT_MUTED, TEXT_PRIMARY, TEXT_WARNING,
+)
+from easy_tts.ui.settings_state import (
+    AudioOutputDevice, AudioOutputIdentity, PendingSettings, SettingsState, VoiceRecord,
+)
+from easy_tts.ui.settings_widgets import (
+    CheckmarkCheckBox, NoWheelComboBox, NoWheelSlider, _SettingsDialog,
+)
+from easy_tts.ui.settings_style import build_settings_stylesheet
+from easy_tts.ui.window import activate_window, center_window
 
 INPUT_TEXT_COLOR = GREEN_ACCENT
 SYSTEM_DEFAULT_AUDIO_OUTPUT_LABEL = "系统默认"
@@ -30,211 +44,6 @@ SECTION_GAP = 12
 INLINE_GAP = 10
 BUTTON_GAP = 16
 BUTTON_MIN_WIDTH = 88
-
-VoiceRecord = dict[str, object]
-AudioOutputDevice = dict[str, object]
-AudioOutputIdentity = dict[str, object]
-
-
-@dataclass
-class SettingsState:
-    hotkey: str
-    hotkey_name: str
-    voice_id: str | None
-    voice_name: str | None
-    volume: float
-    overlay_opacity: float
-    tts_backend: str
-    fixed_center: bool
-    voices_cache: list[VoiceRecord]
-    voices_loading: bool
-    voice_fetch_error: Exception | None
-    audio_output_devices: list[AudioOutputDevice] | list[str] = field(default_factory=list)
-    audio_output_device_name: str | None = None
-    audio_output_device_identity: AudioOutputIdentity | None = None
-    audio_output_devices_error: Exception | None = None
-    cartesia_api_key_saved: bool = False
-    log_level: str = "INFO"
-    # 音频路由状态
-    audio_routing_enabled: bool = False
-    input_devices: list[dict[str, object]] = field(default_factory=list)
-    mic_input_device: str | None = None
-    bridge_source_device: str | None = None
-    virtual_output_device: str | None = None
-    vb_cable_installed: bool = False
-    mic_gain: float = 1.0
-    bridge_gain: float = 1.0
-    tts_gain: float = 1.0
-
-
-@dataclass
-class PendingSettings:
-    hotkey: str
-    hotkey_name: str
-    voice_id: str | None
-    voice_name: str | None
-    volume: float
-    overlay_opacity: float
-    tts_backend: str
-    fixed_center: bool
-    audio_output_device_name: str | None = None
-    audio_output_device_identity: AudioOutputIdentity | None = None
-    cartesia_api_key_action: str = "unchanged"
-    cartesia_api_key_value: str | None = None
-    log_level: str = "INFO"
-    # 音频路由待应用配置
-    audio_routing_enabled: bool = False
-    mic_input_device: str | None = None
-    bridge_source_device: str | None = None
-    virtual_output_device: str | None = None
-    mic_gain: float = 1.0
-    bridge_gain: float = 1.0
-    tts_gain: float = 1.0
-
-
-class _SettingsDialog(QDialog):
-    """将 Qt 原生关闭事件转发给 SettingsWindow。"""
-
-    def __init__(self, owner: "SettingsWindow", parent: QWidget | None) -> None:
-        super().__init__(parent)
-        self._owner = owner
-        self._drag_active = False
-        self._drag_position = QPoint()
-        self._application_event_filter_installed = False
-        app = QApplication.instance()
-        if app is not None:
-            app.installEventFilter(self)
-            self._application_event_filter_installed = True
-
-    def eventFilter(self, watched: object, event: QEvent) -> bool:
-        if self._should_swallow_recording_key_event(watched, event):
-            event.accept()
-            return True
-
-        object_name = getattr(watched, "objectName", None)
-        set_cursor = getattr(watched, "setCursor", None)
-        if not callable(object_name) or object_name() != "dialogTitle" or not isinstance(event, QMouseEvent):
-            return False
-
-        if event.type() == QEvent.Type.MouseButtonPress:
-            if event.button() != Qt.MouseButton.LeftButton:
-                return False
-            global_pos = event.globalPosition().toPoint()
-            self._drag_active = True
-            self._drag_position = global_pos - self.frameGeometry().topLeft()
-            if callable(set_cursor):
-                set_cursor(Qt.CursorShape.ClosedHandCursor)
-            return True
-
-        if event.type() == QEvent.Type.MouseMove:
-            if not self._drag_active or not event.buttons() & Qt.MouseButton.LeftButton:
-                return False
-            global_pos = event.globalPosition().toPoint()
-            self.move(global_pos - self._drag_position)
-            return True
-
-        if event.type() == QEvent.Type.MouseButtonRelease:
-            if not self._drag_active or event.button() != Qt.MouseButton.LeftButton:
-                return False
-            self._drag_active = False
-            if callable(set_cursor):
-                set_cursor(Qt.CursorShape.OpenHandCursor)
-            return True
-
-        return False
-
-    def _should_swallow_recording_key_event(self, watched: object, event: QEvent) -> bool:
-        if self._owner.record_button.isEnabled():
-            return False
-        if event.type() not in (
-            QEvent.Type.KeyPress,
-            QEvent.Type.KeyRelease,
-            QEvent.Type.ShortcutOverride,
-        ):
-            return False
-        if not isinstance(event, QKeyEvent) or not isinstance(watched, QWidget):
-            return False
-        return watched is self or self.isAncestorOf(watched)
-
-    def closeEvent(self, event: QCloseEvent) -> None:
-        if self._application_event_filter_installed:
-            app = QApplication.instance()
-            if app is not None:
-                app.removeEventFilter(self)
-            self._application_event_filter_installed = False
-        self._owner._handle_dialog_close()
-        event.accept()
-
-    def keyPressEvent(self, event: QKeyEvent) -> None:
-        if not self._owner.record_button.isEnabled():
-            event.accept()
-            return
-        if event.key() == Qt.Key.Key_Escape:
-            event.accept()
-            self._owner.close()
-            return
-        super().keyPressEvent(event)
-
-    def keyReleaseEvent(self, event: QKeyEvent) -> None:
-        if not self._owner.record_button.isEnabled():
-            event.accept()
-            return
-        super().keyReleaseEvent(event)
-
-
-class NoWheelComboBox(QComboBox):
-    """忽略折叠状态下的鼠标滚轮，避免误切换选项并让滚动传递给设置页。"""
-
-    def wheelEvent(self, event) -> None:
-        event.ignore()
-
-
-class NoWheelSlider(QSlider):
-    """忽略鼠标滚轮，避免滚动设置页时误调整数值。"""
-
-    def wheelEvent(self, event) -> None:
-        event.ignore()
-
-
-class CheckmarkCheckBox(QCheckBox):
-    """用代码绘制勾选标记的复选框，保留 QCheckBox 行为。"""
-
-    INDICATOR_SIZE: int = 14
-    LABEL_GAP: int = 8
-
-    def sizeHint(self) -> QSize:
-        size = super().sizeHint()
-        font_height = self.fontMetrics().height()
-        text_width = self.fontMetrics().horizontalAdvance(self.text())
-        return QSize(max(size.width(), self.INDICATOR_SIZE + self.LABEL_GAP + text_width), max(size.height(), self.INDICATOR_SIZE, font_height))
-
-    def paintEvent(self, event: QPaintEvent) -> None:
-        event.accept()
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-
-        indicator_y = (self.height() - self.INDICATOR_SIZE) // 2
-        indicator_rect = QRect(0, indicator_y, self.INDICATOR_SIZE, self.INDICATOR_SIZE)
-        accent_color = QColor(INPUT_TEXT_COLOR)
-        border_color = accent_color if self.isChecked() else QColor(SEPARATOR_COLOR)
-        background_color = accent_color if self.isChecked() else QColor(SURFACE_BG)
-
-        painter.setPen(QPen(border_color, 1))
-        painter.setBrush(background_color)
-        painter.drawRoundedRect(indicator_rect.adjusted(0, 0, -1, -1), 3, 3)
-
-        if self.isChecked():
-            check_path = QPainterPath()
-            check_path.moveTo(QPointF(3.2, indicator_y + 7.3))
-            check_path.lineTo(QPointF(5.7, indicator_y + 9.8))
-            check_path.lineTo(QPointF(10.9, indicator_y + 4.1))
-            painter.setPen(QPen(QColor("#ffffff"), 2.2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawPath(check_path)
-
-        text_rect = self.rect().adjusted(self.INDICATOR_SIZE + self.LABEL_GAP, 0, 0, 0)
-        painter.setPen(QPen(QColor(TEXT_PRIMARY)))
-        painter.drawText(text_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, self.text())
 
 
 class SettingsWindow:
@@ -328,7 +137,7 @@ class SettingsWindow:
         self.window.resize(DIALOG_WIDTH, DIALOG_HEIGHT)
         self.window.setSizeGripEnabled(True)
         self.window.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.window.setStyleSheet(self._build_stylesheet())
+        self.window.setStyleSheet(build_settings_stylesheet())
         window = self.window
         center_window(window, DIALOG_WIDTH, DIALOG_HEIGHT, parent)
         self._build(state)
@@ -1089,250 +898,3 @@ class SettingsWindow:
     def _opacity_to_slider(self, opacity: float) -> int:
         clamped = min(max(opacity, MIN_OVERLAY_OPACITY), MAX_OVERLAY_OPACITY)
         return round((clamped - MIN_OVERLAY_OPACITY) / OVERLAY_OPACITY_STEP)
-
-    def _build_stylesheet(self) -> str:
-        return f'''
-            QDialog {{
-                background: transparent;
-                color: {TEXT_PRIMARY};
-            }}
-            QFrame#dialogShell {{
-                background: {SURFACE_BG};
-                border: 1px solid {BUTTON_GHOST_BORDER};
-                border-radius: 18px;
-            }}
-            QLabel#dialogTitle {{
-                color: {TEXT_PRIMARY};
-                font-size: 16px;
-                font-weight: 700;
-                padding: 18px 0 12px 0;
-                border: none;
-            }}
-            QLabel#sectionTitle {{
-                color: {TEXT_PRIMARY};
-                font-size: 12px;
-                font-weight: 700;
-                border: none;
-            }}
-            QLabel#bodyLabel, QLabel#bodyLabelEmphasis {{
-                font-size: 10px;
-                border: none;
-            }}
-            QLabel#bodyLabelEmphasis {{
-                font-size: 11px;
-                font-weight: 600;
-            }}
-            QLabel#hintLabel {{
-                font-size: 12px;
-                border: none;
-            }}
-            QScrollArea, QScrollArea > QWidget > QWidget {{
-                background: transparent;
-                border: none;
-            }}
-            QTabWidget#settingsTabs {{
-                background: transparent;
-                border: none;
-                padding: 0 0 4px 0;
-            }}
-            QTabWidget#settingsTabs::pane {{
-                background: transparent;
-                border: none;
-                margin-top: 10px;
-            }}
-            QTabWidget#settingsTabs::tab-bar {{
-                alignment: center;
-            }}
-            QTabWidget#settingsTabs QTabBar {{
-                background: {SURFACE_BG};
-                border: 1px solid {BUTTON_GHOST_BORDER};
-                border-radius: 12px;
-                padding: 4px;
-            }}
-            QTabWidget#settingsTabs QTabBar::tab {{
-                background: transparent;
-                color: {TEXT_MUTED};
-                border: 1px solid transparent;
-                border-radius: 9px;
-                padding: 8px 12px;
-                margin: 0 2px;
-                min-width: 90px;
-                font-weight: 600;
-            }}
-            QTabWidget#settingsTabs QTabBar::tab:hover {{
-                background: {ELEVATED_BG};
-                color: {TEXT_PRIMARY};
-                border-color: {BUTTON_GHOST_BORDER};
-            }}
-            QTabWidget#settingsTabs QTabBar::tab:pressed {{
-                background: {ACCENT_PRESSED};
-                color: {TEXT_PRIMARY};
-                border-color: {ACCENT_PRESSED};
-            }}
-            QTabWidget#settingsTabs QTabBar::tab:selected {{
-                background: {BUTTON_ACTIVE_BG};
-                color: {TEXT_PRIMARY};
-                border-color: {GREEN_ACCENT};
-            }}
-            QTabWidget#settingsTabs QTabBar::tab:selected:hover {{
-                background: {BUTTON_ACTIVE_BG};
-                border-color: {ACCENT_HOVER};
-            }}
-            QTabWidget#settingsTabs QTabBar::tab:focus {{
-                outline: none;
-                border-color: {ACCENT_HOVER};
-            }}
-            QScrollBar:vertical {{
-                background: transparent;
-                width: 10px;
-                margin: 8px 3px 8px 0;
-                border: none;
-            }}
-            QScrollBar::handle:vertical {{
-                background: {SCROLLBAR_HANDLE};
-                min-height: 30px;
-                border-radius: 4px;
-            }}
-            QScrollBar::handle:vertical:hover {{
-                background: {SCROLLBAR_HANDLE_HOVER};
-            }}
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
-                background: transparent;
-                border: none;
-                height: 0;
-            }}
-            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
-                background: transparent;
-                border: none;
-            }}
-            QFrame#separator {{
-                background: {SEPARATOR_COLOR};
-                border: none;
-            }}
-            QPushButton {{
-                background: {BUTTON_BG};
-                color: {TEXT_PRIMARY};
-                border: 1px solid {BUTTON_GHOST_BORDER};
-                border-radius: 10px;
-                padding: 7px 16px;
-                font-weight: 600;
-            }}
-            QPushButton:hover {{
-                background: {BUTTON_ACTIVE_BG};
-                border-color: {ACCENT_HOVER};
-                color: {TEXT_PRIMARY};
-            }}
-            QPushButton:pressed {{
-                background: {ELEVATED_BG};
-                border-color: {ACCENT_PRESSED};
-            }}
-            QPushButton:disabled {{
-                background: {SEPARATOR_COLOR};
-                color: {TEXT_MUTED};
-                border-color: {SEPARATOR_COLOR};
-            }}
-            QPushButton#applyButton {{
-                background: {GREEN_ACCENT};
-                color: {WINDOW_BG};
-                border-color: {GREEN_ACCENT};
-            }}
-            QPushButton#applyButton:hover {{
-                background: {ACCENT_HOVER};
-                border-color: {ACCENT_HOVER};
-                color: {WINDOW_BG};
-            }}
-            QPushButton#applyButton:pressed {{
-                background: {ACCENT_PRESSED};
-                border-color: {ACCENT_PRESSED};
-                color: {TEXT_PRIMARY};
-            }}
-            QPushButton#cancelButton {{
-                background: transparent;
-                color: {TEXT_MUTED};
-                border-color: {BUTTON_GHOST_BORDER};
-            }}
-            QPushButton#cancelButton:hover {{
-                background: {ELEVATED_BG};
-                color: {TEXT_PRIMARY};
-                border-color: {SCROLLBAR_HANDLE_HOVER};
-            }}
-            QPushButton#cancelButton:pressed {{
-                background: {SEPARATOR_COLOR};
-                color: {TEXT_PRIMARY};
-            }}
-            QComboBox {{
-                background: {ELEVATED_BG};
-                color: {TEXT_PRIMARY};
-                border: 1px solid {BUTTON_GHOST_BORDER};
-                border-radius: 10px;
-                padding: 7px 28px 7px 10px;
-                selection-background-color: {BUTTON_ACTIVE_BG};
-            }}
-            QComboBox:hover {{
-                border-color: {ACCENT_HOVER};
-            }}
-            QComboBox::drop-down {{
-                subcontrol-origin: padding;
-                subcontrol-position: top right;
-                width: 24px;
-                border: none;
-            }}
-            QComboBox::down-arrow {{
-                width: 0;
-                height: 0;
-                border-left: 4px solid transparent;
-                border-right: 4px solid transparent;
-                border-top: 5px solid {TEXT_MUTED};
-            }}
-            QComboBox QAbstractItemView {{
-                background: {ELEVATED_BG};
-                color: {TEXT_PRIMARY};
-                border: 1px solid {BUTTON_GHOST_BORDER};
-                border-radius: 10px;
-                padding: 4px;
-                outline: none;
-                selection-background-color: {BUTTON_ACTIVE_BG};
-                selection-color: {TEXT_PRIMARY};
-            }}
-            QLineEdit {{
-                background: {ELEVATED_BG};
-                color: {TEXT_PRIMARY};
-                border: 1px solid {BUTTON_GHOST_BORDER};
-                border-radius: 10px;
-                padding: 7px 10px;
-                selection-background-color: {BUTTON_ACTIVE_BG};
-                selection-color: {TEXT_PRIMARY};
-            }}
-            QLineEdit:hover {{
-                border-color: {ACCENT_HOVER};
-            }}
-            QLineEdit:focus {{
-                border-color: {GREEN_ACCENT};
-            }}
-            QSlider::groove:horizontal {{
-                height: 6px;
-                background: {SEPARATOR_COLOR};
-                border-radius: 3px;
-            }}
-            QSlider::sub-page:horizontal {{
-                background: {GREEN_ACCENT};
-                border-radius: 3px;
-            }}
-            QSlider::handle:horizontal {{
-                width: 16px;
-                height: 16px;
-                margin: -5px 0;
-                border-radius: 8px;
-                background: {TEXT_PRIMARY};
-                border: 2px solid {GREEN_ACCENT};
-            }}
-            QSlider::handle:horizontal:hover {{
-                background: {ACCENT_HOVER};
-                border-color: {ACCENT_HOVER};
-            }}
-            QCheckBox {{
-                color: {TEXT_PRIMARY};
-                spacing: 8px;
-                border: none;
-            }}
-        '''

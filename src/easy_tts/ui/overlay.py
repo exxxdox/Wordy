@@ -11,37 +11,28 @@ import threading
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, TypeAlias
 
-from PySide6.QtCore import QEvent, QObject, QTimer, Qt, Signal
-from PySide6.QtGui import QColor, QKeyEvent, QMouseEvent, QPainter, QPainterPath, QPaintEvent
-from PySide6.QtWidgets import QApplication, QLabel, QLineEdit, QMessageBox, QStyle, QWidget
+from PySide6.QtCore import QEvent, QObject, QTimer, Qt
+from PySide6.QtGui import QMouseEvent
+from PySide6.QtWidgets import QApplication, QLabel, QLineEdit, QMessageBox
 
 import easy_tts.secret
 from easy_tts.config import AppSettings, display_hotkey, get_active_config_file
 from easy_tts.audio.capture import AudioCapture
 from easy_tts.identity import normalize_identity
 from easy_tts.audio.driver import VBCableDriverManager
-from easy_tts.ui.settings import SettingsState, SettingsWindow
-from easy_tts.ui.theme import ACCENT_HOVER, CONFIG_BUTTON_IDLE, GREEN_ACCENT, INPUT_BACKGROUND, INPUT_BORDER
-from easy_tts.window import activate_window, center_window, clamp_window_position, get_cursor_position, is_left_button_down, is_point_in_widget
+from easy_tts.ui.settings_state import SettingsState
+from easy_tts.ui.settings import SettingsWindow
+from easy_tts.ui.overlay_widgets import _OverlaySignals, _OverlayWidget
+from easy_tts.ui.window import activate_window, center_window, clamp_window_position, get_cursor_position, is_left_button_down, is_point_in_widget
 
 from easy_tts.qt_lifecycle import safe_qt_call
 
 if TYPE_CHECKING:
-    from easy_tts.native_hotkey import NativeHotkeyListener
+    from easy_tts.hotkey import NativeHotkeyListener
 
 logger = logging.getLogger(__name__)
 
-INPUT_BACKGROUND_COLOR = INPUT_BACKGROUND
-INPUT_BORDER_COLOR = INPUT_BORDER
-INPUT_TEXT_COLOR = GREEN_ACCENT
-CONFIG_BUTTON_TEXT_COLOR = CONFIG_BUTTON_IDLE
-CONFIG_BUTTON_HOVER_TEXT_COLOR = ACCENT_HOVER
-SETTINGS_BUTTON_FONT_SIZE = 18
-SETTINGS_BUTTON_CENTER_X_OFFSET = 34
-SETTINGS_BUTTON_ENTRY_RIGHT_PADDING = 92
-ENTRY_LEFT_PADDING = 20
-ENTRY_VERTICAL_PADDING = 9
-WINDOW_RADIUS = 18
+# 仅 InputOverlay 自身使用的常量
 OUTSIDE_CLICK_INTERVAL_MS = 80
 FOCUS_CLEAR_DELAY_MS = 260
 SETTINGS_IGNORE_FOCUS_DELAY_MS = 300
@@ -54,123 +45,7 @@ def normalize_input_text(text: str) -> str:
     return text.strip()
 
 
-class _OverlaySignals(QObject):
-    """将后台线程事件安全转发到 Qt 主线程。"""
-
-    hotkey_triggered = Signal()
-    record_finished = Signal(object, object)
-    voices_loaded = Signal(object)
-    voices_error = Signal(object)
-
-    def __init__(self, owner: "InputOverlay") -> None:
-        super().__init__()
-        self._owner = owner
-
-    def eventFilter(self, watched: QObject, event: Any) -> bool:
-        return self._owner._event_filter(watched, event)
-
-
-class _OverlayWidget(QWidget):
-    """无边框透明胶囊输入框。"""
-
-    def __init__(self, owner: "InputOverlay", signals: _OverlaySignals) -> None:
-        super().__init__()
-        self._owner = owner
-        self._overlay_opacity: float = 1.0
-        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool)
-        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.setFixedSize(owner.width, owner.height)
-        self.setMouseTracking(True)
-
-        self.entry = QLineEdit(self)
-        self.entry.setObjectName("overlayEntry")
-        self.entry.setFrame(False)
-        self.entry.setGeometry(ENTRY_LEFT_PADDING, ENTRY_VERTICAL_PADDING, owner.width - SETTINGS_BUTTON_ENTRY_RIGHT_PADDING, owner.height - ENTRY_VERTICAL_PADDING * 2)
-        self.entry.returnPressed.connect(owner._on_return)
-        self.entry.installEventFilter(signals)
-        self.entry.setStyleSheet(f'''
-            QLineEdit#overlayEntry {{
-                background: transparent;
-                color: {INPUT_TEXT_COLOR};
-                selection-background-color: {CONFIG_BUTTON_HOVER_TEXT_COLOR};
-                selection-color: {INPUT_BACKGROUND_COLOR};
-                border: none;
-                font-family: "Segoe UI";
-                font-size: 24px;
-                padding: 0;
-            }}
-        ''')
-
-        self.settings_button = QLabel("⚙", self)
-        self.settings_button.setObjectName("settingsButton")
-        self.settings_button.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.settings_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        settings_hit_size = SETTINGS_BUTTON_FONT_SIZE + 6
-        settings_x = owner.width - SETTINGS_BUTTON_CENTER_X_OFFSET - settings_hit_size // 2
-        settings_y = (owner.height - settings_hit_size) // 2
-        self.settings_button.setGeometry(settings_x, settings_y, settings_hit_size, settings_hit_size)
-        self.settings_button.installEventFilter(signals)
-        self.set_settings_hover(False)
-
-    def paintEvent(self, _event: QPaintEvent) -> None:
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        border_color = QColor(INPUT_BORDER_COLOR)
-        background_color = QColor(INPUT_BACKGROUND_COLOR)
-        border_color.setAlphaF(self._overlay_opacity)
-        background_color.setAlphaF(self._overlay_opacity)
-        painter.setPen(border_color)
-        painter.setBrush(background_color)
-        path = QPainterPath()
-        path.addRoundedRect(1, 1, self.width() - 2, self.height() - 2, WINDOW_RADIUS, WINDOW_RADIUS)
-        painter.drawPath(path)
-
-    def set_overlay_opacity(self, opacity: float) -> None:
-        self._overlay_opacity = opacity
-        self.update()
-
-    def keyPressEvent(self, event: QKeyEvent) -> None:
-        if event.key() == Qt.Key.Key_Escape:
-            self._owner.hide()
-            event.accept()
-            return
-        super().keyPressEvent(event)
-
-    def mousePressEvent(self, event: QMouseEvent) -> None:
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._owner._on_overlay_mouse_press(event)
-            event.accept()
-            return
-        super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event: QMouseEvent) -> None:
-        self._owner._on_overlay_mouse_move(event)
-        if self._owner._is_dragging_window:
-            event.accept()
-            return
-        super().mouseMoveEvent(event)
-
-    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._owner._on_overlay_mouse_release()
-            event.accept()
-            return
-        super().mouseReleaseEvent(event)
-
-    def focusOutEvent(self, event: Any) -> None:
-        self._owner._on_focus_out()
-        super().focusOutEvent(event)
-
-    def set_settings_hover(self, hovered: bool) -> None:
-        color = CONFIG_BUTTON_HOVER_TEXT_COLOR if hovered else CONFIG_BUTTON_TEXT_COLOR
-        self.settings_button.setStyleSheet(f'''
-            QLabel#settingsButton {{
-                color: {color};
-                background: transparent;
-                font-family: "Segoe UI";
-                font-size: {SETTINGS_BUTTON_FONT_SIZE}px;
-            }}
-        ''')
+# _OverlaySignals / _OverlayWidget 定义在 overlay_widgets.py，此处导入使用。
 
 
 class InputOverlay:
@@ -512,7 +387,7 @@ class InputOverlay:
 
     def _register_hotkey(self) -> None:
         self._unregister_hotkey()
-        from easy_tts.native_hotkey import NativeHotkeyListener
+        from easy_tts.hotkey import NativeHotkeyListener
         hotkey_listener = NativeHotkeyListener(self._hotkey, self._hotkey_name, self._on_global_hotkey)
         self._hotkey_listener = hotkey_listener
         hotkey_listener.start()
@@ -828,54 +703,25 @@ class InputOverlay:
 
     def _apply_pending_settings(self, settings: SettingsWindow) -> None:
         pending = settings.get_pending_settings()
-        hotkey = pending.hotkey
-        name = pending.hotkey_name
-        old_hotkey = self._hotkey
-        old_name = self._hotkey_name
-        hotkey_changed = hotkey != old_hotkey or name != old_name
         config_update: dict[str, object] = {}
         saved_messages: list[str] = []
-        if hotkey_changed and not self.try_register_hotkey(hotkey, name):
-            QMessageBox.critical(settings.window, "快捷键设置失败", f"无法注册 {name}，请确认快捷键未被其他程序占用。")
+
+        # ---- 快捷键（特殊处理：注册失败则回滚，不继续保存） ----
+        old_hotkey = self._hotkey
+        old_name = self._hotkey_name
+        hotkey_changed = pending.hotkey != old_hotkey or pending.hotkey_name != old_name
+        if hotkey_changed and not self.try_register_hotkey(pending.hotkey, pending.hotkey_name):
+            QMessageBox.critical(settings.window, "快捷键设置失败",
+                f"无法注册 {pending.hotkey_name}，请确认快捷键未被其他程序占用。")
             return
         if hotkey_changed:
-            config_update["hotkey"] = hotkey
-            config_update["name"] = name
+            config_update["hotkey"] = pending.hotkey
+            config_update["name"] = pending.hotkey_name
 
-        (
-            has_structured_identity,
-            pending_identity,
-            pending_audio_output_device_name,
-            audio_output_changed,
-            audio_config_patch,
-        ) = self._compute_audio_output_pending(pending)
-        config_update.update(audio_config_patch)
-
-        voice_changed = bool(
-            pending.voice_id
-            and pending.voice_name
-            and (pending.voice_id != self._voice_id or pending.voice_name != self._voice_name)
-        )
-        if voice_changed:
-            config_update["voice_id"] = pending.voice_id
-            config_update["voice_name"] = pending.voice_name
-
-        if pending.volume != self._volume:
-            config_update["volume"] = pending.volume
-
-        if pending.overlay_opacity != self._overlay_opacity:
-            config_update["overlay_opacity"] = pending.overlay_opacity
-
-        if pending.tts_backend != self._tts_backend:
-            config_update["tts_backend"] = pending.tts_backend
-
-        pending_log_level = getattr(pending, "log_level", self._log_level)
-        if pending_log_level != self._log_level:
-            config_update["log_level"] = pending_log_level
-
-        if pending.fixed_center != self._fixed_center:
-            config_update["fixed_center"] = pending.fixed_center
-
+        # ---- 音频输出（复杂 identity 处理，委托给专用方法） ----
+        audio_changed, audio_apply = self._compute_audio_output_change(pending)
+        config_update.update(audio_apply.get("config_patch", {}))
+        # 缓存窗口位置（在 config_update 保存前计算）
         pending_window_position: WindowPosition | None = None
         window_position_changed = False
         if not pending.fixed_center and self.root is not None:
@@ -885,6 +731,24 @@ class InputOverlay:
             if window_position_changed:
                 config_update["window_position"] = pending_window_position
 
+        # ---- 简单标量字段：compare → 存 config_update  ----
+        self._collect_scalar_change(pending, config_update, "voice_id")
+        self._collect_scalar_change(pending, config_update, "voice_name")
+        self._collect_scalar_change(pending, config_update, "volume")
+        self._collect_scalar_change(pending, config_update, "overlay_opacity")
+        self._collect_scalar_change(pending, config_update, "tts_backend")
+        self._collect_scalar_change(pending, config_update, "log_level")
+        self._collect_scalar_change(pending, config_update, "fixed_center")
+
+        # ---- 音频路由：7 个字段统一收集 ----
+        route_update: dict[str, object] = {}
+        for key in ("audio_routing_enabled", "mic_input_device", "bridge_source_device",
+                     "virtual_output_device", "mic_gain", "bridge_gain", "tts_gain"):
+            self._collect_scalar_change(pending, route_update, key, local_attr=f"_{key}")
+        if route_update:
+            config_update.update(route_update)
+
+        # ---- 持久化到 JSON ----
         if config_update:
             try:
                 config_file = AppSettings.load().update(**config_update)
@@ -895,159 +759,142 @@ class InputOverlay:
                 return
             self._last_saved_config_file = config_file
 
+        # ---- 应用变更到运行时状态 + 回调 + 消息 ----
         if hotkey_changed:
-            saved_messages.append(f"全局快捷键已更新为 {name}")
-            settings.current_label.setText(f"当前快捷键：{name}")
+            saved_messages.append(f"全局快捷键已更新为 {pending.hotkey_name}")
+            settings.current_label.setText(f"当前快捷键：{pending.hotkey_name}")
 
-        if voice_changed and pending.voice_id and pending.voice_name:
-            self._voice_id = pending.voice_id
-            self._voice_name = pending.voice_name
-            if self.on_voice_change is not None:
-                self.on_voice_change(self._voice_id, self._voice_name)
-            saved_messages.append(f"音色已更新为 {self._voice_name}")
+        self._apply_scalar_and_notify(pending, saved_messages, "voice_id", "_voice_id",
+            callback=lambda: self.on_voice_change and self.on_voice_change(self._voice_id, self._voice_name or ""),
+            msg=lambda: f"音色已更新为 {self._voice_name}")
+        self._apply_scalar_and_notify(pending, saved_messages, "voice_name", "_voice_name")
+        self._apply_scalar_and_notify(pending, saved_messages, "volume", "_volume",
+            callback=lambda: self.on_volume_change and self.on_volume_change(self._volume),
+            msg=lambda: f"音量已更新为 {self._volume:.2f}x")
+        self._apply_scalar_and_notify(pending, saved_messages, "overlay_opacity", "_overlay_opacity",
+            side_effect=lambda: self.root is not None and self.root.set_overlay_opacity(self._overlay_opacity),
+            msg=lambda: f"输入框透明度已更新为 {round(self._overlay_opacity * 100)}%")
+        self._apply_scalar_and_notify(pending, saved_messages, "tts_backend", "_tts_backend",
+            callback=lambda: self.on_tts_backend_change and self.on_tts_backend_change(self._tts_backend),
+            msg=lambda: f"模式已切换为 {self._tts_backend}")
+        self._apply_scalar_and_notify(pending, saved_messages, "log_level", "_log_level",
+            side_effect=lambda: logging.getLogger().setLevel(getattr(logging, self._log_level, logging.INFO)),
+            msg=lambda: f"日志显示等级已切换为 {self._log_level}")
 
-        if pending.volume != self._volume:
-            self._volume = pending.volume
-            if self.on_volume_change is not None:
-                self.on_volume_change(self._volume)
-            saved_messages.append(f"音量已更新为 {self._volume:.2f}x")
-
-        if pending.overlay_opacity != self._overlay_opacity:
-            self._overlay_opacity = pending.overlay_opacity
-            if self.root is not None:
-                self.root.set_overlay_opacity(self._overlay_opacity)
-            saved_messages.append(f"输入框透明度已更新为 {round(self._overlay_opacity * 100)}%")
-
-        if pending.tts_backend != self._tts_backend:
-            self._tts_backend = pending.tts_backend
-            if self.on_tts_backend_change is not None:
-                self.on_tts_backend_change(self._tts_backend)
-            saved_messages.append(f"模式已切换为 {self._tts_backend}")
-
-        if pending_log_level != self._log_level:
-            self._log_level = pending_log_level
-            logging.getLogger().setLevel(getattr(logging, self._log_level, logging.INFO))
-            saved_messages.append(f"日志显示等级已切换为 {self._log_level}")
-
-        # 音频路由配置处理
-        route_config_changed = False
-        route_config_update: dict[str, object] = {}
-        self_audio_routing_enabled = getattr(self, "_audio_routing_enabled", False)
-        self_mic_input_device = getattr(self, "_mic_input_device", None)
-        self_bridge_source_device = getattr(self, "_bridge_source_device", None)
-        self_virtual_output_device = getattr(self, "_virtual_output_device", None)
-        self_mic_gain = getattr(self, "_mic_gain", 1.0)
-        self_bridge_gain = getattr(self, "_bridge_gain", 1.0)
-        self_tts_gain = getattr(self, "_tts_gain", 1.0)
-
-        pending_audio_routing_enabled = getattr(pending, "audio_routing_enabled", self_audio_routing_enabled)
-        pending_mic_input_device = getattr(pending, "mic_input_device", self_mic_input_device)
-        pending_bridge_source_device = getattr(pending, "bridge_source_device", self_bridge_source_device)
-        pending_virtual_output_device = getattr(pending, "virtual_output_device", self_virtual_output_device)
-        pending_mic_gain = getattr(pending, "mic_gain", self_mic_gain)
-        pending_bridge_gain = getattr(pending, "bridge_gain", self_bridge_gain)
-        pending_tts_gain = getattr(pending, "tts_gain", self_tts_gain)
-
-        if pending_audio_routing_enabled != self_audio_routing_enabled:
-            self._audio_routing_enabled = pending_audio_routing_enabled
-            route_config_update["audio_routing_enabled"] = self._audio_routing_enabled
-            route_config_changed = True
-            saved_messages.append("音频路由已启用" if self._audio_routing_enabled else "音频路由已禁用")
-
-        if pending_mic_input_device != self_mic_input_device:
-            self._mic_input_device = pending_mic_input_device
-            route_config_update["mic_input_device"] = self._mic_input_device
-            route_config_changed = True
-            if self._mic_input_device:
+        # 音频路由：应用变更并通知 WavTransApp
+        if route_update:
+            for key in ("audio_routing_enabled", "mic_input_device", "bridge_source_device",
+                         "virtual_output_device", "mic_gain", "bridge_gain", "tts_gain"):
+                self._apply_scalar_and_notify(pending, saved_messages, key, f"_{key}")
+            if self.on_audio_route_change is not None:
+                self.on_audio_route_change(dict(route_update))
+            # 补充音频路由专用消息
+            if "audio_routing_enabled" in route_update:
+                label = "音频路由已启用" if self._audio_routing_enabled else "音频路由已禁用"
+                saved_messages[-1] = label  # 替换 _apply_scalar_and_notify 的通用消息
+            if self._mic_input_device and "mic_input_device" in route_update:
                 saved_messages.append(f"麦克风已切换为 {self._mic_input_device}")
+            if "bridge_source_device" in route_update:
+                saved_messages.append(
+                    f"桥接源已切换为 {self._bridge_source_device}" if self._bridge_source_device
+                    else "桥接源已禁用")
 
-        if pending_bridge_source_device != self_bridge_source_device:
-            self._bridge_source_device = pending_bridge_source_device
-            route_config_update["bridge_source_device"] = self._bridge_source_device
-            route_config_changed = True
-            if self._bridge_source_device:
-                saved_messages.append(f"桥接源已切换为 {self._bridge_source_device}")
-            else:
-                saved_messages.append("桥接源已禁用")
-
-        if pending_virtual_output_device != self_virtual_output_device:
-            self._virtual_output_device = pending_virtual_output_device
-            route_config_update["virtual_output_device"] = self._virtual_output_device
-            route_config_changed = True
-
-        if pending_mic_gain != self_mic_gain:
-            self._mic_gain = pending_mic_gain
-            route_config_update["mic_gain"] = self._mic_gain
-            route_config_changed = True
-
-        if pending_bridge_gain != self_bridge_gain:
-            self._bridge_gain = pending_bridge_gain
-            route_config_update["bridge_gain"] = self._bridge_gain
-            route_config_changed = True
-
-        if pending_tts_gain != self_tts_gain:
-            self._tts_gain = pending_tts_gain
-            route_config_update["tts_gain"] = self._tts_gain
-            route_config_changed = True
-
-        if route_config_changed:
-            config_update.update(route_config_update)
-            if getattr(self, "on_audio_route_change", None) is not None:
-                self.on_audio_route_change(dict(route_config_update))
-
-        if pending.fixed_center != self._fixed_center:
-            self._fixed_center = pending.fixed_center
-            if self._fixed_center:
-                if self.root is not None:
-                    center_window(self.root, self.width, self.height)
-                saved_messages.append("输入窗口已设置为固定居中")
-            else:
-                self._window_position = pending_window_position
-                saved_messages.append("输入窗口已设置为可拖动并记住位置")
-        elif window_position_changed:
+        # fixed_center 有额外 UI 副作用
+        self._apply_scalar_and_notify(pending, saved_messages, "fixed_center", "_fixed_center",
+            side_effect=lambda: self._apply_fixed_center_side_effect(pending_window_position),
+            msg=lambda: ("输入窗口已设置为固定居中" if self._fixed_center
+                         else "输入窗口已设置为可拖动并记住位置"))
+        if not pending.fixed_center and window_position_changed:
             self._window_position = pending_window_position
             saved_messages.append("输入窗口位置已更新")
 
-        if audio_output_changed:
-            self._audio_output_device_name = pending_audio_output_device_name
-            if has_structured_identity:
-                self._audio_output_device = dict(pending_identity) if pending_identity is not None else None
-                callback_payload: object = dict(pending_identity) if pending_identity is not None else None
-            else:
-                self._audio_output_device = (
-                    dict(normalize_identity(pending_audio_output_device_name))
-                    if pending_audio_output_device_name is not None
-                    else None
-                )
-                callback_payload = pending_audio_output_device_name
-            if self.on_audio_output_change is not None:
-                self.on_audio_output_change(callback_payload)
-            display_name = pending_audio_output_device_name if pending_audio_output_device_name else "系统默认"
-            saved_messages.append(f"音频输出设备已切换为 {display_name}")
+        # 音频输出设备变更
+        if audio_changed:
+            self._apply_audio_output_runtime(audio_apply, saved_messages)
 
         self._apply_cartesia_api_key_change(pending, saved_messages)
 
+        # ---- 最终状态 ----
         if not saved_messages:
             settings.set_apply_status("没有设置变更")
             return
-
         status_text = "；".join(saved_messages)
         if config_update:
             status_text = f"{status_text}\n已保存到：{self._last_saved_config_file}"
         settings.set_apply_status(status_text)
 
-    def _compute_audio_output_pending(
-        self, pending: object
-    ) -> tuple[bool, dict[str, object] | None, str | None, bool, dict[str, object]]:
+    # ── _apply_pending_settings 辅助方法 ─────────────────────────────────
+
+    def _collect_scalar_change(self, pending: object, config: dict[str, object],
+                                key: str, *, local_attr: str | None = None) -> bool:
+        """比较 pending.key 与 self.<local_attr>，有变更则写入 config dict。返回是否有变更。"""
+        local_key = local_attr if local_attr is not None else f"_{key}"
+        old_val = getattr(self, local_key, None)
+        new_val = getattr(pending, key, old_val)
+        if new_val != old_val:
+            config[key] = new_val
+            return True
+        return False
+
+    def _apply_scalar_and_notify(self, pending: object, messages: list[str],
+                                  key: str, local_attr: str, *,
+                                  callback: Callable[[], None] | None = None,
+                                  side_effect: Callable[[], object] | None = None,
+                                  msg: Callable[[], str] | None = None) -> bool:
+        """应用单个字段的运行时变更：更新本地状态 → 执行副作用 → 调回调 → 添加消息。"""
+        old_val = getattr(self, local_attr, None)
+        new_val = getattr(pending, key, old_val)
+        if new_val == old_val:
+            return False
+        setattr(self, local_attr, new_val)
+        if side_effect is not None:
+            side_effect()
+        if callback is not None:
+            callback()
+        if msg is not None:
+            messages.append(msg())
+        return True
+
+    def _apply_fixed_center_side_effect(self, pending_window_position: WindowPosition | None) -> None:
+        """fixed_center 变更的 UI 副作用：居中或恢复拖拽位置。"""
+        if self._fixed_center and self.root is not None:
+            center_window(self.root, self.width, self.height)
+        elif pending_window_position is not None:
+            self._window_position = pending_window_position
+
+    def _apply_audio_output_runtime(self, audio_apply: dict, saved_messages: list[str]) -> None:
+        """应用音频输出设备的运行时状态变更。"""
+        identity = audio_apply.get("identity")
+        device_name = audio_apply.get("device_name")
+        has_structured = audio_apply.get("has_structured_identity", False)
+        self._audio_output_device_name = device_name
+        if has_structured:
+            self._audio_output_device = dict(identity) if identity is not None else None
+            callback_payload: object = dict(identity) if identity is not None else None
+        else:
+            self._audio_output_device = (
+                dict(normalize_identity(device_name)) if device_name is not None else None
+            )
+            callback_payload = device_name
+        if self.on_audio_output_change is not None:
+            self.on_audio_output_change(callback_payload)
+        saved_messages.append(f"音频输出设备已切换为 {device_name or '系统默认'}")
+
+    def _compute_audio_output_change(self, pending: object) -> tuple[bool, dict]:
+        """计算音频输出设备变更，返回 (changed, apply_dict)。
+
+        apply_dict 包含: config_patch, identity, device_name, has_structured_identity
+        """
         _sentinel = object()
         pending_identity_raw: object = getattr(pending, "audio_output_device_identity", _sentinel)
         if pending_identity_raw is _sentinel:
             pending_identity_raw = getattr(pending, "audio_output_device", _sentinel)
-        has_structured_identity = pending_identity_raw is not _sentinel
+        has_structured = pending_identity_raw is not _sentinel
         pending_name_raw: object = getattr(pending, "audio_output_device_name", self._audio_output_device_name)
-        pending_audio_output_device_name: str | None = pending_name_raw if isinstance(pending_name_raw, str) else None
+        pending_device_name: str | None = pending_name_raw if isinstance(pending_name_raw, str) else None
         config_patch: dict[str, object] = {}
-        if has_structured_identity:
+
+        if has_structured:
             pending_identity: dict[str, object] | None
             if isinstance(pending_identity_raw, dict):
                 pending_identity = dict(pending_identity_raw)
@@ -1055,19 +902,26 @@ class InputOverlay:
                 pending_identity = None
             if pending_identity is not None:
                 identity_name = pending_identity.get("name")
-                pending_audio_output_device_name = identity_name if isinstance(identity_name, str) else None
+                pending_device_name = identity_name if isinstance(identity_name, str) else None
             else:
-                pending_audio_output_device_name = None
-            audio_output_changed = pending_identity != self._audio_output_device or pending_audio_output_device_name != self._audio_output_device_name
-            if audio_output_changed:
+                pending_device_name = None
+            changed = (pending_identity != self._audio_output_device
+                        or pending_device_name != self._audio_output_device_name)
+            if changed:
                 config_patch["audio_output_device"] = dict(pending_identity) if pending_identity is not None else None
-                config_patch["audio_output_device_name"] = pending_audio_output_device_name
+                config_patch["audio_output_device_name"] = pending_device_name
         else:
             pending_identity = None
-            audio_output_changed = pending_audio_output_device_name != self._audio_output_device_name
-            if audio_output_changed:
-                config_patch["audio_output_device_name"] = pending_audio_output_device_name
-        return (has_structured_identity, pending_identity, pending_audio_output_device_name, audio_output_changed, config_patch)
+            changed = pending_device_name != self._audio_output_device_name
+            if changed:
+                config_patch["audio_output_device_name"] = pending_device_name
+
+        return changed, {
+            "config_patch": config_patch,
+            "identity": pending_identity,
+            "device_name": pending_device_name,
+            "has_structured_identity": has_structured,
+        }
 
     def _apply_cartesia_api_key_change(self, pending: object, saved_messages: list[str]) -> None:
         cartesia_action = getattr(pending, "cartesia_api_key_action", "unchanged")

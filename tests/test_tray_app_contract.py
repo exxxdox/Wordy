@@ -41,7 +41,7 @@ _CONFIG: dict[str, Any] = {
 
 
 def _install_native_hotkey_stub(monkeypatch: pytest.MonkeyPatch) -> None:
-    module = ModuleType("easy_tts.native_hotkey")
+    module = ModuleType("easy_tts.hotkey")
 
     class NativeHotkeyListener:
         def __init__(self, *args: object, **kwargs: object) -> None:
@@ -54,7 +54,11 @@ def _install_native_hotkey_stub(monkeypatch: pytest.MonkeyPatch) -> None:
             self.started = False
 
     setattr(module, "NativeHotkeyListener", NativeHotkeyListener)
-    monkeypatch.setitem(sys.modules, "easy_tts.native_hotkey", module)
+    from easy_tts.hotkey import iter_hotkey_parts, normalize_key_part, split_hotkey
+    setattr(module, "iter_hotkey_parts", iter_hotkey_parts)
+    setattr(module, "normalize_key_part", normalize_key_part)
+    setattr(module, "split_hotkey", split_hotkey)
+    monkeypatch.setitem(sys.modules, "easy_tts.hotkey", module)
 
 
 def _import_input_overlay(monkeypatch: pytest.MonkeyPatch):

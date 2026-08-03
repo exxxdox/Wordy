@@ -15,7 +15,18 @@ import sys
 from pathlib import Path
 from typing import NoReturn
 
-SETTINGS_PATH = Path(__file__).resolve().parent.parent / "src" / "easy_tts" / "ui" / "settings.py"
+SETTINGS_DIR = Path(__file__).resolve().parent.parent / "src" / "easy_tts" / "ui"
+SETTINGS_PATH = SETTINGS_DIR / "settings.py"
+SETTINGS_WIDGETS_PATH = SETTINGS_DIR / "settings_widgets.py"
+SETTINGS_STYLE_PATH = SETTINGS_DIR / "settings_style.py"
+SETTINGS_STATE_PATH = SETTINGS_DIR / "settings_state.py"
+# 所有设置相关源文件，合并后用于静态检查
+_SETTINGS_PACKAGE_PATHS = (
+    SETTINGS_PATH,
+    SETTINGS_WIDGETS_PATH,
+    SETTINGS_STYLE_PATH,
+    SETTINGS_STATE_PATH,
+)
 
 # ----- 期望阈值 -----
 MIN_DIALOG_WIDTH = 560
@@ -62,9 +73,13 @@ FORBIDDEN_QSS_SUBSTRINGS = [
 # ----- 工具函数 -----
 
 def _load_source() -> str:
-    if not SETTINGS_PATH.exists():
-        raise AssertionError(f"easy_tts/ui/settings.py 不存在: {SETTINGS_PATH}")
-    return SETTINGS_PATH.read_text(encoding="utf-8")
+    """加载 settings 包中所有源文件，合并为单一字符串供静态检查。"""
+    parts: list[str] = []
+    for path in _SETTINGS_PACKAGE_PATHS:
+        if not path.exists():
+            raise AssertionError(f"源文件不存在: {path}")
+        parts.append(path.read_text(encoding="utf-8"))
+    return "\n".join(parts)
 
 
 def _load_tree() -> ast.Module:
@@ -110,9 +125,9 @@ def _call_receiver_text(call: ast.Call) -> str | None:
 
 
 def _find_stylesheet_string(tree: ast.Module) -> str:
-    """从 _build_stylesheet 方法中提取静态/可静态推断的样式表内容。"""
+    """从 build_settings_stylesheet 函数中提取静态/可静态推断的样式表内容。"""
     for node in ast.walk(tree):
-        if isinstance(node, ast.FunctionDef) and node.name == "_build_stylesheet":
+        if isinstance(node, ast.FunctionDef) and node.name in ("_build_stylesheet", "build_settings_stylesheet"):
             for ret in ast.walk(node):
                 if isinstance(ret, ast.Return) and ret.value is not None:
                     value = ret.value
@@ -128,7 +143,7 @@ def _find_stylesheet_string(tree: ast.Module) -> str:
                                 # 占位符以占位标记返回，不影响关键字检测
                                 parts.append("<EXPR>")
                         return "".join(parts)
-    raise AssertionError("未找到 _build_stylesheet 方法或其返回值")
+    raise AssertionError("未找到 build_settings_stylesheet 函数或其返回值")
 
 
 # ----- 断言断点（不依赖 pytest） -----

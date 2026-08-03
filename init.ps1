@@ -44,7 +44,7 @@ if ($LASTEXITCODE -ne 0) {
 
 Write-Host '[INFO] Environment ready.'
 Write-Host "[INFO] Activate: .\.venv\Scripts\Activate.ps1"
-Write-Host "[INFO] Run:     uv run python main.py"
+Write-Host "[INFO] Run:     uv run python -m easy_tts"
 
 Invoke-Pause
 exit 0

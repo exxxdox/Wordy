@@ -18,23 +18,34 @@ from tests._stubs import PYside6_STUBS, patch_module_stubs
 
 
 def import_input_overlay_with_stubs(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
-    patch_module_stubs(
-        monkeypatch,
-        (
-            *PYside6_STUBS,
-            "easy_tts.native_hotkey",
-            "easy_tts.ui.settings",
-            "easy_tts.window",
-        ),
+    # 保存原始模块引用，测试结束后恢复
+    _STUBBED_MODULES = (
+        *PYside6_STUBS,
+        "easy_tts.hotkey",
+        "easy_tts.ui.settings",
+        "easy_tts.ui.settings_state",
+        "easy_tts.ui.settings_widgets",
+        "easy_tts.ui.settings_style",
+        "easy_tts.ui.window",
+        "easy_tts.ui.overlay_widgets",
     )
-    original_input_overlay = sys.modules.pop("easy_tts.ui.overlay", None)
+    _saved: dict[str, ModuleType | None] = {}
+    for name in _STUBBED_MODULES:
+        _saved[name] = sys.modules.get(name)
+    patch_module_stubs(monkeypatch, _STUBBED_MODULES)
+    # 同时清除 overlay 缓存以确保重新导入
+    _saved["easy_tts.ui.overlay"] = sys.modules.pop("easy_tts.ui.overlay", None)
     try:
         module = importlib.import_module("easy_tts.ui.overlay")
-        _ = sys.modules.pop("easy_tts.ui.overlay", None)
+        sys.modules.pop("easy_tts.ui.overlay", None)
         return module
     finally:
-        if original_input_overlay is not None:
-            sys.modules["easy_tts.ui.overlay"] = original_input_overlay
+        # 恢复所有被修改的模块条目
+        for name, original in _saved.items():
+            if original is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = original
 
 
 class ThreadStub:

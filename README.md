@@ -15,7 +15,7 @@
 .\init.ps1
 
 # 2. 运行
-uv run python main.py
+uv run python -m easy_tts
 ```
 
 首次运行 `init.ps1` 时，uv 自动下载 Python 3.12、创建 `.venv`、安装全部依赖。之后再次运行只检查依赖是否变更，秒级完成。

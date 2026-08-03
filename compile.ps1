@@ -35,9 +35,9 @@ $hiddenImports = @(
     'easy_tts.secret',
     'easy_tts.log',
     'easy_tts.hotkey',
-    'easy_tts.native_hotkey',
+    'easy_tts.hotkey.parser',
+    'easy_tts.hotkey.native',
     'easy_tts.identity',
-    'easy_tts.window',
     'easy_tts.qt_lifecycle',
     'easy_tts.audio.capture',
     'easy_tts.audio.player',
@@ -49,9 +49,14 @@ $hiddenImports = @(
     'easy_tts.tts.labels',
     'easy_tts.tts.cartesia',
     'easy_tts.ui.overlay',
+    'easy_tts.ui.overlay_widgets',
     'easy_tts.ui.settings',
+    'easy_tts.ui.settings_state',
+    'easy_tts.ui.settings_widgets',
+    'easy_tts.ui.settings_style',
     'easy_tts.ui.tray',
-    'easy_tts.ui.theme'
+    'easy_tts.ui.theme',
+    'easy_tts.ui.window'
 )
 
 $hiddenImportArgs = @()
@@ -70,7 +75,7 @@ $pyinstallerArgs = @(
     '--collect-all', 'cartesia',
     '--collect-all', 'keyring',
     '--collect-submodules', 'websockets'
-) + $hiddenImportArgs + @('main.py')
+) + $hiddenImportArgs + @('src/easy_tts/main.py')
 
 & uv run pyinstaller @pyinstallerArgs
 $buildExit = $LASTEXITCODE

@@ -36,7 +36,8 @@ _CONFIG = {
 
 
 def _install_native_hotkey_stub(monkeypatch: pytest.MonkeyPatch) -> None:
-    module = ModuleType("easy_tts.native_hotkey")
+    """为 easy_tts.hotkey 包安装轻量 stub，保留 config.py 等模块需要的其它导出。"""
+    module = ModuleType("easy_tts.hotkey")
 
     class NativeHotkeyListener:
         started: bool
@@ -50,8 +51,18 @@ def _install_native_hotkey_stub(monkeypatch: pytest.MonkeyPatch) -> None:
         def stop(self) -> None:
             self.started = False
 
+    # 保留 hotkey 包的其它公开 API，避免 config.py 等模块 import 失败
     setattr(module, "NativeHotkeyListener", NativeHotkeyListener)
-    monkeypatch.setitem(sys.modules, "easy_tts.native_hotkey", module)
+    from easy_tts.hotkey import (
+        iter_hotkey_parts,
+        normalize_key_part,
+        split_hotkey,
+    )
+    setattr(module, "iter_hotkey_parts", iter_hotkey_parts)
+    setattr(module, "normalize_key_part", normalize_key_part)
+    setattr(module, "split_hotkey", split_hotkey)
+
+    monkeypatch.setitem(sys.modules, "easy_tts.hotkey", module)
 
 
 def _import_input_overlay(monkeypatch: pytest.MonkeyPatch):

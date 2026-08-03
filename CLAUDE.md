@@ -5,6 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## 注意事项
 
 + 这是个新项目，不要考虑兼容旧的接口或者数据格式等，直接删除旧的增加新的即可
++ 修改符号的时候可以用LSP查找引用
 
 ## 常用命令
 
@@ -13,7 +14,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 .\init.ps1                     # uv sync，自动下载 Python 3.12 + 依赖
 
 # 运行
-uv run python main.py          # 启动应用
+uv run python -m easy_tts      # 启动应用
 
 # 测试
 uv run pytest tests/ -v        # 全量
