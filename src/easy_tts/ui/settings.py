@@ -88,6 +88,7 @@ class SettingsWindow:
         self.refresh_voices_button: QPushButton = QPushButton()
         self.voice_status_label: QLabel = QLabel()
         self.tts_backend_combo: QComboBox = NoWheelComboBox()
+        self.tts_api_combo: QComboBox = NoWheelComboBox()
         self.audio_output_combo: QComboBox = NoWheelComboBox()
         self.audio_output_status_label: QLabel = QLabel()
         self.api_key_input: QLineEdit = QLineEdit()
@@ -270,19 +271,10 @@ class SettingsWindow:
         tab_widget.setElideMode(Qt.TextElideMode.ElideNone)
         shell_layout.addWidget(tab_widget, 1)
 
-        hotkey_layout = self._create_tab_page(tab_widget, "全局快捷键")
-        self._build_hotkey_section(hotkey_layout, state)
-        hotkey_layout.addStretch(1)
-
-        cartesia_layout = self._create_tab_page(tab_widget, "Cartesia 设置")
-        self._build_api_key_section(cartesia_layout, state)
-        self._add_inner_gap(cartesia_layout)
-        self._build_backend_section(cartesia_layout)
-        self._add_inner_gap(cartesia_layout)
-        self._build_voice_section(cartesia_layout, state)
-        cartesia_layout.addStretch(1)
-
+        # 1. 本地设置（含全局快捷键）
         local_layout = self._create_tab_page(tab_widget, "本地设置")
+        self._build_hotkey_section(local_layout, state)
+        self._add_inner_gap(local_layout)
         self._build_volume_section(local_layout)
         self._add_inner_gap(local_layout)
         self._build_opacity_section(local_layout)
@@ -290,13 +282,26 @@ class SettingsWindow:
         self._build_position_section(local_layout)
         local_layout.addStretch(1)
 
+        # 2. 音频路由（音频输出居首）
         route_layout = self._create_tab_page(tab_widget, "音频路由")
-        self._build_audio_route_section(route_layout, state)
-        self._add_inner_gap(route_layout)
         self._build_audio_output_section(route_layout, state)
+        self._add_inner_gap(route_layout)
+        self._build_audio_route_section(route_layout, state)
         route_layout.addStretch(1)
 
-        log_layout = self._create_tab_page(tab_widget, "日志显示等级")
+        # 3. TTS 设置（含 API 选择 + Cartesia 子项）
+        tts_layout = self._create_tab_page(tab_widget, "TTS 设置")
+        self._build_tts_api_section(tts_layout)
+        self._add_inner_gap(tts_layout)
+        self._build_api_key_section(tts_layout, state)
+        self._add_inner_gap(tts_layout)
+        self._build_backend_section(tts_layout)
+        self._add_inner_gap(tts_layout)
+        self._build_voice_section(tts_layout, state)
+        tts_layout.addStretch(1)
+
+        # 4. 日志
+        log_layout = self._create_tab_page(tab_widget, "日志")
         self._build_log_level_section(log_layout)
         log_layout.addStretch(1)
 
@@ -381,7 +386,7 @@ class SettingsWindow:
 
     def _build_backend_section(self, parent_layout: QVBoxLayout) -> None:
         section = self._create_section(parent_layout)
-        section.addWidget(self._section_title("模式切换"))
+        section.addWidget(self._section_title("生成模式"))
         self.tts_backend_combo = NoWheelComboBox()
         self.tts_backend_combo.setSizeAdjustPolicy(QComboBox.AdjustToContentsOnFirstShow)
         self.tts_backend_combo.setMinimumContentsLength(24)
@@ -390,7 +395,19 @@ class SettingsWindow:
         self.tts_backend_combo.setCurrentText(self.pending_tts_backend)
         self.tts_backend_combo.currentTextChanged.connect(self._on_tts_backend_selected)
         section.addWidget(self.tts_backend_combo)
-        section.addWidget(self._hint_label("选择 Cartesia bytes 或 realtime 模式，应用后立即生效。", TEXT_MUTED))
+        section.addWidget(self._hint_label("Bytes：完整生成后播放。Realtime：边生成边播放，延迟更低。", TEXT_MUTED))
+
+    def _build_tts_api_section(self, parent_layout: QVBoxLayout) -> None:
+        section = self._create_section(parent_layout)
+        section.addWidget(self._section_title("TTS API"))
+        self.tts_api_combo = NoWheelComboBox()
+        self.tts_api_combo.setSizeAdjustPolicy(QComboBox.AdjustToContentsOnFirstShow)
+        self.tts_api_combo.setMinimumContentsLength(24)
+        self.tts_api_combo.view().setTextElideMode(Qt.TextElideMode.ElideRight)
+        self.tts_api_combo.addItems(["Cartesia"])
+        self.tts_api_combo.setCurrentIndex(0)
+        section.addWidget(self.tts_api_combo)
+        section.addWidget(self._hint_label("选择 TTS 服务商。当前仅支持 Cartesia。", TEXT_MUTED))
 
     def _build_audio_output_section(self, parent_layout: QVBoxLayout, state: SettingsState) -> None:
         section = self._create_section(parent_layout)
@@ -456,12 +473,12 @@ class SettingsWindow:
         # VB-CABLE 状态
         if state.vb_cable_installed:
             self.audio_route_status_label = self._hint_label(
-                "VB-CABLE 虚拟驱动已安装。可将你的麦克风声音和 TTS 语音一起输出给 Discord、游戏等应用。",
+                "VB-CABLE 已安装。TTS + 麦克风 → CABLE Input，其他应用选 CABLE Output 即可。",
                 INPUT_TEXT_COLOR,
             )
         else:
             self.audio_route_status_label = self._hint_label(
-                "需要先安装 VB-CABLE 虚拟音频驱动，才能让其他应用听到你的麦克风声音和 TTS 语音。",
+                "需安装 VB-CABLE 驱动才能让其他应用听到 TTS 和麦克风。",
                 TEXT_WARNING,
             )
         section.addWidget(self.audio_route_status_label)
@@ -478,17 +495,14 @@ class SettingsWindow:
         self.audio_route_enabled_check.stateChanged.connect(self._on_audio_route_enabled_changed)
         section.addWidget(self.audio_route_enabled_check)
         section.addWidget(self._hint_label(
-            "启用后 TTS 语音将输出到 CABLE Input，与其他应用通过 CABLE Output 输入的声音叠加。\n"
-            "请确保在 Windows 声音设置中将麦克风设为'侦听此设备'→ 播放设备选 CABLE Input。\n"
-            '在 Discord / 游戏 / Zoom 里选择"CABLE Output"作为麦克风即可。',
+            "TTS 输出到 CABLE Input，自动配置麦克风侦听。在 Discord/游戏里选 CABLE Output 即可。",
             TEXT_MUTED,
         ))
 
         # 麦克风选择（配置 Windows 侦听）
         section.addWidget(self._section_title("麦克风输入"))
         section.addWidget(self._hint_label(
-            "选择要侦听到 CABLE Input 的麦克风。"
-            "开启路由后自动配置 Windows 侦听，无需手动设置。",
+            "选择麦克风，开启路由后自动配置 Windows 侦听。",
             TEXT_MUTED,
         ))
         self.mic_input_combo = NoWheelComboBox()
