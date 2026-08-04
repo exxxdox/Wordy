@@ -18,3 +18,4 @@ __pycache__
 # Claude's data directory
 /.claude/
 /.venv
+/.tmp

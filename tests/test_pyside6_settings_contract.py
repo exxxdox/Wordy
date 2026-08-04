@@ -66,7 +66,7 @@ def _new_settings_window(
         pytest.skip(f"QApplication cannot be imported: {exc}")
         raise
     try:
-        from settings_window import SettingsState, SettingsWindow
+        from wordy.ui.settings import SettingsState, SettingsWindow
     except Exception as exc:  # pragma: no cover - dependency-specific import failures
         pytest.skip(f"SettingsWindow dependencies cannot be imported: {exc}")
         raise
@@ -125,7 +125,7 @@ def _new_settings_window_with_audio_output(
         pytest.skip(f"QApplication cannot be imported: {exc}")
         raise
     try:
-        from settings_window import SettingsState, SettingsWindow
+        from wordy.ui.settings import SettingsState, SettingsWindow
     except Exception as exc:  # pragma: no cover - dependency-specific import failures
         pytest.skip(f"SettingsWindow dependencies cannot be imported: {exc}")
         raise
@@ -955,7 +955,7 @@ def test_settings_window_output_devices_error_displays_warning_status_and_only_d
             f"error path must leave only 系统默认 in combo, got {items!r}"
         )
 
-        from ui_theme import TEXT_WARNING
+        from wordy.ui.theme import TEXT_WARNING
 
         status_text = status_label.text()
         assert "PyAudio init failed" in status_text or "失败" in status_text, (

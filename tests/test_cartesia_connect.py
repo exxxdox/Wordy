@@ -9,7 +9,7 @@ import pytest
 import requests
 
 # Stub out external dependencies that won't be available on CI.
-# Must happen before importing tts_backends.cartesia_connect below.
+# Must happen before importing cartesia_connect below.
 from tests._stubs import CARTESIA_NATIVE_DEPS, install_module_stubs
 
 install_module_stubs(CARTESIA_NATIVE_DEPS)
@@ -21,9 +21,8 @@ except ImportError:
     class Response:
         pass
 
-from tts_backends.cartesia_connect import (
-    VoiceLabelMaps,
-    build_voice_label_maps,
+from wordy.tts.labels import VoiceLabelMaps, build_voice_label_maps
+from wordy.tts.cartesia import (
     _ensure_cartesia_config,
     _voice_specifier,
     _generation_config,
@@ -31,6 +30,7 @@ from tts_backends.cartesia_connect import (
     _raw_float_output_format,
     _raise_for_status,
     logger as cartesia_logger,
+    DEFAULT_CARTESIA_SAMPLE_RATE,
     DEFAULT_CARTESIA_VERSION,
 )
 
@@ -243,8 +243,8 @@ class TestLoggingTextRedactionExposure:
 
     def test_bytes_tts_debug_log_redacts_raw_text(self, caplog, monkeypatch):
         """Test that debug logs do NOT contain full user text, only length metadata."""
-        from tts_backends.cartesia_connect import CartesiaBytesTTS
-        from tts_backends.tts_engine import TTSAudioPlayer
+        from wordy.tts.cartesia import CartesiaBytesTTS
+        from wordy.tts.engine import TTSAudioPlayer
 
         mock_player = Mock(spec=TTSAudioPlayer)
         tts = CartesiaBytesTTS(
@@ -280,8 +280,8 @@ class TestLoggingTextRedactionExposure:
 
     def test_realtime_tts_debug_log_redacts_raw_text(self, caplog):
         """Test that debug logs do NOT contain full user text, only length and context_id metadata."""
-        from tts_backends.cartesia_connect import CartesiaRealtimeTTS
-        from tts_backends.tts_engine import TTSAudioPlayer
+        from wordy.tts.cartesia import CartesiaRealtimeTTS
+        from wordy.tts.engine import TTSAudioPlayer
 
         mock_player = Mock(spec=TTSAudioPlayer)
         tts = CartesiaRealtimeTTS(
@@ -343,8 +343,8 @@ class _FakeConnectionManager:
 
 
 def _make_realtime_tts():
-    from tts_backends.cartesia_connect import CartesiaRealtimeTTS
-    from tts_backends.tts_engine import TTSAudioPlayer
+    from wordy.tts.cartesia import CartesiaRealtimeTTS
+    from wordy.tts.engine import TTSAudioPlayer
 
     mock_player = Mock(spec=TTSAudioPlayer)
     mock_player.open_stream.return_value = True
@@ -451,11 +451,36 @@ class TestRealtimeLifecycleLocking:
         assert tts._connection is existing
 
 
+class TestRealtimeAudioStream:
+    """Realtime output must use formats and buffers compatible with the selected device."""
+
+    def test_cable_stream_uses_safe_buffer_size(self):
+        """VB-CABLE's 7168-sample latency requires client buffers to stay below 7168 / 3."""
+        from wordy.tts.cartesia import pyaudio
+
+        tts, mock_player = _make_realtime_tts()
+        mock_player.output_device_name = "CABLE Input (VB-Audio Virtual Cable)"
+        mock_player.query_output_device_default_rate.return_value = 48000
+        mock_player.get_stream_config.return_value = {
+            "format": pyaudio.paInt16,
+            "rate": 48000,
+        }
+
+        tts._open_audio_stream()
+
+        mock_player.open_stream.assert_called_once_with(
+            audio_format=pyaudio.paInt16,
+            channels=1,
+            rate=48000,
+            frames_per_buffer=1024,
+        )
+
+
 class TestSharedRequestArgs:
     """Shared payload construction via CartesiaTTS._build_request_args."""
 
     def _make_bytes(self, **overrides):
-        from tts_backends.cartesia_connect import CartesiaBytesTTS
+        from wordy.tts.cartesia import CartesiaBytesTTS
 
         mock_player = Mock()
         kwargs = dict(api_key="fake-key", voice_id="voice-1", volume=0.5)
@@ -463,7 +488,7 @@ class TestSharedRequestArgs:
         return CartesiaBytesTTS(audio_player=mock_player, **kwargs)
 
     def _make_realtime(self, **overrides):
-        from tts_backends.cartesia_connect import CartesiaRealtimeTTS
+        from wordy.tts.cartesia import CartesiaRealtimeTTS
 
         mock_player = Mock()
         kwargs = dict(api_key="fake-key", voice_id="voice-1", volume=0.5)
@@ -473,17 +498,18 @@ class TestSharedRequestArgs:
     def test_default_constants_preserved(self):
         """DEFAULT_CARTESIA_VERSION and default model/sample_rate/volume must stay stable."""
         assert DEFAULT_CARTESIA_VERSION == "2026-03-01"
+        assert DEFAULT_CARTESIA_SAMPLE_RATE == 48000
 
         bytes_tts = self._make_bytes(volume=1.0)
         assert bytes_tts.model_id == "sonic-3.5"
-        assert bytes_tts.sample_rate == 44100
+        assert bytes_tts.sample_rate == DEFAULT_CARTESIA_SAMPLE_RATE
         assert bytes_tts.volume == 1.0
         assert bytes_tts.version == DEFAULT_CARTESIA_VERSION
         assert bytes_tts.timeout == 60
 
         realtime_tts = self._make_realtime(volume=1.0)
         assert realtime_tts.model_id == "sonic-3.5"
-        assert realtime_tts.sample_rate == 44100
+        assert realtime_tts.sample_rate == DEFAULT_CARTESIA_SAMPLE_RATE
         assert realtime_tts.volume == 1.0
 
     def test_build_request_args_structure(self):
@@ -531,7 +557,7 @@ class TestSharedRequestArgs:
             captured["timeout"] = timeout
             return _Resp()
 
-        monkeypatch.setattr("tts_backends.cartesia_connect.requests.post", _fake_post)
+        monkeypatch.setattr("wordy.tts.cartesia.requests.post", _fake_post)
 
         bytes_tts = self._make_bytes()
         bytes_tts.generate("hello world")
@@ -545,7 +571,7 @@ class TestSharedRequestArgs:
 
     def test_realtime_context_kwargs_use_shared_args(self):
         """CartesiaRealtimeTTS._send_and_play_once passes shared args + context_id to connection.context()."""
-        from tts_backends.cartesia_connect import CartesiaRealtimeTTS
+        from wordy.tts.cartesia import CartesiaRealtimeTTS
 
         mock_player = Mock()
         mock_player.open_stream.return_value = True

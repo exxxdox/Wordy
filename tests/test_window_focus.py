@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""Tests for window_focus.py.
+"""Tests for wordy.ui.window.py.
 
 These tests focus on two things:
 
@@ -21,7 +21,7 @@ from typing import cast
 
 import pytest
 
-import window_focus
+import wordy.ui.window
 
 
 # ---------------------------------------------------------------------------
@@ -101,19 +101,19 @@ class _DeletedQtWidget:
 
 
 def test_get_cursor_position_returns_none_on_non_windows(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(window_focus, "_IS_WINDOWS", False)
+    monkeypatch.setattr(wordy.ui.window, "_IS_WINDOWS", False)
 
-    assert window_focus.get_cursor_position() is None
+    assert wordy.ui.window.get_cursor_position() is None
 
 
 def test_is_left_button_down_returns_false_on_non_windows(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(window_focus, "_IS_WINDOWS", False)
+    monkeypatch.setattr(wordy.ui.window, "_IS_WINDOWS", False)
 
-    assert window_focus.is_left_button_down() is False
+    assert wordy.ui.window.is_left_button_down() is False
 
 
 def test_activate_window_is_noop_on_non_windows(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(window_focus, "_IS_WINDOWS", False)
+    monkeypatch.setattr(wordy.ui.window, "_IS_WINDOWS", False)
 
     # Pass a widget that would explode if any Win32 call ran (winId raises),
     # to prove the guard short-circuits before touching ctypes.windll.
@@ -121,11 +121,11 @@ def test_activate_window_is_noop_on_non_windows(monkeypatch: pytest.MonkeyPatch)
         def winId(self) -> int:
             raise AssertionError("activate_window must not touch widget on non-Windows")
 
-    window_focus.activate_window(cast(window_focus._Widget, _ExplodingWidget()))
+    wordy.ui.window.activate_window(cast(wordy.ui.window._Widget, _ExplodingWidget()))
 
 
 def test_is_windows_flag_matches_sys_platform() -> None:
-    assert window_focus._IS_WINDOWS == sys.platform.startswith("win")
+    assert wordy.ui.window._IS_WINDOWS == sys.platform.startswith("win")
 
 
 # ---------------------------------------------------------------------------
@@ -135,32 +135,32 @@ def test_is_windows_flag_matches_sys_platform() -> None:
 
 def test_is_point_in_widget_inside() -> None:
     widget = _FakeWidget(_FakeGeometry(10, 20, 100, 50), screen=None)
-    assert window_focus.is_point_in_widget(cast(window_focus._Widget, widget), 50, 40) is True
+    assert wordy.ui.window.is_point_in_widget(cast(wordy.ui.window._Widget, widget), 50, 40) is True
 
 
 def test_is_point_in_widget_outside() -> None:
     widget = _FakeWidget(_FakeGeometry(10, 20, 100, 50), screen=None)
-    assert window_focus.is_point_in_widget(cast(window_focus._Widget, widget), 9, 40) is False
-    assert window_focus.is_point_in_widget(cast(window_focus._Widget, widget), 50, 200) is False
+    assert wordy.ui.window.is_point_in_widget(cast(wordy.ui.window._Widget, widget), 9, 40) is False
+    assert wordy.ui.window.is_point_in_widget(cast(wordy.ui.window._Widget, widget), 50, 200) is False
 
 
 def test_is_point_in_widget_handles_deleted_qt_object() -> None:
     widget = _DeletedQtWidget()
-    assert window_focus.is_point_in_widget(cast(window_focus._Widget, widget), 0, 0) is False
+    assert wordy.ui.window.is_point_in_widget(cast(wordy.ui.window._Widget, widget), 0, 0) is False
 
 
 def test_clamp_window_position_within_bounds_unchanged() -> None:
     screen = _FakeScreen(_FakeGeometry(0, 0, 1920, 1080))
-    x, y = window_focus.clamp_window_position(
-        cast(window_focus._Screen, screen), 400, 300, 100, 200
+    x, y = wordy.ui.window.clamp_window_position(
+        cast(wordy.ui.window._Screen, screen), 400, 300, 100, 200
     )
     assert (x, y) == (100, 200)
 
 
 def test_clamp_window_position_clamps_to_right_and_bottom() -> None:
     screen = _FakeScreen(_FakeGeometry(0, 0, 1920, 1080))
-    x, y = window_focus.clamp_window_position(
-        cast(window_focus._Screen, screen), 400, 300, 5000, 5000
+    x, y = wordy.ui.window.clamp_window_position(
+        cast(wordy.ui.window._Screen, screen), 400, 300, 5000, 5000
     )
     assert x == 1920 - 400
     assert y == 1080 - 300
@@ -168,8 +168,8 @@ def test_clamp_window_position_clamps_to_right_and_bottom() -> None:
 
 def test_clamp_window_position_clamps_to_left_and_top() -> None:
     screen = _FakeScreen(_FakeGeometry(100, 50, 1920, 1080))
-    x, y = window_focus.clamp_window_position(
-        cast(window_focus._Screen, screen), 400, 300, -1000, -1000
+    x, y = wordy.ui.window.clamp_window_position(
+        cast(wordy.ui.window._Screen, screen), 400, 300, -1000, -1000
     )
     assert (x, y) == (100, 50)
 
@@ -177,8 +177,8 @@ def test_clamp_window_position_clamps_to_left_and_top() -> None:
 def test_clamp_window_position_with_widget_screen_source() -> None:
     screen = _FakeScreen(_FakeGeometry(0, 0, 800, 600))
     widget = _FakeWidget(_FakeGeometry(0, 0, 100, 100), screen=screen)
-    x, y = window_focus.clamp_window_position(
-        cast(window_focus._Widget, widget), 200, 200, 10_000, 10_000
+    x, y = wordy.ui.window.clamp_window_position(
+        cast(wordy.ui.window._Widget, widget), 200, 200, 10_000, 10_000
     )
     assert x == 800 - 200
     assert y == 600 - 200
@@ -186,16 +186,16 @@ def test_clamp_window_position_with_widget_screen_source() -> None:
 
 def test_clamp_window_position_none_source_returns_zero_bounds(monkeypatch: pytest.MonkeyPatch) -> None:
     no_primary_screen = lambda: None
-    monkeypatch.setattr(window_focus, "_primary_screen", no_primary_screen)
+    monkeypatch.setattr(wordy.ui.window, "_primary_screen", no_primary_screen)
 
-    x, y = window_focus.clamp_window_position(None, 100, 100, 500, 500)
+    x, y = wordy.ui.window.clamp_window_position(None, 100, 100, 500, 500)
     assert (x, y) == (0, 0)
 
 
 def test_center_window_sets_centered_geometry() -> None:
     screen = _FakeScreen(_FakeGeometry(0, 0, 1000, 800))
     widget = _FakeWidget(_FakeGeometry(0, 0, 1, 1), screen=screen)
-    window_focus.center_window(cast(window_focus._Widget, widget), 400, 200)
+    wordy.ui.window.center_window(cast(wordy.ui.window._Widget, widget), 400, 200)
     assert widget.set_geometry_calls == [((1000 - 400) // 2, (800 - 200) // 2, 400, 200)]
 
 
@@ -204,10 +204,10 @@ def test_center_window_uses_explicit_screen_source() -> None:
     outer_screen = _FakeScreen(_FakeGeometry(0, 0, 2000, 1500))
     widget = _FakeWidget(_FakeGeometry(0, 0, 1, 1), screen=inner_screen)
     screen_source = _FakeWidget(_FakeGeometry(0, 0, 1, 1), screen=outer_screen)
-    window_focus.center_window(
-        cast(window_focus._Widget, widget),
+    wordy.ui.window.center_window(
+        cast(wordy.ui.window._Widget, widget),
         500,
         300,
-        screen_source=cast(window_focus._Widget, screen_source),
+        screen_source=cast(wordy.ui.window._Widget, screen_source),
     )
     assert widget.set_geometry_calls == [((2000 - 500) // 2, (1500 - 300) // 2, 500, 300)]

@@ -16,6 +16,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
+import wordy.config
+
 _ = os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 _ = pytest.importorskip("PySide6")
 
@@ -34,7 +36,8 @@ _CONFIG = {
 
 
 def _install_native_hotkey_stub(monkeypatch: pytest.MonkeyPatch) -> None:
-    module = ModuleType("native_hotkey")
+    """为 wordy.hotkey 包安装轻量 stub，保留 config.py 等模块需要的其它导出。"""
+    module = ModuleType("wordy.hotkey")
 
     class NativeHotkeyListener:
         started: bool
@@ -48,8 +51,18 @@ def _install_native_hotkey_stub(monkeypatch: pytest.MonkeyPatch) -> None:
         def stop(self) -> None:
             self.started = False
 
+    # 保留 hotkey 包的其它公开 API，避免 config.py 等模块 import 失败
     setattr(module, "NativeHotkeyListener", NativeHotkeyListener)
-    monkeypatch.setitem(sys.modules, "native_hotkey", module)
+    from wordy.hotkey import (
+        iter_hotkey_parts,
+        normalize_key_part,
+        split_hotkey,
+    )
+    setattr(module, "iter_hotkey_parts", iter_hotkey_parts)
+    setattr(module, "normalize_key_part", normalize_key_part)
+    setattr(module, "split_hotkey", split_hotkey)
+
+    monkeypatch.setitem(sys.modules, "wordy.hotkey", module)
 
 
 def _import_input_overlay(monkeypatch: pytest.MonkeyPatch):
@@ -57,16 +70,23 @@ def _import_input_overlay(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(sys, "platform", "win32")
     _install_native_hotkey_stub(monkeypatch)
 
-    app_config = importlib.import_module("app_config")
-    def save_config_stub(_update: object) -> Path:
-        return Path("/tmp/wavtrans-test-config.json")
+    # 用 AppSettings 替代已删除的 load_initial_config / save_app_config
+    from wordy.config import AppSettings
+    _test_settings = AppSettings()
+    _test_settings.hotkey = _CONFIG["hotkey"]
+    _test_settings.name = _CONFIG["name"]
+    _test_settings.voice_id = _CONFIG["voice_id"]
+    _test_settings.voice_name = _CONFIG["voice_name"]
+    _test_settings.volume = _CONFIG["volume"]
+    _test_settings.overlay_opacity = _CONFIG["overlay_opacity"]
+    _test_settings.tts_backend = _CONFIG["tts_backend"]
+    _test_settings.fixed_center = _CONFIG["fixed_center"]
+    monkeypatch.setattr(AppSettings, "load", lambda **kw: _test_settings)
+    monkeypatch.setattr(AppSettings, "update", lambda self, **kw: Path("/tmp/wavtrans-test-config.json"))
+    monkeypatch.setattr("wordy.config.get_active_config_file", lambda: Path("/tmp/wavtrans-test-config.json"))
 
-    monkeypatch.setattr(app_config, "load_initial_config", lambda: dict(_CONFIG))
-    monkeypatch.setattr(app_config, "save_app_config", save_config_stub)
-    monkeypatch.setattr(app_config, "get_active_config_file", lambda: Path("/tmp/wavtrans-test-config.json"))
-
-    original_module = sys.modules.pop("input_overlay", None)
-    module = importlib.import_module("input_overlay")
+    original_module = sys.modules.pop("wordy.ui.overlay", None)
+    module = importlib.import_module("wordy.ui.overlay")
     def skip_voice_loading(_self: object, show_status: bool = True) -> None:
         _ = show_status
 
@@ -294,7 +314,7 @@ def test_overlay_settings_state_seeds_output_devices_from_list_helper(
         def close(self) -> None:
             pass
 
-    monkeypatch.setattr("input_overlay.SettingsWindow", _FakeSettingsWindow)
+    monkeypatch.setattr("wordy.ui.overlay.SettingsWindow", _FakeSettingsWindow)
 
     try:
         overlay._open_settings()
@@ -329,14 +349,11 @@ def test_overlay_apply_persists_audio_output_device_name_and_invokes_callback(
 
     saved_updates: list[dict] = []
 
-    def fake_save(update: dict) -> Path:
-        saved_updates.append(dict(update))
+    def fake_update(self, **kwargs: Any) -> Path:
+        saved_updates.append(dict(kwargs))
         return Path("/tmp/wavtrans-test-config.json")
 
-    import app_config
-
-    monkeypatch.setattr(app_config, "save_app_config", fake_save)
-    monkeypatch.setattr("input_overlay.save_app_config", fake_save)
+    monkeypatch.setattr(wordy.config.AppSettings, "update", fake_update)
 
     class _FakePending:
         hotkey = overlay._hotkey
@@ -366,7 +383,7 @@ def test_overlay_apply_persists_audio_output_device_name_and_invokes_callback(
             self.closed = True
 
     fake_window = _FakeSettingsWindow()
-    monkeypatch.setattr("input_overlay.QMessageBox", MagicMock())
+    monkeypatch.setattr("wordy.ui.overlay.QMessageBox", MagicMock())
 
     try:
         overlay._apply_pending_settings(fake_window)
@@ -399,14 +416,11 @@ def test_overlay_apply_clears_audio_output_device_name_to_none(
 
     saved_updates: list[dict] = []
 
-    def fake_save(update: dict) -> Path:
-        saved_updates.append(dict(update))
+    def fake_update(self, **kwargs: Any) -> Path:
+        saved_updates.append(dict(kwargs))
         return Path("/tmp/wavtrans-test-config.json")
 
-    import app_config
-
-    monkeypatch.setattr(app_config, "save_app_config", fake_save)
-    monkeypatch.setattr("input_overlay.save_app_config", fake_save)
+    monkeypatch.setattr(wordy.config.AppSettings, "update", fake_update)
 
     class _FakePending:
         hotkey = overlay._hotkey
@@ -436,7 +450,7 @@ def test_overlay_apply_clears_audio_output_device_name_to_none(
             self.closed = True
 
     fake_window = _FakeSettingsWindow()
-    monkeypatch.setattr("input_overlay.QMessageBox", MagicMock())
+    monkeypatch.setattr("wordy.ui.overlay.QMessageBox", MagicMock())
 
     try:
         overlay._apply_pending_settings(fake_window)
@@ -470,16 +484,13 @@ def test_overlay_apply_success_uses_inline_status_without_information_popup(
 
     saved_updates: list[dict] = []
 
-    def fake_save(update: dict) -> Path:
-        saved_updates.append(dict(update))
+    def fake_update(self, **kwargs: Any) -> Path:
+        saved_updates.append(dict(kwargs))
         return Path("/tmp/wavtrans-test-config.json")
 
-    import app_config
-
-    monkeypatch.setattr(app_config, "save_app_config", fake_save)
-    monkeypatch.setattr("input_overlay.save_app_config", fake_save)
+    monkeypatch.setattr(wordy.config.AppSettings, "update", fake_update)
     message_box = MagicMock()
-    monkeypatch.setattr("input_overlay.QMessageBox", message_box)
+    monkeypatch.setattr("wordy.ui.overlay.QMessageBox", message_box)
 
     class _FakePending:
         hotkey = overlay._hotkey
@@ -613,14 +624,11 @@ def test_overlay_apply_persists_structured_audio_output_device_and_invokes_callb
 
     saved_updates: list[dict] = []
 
-    def fake_save(update: dict) -> Path:
-        saved_updates.append(dict(update))
+    def fake_update(self, **kwargs: Any) -> Path:
+        saved_updates.append(dict(kwargs))
         return Path("/tmp/wavtrans-test-config.json")
 
-    import app_config
-
-    monkeypatch.setattr(app_config, "save_app_config", fake_save)
-    monkeypatch.setattr("input_overlay.save_app_config", fake_save)
+    monkeypatch.setattr(wordy.config.AppSettings, "update", fake_update)
 
     class _FakePending:
         hotkey = overlay._hotkey
@@ -652,7 +660,7 @@ def test_overlay_apply_persists_structured_audio_output_device_and_invokes_callb
             self.closed = True
 
     fake_window = _FakeSettingsWindow()
-    monkeypatch.setattr("input_overlay.QMessageBox", MagicMock())
+    monkeypatch.setattr("wordy.ui.overlay.QMessageBox", MagicMock())
 
     try:
         overlay._apply_pending_settings(fake_window)
@@ -714,14 +722,11 @@ def test_overlay_apply_clears_structured_audio_output_device_to_none(
 
     saved_updates: list[dict] = []
 
-    def fake_save(update: dict) -> Path:
-        saved_updates.append(dict(update))
+    def fake_update(self, **kwargs: Any) -> Path:
+        saved_updates.append(dict(kwargs))
         return Path("/tmp/wavtrans-test-config.json")
 
-    import app_config
-
-    monkeypatch.setattr(app_config, "save_app_config", fake_save)
-    monkeypatch.setattr("input_overlay.save_app_config", fake_save)
+    monkeypatch.setattr(wordy.config.AppSettings, "update", fake_update)
 
     class _FakePending:
         hotkey = overlay._hotkey
@@ -752,7 +757,7 @@ def test_overlay_apply_clears_structured_audio_output_device_to_none(
             self.closed = True
 
     fake_window = _FakeSettingsWindow()
-    monkeypatch.setattr("input_overlay.QMessageBox", MagicMock())
+    monkeypatch.setattr("wordy.ui.overlay.QMessageBox", MagicMock())
 
     try:
         overlay._apply_pending_settings(fake_window)
@@ -800,7 +805,7 @@ def test_overlay_apply_saves_cartesia_api_key_when_action_set(
         on_audio_output_change=lambda _device: None,
     )
 
-    import secret_store as secret_store_mod
+    import wordy.secret as secret_store_mod
 
     save_calls: list[tuple[str, bool]] = []
 
@@ -819,14 +824,11 @@ def test_overlay_apply_saves_cartesia_api_key_when_action_set(
 
     saved_updates: list[dict] = []
 
-    def _fake_save_app_config(update: dict) -> Path:
-        saved_updates.append(dict(update))
+    def _fake_update(self, **kwargs: Any) -> Path:
+        saved_updates.append(dict(kwargs))
         return Path("/tmp/wavtrans-test-config.json")
 
-    import app_config
-
-    monkeypatch.setattr(app_config, "save_app_config", _fake_save_app_config)
-    monkeypatch.setattr("input_overlay.save_app_config", _fake_save_app_config)
+    monkeypatch.setattr(wordy.config.AppSettings, "update", _fake_update)
 
     class _FakePending:
         hotkey = overlay._hotkey
@@ -858,7 +860,7 @@ def test_overlay_apply_saves_cartesia_api_key_when_action_set(
             self.closed = True
 
     fake_window = _FakeSettingsWindow()
-    monkeypatch.setattr("input_overlay.QMessageBox", MagicMock())
+    monkeypatch.setattr("wordy.ui.overlay.QMessageBox", MagicMock())
 
     try:
         overlay._apply_pending_settings(fake_window)
@@ -913,7 +915,7 @@ def test_overlay_apply_does_not_touch_secret_store_when_action_unchanged(
         on_audio_output_change=lambda _device: None,
     )
 
-    import secret_store as secret_store_mod
+    import wordy.secret as secret_store_mod
 
     save_calls: list[tuple] = []
     delete_calls: list[tuple] = []
@@ -937,14 +939,11 @@ def test_overlay_apply_does_not_touch_secret_store_when_action_unchanged(
 
     saved_updates: list[dict] = []
 
-    def _fake_save_app_config(update: dict) -> Path:
-        saved_updates.append(dict(update))
+    def _fake_update(self, **kwargs: Any) -> Path:
+        saved_updates.append(dict(kwargs))
         return Path("/tmp/wavtrans-test-config.json")
 
-    import app_config
-
-    monkeypatch.setattr(app_config, "save_app_config", _fake_save_app_config)
-    monkeypatch.setattr("input_overlay.save_app_config", _fake_save_app_config)
+    monkeypatch.setattr(wordy.config.AppSettings, "update", _fake_update)
 
     class _FakePending:
         hotkey = overlay._hotkey
@@ -976,7 +975,7 @@ def test_overlay_apply_does_not_touch_secret_store_when_action_unchanged(
             self.closed = True
 
     fake_window = _FakeSettingsWindow()
-    monkeypatch.setattr("input_overlay.QMessageBox", MagicMock())
+    monkeypatch.setattr("wordy.ui.overlay.QMessageBox", MagicMock())
 
     try:
         overlay._apply_pending_settings(fake_window)
@@ -1005,7 +1004,7 @@ def test_overlay_apply_clears_cartesia_api_key_when_action_clear(
         on_audio_output_change=lambda _device: None,
     )
 
-    import secret_store as secret_store_mod
+    import wordy.secret as secret_store_mod
 
     delete_calls: list[tuple] = []
 
@@ -1020,14 +1019,11 @@ def test_overlay_apply_clears_cartesia_api_key_when_action_clear(
 
     saved_updates: list[dict] = []
 
-    def _fake_save_app_config(update: dict) -> Path:
-        saved_updates.append(dict(update))
+    def _fake_update(self, **kwargs: Any) -> Path:
+        saved_updates.append(dict(kwargs))
         return Path("/tmp/wavtrans-test-config.json")
 
-    import app_config
-
-    monkeypatch.setattr(app_config, "save_app_config", _fake_save_app_config)
-    monkeypatch.setattr("input_overlay.save_app_config", _fake_save_app_config)
+    monkeypatch.setattr(wordy.config.AppSettings, "update", _fake_update)
 
     class _FakePending:
         hotkey = overlay._hotkey
@@ -1059,7 +1055,7 @@ def test_overlay_apply_clears_cartesia_api_key_when_action_clear(
             self.closed = True
 
     fake_window = _FakeSettingsWindow()
-    monkeypatch.setattr("input_overlay.QMessageBox", MagicMock())
+    monkeypatch.setattr("wordy.ui.overlay.QMessageBox", MagicMock())
 
     try:
         overlay._apply_pending_settings(fake_window)
@@ -1098,7 +1094,7 @@ def test_overlay_apply_cartesia_plaintext_fallback_shows_warning(
         on_audio_output_change=lambda _device: None,
     )
 
-    import secret_store as secret_store_mod
+    import wordy.secret as secret_store_mod
 
     save_calls: list[tuple[str, bool]] = []
 
@@ -1117,14 +1113,11 @@ def test_overlay_apply_cartesia_plaintext_fallback_shows_warning(
 
     saved_updates: list[dict] = []
 
-    def _fake_save_app_config(update: dict) -> Path:
-        saved_updates.append(dict(update))
+    def _fake_update(self, **kwargs: Any) -> Path:
+        saved_updates.append(dict(kwargs))
         return Path("/tmp/wavtrans-test-config.json")
 
-    import app_config
-
-    monkeypatch.setattr(app_config, "save_app_config", _fake_save_app_config)
-    monkeypatch.setattr("input_overlay.save_app_config", _fake_save_app_config)
+    monkeypatch.setattr(wordy.config.AppSettings, "update", _fake_update)
 
     class _FakePending:
         hotkey = overlay._hotkey
@@ -1156,7 +1149,7 @@ def test_overlay_apply_cartesia_plaintext_fallback_shows_warning(
             self.closed = True
 
     fake_window = _FakeSettingsWindow()
-    monkeypatch.setattr("input_overlay.QMessageBox", MagicMock())
+    monkeypatch.setattr("wordy.ui.overlay.QMessageBox", MagicMock())
 
     try:
         overlay._apply_pending_settings(fake_window)
@@ -1203,7 +1196,7 @@ def test_overlay_apply_cartesia_set_reports_rebuild_callback_failure_inline(
         on_cartesia_api_key_change=_raise_rebuild_failure,
     )
 
-    import secret_store as secret_store_mod
+    import wordy.secret as secret_store_mod
 
     save_calls: list[tuple[str, bool]] = []
 
@@ -1222,14 +1215,11 @@ def test_overlay_apply_cartesia_set_reports_rebuild_callback_failure_inline(
 
     saved_updates: list[dict] = []
 
-    def _fake_save_app_config(update: dict) -> Path:
-        saved_updates.append(dict(update))
+    def _fake_update(self, **kwargs: Any) -> Path:
+        saved_updates.append(dict(kwargs))
         return Path("/tmp/wavtrans-test-config.json")
 
-    import app_config
-
-    monkeypatch.setattr(app_config, "save_app_config", _fake_save_app_config)
-    monkeypatch.setattr("input_overlay.save_app_config", _fake_save_app_config)
+    monkeypatch.setattr(wordy.config.AppSettings, "update", _fake_update)
 
     class _FakePending:
         hotkey = overlay._hotkey
@@ -1261,7 +1251,7 @@ def test_overlay_apply_cartesia_set_reports_rebuild_callback_failure_inline(
             self.closed = True
 
     fake_window = _FakeSettingsWindow()
-    monkeypatch.setattr("input_overlay.QMessageBox", MagicMock())
+    monkeypatch.setattr("wordy.ui.overlay.QMessageBox", MagicMock())
 
     try:
         overlay._apply_pending_settings(fake_window)
@@ -1309,7 +1299,7 @@ def test_overlay_apply_cartesia_clear_reports_rebuild_callback_failure_inline(
         on_cartesia_api_key_change=_raise_rebuild_failure,
     )
 
-    import secret_store as secret_store_mod
+    import wordy.secret as secret_store_mod
 
     delete_calls: list[tuple] = []
 
@@ -1326,14 +1316,11 @@ def test_overlay_apply_cartesia_clear_reports_rebuild_callback_failure_inline(
 
     saved_updates: list[dict] = []
 
-    def _fake_save_app_config(update: dict) -> Path:
-        saved_updates.append(dict(update))
+    def _fake_update(self, **kwargs: Any) -> Path:
+        saved_updates.append(dict(kwargs))
         return Path("/tmp/wavtrans-test-config.json")
 
-    import app_config
-
-    monkeypatch.setattr(app_config, "save_app_config", _fake_save_app_config)
-    monkeypatch.setattr("input_overlay.save_app_config", _fake_save_app_config)
+    monkeypatch.setattr(wordy.config.AppSettings, "update", _fake_update)
 
     class _FakePending:
         hotkey = overlay._hotkey
@@ -1365,7 +1352,7 @@ def test_overlay_apply_cartesia_clear_reports_rebuild_callback_failure_inline(
             self.closed = True
 
     fake_window = _FakeSettingsWindow()
-    monkeypatch.setattr("input_overlay.QMessageBox", MagicMock())
+    monkeypatch.setattr("wordy.ui.overlay.QMessageBox", MagicMock())
 
     try:
         overlay._apply_pending_settings(fake_window)
@@ -1400,7 +1387,7 @@ def test_overlay_apply_cartesia_clear_reports_rebuild_callback_failure_inline(
 # ---------------------------------------------------------------------------
 # Cartesia API key engine-rebuild ownership note
 #
-# The _apply_pending_settings method (defined in input_overlay.py) is
+# The _apply_pending_settings method (defined in overlay.py) is
 # responsible for persisting the API key but does NOT own the TTS-engine
 # rebuild.  Rebuilding the engine with the new key is handled in main.py
 # via on_cartesia_api_key_change or an equivalent callback wired into
@@ -1619,7 +1606,7 @@ def test_stop_finalize_invokes_log_stream_shutdown_before_app_quit(
     submitted: list[str] = []
     overlay = _new_overlay(monkeypatch, submitted)
 
-    import log_stream
+    import wordy.log
 
     shutdown_calls: list[object] = []
     quit_calls: list[None] = []
@@ -1631,7 +1618,7 @@ def test_stop_finalize_invokes_log_stream_shutdown_before_app_quit(
                 "log_stream.shutdown_log_stream must run BEFORE QApplication.quit"
             )
 
-    monkeypatch.setattr(log_stream, "shutdown_log_stream", fake_shutdown)
+    monkeypatch.setattr(wordy.log, "shutdown_log_stream", fake_shutdown)
     if overlay._app is not None:
         original_quit = overlay._app.quit
 

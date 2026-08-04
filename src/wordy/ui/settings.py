@@ -5,218 +5,45 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from typing import Callable
 
-from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, QSize, Qt
-from PySide6.QtGui import QColor, QCloseEvent, QIcon, QKeyEvent, QMouseEvent, QPainter, QPainterPath, QPaintEvent, QPen
-from PySide6.QtWidgets import QApplication, QCheckBox, QComboBox, QDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton, QScrollArea, QSlider, QStyle, QTabWidget, QVBoxLayout, QWidget
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QIcon
+from PySide6.QtWidgets import (
+    QApplication, QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit,
+    QPushButton, QScrollArea, QSlider, QStyle, QTabWidget, QVBoxLayout, QWidget,
+)
 
-import secret_store
-from app_config import LOG_LEVELS, MAX_OVERLAY_OPACITY, MAX_VOLUME, MIN_OVERLAY_OPACITY, MIN_VOLUME, OVERLAY_OPACITY_STEP, TTS_BACKENDS, VOLUME_STEP
-from audio_identity import normalize_identity
-from tts_backends.voice_labels import VoiceLabelMaps, build_voice_label_maps
-from ui_theme import ACCENT_HOVER, ACCENT_PRESSED, BUTTON_ACTIVE_BG, BUTTON_BG, BUTTON_GHOST_BORDER, ELEVATED_BG, GREEN_ACCENT, SCROLLBAR_HANDLE, SCROLLBAR_HANDLE_HOVER, SEPARATOR_COLOR, SURFACE_BG, TEXT_ERROR, TEXT_MUTED, TEXT_PRIMARY, TEXT_WARNING, WINDOW_BG
-from window_focus import activate_window, center_window
+import wordy.secret
+from wordy.config import (
+    LOG_LEVELS, MAX_OVERLAY_OPACITY, MAX_VOLUME, MIN_OVERLAY_OPACITY, MIN_VOLUME,
+    OVERLAY_OPACITY_STEP, TTS_BACKENDS, VOLUME_STEP,
+)
+from wordy.identity import normalize_identity
+from wordy.tts.labels import VoiceLabelMaps, build_voice_label_maps
+from wordy.ui.theme import (
+    GREEN_ACCENT, TEXT_ERROR, TEXT_MUTED, TEXT_PRIMARY, TEXT_WARNING,
+)
+from wordy.ui.settings_state import (
+    AudioOutputDevice, AudioOutputIdentity, PendingSettings, SettingsState, VoiceRecord,
+)
+from wordy.ui.settings_widgets import (
+    CheckmarkCheckBox, NoWheelComboBox, NoWheelSlider, _SettingsDialog,
+)
+from wordy.ui.settings_style import build_settings_stylesheet
+from wordy.ui.window import activate_window, center_window
 
 INPUT_TEXT_COLOR = GREEN_ACCENT
 SYSTEM_DEFAULT_AUDIO_OUTPUT_LABEL = "系统默认"
-DIALOG_WIDTH = 560
+DIALOG_WIDTH = 720
 DIALOG_HEIGHT = 580
-DIALOG_MIN_WIDTH = 520
+DIALOG_MIN_WIDTH = 680
 DIALOG_MIN_HEIGHT = 580
 CONTENT_MARGIN = 20
 SECTION_GAP = 12
 INLINE_GAP = 10
 BUTTON_GAP = 16
 BUTTON_MIN_WIDTH = 88
-
-VoiceRecord = dict[str, object]
-AudioOutputDevice = dict[str, object]
-AudioOutputIdentity = dict[str, object]
-
-
-@dataclass
-class SettingsState:
-    hotkey: str
-    hotkey_name: str
-    voice_id: str | None
-    voice_name: str | None
-    volume: float
-    overlay_opacity: float
-    tts_backend: str
-    fixed_center: bool
-    voices_cache: list[VoiceRecord]
-    voices_loading: bool
-    voice_fetch_error: Exception | None
-    audio_output_devices: list[AudioOutputDevice] | list[str] = field(default_factory=list)
-    audio_output_device_name: str | None = None
-    audio_output_device_identity: AudioOutputIdentity | None = None
-    audio_output_devices_error: Exception | None = None
-    cartesia_api_key_saved: bool = False
-    log_level: str = "INFO"
-
-
-@dataclass
-class PendingSettings:
-    hotkey: str
-    hotkey_name: str
-    voice_id: str | None
-    voice_name: str | None
-    volume: float
-    overlay_opacity: float
-    tts_backend: str
-    fixed_center: bool
-    audio_output_device_name: str | None = None
-    audio_output_device_identity: AudioOutputIdentity | None = None
-    cartesia_api_key_action: str = "unchanged"
-    cartesia_api_key_value: str | None = None
-    log_level: str = "INFO"
-
-
-class _SettingsDialog(QDialog):
-    """将 Qt 原生关闭事件转发给 SettingsWindow。"""
-
-    def __init__(self, owner: "SettingsWindow", parent: QWidget | None) -> None:
-        super().__init__(parent)
-        self._owner = owner
-        self._drag_active = False
-        self._drag_position = QPoint()
-        self._application_event_filter_installed = False
-        app = QApplication.instance()
-        if app is not None:
-            app.installEventFilter(self)
-            self._application_event_filter_installed = True
-
-    def eventFilter(self, watched: object, event: QEvent) -> bool:
-        if self._should_swallow_recording_key_event(watched, event):
-            event.accept()
-            return True
-
-        object_name = getattr(watched, "objectName", None)
-        set_cursor = getattr(watched, "setCursor", None)
-        if not callable(object_name) or object_name() != "dialogTitle" or not isinstance(event, QMouseEvent):
-            return False
-
-        if event.type() == QEvent.Type.MouseButtonPress:
-            if event.button() != Qt.MouseButton.LeftButton:
-                return False
-            global_pos = event.globalPosition().toPoint()
-            self._drag_active = True
-            self._drag_position = global_pos - self.frameGeometry().topLeft()
-            if callable(set_cursor):
-                set_cursor(Qt.CursorShape.ClosedHandCursor)
-            return True
-
-        if event.type() == QEvent.Type.MouseMove:
-            if not self._drag_active or not event.buttons() & Qt.MouseButton.LeftButton:
-                return False
-            global_pos = event.globalPosition().toPoint()
-            self.move(global_pos - self._drag_position)
-            return True
-
-        if event.type() == QEvent.Type.MouseButtonRelease:
-            if not self._drag_active or event.button() != Qt.MouseButton.LeftButton:
-                return False
-            self._drag_active = False
-            if callable(set_cursor):
-                set_cursor(Qt.CursorShape.OpenHandCursor)
-            return True
-
-        return False
-
-    def _should_swallow_recording_key_event(self, watched: object, event: QEvent) -> bool:
-        if self._owner.record_button.isEnabled():
-            return False
-        if event.type() not in (
-            QEvent.Type.KeyPress,
-            QEvent.Type.KeyRelease,
-            QEvent.Type.ShortcutOverride,
-        ):
-            return False
-        if not isinstance(event, QKeyEvent) or not isinstance(watched, QWidget):
-            return False
-        return watched is self or self.isAncestorOf(watched)
-
-    def closeEvent(self, event: QCloseEvent) -> None:
-        if self._application_event_filter_installed:
-            app = QApplication.instance()
-            if app is not None:
-                app.removeEventFilter(self)
-            self._application_event_filter_installed = False
-        self._owner._handle_dialog_close()
-        event.accept()
-
-    def keyPressEvent(self, event: QKeyEvent) -> None:
-        if not self._owner.record_button.isEnabled():
-            event.accept()
-            return
-        if event.key() == Qt.Key.Key_Escape:
-            event.accept()
-            self._owner.close()
-            return
-        super().keyPressEvent(event)
-
-    def keyReleaseEvent(self, event: QKeyEvent) -> None:
-        if not self._owner.record_button.isEnabled():
-            event.accept()
-            return
-        super().keyReleaseEvent(event)
-
-
-class NoWheelComboBox(QComboBox):
-    """忽略折叠状态下的鼠标滚轮，避免误切换选项并让滚动传递给设置页。"""
-
-    def wheelEvent(self, event) -> None:
-        event.ignore()
-
-
-class NoWheelSlider(QSlider):
-    """忽略鼠标滚轮，避免滚动设置页时误调整数值。"""
-
-    def wheelEvent(self, event) -> None:
-        event.ignore()
-
-
-class CheckmarkCheckBox(QCheckBox):
-    """用代码绘制勾选标记的复选框，保留 QCheckBox 行为。"""
-
-    INDICATOR_SIZE: int = 14
-    LABEL_GAP: int = 8
-
-    def sizeHint(self) -> QSize:
-        size = super().sizeHint()
-        font_height = self.fontMetrics().height()
-        text_width = self.fontMetrics().horizontalAdvance(self.text())
-        return QSize(max(size.width(), self.INDICATOR_SIZE + self.LABEL_GAP + text_width), max(size.height(), self.INDICATOR_SIZE, font_height))
-
-    def paintEvent(self, event: QPaintEvent) -> None:
-        event.accept()
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-
-        indicator_y = (self.height() - self.INDICATOR_SIZE) // 2
-        indicator_rect = QRect(0, indicator_y, self.INDICATOR_SIZE, self.INDICATOR_SIZE)
-        accent_color = QColor(INPUT_TEXT_COLOR)
-        border_color = accent_color if self.isChecked() else QColor(SEPARATOR_COLOR)
-        background_color = accent_color if self.isChecked() else QColor(SURFACE_BG)
-
-        painter.setPen(QPen(border_color, 1))
-        painter.setBrush(background_color)
-        painter.drawRoundedRect(indicator_rect.adjusted(0, 0, -1, -1), 3, 3)
-
-        if self.isChecked():
-            check_path = QPainterPath()
-            check_path.moveTo(QPointF(3.2, indicator_y + 7.3))
-            check_path.lineTo(QPointF(5.7, indicator_y + 9.8))
-            check_path.lineTo(QPointF(10.9, indicator_y + 4.1))
-            painter.setPen(QPen(QColor("#ffffff"), 2.2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.drawPath(check_path)
-
-        text_rect = self.rect().adjusted(self.INDICATOR_SIZE + self.LABEL_GAP, 0, 0, 0)
-        painter.setPen(QPen(QColor(TEXT_PRIMARY)))
-        painter.drawText(text_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, self.text())
 
 
 class SettingsWindow:
@@ -240,8 +67,16 @@ class SettingsWindow:
         self.pending_cartesia_api_key_action = "unchanged"
         self.pending_cartesia_api_key_value: str | None = None
         self.pending_log_level = state.log_level
+        # 音频路由待应用配置
+        self.pending_audio_routing_enabled = state.audio_routing_enabled
+        self.pending_mic_input_device = state.mic_input_device
+        self.pending_virtual_output_device = state.virtual_output_device
+        self.pending_sidetone_enabled = state.sidetone_enabled
         self.cartesia_api_key_saved = state.cartesia_api_key_saved
         self._audio_output_label_to_identity: dict[str, AudioOutputIdentity] = {}
+        self._audio_output_devices_error: Exception | None = None
+        # 路由锁定时仅改变下拉框显示，保留用户关闭路由后使用的本地输出。
+        self._local_audio_output_label: str | None = None
         self.voice_label_to_id: dict[str, str] = {}
         self.voice_label_to_name: dict[str, str] = {}
         self._closed = False
@@ -254,6 +89,7 @@ class SettingsWindow:
         self.refresh_voices_button: QPushButton = QPushButton()
         self.voice_status_label: QLabel = QLabel()
         self.tts_backend_combo: QComboBox = NoWheelComboBox()
+        self.tts_api_combo: QComboBox = NoWheelComboBox()
         self.audio_output_combo: QComboBox = NoWheelComboBox()
         self.audio_output_status_label: QLabel = QLabel()
         self.api_key_input: QLineEdit = QLineEdit()
@@ -266,6 +102,15 @@ class SettingsWindow:
         self.opacity_value_label: QLabel = QLabel()
         self.opacity_slider: QSlider = NoWheelSlider(Qt.Orientation.Horizontal)
         self.fixed_center_check: QCheckBox = QCheckBox()
+        # 音频路由 UI
+        self.audio_route_enabled_check: QCheckBox = QCheckBox()
+        self.virtual_output_combo: QComboBox = NoWheelComboBox()
+        self.audio_route_status_label: QLabel = QLabel()
+        self.vb_cable_install_button: QPushButton = QPushButton()
+        self._input_device_names: list[str] = []
+        self._output_device_names: list[str] = []
+        # TTS 服务商专属设置容器（左绿线缩进，包含 API Key / 生成模式 / 音色）
+        self._tts_provider_container: QFrame | None = None
 
         parent = root if isinstance(root, QWidget) else None
         self.window: _SettingsDialog | None = _SettingsDialog(self, parent)
@@ -280,7 +125,7 @@ class SettingsWindow:
         self.window.resize(DIALOG_WIDTH, DIALOG_HEIGHT)
         self.window.setSizeGripEnabled(True)
         self.window.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.window.setStyleSheet(self._build_stylesheet())
+        self.window.setStyleSheet(build_settings_stylesheet())
         window = self.window
         center_window(window, DIALOG_WIDTH, DIALOG_HEIGHT, parent)
         self._build(state)
@@ -320,9 +165,25 @@ class SettingsWindow:
         """读取待应用设置。"""
         hotkey, hotkey_name = self.pending_hotkey
         self.pending_fixed_center = self.fixed_center_check.isChecked()
-        self._on_audio_output_selected(self.audio_output_combo.currentText())
+        # 路由启用时下拉框显示的是固定 CABLE Input，不能覆盖已保存的本地输出。
+        if not self.pending_audio_routing_enabled:
+            self._on_audio_output_selected(self.audio_output_combo.currentText())
         self._sync_pending_cartesia_api_key()
-        return PendingSettings(hotkey, hotkey_name, self.pending_voice_id, self.pending_voice_name, self.pending_volume, self.pending_overlay_opacity, self.pending_tts_backend, self.pending_fixed_center, self.pending_audio_output_device_name, self.pending_audio_output_device_identity, self.pending_cartesia_api_key_action, self.pending_cartesia_api_key_value, self.pending_log_level)
+        return PendingSettings(
+            hotkey, hotkey_name,
+            self.pending_voice_id, self.pending_voice_name,
+            self.pending_volume, self.pending_overlay_opacity,
+            self.pending_tts_backend, self.pending_fixed_center,
+            self.pending_audio_output_device_name,
+            self.pending_audio_output_device_identity,
+            self.pending_cartesia_api_key_action,
+            self.pending_cartesia_api_key_value,
+            self.pending_log_level,
+            audio_routing_enabled=self.pending_audio_routing_enabled,
+            mic_input_device=self.pending_mic_input_device,
+            virtual_output_device=self.pending_virtual_output_device,
+            sidetone_enabled=self.pending_sidetone_enabled,
+        )
 
     def set_recording_started(self) -> None:
         """更新为快捷键录制中状态。"""
@@ -414,20 +275,9 @@ class SettingsWindow:
         tab_widget.setElideMode(Qt.TextElideMode.ElideNone)
         shell_layout.addWidget(tab_widget, 1)
 
-        hotkey_layout = self._create_tab_page(tab_widget, "全局快捷键")
-        self._build_hotkey_section(hotkey_layout, state)
-        hotkey_layout.addStretch(1)
-
-        cartesia_layout = self._create_tab_page(tab_widget, "Cartesia 设置")
-        self._build_api_key_section(cartesia_layout, state)
-        self._add_inner_gap(cartesia_layout)
-        self._build_backend_section(cartesia_layout)
-        self._add_inner_gap(cartesia_layout)
-        self._build_voice_section(cartesia_layout, state)
-        cartesia_layout.addStretch(1)
-
+        # 1. 本地设置（含全局快捷键）
         local_layout = self._create_tab_page(tab_widget, "本地设置")
-        self._build_audio_output_section(local_layout, state)
+        self._build_hotkey_section(local_layout, state)
         self._add_inner_gap(local_layout)
         self._build_volume_section(local_layout)
         self._add_inner_gap(local_layout)
@@ -436,7 +286,34 @@ class SettingsWindow:
         self._build_position_section(local_layout)
         local_layout.addStretch(1)
 
-        log_layout = self._create_tab_page(tab_widget, "日志显示等级")
+        # 2. 音频路由（音频输出居首）
+        route_layout = self._create_tab_page(tab_widget, "音频路由")
+        self._build_audio_output_section(route_layout, state)
+        self._add_inner_gap(route_layout)
+        self._build_audio_route_section(route_layout, state)
+        route_layout.addStretch(1)
+
+        # 3. TTS 设置（服务商选择 + 专属配置容器）
+        tts_layout = self._create_tab_page(tab_widget, "TTS 设置")
+        self._build_tts_api_section(tts_layout)
+        self._add_inner_gap(tts_layout)
+        # 服务商专属设置容器：左侧绿色强调线 + 微浅底色，视觉缩进体现层级
+        self._tts_provider_container = QFrame()
+        self._tts_provider_container.setObjectName("ttsProviderContainer")
+        provider_layout = QVBoxLayout(self._tts_provider_container)
+        provider_layout.setContentsMargins(16, 12, 16, 4)
+        provider_layout.setSpacing(0)
+        self._build_api_key_section(provider_layout, state)
+        self._add_inner_gap(provider_layout)
+        self._build_backend_section(provider_layout)
+        self._add_inner_gap(provider_layout)
+        self._build_voice_section(provider_layout, state)
+        provider_layout.addStretch(1)
+        tts_layout.addWidget(self._tts_provider_container)
+        tts_layout.addStretch(1)
+
+        # 4. 日志
+        log_layout = self._create_tab_page(tab_widget, "日志")
         self._build_log_level_section(log_layout)
         log_layout.addStretch(1)
 
@@ -521,7 +398,7 @@ class SettingsWindow:
 
     def _build_backend_section(self, parent_layout: QVBoxLayout) -> None:
         section = self._create_section(parent_layout)
-        section.addWidget(self._section_title("模式切换"))
+        section.addWidget(self._section_title("生成模式"))
         self.tts_backend_combo = NoWheelComboBox()
         self.tts_backend_combo.setSizeAdjustPolicy(QComboBox.AdjustToContentsOnFirstShow)
         self.tts_backend_combo.setMinimumContentsLength(24)
@@ -530,7 +407,20 @@ class SettingsWindow:
         self.tts_backend_combo.setCurrentText(self.pending_tts_backend)
         self.tts_backend_combo.currentTextChanged.connect(self._on_tts_backend_selected)
         section.addWidget(self.tts_backend_combo)
-        section.addWidget(self._hint_label("选择 Cartesia bytes 或 realtime 模式，应用后立即生效。", TEXT_MUTED))
+        section.addWidget(self._hint_label("Bytes：完整生成后播放。Realtime：边生成边播放，延迟更低。", TEXT_MUTED))
+
+    def _build_tts_api_section(self, parent_layout: QVBoxLayout) -> None:
+        section = self._create_section(parent_layout)
+        section.addWidget(self._section_title("TTS 服务商"))
+        self.tts_api_combo = NoWheelComboBox()
+        self.tts_api_combo.setSizeAdjustPolicy(QComboBox.AdjustToContentsOnFirstShow)
+        self.tts_api_combo.setMinimumContentsLength(24)
+        self.tts_api_combo.view().setTextElideMode(Qt.TextElideMode.ElideRight)
+        self.tts_api_combo.addItems(["Cartesia"])
+        self.tts_api_combo.setCurrentIndex(0)
+        self.tts_api_combo.currentTextChanged.connect(self._on_tts_api_selected)
+        section.addWidget(self.tts_api_combo)
+        section.addWidget(self._hint_label("选择 TTS 服务商，下方设置区同步切换。", TEXT_MUTED))
 
     def _build_audio_output_section(self, parent_layout: QVBoxLayout, state: SettingsState) -> None:
         section = self._create_section(parent_layout)
@@ -543,6 +433,8 @@ class SettingsWindow:
         section.addWidget(self.audio_output_combo)
         self.audio_output_status_label.setObjectName("hintLabel")
         self._apply_audio_output_devices(state.audio_output_devices, state.audio_output_device_identity, state.audio_output_device_name, state.audio_output_devices_error)
+        self._local_audio_output_label = self.audio_output_combo.currentText()
+        self._sync_audio_output_control()
         section.addWidget(self.audio_output_status_label)
 
     def _build_volume_section(self, parent_layout: QVBoxLayout) -> None:
@@ -587,6 +479,155 @@ class SettingsWindow:
         section.addWidget(self.fixed_center_check)
         section.addWidget(self._hint_label("取消勾选后，可拖动输入窗口；松开鼠标后自动记住位置。", TEXT_MUTED))
 
+    def _build_audio_route_section(self, parent_layout: QVBoxLayout, state: SettingsState) -> None:
+        section = self._create_section(parent_layout)
+        section.addWidget(self._section_title("音频路由"))
+
+        # VB-CABLE 状态
+        if state.vb_cable_installed:
+            self.audio_route_status_label = self._hint_label(
+                "VB-CABLE 已安装。TTS + 麦克风 → CABLE Input，其他应用选 CABLE Output 即可。",
+                INPUT_TEXT_COLOR,
+            )
+        else:
+            self.audio_route_status_label = self._hint_label(
+                "需安装 VB-CABLE 驱动才能让其他应用听到 TTS 和麦克风。",
+                TEXT_WARNING,
+            )
+        section.addWidget(self.audio_route_status_label)
+
+        if not state.vb_cable_installed:
+            self.vb_cable_install_button = QPushButton("下载并安装 VB-CABLE")
+            self.vb_cable_install_button.clicked.connect(self._on_open_vb_cable_download)
+            section.addWidget(self.vb_cable_install_button)
+            self._add_inner_gap(parent_layout)
+
+        # 启用开关
+        self.audio_route_enabled_check = CheckmarkCheckBox("启用音频路由")
+        self.audio_route_enabled_check.setChecked(state.audio_routing_enabled)
+        self.audio_route_enabled_check.stateChanged.connect(self._on_audio_route_enabled_changed)
+        section.addWidget(self.audio_route_enabled_check)
+        section.addWidget(self._hint_label(
+            "TTS 输出到 CABLE Input，自动配置麦克风侦听。在 Discord/游戏里选 CABLE Output 即可。",
+            TEXT_MUTED,
+        ))
+
+        # 返听开关 —— TTS 同步输出到系统默认扬声器/耳机，路由开启后自己也能听到
+        self.sidetone_enabled_check = CheckmarkCheckBox("返听（TTS 同步输出到默认设备）")
+        self.sidetone_enabled_check.setChecked(state.sidetone_enabled)
+        self.sidetone_enabled_check.stateChanged.connect(self._on_sidetone_enabled_changed)
+        section.addWidget(self.sidetone_enabled_check)
+        section.addWidget(self._hint_label(
+            "TTS 播放时同步在扬声器/耳机中播放，方便路由启用后自己能听到。",
+            TEXT_MUTED,
+        ))
+
+        # 麦克风选择（配置 Windows 侦听）
+        section.addWidget(self._section_title("麦克风输入"))
+        section.addWidget(self._hint_label(
+            "选择麦克风，开启路由后自动配置 Windows 侦听。",
+            TEXT_MUTED,
+        ))
+        self.mic_input_combo = NoWheelComboBox()
+        self.mic_input_combo.setSizeAdjustPolicy(QComboBox.AdjustToContentsOnFirstShow)
+        self.mic_input_combo.setMinimumContentsLength(24)
+        self._populate_input_devices(state.input_devices, state.mic_input_device)
+        self.mic_input_combo.currentTextChanged.connect(self._on_mic_input_selected)
+        section.addWidget(self.mic_input_combo)
+
+    def _on_open_vb_cable_download(self, _checked: bool = False) -> None:
+        from wordy.audio.driver import VBCableDriverManager
+        VBCableDriverManager.open_download_page()
+
+    def _on_audio_route_enabled_changed(self, state: int) -> None:
+        enabled = state == Qt.CheckState.Checked.value
+        if enabled and not self.pending_audio_routing_enabled:
+            self._local_audio_output_label = self.audio_output_combo.currentText()
+        self.pending_audio_routing_enabled = enabled
+        self._sync_audio_output_control()
+
+    def _on_sidetone_enabled_changed(self, state: int) -> None:
+        self.pending_sidetone_enabled = state == Qt.CheckState.Checked.value
+
+    def _find_routing_output_label(self) -> str | None:
+        """查找路由固定使用的 Windows WASAPI CABLE Input 标签。"""
+        for label, identity in self._audio_output_label_to_identity.items():
+            name = identity.get("name")
+            host_api = identity.get("host_api_name")
+            if isinstance(name, str) and "CABLE Input" in name and host_api == "Windows WASAPI":
+                return label
+        return None
+
+    def _sync_audio_output_control(self) -> None:
+        """路由启用时固定显示 CABLE Input，关闭后恢复本地输出选择。"""
+        combo = self.audio_output_combo
+        combo.blockSignals(True)
+        if self.pending_audio_routing_enabled:
+            routing_label = self._find_routing_output_label()
+            if routing_label is None:
+                routing_label = "CABLE Input [Windows WASAPI]（未检测到）"
+                if combo.findText(routing_label) < 0:
+                    combo.addItem(routing_label)
+            combo.setCurrentText(routing_label)
+            combo.setEnabled(False)
+            self._set_label(
+                self.audio_output_status_label,
+                "音频路由已启用，输出固定为 VB-CABLE Input，不可更改。",
+                INPUT_TEXT_COLOR,
+            )
+        else:
+            combo.setEnabled(True)
+            local_label = self._local_audio_output_label or SYSTEM_DEFAULT_AUDIO_OUTPUT_LABEL
+            if combo.findText(local_label) >= 0:
+                combo.setCurrentText(local_label)
+            else:
+                combo.setCurrentText(SYSTEM_DEFAULT_AUDIO_OUTPUT_LABEL)
+            if self._audio_output_devices_error is not None:
+                self._set_label(
+                    self.audio_output_status_label,
+                    f"输出设备枚举失败：{self._audio_output_devices_error}",
+                    TEXT_WARNING,
+                )
+            elif self._audio_output_label_to_identity:
+                self._set_label(
+                    self.audio_output_status_label,
+                    f"已发现 {len(self._audio_output_label_to_identity)} 个输出设备",
+                    TEXT_MUTED,
+                )
+            else:
+                self._set_label(
+                    self.audio_output_status_label,
+                    "未发现输出设备，将使用系统默认",
+                    TEXT_MUTED,
+                )
+        combo.blockSignals(False)
+        if not self.pending_audio_routing_enabled:
+            self._on_audio_output_selected(combo.currentText())
+
+    MIC_NONE_LABEL = "无（不侦听麦克风）"
+
+    def _on_mic_input_selected(self, text: str) -> None:
+        # "无" → None，路由器不做侦听配置。
+        self.pending_mic_input_device = None if text == self.MIC_NONE_LABEL else (text if text else None)
+
+    def _populate_input_devices(self, devices: list[dict[str, object]], selected: str | None) -> None:
+        """填充麦克风输入设备下拉列表，首项为"无"——显式表示不侦听。"""
+        combo = self.mic_input_combo
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem(self.MIC_NONE_LABEL)
+        names: list[str] = [self.MIC_NONE_LABEL]
+        for dev in devices:
+            name = dev.get("name") if isinstance(dev, dict) else str(dev)
+            if isinstance(name, str) and name:
+                names.append(name)
+                combo.addItem(name)
+        if selected is None:
+            combo.setCurrentIndex(0)
+        elif selected in names:
+            combo.setCurrentText(selected)
+        combo.blockSignals(False)
+
     def _build_log_level_section(self, parent_layout: QVBoxLayout) -> None:
         section = self._create_section(parent_layout)
         section.addWidget(self._section_title("显示等级"))
@@ -623,15 +664,6 @@ class SettingsWindow:
         button_row.addWidget(apply_button)
         parent_layout.addLayout(button_row)
 
-    def _add_separator(self, parent_layout: QVBoxLayout) -> None:
-        separator = QFrame()
-        separator.setObjectName("separator")
-        separator.setFrameShape(QFrame.Shape.HLine)
-        separator.setFixedHeight(1)
-        parent_layout.addSpacing(SECTION_GAP)
-        parent_layout.addWidget(separator)
-        parent_layout.addSpacing(SECTION_GAP)
-
     def _add_inner_gap(self, parent_layout: QVBoxLayout) -> None:
         parent_layout.addSpacing(SECTION_GAP)
 
@@ -655,11 +687,17 @@ class SettingsWindow:
     def _on_tts_backend_selected(self, backend: str) -> None:
         self.pending_tts_backend = backend
 
+    def _on_tts_api_selected(self, provider: str) -> None:
+        """TTS 服务商切换：显示/隐藏对应专属设置容器。"""
+        if self._tts_provider_container is not None:
+            self._tts_provider_container.setVisible(provider == "Cartesia")
+
     def _on_log_level_selected(self, log_level: str) -> None:
         self.pending_log_level = log_level if log_level in LOG_LEVELS else "INFO"
 
     def _apply_audio_output_devices(self, devices: list[AudioOutputDevice] | list[str], selected_identity: AudioOutputIdentity | None, selected_device_name: str | None, error: Exception | None) -> None:
         self._audio_output_label_to_identity = {}
+        self._audio_output_devices_error = error
         labels: list[str] = []
         identities: list[AudioOutputIdentity] = []
         if error is None:
@@ -744,7 +782,7 @@ class SettingsWindow:
         if self.pending_cartesia_api_key_action == "clear":
             self.pending_cartesia_api_key_value = None
             return
-        normalized = secret_store.normalize_api_key_input(self.api_key_input.text())
+        normalized = wordy.secret.normalize_api_key_input(self.api_key_input.text())
         if normalized:
             self.pending_cartesia_api_key_action = "set"
             self.pending_cartesia_api_key_value = normalized
@@ -753,6 +791,9 @@ class SettingsWindow:
         self.pending_cartesia_api_key_value = None
 
     def _on_audio_output_selected(self, device_label: str) -> None:
+        if self.pending_audio_routing_enabled:
+            return
+        self._local_audio_output_label = device_label
         if device_label == SYSTEM_DEFAULT_AUDIO_OUTPUT_LABEL:
             self.pending_audio_output_device_identity = None
             self.pending_audio_output_device_name = None
@@ -838,250 +879,3 @@ class SettingsWindow:
     def _opacity_to_slider(self, opacity: float) -> int:
         clamped = min(max(opacity, MIN_OVERLAY_OPACITY), MAX_OVERLAY_OPACITY)
         return round((clamped - MIN_OVERLAY_OPACITY) / OVERLAY_OPACITY_STEP)
-
-    def _build_stylesheet(self) -> str:
-        return f'''
-            QDialog {{
-                background: transparent;
-                color: {TEXT_PRIMARY};
-            }}
-            QFrame#dialogShell {{
-                background: {SURFACE_BG};
-                border: 1px solid {BUTTON_GHOST_BORDER};
-                border-radius: 18px;
-            }}
-            QLabel#dialogTitle {{
-                color: {TEXT_PRIMARY};
-                font-size: 16px;
-                font-weight: 700;
-                padding: 18px 0 12px 0;
-                border: none;
-            }}
-            QLabel#sectionTitle {{
-                color: {TEXT_PRIMARY};
-                font-size: 12px;
-                font-weight: 700;
-                border: none;
-            }}
-            QLabel#bodyLabel, QLabel#bodyLabelEmphasis {{
-                font-size: 10px;
-                border: none;
-            }}
-            QLabel#bodyLabelEmphasis {{
-                font-size: 11px;
-                font-weight: 600;
-            }}
-            QLabel#hintLabel {{
-                font-size: 12px;
-                border: none;
-            }}
-            QScrollArea, QScrollArea > QWidget > QWidget {{
-                background: transparent;
-                border: none;
-            }}
-            QTabWidget#settingsTabs {{
-                background: transparent;
-                border: none;
-                padding: 0 0 4px 0;
-            }}
-            QTabWidget#settingsTabs::pane {{
-                background: transparent;
-                border: none;
-                margin-top: 10px;
-            }}
-            QTabWidget#settingsTabs::tab-bar {{
-                alignment: center;
-            }}
-            QTabWidget#settingsTabs QTabBar {{
-                background: {SURFACE_BG};
-                border: 1px solid {BUTTON_GHOST_BORDER};
-                border-radius: 12px;
-                padding: 4px;
-            }}
-            QTabWidget#settingsTabs QTabBar::tab {{
-                background: transparent;
-                color: {TEXT_MUTED};
-                border: 1px solid transparent;
-                border-radius: 9px;
-                padding: 8px 12px;
-                margin: 0 2px;
-                min-width: 90px;
-                font-weight: 600;
-            }}
-            QTabWidget#settingsTabs QTabBar::tab:hover {{
-                background: {ELEVATED_BG};
-                color: {TEXT_PRIMARY};
-                border-color: {BUTTON_GHOST_BORDER};
-            }}
-            QTabWidget#settingsTabs QTabBar::tab:pressed {{
-                background: {ACCENT_PRESSED};
-                color: {TEXT_PRIMARY};
-                border-color: {ACCENT_PRESSED};
-            }}
-            QTabWidget#settingsTabs QTabBar::tab:selected {{
-                background: {BUTTON_ACTIVE_BG};
-                color: {TEXT_PRIMARY};
-                border-color: {GREEN_ACCENT};
-            }}
-            QTabWidget#settingsTabs QTabBar::tab:selected:hover {{
-                background: {BUTTON_ACTIVE_BG};
-                border-color: {ACCENT_HOVER};
-            }}
-            QTabWidget#settingsTabs QTabBar::tab:focus {{
-                outline: none;
-                border-color: {ACCENT_HOVER};
-            }}
-            QScrollBar:vertical {{
-                background: transparent;
-                width: 10px;
-                margin: 8px 3px 8px 0;
-                border: none;
-            }}
-            QScrollBar::handle:vertical {{
-                background: {SCROLLBAR_HANDLE};
-                min-height: 30px;
-                border-radius: 4px;
-            }}
-            QScrollBar::handle:vertical:hover {{
-                background: {SCROLLBAR_HANDLE_HOVER};
-            }}
-            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
-                background: transparent;
-                border: none;
-                height: 0;
-            }}
-            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
-                background: transparent;
-                border: none;
-            }}
-            QFrame#separator {{
-                background: {SEPARATOR_COLOR};
-                border: none;
-            }}
-            QPushButton {{
-                background: {BUTTON_BG};
-                color: {TEXT_PRIMARY};
-                border: 1px solid {BUTTON_GHOST_BORDER};
-                border-radius: 10px;
-                padding: 7px 16px;
-                font-weight: 600;
-            }}
-            QPushButton:hover {{
-                background: {BUTTON_ACTIVE_BG};
-                border-color: {ACCENT_HOVER};
-                color: {TEXT_PRIMARY};
-            }}
-            QPushButton:pressed {{
-                background: {ELEVATED_BG};
-                border-color: {ACCENT_PRESSED};
-            }}
-            QPushButton:disabled {{
-                background: {SEPARATOR_COLOR};
-                color: {TEXT_MUTED};
-                border-color: {SEPARATOR_COLOR};
-            }}
-            QPushButton#applyButton {{
-                background: {GREEN_ACCENT};
-                color: {WINDOW_BG};
-                border-color: {GREEN_ACCENT};
-            }}
-            QPushButton#applyButton:hover {{
-                background: {ACCENT_HOVER};
-                border-color: {ACCENT_HOVER};
-                color: {WINDOW_BG};
-            }}
-            QPushButton#applyButton:pressed {{
-                background: {ACCENT_PRESSED};
-                border-color: {ACCENT_PRESSED};
-                color: {TEXT_PRIMARY};
-            }}
-            QPushButton#cancelButton {{
-                background: transparent;
-                color: {TEXT_MUTED};
-                border-color: {BUTTON_GHOST_BORDER};
-            }}
-            QPushButton#cancelButton:hover {{
-                background: {ELEVATED_BG};
-                color: {TEXT_PRIMARY};
-                border-color: {SCROLLBAR_HANDLE_HOVER};
-            }}
-            QPushButton#cancelButton:pressed {{
-                background: {SEPARATOR_COLOR};
-                color: {TEXT_PRIMARY};
-            }}
-            QComboBox {{
-                background: {ELEVATED_BG};
-                color: {TEXT_PRIMARY};
-                border: 1px solid {BUTTON_GHOST_BORDER};
-                border-radius: 10px;
-                padding: 7px 28px 7px 10px;
-                selection-background-color: {BUTTON_ACTIVE_BG};
-            }}
-            QComboBox:hover {{
-                border-color: {ACCENT_HOVER};
-            }}
-            QComboBox::drop-down {{
-                subcontrol-origin: padding;
-                subcontrol-position: top right;
-                width: 24px;
-                border: none;
-            }}
-            QComboBox::down-arrow {{
-                width: 0;
-                height: 0;
-                border-left: 4px solid transparent;
-                border-right: 4px solid transparent;
-                border-top: 5px solid {TEXT_MUTED};
-            }}
-            QComboBox QAbstractItemView {{
-                background: {ELEVATED_BG};
-                color: {TEXT_PRIMARY};
-                border: 1px solid {BUTTON_GHOST_BORDER};
-                border-radius: 10px;
-                padding: 4px;
-                outline: none;
-                selection-background-color: {BUTTON_ACTIVE_BG};
-                selection-color: {TEXT_PRIMARY};
-            }}
-            QLineEdit {{
-                background: {ELEVATED_BG};
-                color: {TEXT_PRIMARY};
-                border: 1px solid {BUTTON_GHOST_BORDER};
-                border-radius: 10px;
-                padding: 7px 10px;
-                selection-background-color: {BUTTON_ACTIVE_BG};
-                selection-color: {TEXT_PRIMARY};
-            }}
-            QLineEdit:hover {{
-                border-color: {ACCENT_HOVER};
-            }}
-            QLineEdit:focus {{
-                border-color: {GREEN_ACCENT};
-            }}
-            QSlider::groove:horizontal {{
-                height: 6px;
-                background: {SEPARATOR_COLOR};
-                border-radius: 3px;
-            }}
-            QSlider::sub-page:horizontal {{
-                background: {GREEN_ACCENT};
-                border-radius: 3px;
-            }}
-            QSlider::handle:horizontal {{
-                width: 16px;
-                height: 16px;
-                margin: -5px 0;
-                border-radius: 8px;
-                background: {TEXT_PRIMARY};
-                border: 2px solid {GREEN_ACCENT};
-            }}
-            QSlider::handle:horizontal:hover {{
-                background: {ACCENT_HOVER};
-                border-color: {ACCENT_HOVER};
-            }}
-            QCheckBox {{
-                color: {TEXT_PRIMARY};
-                spacing: 8px;
-                border: none;
-            }}
-        '''

@@ -153,7 +153,7 @@ def _delete_fallback_file() -> bool:
         return False
 
 
-def normalize_api_key_input(raw: str) -> str:
+def normalize_api_key_input(raw: str | None) -> str:
     """Strip whitespace and an optional leading 'CARTESIA_API_KEY=' prefix."""
     if raw is None:
         return ""

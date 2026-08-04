@@ -9,9 +9,9 @@ import sys
 import pytest
 
 # Ensure a clean import (previous test runs may have cached the module).
-sys.modules.pop("native_hotkey", None)
+sys.modules.pop("wordy.hotkey.native", None)
 
-from native_hotkey import parse_hotkey, MOD_NOREPEAT, MOD_CONTROL, MOD_SHIFT, MOD_ALT
+from wordy.hotkey.native import parse_hotkey, MOD_NOREPEAT, MOD_CONTROL, MOD_SHIFT, MOD_ALT
 
 
 def test_parse_hotkey_single_function_key():
@@ -84,9 +84,9 @@ def test_native_hotkey_module_importable_without_user32(monkeypatch):
     preserved, and parse_hotkey behaves identically.
     """
     monkeypatch.delattr(ctypes, "WinDLL", raising=False)
-    sys.modules.pop("native_hotkey", None)
+    sys.modules.pop("wordy.hotkey.native", None)
 
-    module = importlib.import_module("native_hotkey")
+    module = importlib.import_module("wordy.hotkey.native")
 
     assert module.MOD_NOREPEAT == MOD_NOREPEAT
     assert module.MOD_CONTROL == MOD_CONTROL
@@ -100,10 +100,10 @@ def test_native_hotkey_module_importable_without_user32(monkeypatch):
 
 def test_listener_start_rejects_non_windows(monkeypatch):
     """start() must raise a clear RuntimeError on non-Windows platforms."""
-    sys.modules.pop("native_hotkey", None)
+    sys.modules.pop("wordy.hotkey.native", None)
     monkeypatch.setattr(sys, "platform", "linux")
 
-    module = importlib.import_module("native_hotkey")
+    module = importlib.import_module("wordy.hotkey.native")
     listener = module.NativeHotkeyListener("ctrl+f6", "test", lambda: None)
 
     with pytest.raises(RuntimeError, match="仅支持 Windows 平台"):
@@ -118,7 +118,7 @@ def test_stop_logs_warning_on_join_timeout():
     import logging
     import threading
     from unittest.mock import patch
-    from native_hotkey import NativeHotkeyListener
+    from wordy.hotkey.native import NativeHotkeyListener
 
     # Create a listener but don't actually start Windows message loop
     def dummy_callback():
@@ -142,7 +142,7 @@ def test_stop_logs_warning_on_join_timeout():
     fake_thread = listener._thread
 
     # Check that we get a warning when stopping
-    with patch.object(logging.getLogger('native_hotkey'), 'warning') as mock_warn:
+    with patch.object(logging.getLogger('wordy.hotkey.native'), 'warning') as mock_warn:
         listener.stop()
         assert mock_warn.called
         warning_messages = [call.args[0] for call in mock_warn.call_args_list]

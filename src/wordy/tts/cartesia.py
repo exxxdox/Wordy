@@ -15,16 +15,21 @@ import requests
 from cartesia import Cartesia
 from websockets.sync.client import ClientConnection
 
+# 向后兼容：从 cartesia_connect 模块重新导出 voice label 辅助函数
+from wordy.tts.labels import VoiceLabelMaps, build_voice_label_maps  # noqa: F401
+
 if TYPE_CHECKING:
     from cartesia.types.websocket_connection_options import WebsocketConnectionOptions
 
-from .tts_engine import BackendTTSEngine, TTSAudioPlayer, VoiceInfo
-from .voice_labels import VoiceLabelMaps, build_voice_label_maps
+from .engine import BackendTTSEngine, TTSAudioPlayer, VoiceInfo
 
 
 logger = logging.getLogger(__name__)
 
 DEFAULT_CARTESIA_VERSION = "2026-03-01"
+# 直接请求 Cartesia 生成 48 kHz，使返回 PCM 与 VB-CABLE WASAPI 格式一致。
+# 播放器原样输出，不在本地重采样或改写 WAV 采样率。
+DEFAULT_CARTESIA_SAMPLE_RATE = 48000
 VOICES_URL = "https://api.cartesia.ai/voices?is_owner=true"
 BYTES_TTS_URL = "https://api.cartesia.ai/tts/bytes"
 REALTIME_PING_INTERVAL_SECONDS = 60
@@ -76,6 +81,15 @@ def _raw_float_output_format(sample_rate: int) -> dict[str, Any]:
     }
 
 
+def _raw_int16_output_format(sample_rate: int) -> dict[str, Any]:
+    """Cartesia int16 原始 PCM 输出——与 VB-CABLE 等虚拟设备 WASAPI 端点兼容。"""
+    return {
+        "container": "raw",
+        "encoding": "pcm_s16le",
+        "sample_rate": sample_rate,
+    }
+
+
 def _raise_for_status(response: requests.Response, error_prefix: str) -> None:
     try:
         response.raise_for_status()
@@ -93,7 +107,7 @@ class CartesiaTTS(BackendTTSEngine):
         api_key: str | None = None,
         voice_id: str | None = None,
         model_id: str = "sonic-3.5",
-        sample_rate: int = 44100,
+        sample_rate: int = DEFAULT_CARTESIA_SAMPLE_RATE,
         volume: float = 1.0,
     ):
         super().__init__(audio_player=audio_player, voice_id=voice_id, volume=volume)
@@ -159,7 +173,7 @@ class CartesiaBytesTTS(CartesiaTTS):
         voice_id: str | None = None,
         model_id: str = "sonic-3.5",
         version: str = DEFAULT_CARTESIA_VERSION,
-        sample_rate: int = 44100,
+        sample_rate: int = DEFAULT_CARTESIA_SAMPLE_RATE,
         timeout: int = 60,
         volume: float = 1.0,
     ):
@@ -210,7 +224,7 @@ class CartesiaRealtimeTTS(CartesiaTTS):
         api_key: str | None = None,
         voice_id: str | None = None,
         model_id: str = "sonic-3.5",
-        sample_rate: int = 44100,
+        sample_rate: int = DEFAULT_CARTESIA_SAMPLE_RATE,
         volume: float = 1.0,
     ):
         super().__init__(
@@ -245,12 +259,83 @@ class CartesiaRealtimeTTS(CartesiaTTS):
 
     def _open_audio_stream(self) -> None:
         logger.info("正在打开 PyAudio 流式输出...")
-        if not self.audio_player.open_stream(
-            audio_format=pyaudio.paFloat32,
+
+        # VB-CABLE 虚拟设备 WASAPI 端点对 float32 处理不可靠（驱动层可能
+        # 错当 int16 解析致 PCM 变声）。主动使用 int16 + 让 Cartesia 输出
+        # pcm_s16le，从源头消除格式歧义。非 CABLE 设备维持 float32 优先。
+        device_name = (self.audio_player.output_device_name or "").lower()
+        prefer_int16 = isinstance(device_name, str) and any(
+            kw in device_name for kw in ("cable", "vb-audio")
+        )
+
+        # 虚拟设备采样率以 Windows 声音设置中该设备的默认格式为准；
+        # 与源采样率不一致时 Windows Audio Engine 会做 SRC，可能引入失真。
+        # 因此对 CABLE 设备主动匹配其原生采样率。
+        stream_rate = self.sample_rate
+        if prefer_int16:
+            device_rate = self.audio_player.query_output_device_default_rate()
+            if device_rate is not None and device_rate != self.sample_rate:
+                logger.warning(
+                    "CABLE 设备默认采样率为 %s Hz，与 Cartesia 请求的 %s Hz 不匹配，"
+                    "已调整为设备原生采样率以避免 Windows SRC 失真",
+                    device_rate,
+                    self.sample_rate,
+                )
+                stream_rate = device_rate
+
+        # VB-CABLE 默认内部延迟为 7168 samples，官方要求内部延迟至少为
+        # 最大客户端 buffer 的 3 倍。4096 会超过 7168 / 3 的安全上限并可能
+        # 触发 Pull loss / DMA error；1024 仍能提供充足余量。CABLE 模式已在
+        # _send_and_play_once 中收齐音频后连续写入，无需靠放大客户端 buffer
+        # 掩盖网络 chunk 间隔。
+        buffer_size = 1024
+
+        primary_format = pyaudio.paInt16 if prefer_int16 else pyaudio.paFloat32
+        if self.audio_player.open_stream(
+            audio_format=primary_format,
             channels=1,
-            rate=self.sample_rate,
+            rate=stream_rate,
+            frames_per_buffer=buffer_size,
         ):
-            raise RuntimeError("无法打开 PyAudio 流式输出")
+            stream_config = self.audio_player.get_stream_config()
+            actual_format = stream_config.get("format")
+            actual_rate = stream_config.get("rate")
+            # 记录实际协商的采样率供 Cartesia 请求使用
+            if actual_rate is not None:
+                self.sample_rate = actual_rate
+            if prefer_int16 and actual_format != pyaudio.paInt16:
+                logger.warning(
+                    "CABLE 设备 int16 流打开后实际格式=%s，可能仍会变声",
+                    actual_format,
+                )
+            elif actual_format == pyaudio.paInt16:
+                logger.info(
+                    "已使用 int16 / %s Hz 打开流式输出（CABLE 兼容模式）",
+                    actual_rate,
+                )
+            return
+
+        # 首选格式失败，尝试备用格式
+        if prefer_int16:
+            logger.warning("CABLE 设备 int16 流打开失败，尝试 float32 兜底")
+            if self.audio_player.open_stream(
+                audio_format=pyaudio.paFloat32,
+                channels=1,
+                rate=stream_rate,
+                frames_per_buffer=buffer_size,
+            ):
+                return
+        else:
+            logger.warning("float32 流打开失败，尝试 int16 兜底")
+            if self.audio_player.open_stream(
+                audio_format=pyaudio.paInt16,
+                channels=1,
+                rate=stream_rate,
+                frames_per_buffer=buffer_size,
+            ):
+                return
+
+        raise RuntimeError("无法打开 PyAudio 流式输出")
 
     def _open_websocket(self) -> None:
         logger.info("正在连接 Cartesia realtime websocket...")
@@ -309,25 +394,60 @@ class CartesiaRealtimeTTS(CartesiaTTS):
         if connection is None:
             raise RuntimeError("Cartesia realtime websocket 未建立连接")
 
+        # 根据实际流格式选择 Cartesia 输出编码：paInt16 → pcm_s16le，
+        # paFloat32/其他 → pcm_f32le。避免 float32 PCM 被 CABLE 等
+        # 虚拟设备 WASAPI 端点错当 int16 解析导致变声。
+        stream_config = self.audio_player.get_stream_config()
+        if stream_config.get("format") == pyaudio.paInt16:
+            output_format = _raw_int16_output_format(self.sample_rate)
+        else:
+            output_format = _raw_float_output_format(self.sample_rate)
+
         context_id = self._new_context_id()
         ctx = connection.context(
             context_id=context_id,
-            **self._build_request_args(_raw_float_output_format(self.sample_rate)),
+            **self._build_request_args(output_format),
         )
 
         logger.debug("发送 Cartesia realtime 文本，长度: %d 字符 (context_id=%s)", len(text), context_id)
         ctx.push(text)
         ctx.no_more_inputs()
 
-        for response in ctx.receive():
-            if response.type == "chunk" and response.audio:
-                logger.debug("Received audio chunk (%s bytes, context_id=%s)", len(response.audio), response.context_id)
-                self.audio_player.write_stream(response.audio)
-            elif response.type == "error":
-                message = getattr(response, "message", "") or getattr(response, "title", "")
-                raise RuntimeError(f"Cartesia realtime 返回错误: {message}")
-            elif response.type == "done":
-                break
+        # CABLE 等虚拟设备无硬件 DMA buffer，chunk 间 write_stream 的间隔
+        # 会导致 PortAudio ring buffer 排空 → 静音间隙 → 声音不连贯。
+        # 先收齐全部 chunk 再连续写入，消除 chunk 间空洞。
+        device_name = (self.audio_player.output_device_name or "").lower()
+        is_cable = isinstance(device_name, str) and any(
+            kw in device_name for kw in ("cable", "vb-audio")
+        )
+
+        if is_cable:
+            chunks: list[bytes] = []
+            for response in ctx.receive():
+                if response.type == "chunk" and response.audio:
+                    chunks.append(response.audio)
+                elif response.type == "error":
+                    message = getattr(response, "message", "") or getattr(response, "title", "")
+                    raise RuntimeError(f"Cartesia realtime 返回错误: {message}")
+                elif response.type == "done":
+                    break
+            total_bytes = sum(len(c) for c in chunks)
+            logger.debug(
+                "CABLE 模式：收齐 %d 个 chunk（%d bytes），开始连续写入",
+                len(chunks), total_bytes,
+            )
+            for chunk in chunks:
+                self.audio_player.write_stream(chunk)
+        else:
+            for response in ctx.receive():
+                if response.type == "chunk" and response.audio:
+                    logger.debug("Received audio chunk (%s bytes, context_id=%s)", len(response.audio), response.context_id)
+                    self.audio_player.write_stream(response.audio)
+                elif response.type == "error":
+                    message = getattr(response, "message", "") or getattr(response, "title", "")
+                    raise RuntimeError(f"Cartesia realtime 返回错误: {message}")
+                elif response.type == "done":
+                    break
         return True
 
     def speak(self, text: str) -> bool:
@@ -353,6 +473,14 @@ class CartesiaRealtimeTTS(CartesiaTTS):
                 self._log_close_info("Cartesia realtime websocket 接收超时")
                 self._close_websocket()
                 raise
+
+    def reset_audio_output(self) -> None:
+        """关闭并重新打开音频流（保持 websocket），用于输出设备切换时。"""
+        with self._lock:
+            self.audio_player.close_stream()
+            if self._connection is not None:
+                self._open_audio_stream()
+                logger.info("TTS 实时音频流已重建（输出设备变更）")
 
     def close(self) -> None:
         """关闭 websocket 连接和流式音频输出。"""

@@ -3,7 +3,7 @@
 
 """RED contract tests for TrayApp and LogStream public hooks.
 
-These tests intentionally fail because tray_app.TrayApp and
+These tests intentionally fail because tray.TrayApp and
 log_stream.LogStream do not exist yet, and because the existing
 InputOverlay public hook _open_settings is not yet wired to a tray menu.
 """
@@ -41,7 +41,7 @@ _CONFIG: dict[str, Any] = {
 
 
 def _install_native_hotkey_stub(monkeypatch: pytest.MonkeyPatch) -> None:
-    module = ModuleType("native_hotkey")
+    module = ModuleType("wordy.hotkey")
 
     class NativeHotkeyListener:
         def __init__(self, *args: object, **kwargs: object) -> None:
@@ -54,7 +54,11 @@ def _install_native_hotkey_stub(monkeypatch: pytest.MonkeyPatch) -> None:
             self.started = False
 
     setattr(module, "NativeHotkeyListener", NativeHotkeyListener)
-    monkeypatch.setitem(sys.modules, "native_hotkey", module)
+    from wordy.hotkey import iter_hotkey_parts, normalize_key_part, split_hotkey
+    setattr(module, "iter_hotkey_parts", iter_hotkey_parts)
+    setattr(module, "normalize_key_part", normalize_key_part)
+    setattr(module, "split_hotkey", split_hotkey)
+    monkeypatch.setitem(sys.modules, "wordy.hotkey", module)
 
 
 def _import_input_overlay(monkeypatch: pytest.MonkeyPatch):
@@ -62,21 +66,23 @@ def _import_input_overlay(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(sys, "platform", "win32")
     _install_native_hotkey_stub(monkeypatch)
 
-    app_config = importlib.import_module("app_config")
+    # 用 AppSettings 替代已删除的 load_initial_config / save_app_config
+    from wordy.config import AppSettings
+    _test_settings = AppSettings()
+    _test_settings.hotkey = _CONFIG["hotkey"]
+    _test_settings.name = _CONFIG["name"]
+    _test_settings.voice_id = _CONFIG["voice_id"]
+    _test_settings.voice_name = _CONFIG["voice_name"]
+    _test_settings.volume = _CONFIG["volume"]
+    _test_settings.overlay_opacity = _CONFIG["overlay_opacity"]
+    _test_settings.tts_backend = _CONFIG["tts_backend"]
+    _test_settings.fixed_center = _CONFIG["fixed_center"]
+    monkeypatch.setattr(AppSettings, "load", lambda **kw: _test_settings)
+    monkeypatch.setattr(AppSettings, "update", lambda self, **kw: Path("/tmp/wavtrans-test-config.json"))
+    monkeypatch.setattr("wordy.config.get_active_config_file", lambda: Path("/tmp/wavtrans-test-config.json"))
 
-    def save_config_stub(_update: object) -> Path:
-        return Path("/tmp/wavtrans-test-config.json")
-
-    monkeypatch.setattr(app_config, "load_initial_config", lambda: dict(_CONFIG))
-    monkeypatch.setattr(app_config, "save_app_config", save_config_stub)
-    monkeypatch.setattr(
-        app_config,
-        "get_active_config_file",
-        lambda: Path("/tmp/wavtrans-test-config.json"),
-    )
-
-    original_module = sys.modules.pop("input_overlay", None)
-    module = importlib.import_module("input_overlay")
+    original_module = sys.modules.pop("wordy.ui.overlay", None)
+    module = importlib.import_module("wordy.ui.overlay")
 
     def skip_voice_loading(_self: object, show_status: bool = True) -> None:
         _ = show_status
@@ -90,17 +96,17 @@ def _import_input_overlay(monkeypatch: pytest.MonkeyPatch):
 
 
 def _import_tray_app(monkeypatch: pytest.MonkeyPatch):
-    """Import tray_app, ensuring overlay deps are stubbed first.
+    """Import tray, ensuring overlay deps are stubbed first.
 
     Returns the imported module or fails the test with a clear RED message.
     """
     _import_input_overlay(monkeypatch)
-    sys.modules.pop("tray_app", None)
+    sys.modules.pop("wordy.ui.tray", None)
     try:
-        return importlib.import_module("tray_app")
+        return importlib.import_module("wordy.ui.tray")
     except ModuleNotFoundError as exc:
         pytest.fail(
-            "tray_app module is missing. Create tray_app.py exposing a TrayApp "
+            "tray module is missing. Create wordy/ui/tray.py exposing a TrayApp "
             f"class that wires QSystemTrayIcon, a QMenu with the two Chinese "
             f"actions, and delegates settings to overlay._open_settings. "
             f"Underlying error: {exc!r}"
@@ -109,12 +115,12 @@ def _import_tray_app(monkeypatch: pytest.MonkeyPatch):
 
 def _import_log_stream(monkeypatch: pytest.MonkeyPatch):
     _import_input_overlay(monkeypatch)
-    sys.modules.pop("log_stream", None)
+    sys.modules.pop("wordy.log", None)
     try:
-        return importlib.import_module("log_stream")
+        return importlib.import_module("wordy.log")
     except ModuleNotFoundError as exc:
         pytest.fail(
-            "log_stream module is missing. Create log_stream.py exposing a "
+            "log_stream module is missing. Create wordy/log.py exposing a "
             f"LogStream class with .write(record)/.attach(view) and a "
             f"LogWindow with a black read-only QPlainTextEdit (maxBlockCount=5000). "
             f"Underlying error: {exc!r}"
@@ -128,7 +134,7 @@ def _make_tray_with_real_overlay(monkeypatch: pytest.MonkeyPatch, available: boo
         staticmethod(lambda: available),
     )
     tray_mod = _import_tray_app(monkeypatch)
-    overlay_mod = importlib.import_module("input_overlay")
+    overlay_mod = importlib.import_module("wordy.ui.overlay")
     overlay = overlay_mod.InputOverlay(on_submit=lambda _t: None)
     try:
         tray = tray_mod.TrayApp(overlay)

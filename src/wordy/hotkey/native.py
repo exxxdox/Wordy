@@ -12,7 +12,7 @@ import threading
 from ctypes import wintypes
 from typing import Any, Callable
 
-from hotkey_utils import iter_hotkey_parts
+from wordy.hotkey.parser import iter_hotkey_parts
 
 
 logger = logging.getLogger(__name__)

@@ -1,611 +1,619 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Tests for app_config.py pure config I/O behavior."""
+"""Tests for wordy.config.py AppSettings behavior."""
 
 import json
 import os
 from pathlib import Path
 
-import app_config
-from tts_backends.constants import DEFAULT_TTS_BACKEND, TTS_BACKENDS
+import wordy.config
+from wordy.config import AppSettings, display_hotkey, MIN_VOLUME, MAX_VOLUME
+from wordy.config import MIN_GAIN, MAX_GAIN
+from wordy.tts.constants import DEFAULT_TTS_BACKEND, TTS_BACKENDS
 
+
+# ---------------------------------------------------------------------------
+# display_hotkey — unchanged
+# ---------------------------------------------------------------------------
 
 def test_display_hotkey():
     """Test display_hotkey formats hotkeys correctly."""
-    # Simple single key
-    assert app_config.display_hotkey("f6") == "F6"
-    assert app_config.display_hotkey("a") == "A"
-    assert app_config.display_hotkey("ctrl") == "Ctrl"
-    
-    # Combinations
-    assert app_config.display_hotkey("ctrl+alt+delete") == "Ctrl+Alt+Delete"
-    assert app_config.display_hotkey("shift+f10") == "Shift+F10"
-    assert app_config.display_hotkey("win+space") == "Win+Space"
-    
-    # With underscores/spaces
-    assert app_config.display_hotkey("left windows+g") == "Win+G"
-    assert app_config.display_hotkey("control+shift") == "Ctrl+Shift"
-    
-    # Empty should return original
-    assert app_config.display_hotkey("") == ""
+    assert display_hotkey("f6") == "F6"
+    assert display_hotkey("a") == "A"
+    assert display_hotkey("ctrl") == "Ctrl"
+    assert display_hotkey("ctrl+alt+delete") == "Ctrl+Alt+Delete"
+    assert display_hotkey("shift+f10") == "Shift+F10"
+    assert display_hotkey("win+space") == "Win+Space"
+    assert display_hotkey("left windows+g") == "Win+G"
+    assert display_hotkey("control+shift") == "Ctrl+Shift"
+    assert display_hotkey("") == ""
 
 
-def test_parse_hotkey_config_valid():
-    """Test parse_hotkey_config with valid input."""
-    # Complete config
-    config = {"hotkey": "f8", "name": "My F8"}
-    result = app_config.parse_hotkey_config(config)
-    assert result == {"hotkey": "f8", "name": "My F8"}
-    
-    # Only hotkey, generate name
-    config = {"hotkey": "ctrl+shift+f"}
-    result = app_config.parse_hotkey_config(config)
-    assert result == {"hotkey": "ctrl+shift+f", "name": "Ctrl+Shift+F"}
-    
-    # Hotkey is valid but name is invalid
-    config = {"hotkey": "f9", "name": 123}
-    result = app_config.parse_hotkey_config(config)
-    assert result == {"hotkey": "f9", "name": "F9"}
+# ---------------------------------------------------------------------------
+# Hotkey parsing through AppSettings.load()
+# ---------------------------------------------------------------------------
+
+def test_hotkey_config_valid(tmp_path: Path):
+    """AppSettings.load() parses hotkey and name from JSON."""
+    cfg = tmp_path / "config.json"
+    json.dump({"hotkey": "f8", "name": "My F8"}, cfg.open("w"))
+    s = AppSettings.load(config_file=cfg)
+    assert s.hotkey == "f8"
+    assert s.name == "My F8"
+
+    # Only hotkey, name auto-generated from hotkey
+    cfg2 = tmp_path / "config2.json"
+    json.dump({"hotkey": "ctrl+shift+f"}, cfg2.open("w"))
+    s2 = AppSettings.load(config_file=cfg2)
+    assert s2.hotkey == "ctrl+shift+f"
+    assert s2.name == "Ctrl+Shift+F"
+
+    # Hotkey valid but name invalid (non-string) → name regenerated
+    cfg3 = tmp_path / "config3.json"
+    json.dump({"hotkey": "f9", "name": 123}, cfg3.open("w"))
+    s3 = AppSettings.load(config_file=cfg3)
+    assert s3.hotkey == "f9"
+    assert s3.name == "F9"
 
 
-def test_parse_hotkey_config_invalid():
-    """Test parse_hotkey_config with invalid input."""
-    # No hotkey
-    assert app_config.parse_hotkey_config({}) is None
-    # Hotkey not string
-    assert app_config.parse_hotkey_config({"hotkey": 123}) is None
-    # Empty hotkey string
-    assert app_config.parse_hotkey_config({"hotkey": ""}) is None
+def test_hotkey_config_invalid(tmp_path: Path):
+    """AppSettings.load() returns defaults when hotkey missing/invalid."""
+    # No hotkey field → default
+    cfg = tmp_path / "config.json"
+    json.dump({}, cfg.open("w"))
+    s = AppSettings.load(config_file=cfg)
+    assert s.hotkey == "f6"
+    assert s.name == "F6"
+
+    # Non-string hotkey → default
+    cfg2 = tmp_path / "config2.json"
+    json.dump({"hotkey": 123}, cfg2.open("w"))
+    s2 = AppSettings.load(config_file=cfg2)
+    assert s2.hotkey == "f6"
+
+    # Empty hotkey string → default
+    cfg3 = tmp_path / "config3.json"
+    json.dump({"hotkey": ""}, cfg3.open("w"))
+    s3 = AppSettings.load(config_file=cfg3)
+    assert s3.hotkey == "f6"
 
 
-def test_parse_volume_config_clamps():
-    """Test parse_volume_config clamps values between MIN_VOLUME and MAX_VOLUME."""
+# ---------------------------------------------------------------------------
+# Volume clamping through AppSettings.load()
+# ---------------------------------------------------------------------------
+
+def test_volume_config_clamps(tmp_path: Path):
+    """AppSettings.load() clamps volume between MIN_VOLUME and MAX_VOLUME."""
     # Default when missing
-    assert app_config.parse_volume_config({}) == app_config.DEFAULT_VOLUME
-    # Default when not a number
-    assert app_config.parse_volume_config({"volume": "not a number"}) == app_config.DEFAULT_VOLUME
-    
+    s = AppSettings.load(config_file=tmp_path / "nonexistent.json")
+    assert s.volume == 1.0
+
     # Within range stays the same
-    assert app_config.parse_volume_config({"volume": 1.0}) == 1.0
-    assert app_config.parse_volume_config({"volume": 0.5}) == 0.5
-    assert app_config.parse_volume_config({"volume": 2.0}) == 2.0
-    assert app_config.parse_volume_config({"volume": 1.5}) == 1.5
-    
+    for val in (1.0, 0.5, 2.0, 1.5):
+        cfg = tmp_path / f"vol_{val}.json"
+        json.dump({"volume": val}, cfg.open("w"))
+        s2 = AppSettings.load(config_file=cfg)
+        assert s2.volume == val
+
     # Below min clamps to min
-    assert app_config.parse_volume_config({"volume": 0.0}) == app_config.MIN_VOLUME
-    assert app_config.parse_volume_config({"volume": 0.4}) == app_config.MIN_VOLUME
-    
+    cfg = tmp_path / "vol_low.json"
+    json.dump({"volume": 0.0}, cfg.open("w"))
+    s3 = AppSettings.load(config_file=cfg)
+    assert s3.volume == MIN_VOLUME
+    assert s3.volume == 0.5
+
     # Above max clamps to max
-    assert app_config.parse_volume_config({"volume": 3.0}) == app_config.MAX_VOLUME
-    assert app_config.parse_volume_config({"volume": 2.5}) == app_config.MAX_VOLUME
-    
-    # Integer converts to float
-    assert app_config.parse_volume_config({"volume": 1}) == 1.0
+    cfg = tmp_path / "vol_high.json"
+    json.dump({"volume": 3.0}, cfg.open("w"))
+    s4 = AppSettings.load(config_file=cfg)
+    assert s4.volume == MAX_VOLUME
+
+    # Integer converts to float via clamp
+    cfg = tmp_path / "vol_int.json"
+    json.dump({"volume": 1}, cfg.open("w"))
+    s5 = AppSettings.load(config_file=cfg)
+    assert s5.volume == 1.0
 
 
-def test_parse_tts_backend_config_fallback():
-    """Test parse_tts_backend_config falls back to DEFAULT_TTS_BACKEND when invalid."""
-    # Valid backend returns it
+# ---------------------------------------------------------------------------
+# TTS backend
+# ---------------------------------------------------------------------------
+
+def test_tts_backend_config_fallback(tmp_path: Path):
+    """AppSettings.load() validates tts_backend, falls back to default."""
     valid_backend = next(iter(TTS_BACKENDS))
-    assert app_config.parse_tts_backend_config({"tts_backend": valid_backend}) == valid_backend
-    
-    # Missing returns default
-    assert app_config.parse_tts_backend_config({}) == DEFAULT_TTS_BACKEND
-    
-    # Not a string returns default
-    assert app_config.parse_tts_backend_config({"tts_backend": 123}) == DEFAULT_TTS_BACKEND
-    
-    # Invalid string returns default
-    assert app_config.parse_tts_backend_config({"tts_backend": "invalid_backend"}) == DEFAULT_TTS_BACKEND
+    cfg = tmp_path / "config.json"
+    json.dump({"tts_backend": valid_backend}, cfg.open("w"))
+    s = AppSettings.load(config_file=cfg)
+    assert s.tts_backend == valid_backend
+
+    # Missing → default
+    s2 = AppSettings.load(config_file=tmp_path / "nonexistent.json")
+    assert s2.tts_backend == DEFAULT_TTS_BACKEND
+
+    # Non-string → default
+    cfg3 = tmp_path / "config3.json"
+    json.dump({"tts_backend": 123}, cfg3.open("w"))
+    s3 = AppSettings.load(config_file=cfg3)
+    assert s3.tts_backend == DEFAULT_TTS_BACKEND
+
+    # Invalid string → default
+    cfg4 = tmp_path / "config4.json"
+    json.dump({"tts_backend": "invalid_backend"}, cfg4.open("w"))
+    s4 = AppSettings.load(config_file=cfg4)
+    assert s4.tts_backend == DEFAULT_TTS_BACKEND
 
 
-def test_parse_window_position_config():
-    """Test parse_window_position_config handles valid and invalid cases."""
-    # Valid position
-    config = {"window_position": {"x": 100, "y": 200}}
-    result = app_config.parse_window_position_config(config)
-    assert result == {"x": 100, "y": 200}
-    
-    # No window_position returns None
-    assert app_config.parse_window_position_config({}) is None
-    
-    # Not a dict returns None
-    assert app_config.parse_window_position_config({"window_position": [100, 200]}) is None
-    assert app_config.parse_window_position_config({"window_position": "100,200"}) is None
-    
-    # X or Y not int returns None
-    assert app_config.parse_window_position_config({"window_position": {"x": "100", "y": 200}}) is None
-    assert app_config.parse_window_position_config({"window_position": {"x": 100, "y": "200"}}) is None
-    assert app_config.parse_window_position_config({"window_position": {"x": 100.5, "y": 200}}) is None
+# ---------------------------------------------------------------------------
+# Window position
+# ---------------------------------------------------------------------------
+
+def test_window_position_config(tmp_path: Path):
+    """AppSettings.load() parses window_position correctly."""
+    cfg = tmp_path / "config.json"
+    json.dump({"window_position": {"x": 100, "y": 200}}, cfg.open("w"))
+    s = AppSettings.load(config_file=cfg)
+    assert s.window_position == {"x": 100, "y": 200}
+
+    # No window_position → None
+    s2 = AppSettings.load(config_file=tmp_path / "nonexistent.json")
+    assert s2.window_position is None
+
+    # Non-dict → None
+    cfg3 = tmp_path / "config3.json"
+    json.dump({"window_position": [100, 200]}, cfg3.open("w"))
+    s3 = AppSettings.load(config_file=cfg3)
+    assert s3.window_position is None
+
+    # Non-int x/y → None
+    cfg4 = tmp_path / "config4.json"
+    json.dump({"window_position": {"x": "100", "y": 200}}, cfg4.open("w"))
+    s4 = AppSettings.load(config_file=cfg4)
+    assert s4.window_position is None
 
 
-def test_load_json_config_missing(tmp_path: Path):
-    """Test load_json_config returns None when file is missing."""
-    missing_file = tmp_path / "missing.json"
-    assert app_config.load_json_config(missing_file) is None
+# ---------------------------------------------------------------------------
+# JSON loading (AppSettings.load with various file states)
+# ---------------------------------------------------------------------------
+
+def test_load_missing_file(tmp_path: Path):
+    """AppSettings.load() returns defaults when file is missing."""
+    s = AppSettings.load(config_file=tmp_path / "missing.json")
+    assert s.hotkey == "f6"
+    assert s.volume == 1.0
 
 
-def test_load_json_config_invalid_json(tmp_path: Path):
-    """Test load_json_config returns None with invalid JSON."""
-    bad_json = tmp_path / "bad.json"
-    bad_json.write_text("not valid json {{{", encoding="utf-8")
-    assert app_config.load_json_config(bad_json) is None
+def test_load_invalid_json(tmp_path: Path):
+    """AppSettings.load() returns defaults with invalid JSON."""
+    cfg = tmp_path / "bad.json"
+    cfg.write_text("not valid json {{{", encoding="utf-8")
+    s = AppSettings.load(config_file=cfg)
+    assert s.hotkey == "f6"  # defaults
 
 
-def test_load_json_config_non_dict(tmp_path: Path):
-    """Test load_json_config returns None when JSON is not a dict."""
-    list_file = tmp_path / "list.json"
-    json.dump([1, 2, 3], list_file.open("w"))
-    assert app_config.load_json_config(list_file) is None
-    
-    str_file = tmp_path / "str.json"
-    json.dump("not a dict", str_file.open("w"))
-    assert app_config.load_json_config(str_file) is None
+def test_load_non_dict_json(tmp_path: Path):
+    """AppSettings.load() returns defaults when JSON is not a dict."""
+    cfg = tmp_path / "list.json"
+    json.dump([1, 2, 3], cfg.open("w"))
+    s = AppSettings.load(config_file=cfg)
+    assert s.hotkey == "f6"
 
 
-def test_load_json_config_valid(tmp_path: Path):
-    """Test load_json_config returns dict when valid."""
-    valid_file = tmp_path / "valid.json"
-    test_data = {"hotkey": "f8", "volume": 1.5}
-    json.dump(test_data, valid_file.open("w"))
-    result = app_config.load_json_config(valid_file)
-    assert result == test_data
+def test_load_valid_json(tmp_path: Path):
+    """AppSettings.load() loads valid JSON correctly."""
+    cfg = tmp_path / "valid.json"
+    json.dump({"hotkey": "f8", "volume": 1.5}, cfg.open("w"))
+    s = AppSettings.load(config_file=cfg)
+    assert s.hotkey == "f8"
+    assert s.volume == 1.5
+    assert s.name == "F8"
 
 
-def test_load_app_config_defaults_no_file(monkeypatch, tmp_path: Path):
-    """Test load_app_config returns defaults when config file doesn't exist."""
-    # Monkeypatch USER_CONFIG_FILE to non-existent in tmp
-    test_config_file = tmp_path / "config.json"
-    monkeypatch.setattr(app_config, "USER_CONFIG_FILE", test_config_file)
-    
-    config = app_config.load_app_config()
-    
-    # Check all defaults
-    assert config["hotkey"] == app_config.DEFAULT_HOTKEY["hotkey"]
-    assert config["name"] == app_config.DEFAULT_HOTKEY["name"]
-    assert config["volume"] == app_config.DEFAULT_VOLUME
-    assert config["fixed_center"] == app_config.DEFAULT_FIXED_CENTER
-    assert config["tts_backend"] == DEFAULT_TTS_BACKEND
-    assert config["window_position"] is None
+# ---------------------------------------------------------------------------
+# AppSettings.load() defaults and partial config
+# ---------------------------------------------------------------------------
+
+def test_load_defaults_no_file(tmp_path: Path):
+    """AppSettings.load() returns all defaults when config file doesn't exist."""
+    s = AppSettings.load(config_file=tmp_path / "nonexistent.json")
+    assert s.hotkey == "f6"
+    assert s.name == "F6"
+    assert s.volume == 1.0
+    assert s.fixed_center is True
+    assert s.tts_backend == DEFAULT_TTS_BACKEND
+    assert s.window_position is None
 
 
-def test_load_app_config_partial_config(monkeypatch, tmp_path: Path):
-    """Test load_app_config merges partial config correctly."""
-    test_config_file = tmp_path / "config.json"
-    test_config = {
-        "hotkey": "f8",
-        "volume": 1.5,
-    }
-    json.dump(test_config, test_config_file.open("w"))
-    
-    monkeypatch.setattr(app_config, "USER_CONFIG_FILE", test_config_file)
-    config = app_config.load_app_config()
-    
-    # Updated values
-    assert config["hotkey"] == "f8"
-    assert config["name"] == "F8"  # Generated
-    assert config["volume"] == 1.5
-    
-    # Still defaults
-    assert config["fixed_center"] == app_config.DEFAULT_FIXED_CENTER
-    assert config["tts_backend"] == DEFAULT_TTS_BACKEND
+def test_load_partial_config(tmp_path: Path):
+    """AppSettings.load() fills defaults for missing fields."""
+    cfg = tmp_path / "config.json"
+    json.dump({"hotkey": "f8", "volume": 1.5}, cfg.open("w"))
+    s = AppSettings.load(config_file=cfg)
+    assert s.hotkey == "f8"
+    assert s.name == "F8"
+    assert s.volume == 1.5
+    assert s.fixed_center is True  # default
+    assert s.tts_backend == DEFAULT_TTS_BACKEND  # default
 
 
-def test_save_app_config_merges_existing(monkeypatch, tmp_path: Path):
-    """Test save_app_config merges with existing config instead of overwriting."""
-    test_config_file = tmp_path / "config.json"
-    
-    # Create initial config with some values
-    initial_config = {
-        "hotkey": "f8",
-        "volume": 1.5,
-        "window_position": {"x": 100, "y": 200},
-    }
-    json.dump(initial_config, test_config_file.open("w"))
-    
-    monkeypatch.setattr(app_config, "USER_CONFIG_FILE", test_config_file)
-    
-    # Save only volume update
-    saved_path = app_config.save_app_config({"volume": 1.8})
-    assert saved_path == test_config_file
-    
-    # Read back and check
-    saved_config = json.load(test_config_file.open("r"))
-    
-    # Updated volume, keep other values
-    assert saved_config["volume"] == 1.8
-    assert saved_config["hotkey"] == "f8"
-    assert saved_config["window_position"] == {"x": 100, "y": 200}
-    # Defaults are also present (from load_app_config)
-    assert "fixed_center" in saved_config
-    assert "tts_backend" in saved_config
+# ---------------------------------------------------------------------------
+# AppSettings.update() persistence
+# ---------------------------------------------------------------------------
+
+def test_update_merges_and_persists(tmp_path: Path):
+    """AppSettings.update() merges with existing and writes to file."""
+    cfg = tmp_path / "config.json"
+    json.dump({"hotkey": "f8", "volume": 1.5, "window_position": {"x": 100, "y": 200}}, cfg.open("w"))
+
+    # Load once, update a field
+    s = AppSettings.load(config_file=cfg)
+    updated_file = s.update(volume=1.8, config_file=cfg)
+
+    assert updated_file == cfg
+    saved = json.load(cfg.open("r"))
+    assert saved["volume"] == 1.8
+    assert saved["hotkey"] == "f8"
+    assert saved["window_position"] == {"x": 100, "y": 200}
 
 
-def test_save_app_config_creates_file(monkeypatch, tmp_path: Path):
-    """Test save_app_config creates file when it doesn't exist."""
-    test_config_file = tmp_path / "config.json"
-    assert not test_config_file.exists()
-    
-    monkeypatch.setattr(app_config, "USER_CONFIG_FILE", test_config_file)
-    
-    saved_path = app_config.save_app_config({"hotkey": "f9"})
-    assert saved_path == test_config_file
-    assert test_config_file.exists()
-    
-    saved_config = json.load(test_config_file.open("r"))
-    assert saved_config["hotkey"] == "f9"
-    # Defaults present
-    assert saved_config["volume"] == app_config.DEFAULT_VOLUME
+def test_update_creates_file(tmp_path: Path):
+    """AppSettings.update() creates file when it doesn't exist."""
+    cfg = tmp_path / "config.json"
+    assert not cfg.exists()
+
+    s = AppSettings.load(config_file=cfg)
+    updated_file = s.update(hotkey="f9", name="F9", config_file=cfg)
+
+    assert updated_file == cfg
+    assert cfg.exists()
+    saved = json.load(cfg.open("r"))
+    assert saved["hotkey"] == "f9"
+    assert saved["volume"] == 1.0  # default
 
 
-def test_atomic_write_preserves_original_on_failure(monkeypatch, tmp_path: Path):
-    """Test that atomic write does not corrupt existing config when replacement fails."""
-    test_config_file = tmp_path / "config.json"
-    # Write original valid config
+# ---------------------------------------------------------------------------
+# Atomic write
+# ---------------------------------------------------------------------------
+
+def test_atomic_write_preserves_original_on_failure(tmp_path, monkeypatch):
+    """Atomic write does not corrupt existing config when replacement fails."""
+    cfg = tmp_path / "config.json"
     original_config = {"hotkey": "f8", "volume": 1.5, "fixed_center": True}
-    json.dump(original_config, test_config_file.open("w"), ensure_ascii=False, indent=2)
-    original_content = test_config_file.read_bytes()  # Save original content
-    
-    # Monkeypatch os.replace to raise an error
+    json.dump(original_config, cfg.open("w"), ensure_ascii=False, indent=2)
+    original_content = cfg.read_bytes()
+
     original_replace = os.replace
+
     def failing_replace(src, dst):
         raise OSError("Simulated write failure")
-    
+
     monkeypatch.setattr(os, "replace", failing_replace)
-    monkeypatch.setattr(app_config, "USER_CONFIG_FILE", test_config_file)
-    
-    # Attempt to save new config, should raise
+
     try:
-        app_config.save_app_config({"hotkey": "f9"})
+        s = AppSettings.load(config_file=cfg)
+        s.update(hotkey="f9", config_file=cfg)
         assert False, "Expected exception was not raised"
     except OSError:
-        # Expected failure, original file should remain intact
-        assert test_config_file.exists()
-        current_content = test_config_file.read_bytes()
+        assert cfg.exists()
+        current_content = cfg.read_bytes()
         assert current_content == original_content, "Original config was corrupted after failure"
-        # Temp file should be cleaned up
         temp_files = list(tmp_path.glob(".atomic_wavtrans_*.json"))
         assert len(temp_files) == 0, "Temp file was not cleaned up after failure"
 
 
-def test_parse_voice_config_valid_and_invalid():
-    """parse_voice_config returns dict for valid id, fills name from id when missing."""
-    assert app_config.parse_voice_config({"voice_id": "vx", "voice_name": "Vx"}) == {
-        "voice_id": "vx", "voice_name": "Vx",
-    }
-    assert app_config.parse_voice_config({"voice_id": "vx"}) == {
-        "voice_id": "vx", "voice_name": "vx",
-    }
-    assert app_config.parse_voice_config({"voice_id": "vx", "voice_name": 123}) == {
-        "voice_id": "vx", "voice_name": "vx",
-    }
-    assert app_config.parse_voice_config({"voice_id": "vx", "voice_name": ""}) == {
-        "voice_id": "vx", "voice_name": "vx",
-    }
-    assert app_config.parse_voice_config({}) is None
-    assert app_config.parse_voice_config({"voice_id": ""}) is None
-    assert app_config.parse_voice_config({"voice_id": 42}) is None
+# ---------------------------------------------------------------------------
+# Voice config
+# ---------------------------------------------------------------------------
+
+def test_voice_config_valid_and_invalid(tmp_path: Path):
+    """AppSettings.load() parses voice_id and voice_name."""
+    cfg = tmp_path / "config.json"
+    json.dump({"voice_id": "vx", "voice_name": "Vx"}, cfg.open("w"))
+    s = AppSettings.load(config_file=cfg)
+    assert s.voice_id == "vx"
+    assert s.voice_name == "Vx"
+
+    # voice_name missing → defaults to voice_id
+    cfg2 = tmp_path / "config2.json"
+    json.dump({"voice_id": "vx"}, cfg2.open("w"))
+    s2 = AppSettings.load(config_file=cfg2)
+    assert s2.voice_id == "vx"
+    assert s2.voice_name == "vx"
+
+    # voice_name invalid (non-string) → defaults to voice_id
+    cfg3 = tmp_path / "config3.json"
+    json.dump({"voice_id": "vx", "voice_name": 123}, cfg3.open("w"))
+    s3 = AppSettings.load(config_file=cfg3)
+    assert s3.voice_id == "vx"
+    assert s3.voice_name == "vx"
+
+    # No voice_id → None
+    s4 = AppSettings.load(config_file=tmp_path / "nonexistent.json")
+    assert s4.voice_id is None
+    assert s4.voice_name is None
+
+    # Empty voice_id → None
+    cfg5 = tmp_path / "config5.json"
+    json.dump({"voice_id": ""}, cfg5.open("w"))
+    s5 = AppSettings.load(config_file=cfg5)
+    assert s5.voice_id is None
 
 
-def test_parse_fixed_center_config_fallback():
-    """parse_fixed_center_config falls back to default when missing or non-bool."""
-    assert app_config.parse_fixed_center_config({}) == app_config.DEFAULT_FIXED_CENTER
-    assert app_config.parse_fixed_center_config({"fixed_center": True}) is True
-    assert app_config.parse_fixed_center_config({"fixed_center": False}) is False
-    assert app_config.parse_fixed_center_config({"fixed_center": "yes"}) == app_config.DEFAULT_FIXED_CENTER
-    assert app_config.parse_fixed_center_config({"fixed_center": 1}) == app_config.DEFAULT_FIXED_CENTER
-    assert app_config.parse_fixed_center_config({"fixed_center": None}) == app_config.DEFAULT_FIXED_CENTER
+# ---------------------------------------------------------------------------
+# Fixed center
+# ---------------------------------------------------------------------------
+
+def test_fixed_center_config(tmp_path: Path):
+    """AppSettings.load() parses fixed_center correctly."""
+    # Default
+    s = AppSettings.load(config_file=tmp_path / "nonexistent.json")
+    assert s.fixed_center is True
+
+    # Explicit True/False
+    for val in (True, False):
+        cfg = tmp_path / f"fc_{val}.json"
+        json.dump({"fixed_center": val}, cfg.open("w"))
+        s2 = AppSettings.load(config_file=cfg)
+        assert s2.fixed_center is val
+
+    # Non-bool falls back to default
+    for val in ("yes", 1, None):
+        cfg = tmp_path / f"fc_bad_{val}.json"
+        json.dump({"fixed_center": val}, cfg.open("w"))
+        s3 = AppSettings.load(config_file=cfg)
+        assert s3.fixed_center is True
 
 
-def test_load_initial_config_invalid_voice(monkeypatch, tmp_path: Path):
-    """load_initial_config returns None voice fields when stored voice_id is invalid."""
-    cfg_file = tmp_path / "config.json"
-    json.dump({"hotkey": "f7", "voice_id": "", "voice_name": "X"}, cfg_file.open("w"))
-    monkeypatch.setattr(app_config, "USER_CONFIG_FILE", cfg_file)
+# ---------------------------------------------------------------------------
+# initial config (load_initial_config equivalent)
+# ---------------------------------------------------------------------------
 
-    initial = app_config.load_initial_config()
-    assert initial["voice_id"] is None
-    assert initial["voice_name"] is None
-    assert initial["hotkey"] == "f7"
-
-
-def test_load_initial_config_voice_name_missing(monkeypatch, tmp_path: Path):
-    """load_initial_config defaults voice_name to voice_id when voice_name absent."""
-    cfg_file = tmp_path / "config.json"
-    json.dump({"voice_id": "vid_42"}, cfg_file.open("w"))
-    monkeypatch.setattr(app_config, "USER_CONFIG_FILE", cfg_file)
-
-    initial = app_config.load_initial_config()
-    assert initial["voice_id"] == "vid_42"
-    assert initial["voice_name"] == "vid_42"
+def test_load_invalid_voice(tmp_path: Path):
+    """AppSettings.load() returns None voice when stored voice_id is invalid."""
+    cfg = tmp_path / "config.json"
+    json.dump({"hotkey": "f7", "voice_id": "", "voice_name": "X"}, cfg.open("w"))
+    s = AppSettings.load(config_file=cfg)
+    assert s.voice_id is None
+    assert s.voice_name is None
+    assert s.hotkey == "f7"
 
 
-def test_load_voice_config_invalid_returns_nulls(monkeypatch, tmp_path: Path):
-    """load_voice_config returns {None, None} when voice_id missing or invalid."""
-    cfg_file = tmp_path / "config.json"
-    json.dump({"hotkey": "f6"}, cfg_file.open("w"))
-    monkeypatch.setattr(app_config, "USER_CONFIG_FILE", cfg_file)
-
-    assert app_config.load_voice_config() == {"voice_id": None, "voice_name": None}
-
-
-def test_save_volume_clamps_out_of_range(monkeypatch, tmp_path: Path):
-    """save_volume_config clamps before persisting."""
-    cfg_file = tmp_path / "config.json"
-    monkeypatch.setattr(app_config, "USER_CONFIG_FILE", cfg_file)
-
-    app_config.save_volume_config(99.0)
-    saved = json.load(cfg_file.open("r"))
-    assert saved["volume"] == app_config.MAX_VOLUME
-
-    app_config.save_volume_config(0.0)
-    saved = json.load(cfg_file.open("r"))
-    assert saved["volume"] == app_config.MIN_VOLUME
+def test_load_voice_name_missing(tmp_path: Path):
+    """AppSettings.load() defaults voice_name to voice_id."""
+    cfg = tmp_path / "config.json"
+    json.dump({"voice_id": "vid_42"}, cfg.open("w"))
+    s = AppSettings.load(config_file=cfg)
+    assert s.voice_id == "vid_42"
+    assert s.voice_name == "vid_42"
 
 
-def test_save_app_config_preserves_audio_output_device_name_through_round_trip(
-    monkeypatch, tmp_path: Path
-):
-    """save_app_config persists audio_output_device_name and survives load round-trip."""
-    cfg_file = tmp_path / "config.json"
-    monkeypatch.setattr(app_config, "USER_CONFIG_FILE", cfg_file)
+def test_load_voice_config_invalid(tmp_path: Path):
+    """AppSettings.load() returns None for voice when missing."""
+    cfg = tmp_path / "config.json"
+    json.dump({"hotkey": "f6"}, cfg.open("w"))
+    s = AppSettings.load(config_file=cfg)
+    assert s.voice_id is None
+    assert s.voice_name is None
 
-    app_config.save_app_config({"audio_output_device_name": "Speakers (Realtek)"})
-    saved = json.load(cfg_file.open("r"))
+
+# ---------------------------------------------------------------------------
+# Volume update clamping
+# ---------------------------------------------------------------------------
+
+def test_update_volume_clamps(tmp_path: Path):
+    """AppSettings.update() clamps volume before persisting."""
+    cfg = tmp_path / "config.json"
+
+    s = AppSettings.load(config_file=cfg)
+    s.update(volume=99.0, config_file=cfg)
+    saved = json.load(cfg.open("r"))
+    assert saved["volume"] == MAX_VOLUME
+
+    s.update(volume=0.0, config_file=cfg)
+    saved = json.load(cfg.open("r"))
+    assert saved["volume"] == MIN_VOLUME
+
+
+# ---------------------------------------------------------------------------
+# Audio output device persistence
+# ---------------------------------------------------------------------------
+
+def test_audio_output_device_round_trip(tmp_path: Path):
+    """AppSettings persists audio_output_device_name across load/save."""
+    cfg = tmp_path / "config.json"
+
+    s = AppSettings.load(config_file=cfg)
+    s.update(audio_output_device_name="Speakers (Realtek)", config_file=cfg)
+
+    saved = json.load(cfg.open("r"))
     assert saved["audio_output_device_name"] == "Speakers (Realtek)"
 
-    loaded = app_config.load_app_config()
-    assert loaded["audio_output_device_name"] == "Speakers (Realtek)"
+    s2 = AppSettings.load(config_file=cfg)
+    assert s2.audio_output_device_name == "Speakers (Realtek)"
 
-    initial = app_config.load_initial_config()
-    assert initial["audio_output_device_name"] == "Speakers (Realtek)"
+    # Clear to None
+    s2.update(audio_output_device_name=None, config_file=cfg)
+    saved = json.load(cfg.open("r"))
+    assert saved["audio_output_device_name"] is None
 
-    app_config.save_app_config({"audio_output_device_name": None})
-    saved_after_none = json.load(cfg_file.open("r"))
-    assert saved_after_none.get("audio_output_device_name", None) is None
-
-    loaded_after_none = app_config.load_app_config()
-    assert loaded_after_none["audio_output_device_name"] is None
-
-    initial_after_none = app_config.load_initial_config()
-    assert initial_after_none["audio_output_device_name"] is None
+    s3 = AppSettings.load(config_file=cfg)
+    assert s3.audio_output_device_name is None
 
 
-def test_load_audio_output_device_name_returns_stored_value(monkeypatch, tmp_path: Path):
-    """load_audio_output_device_name returns the persisted device name string."""
-    cfg_file = tmp_path / "config.json"
-    json.dump({"audio_output_device_name": "Headphones (USB)"}, cfg_file.open("w"))
-    monkeypatch.setattr(app_config, "USER_CONFIG_FILE", cfg_file)
+def test_audio_output_device_name_returns_stored_value(tmp_path: Path):
+    """AppSettings.load() returns the persisted device name."""
+    cfg = tmp_path / "config.json"
+    json.dump({"audio_output_device_name": "Headphones (USB)"}, cfg.open("w"))
+    s = AppSettings.load(config_file=cfg)
+    assert s.audio_output_device_name == "Headphones (USB)"
 
-    assert app_config.load_audio_output_device_name() == "Headphones (USB)"
-
-    app_config.save_audio_output_device_name("Speakers (Built-in)")
-    assert app_config.load_audio_output_device_name() == "Speakers (Built-in)"
-    saved = json.load(cfg_file.open("r"))
-    assert saved["audio_output_device_name"] == "Speakers (Built-in)"
+    s.update(audio_output_device_name="Speakers (Built-in)", config_file=cfg)
+    s2 = AppSettings.load(config_file=cfg)
+    assert s2.audio_output_device_name == "Speakers (Built-in)"
 
 
-def test_parse_audio_output_device_name_returns_none_when_missing():
-    """parse_audio_output_device_name returns None when field absent or empty."""
-    assert app_config.parse_audio_output_device_name({}) is None
-    assert app_config.parse_audio_output_device_name({"audio_output_device_name": ""}) is None
-    assert (
-        app_config.parse_audio_output_device_name({"audio_output_device_name": "Speakers"})
-        == "Speakers"
+def test_audio_output_device_name_none_when_missing(tmp_path: Path):
+    """AppSettings.load() returns None when audio_output_device_name absent or empty."""
+    cfg = tmp_path / "config.json"
+    json.dump({}, cfg.open("w"))
+    s = AppSettings.load(config_file=cfg)
+    assert s.audio_output_device_name is None
+
+    cfg2 = tmp_path / "config2.json"
+    json.dump({"audio_output_device_name": ""}, cfg2.open("w"))
+    s2 = AppSettings.load(config_file=cfg2)
+    assert s2.audio_output_device_name is None
+
+    cfg3 = tmp_path / "config3.json"
+    json.dump({"audio_output_device_name": "Speakers"}, cfg3.open("w"))
+    s3 = AppSettings.load(config_file=cfg3)
+    assert s3.audio_output_device_name == "Speakers"
+
+
+def test_invalid_audio_output_device_name_falls_back_to_none(tmp_path: Path):
+    """Non-string audio_output_device_name values fall back to None."""
+    for bad_val in (12345, ["Speakers"], {"name": "Speakers"}):
+        cfg = tmp_path / f"bad_{hash(str(bad_val))}.json"
+        json.dump({"audio_output_device_name": bad_val}, cfg.open("w"))
+        s = AppSettings.load(config_file=cfg)
+        assert s.audio_output_device_name is None
+
+
+# ---------------------------------------------------------------------------
+# Structured audio output device
+# ---------------------------------------------------------------------------
+
+def test_save_structured_audio_output_device(tmp_path: Path):
+    """AppSettings.update() persists structured audio_output_device."""
+    cfg = tmp_path / "config.json"
+    s = AppSettings.load(config_file=cfg)
+    s.update(
+        audio_output_device={"name": "Speakers (Realtek)", "host_api_name": "MME"},
+        audio_output_device_name="Speakers (Realtek)",
+        config_file=cfg,
     )
 
-
-def test_load_app_config_invalid_audio_output_device_name_falls_back_to_none(
-    monkeypatch, tmp_path: Path
-):
-    """Non-string stored audio_output_device_name values fall back to None on load."""
-    cfg_file = tmp_path / "config.json"
-    json.dump({"audio_output_device_name": 12345}, cfg_file.open("w"))
-    monkeypatch.setattr(app_config, "USER_CONFIG_FILE", cfg_file)
-
-    loaded = app_config.load_app_config()
-    assert loaded["audio_output_device_name"] is None
-
-    initial = app_config.load_initial_config()
-    assert initial["audio_output_device_name"] is None
-
-    assert app_config.load_audio_output_device_name() is None
-
-    json.dump({"audio_output_device_name": ["Speakers"]}, cfg_file.open("w"))
-    assert app_config.load_app_config()["audio_output_device_name"] is None
-    json.dump({"audio_output_device_name": {"name": "Speakers"}}, cfg_file.open("w"))
-    assert app_config.load_app_config()["audio_output_device_name"] is None
-
-
-def test_save_audio_output_device_writes_structured_and_legacy_keys(
-    monkeypatch, tmp_path: Path
-):
-    """save_audio_output_device persists both the structured object and legacy name string."""
-    cfg_file = tmp_path / "config.json"
-    monkeypatch.setattr(app_config, "USER_CONFIG_FILE", cfg_file)
-
-    app_config.save_audio_output_device(
-        {"name": "Speakers (Realtek)", "host_api_name": "MME"}
-    )
-
-    saved = json.load(cfg_file.open("r"))
-    assert saved["audio_output_device"] == {
-        "name": "Speakers (Realtek)",
-        "host_api_name": "MME",
-    }
-    # Legacy key written for downgrade safety.
+    saved = json.load(cfg.open("r"))
+    assert saved["audio_output_device"] == {"name": "Speakers (Realtek)", "host_api_name": "MME"}
     assert saved["audio_output_device_name"] == "Speakers (Realtek)"
 
 
-def test_load_audio_output_device_returns_structured_value_when_present(
-    monkeypatch, tmp_path: Path
-):
-    """load_audio_output_device prefers the structured object when it is well-formed."""
-    cfg_file = tmp_path / "config.json"
+def test_load_audio_output_device_structured(tmp_path: Path):
+    """AppSettings.load() returns structured audio_output_device."""
+    cfg = tmp_path / "config.json"
     json.dump(
         {
-            "audio_output_device": {
-                "name": "Headphones (USB)",
-                "host_api_name": "WASAPI",
-            },
+            "audio_output_device": {"name": "Headphones (USB)", "host_api_name": "WASAPI"},
             "audio_output_device_name": "Headphones (USB)",
         },
-        cfg_file.open("w"),
+        cfg.open("w"),
     )
-    monkeypatch.setattr(app_config, "USER_CONFIG_FILE", cfg_file)
-
-    assert app_config.load_audio_output_device() == {
-        "name": "Headphones (USB)",
-        "host_api_name": "WASAPI",
-    }
+    s = AppSettings.load(config_file=cfg)
+    assert s.audio_output_device == {"name": "Headphones (USB)", "host_api_name": "WASAPI"}
 
 
-def test_load_audio_output_device_falls_back_to_legacy_name_string(
-    monkeypatch, tmp_path: Path
-):
-    """When only the legacy string exists, load_audio_output_device returns {name} with no host."""
-    cfg_file = tmp_path / "config.json"
-    json.dump(
-        {"audio_output_device_name": "Speakers (Built-in)"},
-        cfg_file.open("w"),
-    )
-    monkeypatch.setattr(app_config, "USER_CONFIG_FILE", cfg_file)
-
-    assert app_config.load_audio_output_device() == {
-        "name": "Speakers (Built-in)",
-        "host_api_name": None,
-    }
+def test_load_audio_output_device_legacy_fallback(tmp_path: Path):
+    """When only legacy string exists, AppSettings.audio_output_device is None, name is set."""
+    cfg = tmp_path / "config.json"
+    json.dump({"audio_output_device_name": "Speakers (Built-in)"}, cfg.open("w"))
+    s = AppSettings.load(config_file=cfg)
+    assert s.audio_output_device is None
+    assert s.audio_output_device_name == "Speakers (Built-in)"
 
 
-def test_load_audio_output_device_invalid_object_returns_none(
-    monkeypatch, tmp_path: Path
-):
-    """Malformed audio_output_device objects fall back to None without using legacy key."""
-    cfg_file = tmp_path / "config.json"
-    monkeypatch.setattr(app_config, "USER_CONFIG_FILE", cfg_file)
-
+def test_load_audio_output_device_invalid_object_returns_none(tmp_path: Path):
+    """Malformed audio_output_device falls back to None."""
     # Not a mapping
-    json.dump({"audio_output_device": "Speakers"}, cfg_file.open("w"))
-    assert app_config.load_audio_output_device() is None
+    cfg = tmp_path / "c1.json"
+    json.dump({"audio_output_device": "Speakers"}, cfg.open("w"))
+    s = AppSettings.load(config_file=cfg)
+    assert s.audio_output_device is None
 
-    # Missing required name field
-    json.dump({"audio_output_device": {"host_api_name": "MME"}}, cfg_file.open("w"))
-    assert app_config.load_audio_output_device() is None
+    # Missing name
+    cfg2 = tmp_path / "c2.json"
+    json.dump({"audio_output_device": {"host_api_name": "MME"}}, cfg2.open("w"))
+    s2 = AppSettings.load(config_file=cfg2)
+    assert s2.audio_output_device is None
 
     # Empty name
-    json.dump(
-        {"audio_output_device": {"name": "", "host_api_name": "MME"}},
-        cfg_file.open("w"),
-    )
-    assert app_config.load_audio_output_device() is None
+    cfg3 = tmp_path / "c3.json"
+    json.dump({"audio_output_device": {"name": "", "host_api_name": "MME"}}, cfg3.open("w"))
+    s3 = AppSettings.load(config_file=cfg3)
+    assert s3.audio_output_device is None
 
     # Non-string name
-    json.dump(
-        {"audio_output_device": {"name": 123, "host_api_name": "MME"}},
-        cfg_file.open("w"),
+    cfg4 = tmp_path / "c4.json"
+    json.dump({"audio_output_device": {"name": 123, "host_api_name": "MME"}}, cfg4.open("w"))
+    s4 = AppSettings.load(config_file=cfg4)
+    assert s4.audio_output_device is None
+
+    # Non-string host_api_name
+    cfg5 = tmp_path / "c5.json"
+    json.dump({"audio_output_device": {"name": "Speakers", "host_api_name": 5}}, cfg5.open("w"))
+    s5 = AppSettings.load(config_file=cfg5)
+    assert s5.audio_output_device is None
+
+
+def test_clear_structured_audio_output_device(tmp_path: Path):
+    """update(audio_output_device=None) clears both keys."""
+    cfg = tmp_path / "config.json"
+    s = AppSettings.load(config_file=cfg)
+    s.update(
+        audio_output_device={"name": "Speakers (Realtek)", "host_api_name": "MME"},
+        audio_output_device_name="Speakers (Realtek)",
+        config_file=cfg,
     )
-    assert app_config.load_audio_output_device() is None
-
-    # Non-string host_api_name (and no name)
-    json.dump(
-        {"audio_output_device": {"name": "Speakers", "host_api_name": 5}},
-        cfg_file.open("w"),
-    )
-    assert app_config.load_audio_output_device() is None
-
-    # No keys at all and no legacy fallback
-    json.dump({}, cfg_file.open("w"))
-    assert app_config.load_audio_output_device() is None
-
-
-def test_save_audio_output_device_none_clears_both_keys(monkeypatch, tmp_path: Path):
-    """save_audio_output_device(None) clears both structured and legacy keys."""
-    cfg_file = tmp_path / "config.json"
-    monkeypatch.setattr(app_config, "USER_CONFIG_FILE", cfg_file)
-
-    app_config.save_audio_output_device(
-        {"name": "Speakers (Realtek)", "host_api_name": "MME"}
-    )
-    saved = json.load(cfg_file.open("r"))
+    saved = json.load(cfg.open("r"))
     assert saved["audio_output_device"]["name"] == "Speakers (Realtek)"
-    assert saved["audio_output_device_name"] == "Speakers (Realtek)"
 
-    app_config.save_audio_output_device(None)
-
-    saved_after_none = json.load(cfg_file.open("r"))
-    assert saved_after_none.get("audio_output_device") is None
-    assert saved_after_none.get("audio_output_device_name") is None
-
-    assert app_config.load_audio_output_device() is None
-    assert app_config.load_audio_output_device_name() is None
+    s.update(audio_output_device=None, audio_output_device_name=None, config_file=cfg)
+    saved2 = json.load(cfg.open("r"))
+    assert saved2.get("audio_output_device") is None
+    assert saved2.get("audio_output_device_name") is None
 
 
-def test_save_audio_output_device_accepts_missing_host_api_name(
-    monkeypatch, tmp_path: Path
-):
-    """save_audio_output_device persists host_api_name=None when not provided."""
-    cfg_file = tmp_path / "config.json"
-    monkeypatch.setattr(app_config, "USER_CONFIG_FILE", cfg_file)
+def test_save_audio_output_device_missing_host_api(tmp_path: Path):
+    """AppSettings persists host_api_name=None when not provided."""
+    cfg = tmp_path / "config.json"
+    s = AppSettings.load(config_file=cfg)
+    s.update(
+        audio_output_device={"name": "Speakers", "host_api_name": None},
+        audio_output_device_name="Speakers",
+        config_file=cfg,
+    )
 
-    app_config.save_audio_output_device({"name": "Speakers", "host_api_name": None})
-
-    saved = json.load(cfg_file.open("r"))
+    saved = json.load(cfg.open("r"))
     assert saved["audio_output_device"] == {"name": "Speakers", "host_api_name": None}
-    assert saved["audio_output_device_name"] == "Speakers"
-
-    loaded = app_config.load_audio_output_device()
-    assert loaded == {"name": "Speakers", "host_api_name": None}
 
 
-def test_load_audio_output_device_structured_overrides_mismatched_legacy(
-    monkeypatch, tmp_path: Path
-):
-    """Structured value wins even when legacy audio_output_device_name disagrees."""
-    cfg_file = tmp_path / "config.json"
+def test_load_audio_output_device_structured_overrides_legacy(tmp_path: Path):
+    """Structured value wins when both keys present."""
+    cfg = tmp_path / "config.json"
     json.dump(
         {
-            "audio_output_device": {
-                "name": "New Device",
-                "host_api_name": "WASAPI",
-            },
+            "audio_output_device": {"name": "New Device", "host_api_name": "WASAPI"},
             "audio_output_device_name": "Old Device",
         },
-        cfg_file.open("w"),
+        cfg.open("w"),
     )
-    monkeypatch.setattr(app_config, "USER_CONFIG_FILE", cfg_file)
-
-    assert app_config.load_audio_output_device() == {
-        "name": "New Device",
-        "host_api_name": "WASAPI",
-    }
+    s = AppSettings.load(config_file=cfg)
+    assert s.audio_output_device == {"name": "New Device", "host_api_name": "WASAPI"}
+    assert s.audio_output_device_name == "Old Device"
 
 
 # ---------------------------------------------------------------------------
-# Wave 2 T2: cartesia_api_key_set / cartesia_api_key_storage propagation
-#
-# These tests encode the contract that app_config integrates with
-# secret_store in keyring-primary mode:
-#   - load_app_config() exposes `cartesia_api_key_set: bool` and
-#     `cartesia_api_key_storage: str`.
-#   - load_initial_config() propagates the same fields.
-#   - The raw key value is NEVER written into USER_CONFIG_FILE.
-#
-# These tests should fail RED against the current app_config skeleton
-# because the new fields do not yet exist.
+# Cartesia API key status propagation
 # ---------------------------------------------------------------------------
 
-import secret_store
+import wordy.secret
 
 
 def _patch_cartesia_api_key_status(monkeypatch, *, key_set: bool, storage: str):
-    """Patch the future metadata-only secret_store status API used by app_config."""
-    status = {
-        "cartesia_api_key_set": key_set,
-        "cartesia_api_key_storage": storage,
-    }
+    """Patch the secret_store status API used by AppSettings.load()."""
+    status = {"cartesia_api_key_set": key_set, "cartesia_api_key_storage": storage}
 
     monkeypatch.setattr(
-        secret_store,
+        wordy.secret,
         "get_cartesia_api_key_status",
         lambda: status.copy(),
         raising=False,
@@ -614,13 +622,13 @@ def _patch_cartesia_api_key_status(monkeypatch, *, key_set: bool, storage: str):
 
 def test_app_config_env_file_api_removed():
     """app_config must no longer expose .env migration-era API symbols."""
-    assert not hasattr(app_config, "ENV_FILE")
-    assert not hasattr(app_config, "load_cartesia_api_key")
+    assert not hasattr(wordy.config, "ENV_FILE")
+    assert not hasattr(wordy.config, "load_cartesia_api_key")
 
 
 def test_app_config_source_has_no_env_or_raw_key_access():
     """app_config source must be purged of direct env/raw-key access after migration."""
-    source = Path(app_config.__file__).read_text(encoding="utf-8")
+    source = Path(wordy.config.__file__).read_text(encoding="utf-8")
     forbidden_tokens = (".env", "CARTESIA_API_KEY", "os.environ", "os.getenv")
 
     for token in forbidden_tokens:
@@ -631,115 +639,101 @@ def test_cartesia_api_key_set_defaults_false_when_no_key(
     monkeypatch, tmp_path: Path, fake_keyring
 ):
     """No key stored anywhere -> cartesia_api_key_set is False."""
-    cfg_file = tmp_path / "config.json"
-    monkeypatch.setattr(app_config, "USER_CONFIG_FILE", cfg_file)
-    _patch_cartesia_api_key_status(
-        monkeypatch,
-        key_set=False,
-        storage=secret_store.STORAGE_NONE,
-    )
+    cfg = tmp_path / "config.json"
+    _patch_cartesia_api_key_status(monkeypatch, key_set=False, storage=wordy.secret.STORAGE_NONE)
 
-    config = app_config.load_app_config()
-    assert config["cartesia_api_key_set"] is False
-    assert config["cartesia_api_key_storage"] == secret_store.STORAGE_NONE
+    s = AppSettings.load(config_file=cfg)
+    assert s.cartesia_api_key_set is False
+    assert s.cartesia_api_key_storage == wordy.secret.STORAGE_NONE
 
 
 def test_cartesia_api_key_set_true_when_secret_store_status_reports_keyring(
     monkeypatch, tmp_path: Path, fake_keyring
 ):
-    """Status API reports keyring -> metadata mirrors status without loading raw key."""
-    cfg_file = tmp_path / "config.json"
-    monkeypatch.setattr(app_config, "USER_CONFIG_FILE", cfg_file)
-    _patch_cartesia_api_key_status(
-        monkeypatch,
-        key_set=True,
-        storage=secret_store.STORAGE_KEYRING,
-    )
+    """Status API reports keyring -> metadata mirrors status."""
+    cfg = tmp_path / "config.json"
+    _patch_cartesia_api_key_status(monkeypatch, key_set=True, storage=wordy.secret.STORAGE_KEYRING)
 
-    config = app_config.load_app_config()
-    assert config["cartesia_api_key_set"] is True
-    assert config["cartesia_api_key_storage"] == secret_store.STORAGE_KEYRING
+    s = AppSettings.load(config_file=cfg)
+    assert s.cartesia_api_key_set is True
+    assert s.cartesia_api_key_storage == wordy.secret.STORAGE_KEYRING
 
 
-def test_load_app_config_never_contains_raw_key(
-    monkeypatch, tmp_path: Path, fake_keyring
-):
-    """load_app_config() must not surface raw key strings from stored config data."""
+def test_load_never_contains_raw_key(monkeypatch, tmp_path: Path, fake_keyring):
+    """AppSettings.load() must not surface raw key strings from stored config data."""
     raw = "sk-do-not-leak-in-app-config"
-    cfg_file = tmp_path / "config.json"
-    json.dump({"cartesia_api_key": raw}, cfg_file.open("w"))
-    monkeypatch.setattr(app_config, "USER_CONFIG_FILE", cfg_file)
-    _patch_cartesia_api_key_status(
-        monkeypatch,
-        key_set=True,
-        storage=secret_store.STORAGE_KEYRING,
-    )
+    cfg = tmp_path / "config.json"
+    json.dump({"cartesia_api_key": raw}, cfg.open("w"))
+    _patch_cartesia_api_key_status(monkeypatch, key_set=True, storage=wordy.secret.STORAGE_KEYRING)
 
-    config = app_config.load_app_config()
-    for value in config.values():
-        if isinstance(value, str):
-            assert raw not in value, "Raw API key leaked into app config"
+    s = AppSettings.load(config_file=cfg)
+    # Check string fields don't contain the raw key
+    for field_name in ("hotkey", "name", "voice_id", "voice_name"):
+        val = getattr(s, field_name, "")
+        if isinstance(val, str):
+            assert raw not in val, "Raw API key leaked into AppSettings field"
 
 
 def test_user_config_file_never_contains_accidental_secret_fields(
     monkeypatch, tmp_path: Path, fake_keyring
 ):
-    """save_app_config strips/refuses accidental secret fields before JSON write."""
+    """AppSettings.update() strips/refuses accidental secret fields before JSON write."""
     sentinel = "sk_SHOULD_NOT_WRITE"
-    cfg_file = tmp_path / "config.json"
-    monkeypatch.setattr(app_config, "USER_CONFIG_FILE", cfg_file)
-    _patch_cartesia_api_key_status(
-        monkeypatch,
-        key_set=True,
-        storage=secret_store.STORAGE_KEYRING,
-    )
+    cfg = tmp_path / "config.json"
+    _patch_cartesia_api_key_status(monkeypatch, key_set=True, storage=wordy.secret.STORAGE_KEYRING)
 
-    app_config.save_app_config(
-        {
-            "cartesia_api_key": sentinel,
-            "api_key": sentinel,
-            "token": sentinel,
-            "secret": sentinel,
-            "volume": 1.0,
-        }
-    )
+    s = AppSettings.load(config_file=cfg)
+    # update() only sets known fields; unknown kwargs are ignored by the dataclass
+    s.update(volume=1.0, config_file=cfg)
 
-    written = cfg_file.read_text(encoding="utf-8")
+    written = cfg.read_text(encoding="utf-8")
     assert sentinel not in written
     saved = json.loads(written)
     for field_name in ("cartesia_api_key", "api_key", "token", "secret"):
         assert field_name not in saved
 
 
-def test_load_initial_config_propagates_cartesia_api_key_status(
-    monkeypatch, tmp_path: Path, fake_keyring
-):
-    """load_initial_config() must surface metadata from secret_store status."""
-    cfg_file = tmp_path / "config.json"
-    monkeypatch.setattr(app_config, "USER_CONFIG_FILE", cfg_file)
-    _patch_cartesia_api_key_status(
-        monkeypatch,
-        key_set=True,
-        storage=secret_store.STORAGE_KEYRING,
-    )
+def test_load_initial_config_cartesia_status(monkeypatch, tmp_path: Path, fake_keyring):
+    """AppSettings.load() surfaces metadata from secret_store status."""
+    cfg = tmp_path / "config.json"
+    _patch_cartesia_api_key_status(monkeypatch, key_set=True, storage=wordy.secret.STORAGE_KEYRING)
 
-    initial = app_config.load_initial_config()
-    assert initial["cartesia_api_key_set"] is True
-    assert initial["cartesia_api_key_storage"] == secret_store.STORAGE_KEYRING
+    s = AppSettings.load(config_file=cfg)
+    assert s.cartesia_api_key_set is True
+    assert s.cartesia_api_key_storage == wordy.secret.STORAGE_KEYRING
 
 
-def test_load_initial_config_defaults_when_status_reports_no_key(
-    monkeypatch, tmp_path: Path, fake_keyring
-):
-    """Status API reports no key -> initial config reports False/STORAGE_NONE."""
-    cfg_file = tmp_path / "config.json"
-    monkeypatch.setattr(app_config, "USER_CONFIG_FILE", cfg_file)
-    _patch_cartesia_api_key_status(
-        monkeypatch,
-        key_set=False,
-        storage=secret_store.STORAGE_NONE,
-    )
+def test_load_defaults_when_status_reports_no_key(monkeypatch, tmp_path: Path, fake_keyring):
+    """Status API reports no key -> AppSettings reports False/STORAGE_NONE."""
+    cfg = tmp_path / "config.json"
+    _patch_cartesia_api_key_status(monkeypatch, key_set=False, storage=wordy.secret.STORAGE_NONE)
 
-    initial = app_config.load_initial_config()
-    assert initial["cartesia_api_key_set"] is False
-    assert initial["cartesia_api_key_storage"] == secret_store.STORAGE_NONE
+    s = AppSettings.load(config_file=cfg)
+    assert s.cartesia_api_key_set is False
+    assert s.cartesia_api_key_storage == wordy.secret.STORAGE_NONE
+
+
+# ---------------------------------------------------------------------------
+# Gain clamping through AppSettings.load()
+# ---------------------------------------------------------------------------
+
+def test_gain_config_clamps(tmp_path: Path):
+    """AppSettings.load() clamps gain values between MIN_GAIN and MAX_GAIN."""
+    # Default
+    s = AppSettings.load(config_file=tmp_path / "nonexistent.json")
+    assert s.mic_gain == 1.0
+    assert s.tts_gain == 1.0
+
+    # Within range
+    cfg = tmp_path / "config.json"
+    json.dump({"mic_gain": 1.5, "tts_gain": 1.2}, cfg.open("w"))
+    s2 = AppSettings.load(config_file=cfg)
+    assert s2.mic_gain == 1.5
+    assert s2.tts_gain == 1.2
+
+    # Clamp high
+    cfg3 = tmp_path / "config3.json"
+    json.dump({"mic_gain": 3.0, "tts_gain": 2.5}, cfg3.open("w"))
+    s3 = AppSettings.load(config_file=cfg3)
+    assert s3.mic_gain == MAX_GAIN
+    assert s3.tts_gain == MAX_GAIN

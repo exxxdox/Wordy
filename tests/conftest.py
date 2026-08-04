@@ -165,6 +165,43 @@ def cleanup_qt_application() -> "Iterator[None]":
         pass
 
 
+# 测试间可能被 stub 替换的 wordy 子模块。
+# 在任何测试运行前保存真实引用，autouse fixture 用此快照强制恢复。
+_STUBBABLE_MODULES = (
+    "wordy.hotkey",
+    "wordy.hotkey.parser",
+    "wordy.hotkey.native",
+    "wordy.ui.overlay",
+    "wordy.ui.overlay_widgets",
+    "wordy.ui.settings",
+    "wordy.ui.settings_state",
+    "wordy.ui.settings_widgets",
+    "wordy.ui.settings_style",
+    "wordy.ui.window",
+)
+
+# 强制导入真实模块并保存快照——在所有测试和 monkeypatch 之前
+_REAL_MODULE_SNAPSHOT: dict[str, object] = {}
+for _name in _STUBBABLE_MODULES:
+    try:
+        __import__(_name)
+    except ImportError:
+        pass
+    if _name in sys.modules:
+        _REAL_MODULE_SNAPSHOT[_name] = sys.modules[_name]
+
+
+@pytest.fixture(autouse=True)
+def _restore_stubbed_modules() -> "Iterator[None]":
+    """每次测试后强制恢复 sys.modules 到测试前的真实模块状态。"""
+    yield
+    for name in _STUBBABLE_MODULES:
+        if name in _REAL_MODULE_SNAPSHOT:
+            sys.modules[name] = _REAL_MODULE_SNAPSHOT[name]
+        else:
+            sys.modules.pop(name, None)
+
+
 @pytest.fixture
 def fake_keyring(monkeypatch: pytest.MonkeyPatch) -> "Iterator[FakeKeyringBackend]":
     """Provide an in-memory keyring backend wired into ``secret_store``.

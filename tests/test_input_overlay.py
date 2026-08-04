@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""Tests for input_overlay.py input normalization and hotkey recording lifecycle."""
+"""Tests for overlay.py input normalization and hotkey recording lifecycle."""
 
 import importlib
 import sys
@@ -12,27 +12,40 @@ from typing import cast
 
 import pytest
 
+import wordy.secret
+
 from tests._stubs import PYside6_STUBS, patch_module_stubs
 
 
 def import_input_overlay_with_stubs(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
-    patch_module_stubs(
-        monkeypatch,
-        (
-            *PYside6_STUBS,
-            "native_hotkey",
-            "settings_window",
-            "window_focus",
-        ),
+    # 保存原始模块引用，测试结束后恢复
+    _STUBBED_MODULES = (
+        *PYside6_STUBS,
+        "wordy.hotkey",
+        "wordy.ui.settings",
+        "wordy.ui.settings_state",
+        "wordy.ui.settings_widgets",
+        "wordy.ui.settings_style",
+        "wordy.ui.window",
+        "wordy.ui.overlay_widgets",
     )
-    original_input_overlay = sys.modules.pop("input_overlay", None)
+    _saved: dict[str, ModuleType | None] = {}
+    for name in _STUBBED_MODULES:
+        _saved[name] = sys.modules.get(name)
+    patch_module_stubs(monkeypatch, _STUBBED_MODULES)
+    # 同时清除 overlay 缓存以确保重新导入
+    _saved["wordy.ui.overlay"] = sys.modules.pop("wordy.ui.overlay", None)
     try:
-        module = importlib.import_module("input_overlay")
-        _ = sys.modules.pop("input_overlay", None)
+        module = importlib.import_module("wordy.ui.overlay")
+        sys.modules.pop("wordy.ui.overlay", None)
         return module
     finally:
-        if original_input_overlay is not None:
-            sys.modules["input_overlay"] = original_input_overlay
+        # 恢复所有被修改的模块条目
+        for name, original in _saved.items():
+            if original is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = original
 
 
 class ThreadStub:
@@ -334,11 +347,14 @@ def test_apply_pending_settings_no_changes_does_not_save_config(monkeypatch: pyt
     overlay = _new_apply_overlay(module)
     saved_updates: list[dict[str, object]] = []
 
-    def fake_save_app_config(update: dict[str, object]) -> Path:
-        saved_updates.append(dict(update))
+    from wordy.config import AppSettings
+
+    def fake_update(self, **kwargs: object) -> Path:
+        saved_updates.append({str(k): v for k, v in kwargs.items()})
         return Path("updated-config.json")
 
-    monkeypatch.setattr(module, "save_app_config", fake_save_app_config)
+    monkeypatch.setattr(AppSettings, "load", lambda **kw: AppSettings())
+    monkeypatch.setattr(AppSettings, "update", fake_update)
     window = ApplySettingsWindowStub(_pending_settings(overlay))
 
     module.InputOverlay._apply_pending_settings(overlay, window)
@@ -353,11 +369,14 @@ def test_apply_pending_settings_saves_and_reports_only_changed_fields(monkeypatc
     overlay = _new_apply_overlay(module)
     saved_updates: list[dict[str, object]] = []
 
-    def fake_save_app_config(update: dict[str, object]) -> Path:
-        saved_updates.append(dict(update))
+    from wordy.config import AppSettings
+
+    def fake_update(self, **kwargs: object) -> Path:
+        saved_updates.append({str(k): v for k, v in kwargs.items()})
         return Path("updated-config.json")
 
-    monkeypatch.setattr(module, "save_app_config", fake_save_app_config)
+    monkeypatch.setattr(AppSettings, "load", lambda **kw: AppSettings())
+    monkeypatch.setattr(AppSettings, "update", fake_update)
     window = ApplySettingsWindowStub(_pending_settings(overlay, volume=0.75))
 
     module.InputOverlay._apply_pending_settings(overlay, window)
@@ -384,10 +403,13 @@ def test_apply_oserror_rolls_back_hotkey_and_prevents_mutation(monkeypatch: pyte
 
     overlay.try_register_hotkey = tracked_try_register
 
-    def failing_save(*_a, **_kw):
+    from wordy.config import AppSettings
+
+    def failing_update(self, **kwargs: object) -> Path:
         raise OSError("write failed")
 
-    monkeypatch.setattr(module, "save_app_config", failing_save)
+    monkeypatch.setattr(AppSettings, "load", lambda **kw: AppSettings())
+    monkeypatch.setattr(AppSettings, "update", failing_update)
     monkeypatch.setattr(module, "QMessageBox", type("QMB", (), {"critical": staticmethod(lambda *a, **kw: None)}))
     window = ApplySettingsWindowStub(
         _pending_settings(overlay, hotkey="f7", hotkey_name="F7", volume=0.5)
@@ -415,11 +437,14 @@ def test_apply_audio_callback_payload_structured_dict(monkeypatch: pytest.Monkey
 
     saved_updates: list[dict[str, object]] = []
 
-    def fake_save(update: dict[str, object]) -> Path:
-        saved_updates.append(dict(update))
+    from wordy.config import AppSettings
+
+    def fake_update(self, **kwargs: object) -> Path:
+        saved_updates.append({str(k): v for k, v in kwargs.items()})
         return Path("updated.json")
 
-    monkeypatch.setattr(module, "save_app_config", fake_save)
+    monkeypatch.setattr(AppSettings, "load", lambda **kw: AppSettings())
+    monkeypatch.setattr(AppSettings, "update", fake_update)
     structured_identity = {"name": "VB-Audio Cable", "host_api_name": "WASAPI"}
     window = ApplySettingsWindowStub(
         _pending_settings(overlay,
@@ -446,11 +471,14 @@ def test_apply_audio_callback_payload_legacy_str(monkeypatch: pytest.MonkeyPatch
 
     saved_updates: list[dict[str, object]] = []
 
-    def fake_save(update: dict[str, object]) -> Path:
-        saved_updates.append(dict(update))
+    from wordy.config import AppSettings
+
+    def fake_update(self, **kwargs: object) -> Path:
+        saved_updates.append({str(k): v for k, v in kwargs.items()})
         return Path("updated.json")
 
-    monkeypatch.setattr(module, "save_app_config", fake_save)
+    monkeypatch.setattr(AppSettings, "load", lambda **kw: AppSettings())
+    monkeypatch.setattr(AppSettings, "update", fake_update)
     window = ApplySettingsWindowStub(
         _pending_settings(overlay, audio_output_device_name="VB-Cable")
     )
@@ -474,11 +502,14 @@ def test_apply_audio_callback_payload_legacy_none(monkeypatch: pytest.MonkeyPatc
 
     saved_updates: list[dict[str, object]] = []
 
-    def fake_save(update: dict[str, object]) -> Path:
-        saved_updates.append(dict(update))
+    from wordy.config import AppSettings
+
+    def fake_update(self, **kwargs: object) -> Path:
+        saved_updates.append({str(k): v for k, v in kwargs.items()})
         return Path("updated.json")
 
-    monkeypatch.setattr(module, "save_app_config", fake_save)
+    monkeypatch.setattr(AppSettings, "load", lambda **kw: AppSettings())
+    monkeypatch.setattr(AppSettings, "update", fake_update)
     window = ApplySettingsWindowStub(
         _pending_settings(overlay, audio_output_device_name=None)
     )
@@ -498,8 +529,11 @@ def test_apply_cartesia_callback_failure_appends_status_and_does_not_raise(monke
         fallback_active = False
         backend = "keyring"
 
-    monkeypatch.setattr(module, "save_app_config", lambda _u: Path("updated.json"))
-    monkeypatch.setattr(module.secret_store, "save_cartesia_api_key", lambda *_a, **_kw: FakeStorageStatus())
+    from wordy.config import AppSettings
+
+    monkeypatch.setattr(AppSettings, "load", lambda **kw: AppSettings())
+    monkeypatch.setattr(AppSettings, "update", lambda self, **kw: Path("updated.json"))
+    monkeypatch.setattr(wordy.secret, "save_cartesia_api_key", lambda *_a, **_kw: FakeStorageStatus())
     window = ApplySettingsWindowStub(
         _pending_settings(overlay, cartesia_api_key_action="set", cartesia_api_key_value="new-key")
     )
@@ -517,8 +551,11 @@ def test_apply_cartesia_callback_failure_clear_does_not_raise(monkeypatch: pytes
     overlay = _new_apply_overlay(module)
     overlay.on_cartesia_api_key_change = lambda _key: (_ for _ in ()).throw(RuntimeError("boom"))
 
-    monkeypatch.setattr(module, "save_app_config", lambda _u: Path("updated.json"))
-    monkeypatch.setattr(module.secret_store, "delete_cartesia_api_key", lambda: None)
+    from wordy.config import AppSettings
+
+    monkeypatch.setattr(AppSettings, "load", lambda **kw: AppSettings())
+    monkeypatch.setattr(AppSettings, "update", lambda self, **kw: Path("updated.json"))
+    monkeypatch.setattr(wordy.secret, "delete_cartesia_api_key", lambda: None)
     window = ApplySettingsWindowStub(
         _pending_settings(overlay, cartesia_api_key_action="clear")
     )

@@ -3,7 +3,7 @@
 
 """RED contract tests for the modern dark UI refresh.
 
-These tests pin the palette tokens that ``ui_theme.py`` must expose after
+These tests pin the palette tokens that ``wordy.ui.theme.py`` must expose after
 the refresh, while preserving the existing tokens used by current code.
 They also assert structural invariants of the settings stylesheet and the
 input overlay capsule so the visual refresh cannot regress behavior.
@@ -33,7 +33,7 @@ _HEX_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 
 def test_palette_tokens_present() -> None:
     """New modern-dark palette tokens must exist and be 6-digit hex."""
-    ui_theme = importlib.import_module("ui_theme")
+    theme = importlib.import_module("wordy.ui.theme")
 
     required = (
         "SURFACE_BG",
@@ -45,15 +45,15 @@ def test_palette_tokens_present() -> None:
         "SCROLLBAR_HANDLE_HOVER",
     )
     for name in required:
-        assert hasattr(ui_theme, name), f"ui_theme missing new token: {name}"
-        value = getattr(ui_theme, name)
+        assert hasattr(theme, name), f"wordy.ui.theme missing new token: {name}"
+        value = getattr(theme, name)
         assert isinstance(value, str), f"{name} must be a string, got {type(value)!r}"
         assert _HEX_RE.match(value), f"{name}={value!r} is not a 6-digit hex color"
 
 
 def test_palette_backwards_compat_aliases_preserved() -> None:
     """Existing palette tokens must remain available and valid hex values."""
-    ui_theme = importlib.import_module("ui_theme")
+    theme = importlib.import_module("wordy.ui.theme")
 
     legacy = (
         "GREEN_ACCENT",
@@ -71,12 +71,12 @@ def test_palette_backwards_compat_aliases_preserved() -> None:
         "TRANSPARENT_COLOR",
     )
     for name in legacy:
-        assert hasattr(ui_theme, name), f"ui_theme dropped legacy token: {name}"
-        value = getattr(ui_theme, name)
+        assert hasattr(theme, name), f"wordy.ui.theme dropped legacy token: {name}"
+        value = getattr(theme, name)
         assert isinstance(value, str), f"{name} must be a string, got {type(value)!r}"
         assert _HEX_RE.match(value), f"{name}={value!r} is not a 6-digit hex color"
 
-    assert ui_theme.TRANSPARENT_COLOR == "#ff00ff"
+    assert theme.TRANSPARENT_COLOR == "#ff00ff"
 
 
 # ---------------------------------------------------------------------------
@@ -106,7 +106,7 @@ def _new_settings_window(monkeypatch: pytest.MonkeyPatch):
         pytest.skip(f"QApplication cannot be imported: {exc}")
         raise
     try:
-        from settings_window import SettingsState, SettingsWindow
+        from wordy.ui.settings import SettingsState, SettingsWindow
     except Exception as exc:  # pragma: no cover - dependency-specific import failures
         pytest.skip(f"SettingsWindow dependencies cannot be imported: {exc}")
         raise
@@ -197,7 +197,7 @@ _OVERLAY_CONFIG = {
 
 
 def _install_native_hotkey_stub(monkeypatch: pytest.MonkeyPatch) -> None:
-    module = ModuleType("native_hotkey")
+    module = ModuleType("wordy.hotkey")
 
     class NativeHotkeyListener:
         started: bool
@@ -212,7 +212,11 @@ def _install_native_hotkey_stub(monkeypatch: pytest.MonkeyPatch) -> None:
             self.started = False
 
     setattr(module, "NativeHotkeyListener", NativeHotkeyListener)
-    monkeypatch.setitem(sys.modules, "native_hotkey", module)
+    from wordy.hotkey import iter_hotkey_parts, normalize_key_part, split_hotkey
+    setattr(module, "iter_hotkey_parts", iter_hotkey_parts)
+    setattr(module, "normalize_key_part", normalize_key_part)
+    setattr(module, "split_hotkey", split_hotkey)
+    monkeypatch.setitem(sys.modules, "wordy.hotkey", module)
 
 
 def _import_input_overlay(monkeypatch: pytest.MonkeyPatch):
@@ -220,19 +224,25 @@ def _import_input_overlay(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(sys, "platform", "win32")
     _install_native_hotkey_stub(monkeypatch)
 
-    app_config = importlib.import_module("app_config")
-
-    def save_config_stub(_update: object) -> Path:
-        return Path("/tmp/wavtrans-test-config.json")
-
-    monkeypatch.setattr(app_config, "load_initial_config", lambda: dict(_OVERLAY_CONFIG))
-    monkeypatch.setattr(app_config, "save_app_config", save_config_stub)
+    # 用 AppSettings 替代已删除的 load_initial_config / save_app_config
+    from wordy.config import AppSettings
+    _test_settings = AppSettings()
+    _test_settings.hotkey = _OVERLAY_CONFIG["hotkey"]
+    _test_settings.name = _OVERLAY_CONFIG["name"]
+    _test_settings.voice_id = _OVERLAY_CONFIG["voice_id"]
+    _test_settings.voice_name = _OVERLAY_CONFIG["voice_name"]
+    _test_settings.volume = _OVERLAY_CONFIG["volume"]
+    _test_settings.overlay_opacity = _OVERLAY_CONFIG["overlay_opacity"]
+    _test_settings.tts_backend = _OVERLAY_CONFIG["tts_backend"]
+    _test_settings.fixed_center = _OVERLAY_CONFIG["fixed_center"]
+    monkeypatch.setattr(AppSettings, "load", lambda **kw: _test_settings)
+    monkeypatch.setattr(AppSettings, "update", lambda self, **kw: Path("/tmp/wavtrans-test-config.json"))
     monkeypatch.setattr(
-        app_config, "get_active_config_file", lambda: Path("/tmp/wavtrans-test-config.json")
+        "wordy.config.get_active_config_file", lambda: Path("/tmp/wavtrans-test-config.json")
     )
 
-    original_module = sys.modules.pop("input_overlay", None)
-    module = importlib.import_module("input_overlay")
+    original_module = sys.modules.pop("wordy.ui.overlay", None)
+    module = importlib.import_module("wordy.ui.overlay")
 
     def skip_voice_loading(_self: object, show_status: bool = True) -> None:
         _ = show_status
@@ -277,10 +287,10 @@ def test_input_overlay_capsule_invariants_preserved(monkeypatch: pytest.MonkeyPa
 
         settings_button = getattr(root, "settings_button", None)
         assert settings_button is not None, "overlay root must expose settings_button attribute"
-        settings_style = settings_button.styleSheet() or ""
-        assert "font-size: 18px" in settings_style, (
-            "settingsButton stylesheet must include 'font-size: 18px'"
-        )
+        # 设置图标改用 QPixmap 绘制，不再依赖文本 stylesheet
+        pixmap = settings_button.pixmap()
+        assert pixmap is not None, "settingsButton must have a pixmap set"
+        assert not pixmap.isNull(), "settingsButton pixmap must be valid"
 
         size = root.size()
         assert size.width() == 540, f"overlay root width must be 540, got {size.width()}"

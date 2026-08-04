@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""静态布局契约测试（RED）：检查 settings_window.py 的宽度/排布约束。
+"""静态布局契约测试（RED）：检查 wordy/ui/settings.py 的宽度/排布约束。
 
 仅使用 Python 标准库（ast、pathlib），不导入 PySide6 或 pytest。
 当生产代码尚未修复时，本测试预期失败（RED）。
@@ -15,17 +15,28 @@ import sys
 from pathlib import Path
 from typing import NoReturn
 
-SETTINGS_PATH = Path(__file__).resolve().parent.parent / "settings_window.py"
+SETTINGS_DIR = Path(__file__).resolve().parent.parent / "src" / "wordy" / "ui"
+SETTINGS_PATH = SETTINGS_DIR / "settings.py"
+SETTINGS_WIDGETS_PATH = SETTINGS_DIR / "settings_widgets.py"
+SETTINGS_STYLE_PATH = SETTINGS_DIR / "settings_style.py"
+SETTINGS_STATE_PATH = SETTINGS_DIR / "settings_state.py"
+# 所有设置相关源文件，合并后用于静态检查
+_SETTINGS_PACKAGE_PATHS = (
+    SETTINGS_PATH,
+    SETTINGS_WIDGETS_PATH,
+    SETTINGS_STYLE_PATH,
+    SETTINGS_STATE_PATH,
+)
 
 # ----- 期望阈值 -----
 MIN_DIALOG_WIDTH = 560
 MIN_DIALOG_HEIGHT = 580  # 标签页布局下，默认打开高度只需容纳当前分类内容与底部按钮
 MAX_CONTENT_MARGIN = 20
 MAX_SECTION_GAP = 12
-MIN_COMBO_SIZE_ADJUST_CALLS = 3
-MIN_COMBO_MIN_CONTENTS_LENGTH = 3
+MIN_COMBO_SIZE_ADJUST_CALLS = 4
+MIN_COMBO_MIN_CONTENTS_LENGTH = 4
 MIN_COMBO_MIN_CONTENTS_LENGTH_INT = 24
-MIN_COMBO_ELIDE_MODE_CALLS = 3
+MIN_COMBO_ELIDE_MODE_CALLS = 4
 
 # ----- 可调整大小对话框契约 -----
 DIALOG_MIN_WIDTH_THRESHOLD = 480
@@ -62,9 +73,13 @@ FORBIDDEN_QSS_SUBSTRINGS = [
 # ----- 工具函数 -----
 
 def _load_source() -> str:
-    if not SETTINGS_PATH.exists():
-        raise AssertionError(f"settings_window.py 不存在: {SETTINGS_PATH}")
-    return SETTINGS_PATH.read_text(encoding="utf-8")
+    """加载 settings 包中所有源文件，合并为单一字符串供静态检查。"""
+    parts: list[str] = []
+    for path in _SETTINGS_PACKAGE_PATHS:
+        if not path.exists():
+            raise AssertionError(f"源文件不存在: {path}")
+        parts.append(path.read_text(encoding="utf-8"))
+    return "\n".join(parts)
 
 
 def _load_tree() -> ast.Module:
@@ -110,9 +125,9 @@ def _call_receiver_text(call: ast.Call) -> str | None:
 
 
 def _find_stylesheet_string(tree: ast.Module) -> str:
-    """从 _build_stylesheet 方法中提取静态/可静态推断的样式表内容。"""
+    """从 build_settings_stylesheet 函数中提取静态/可静态推断的样式表内容。"""
     for node in ast.walk(tree):
-        if isinstance(node, ast.FunctionDef) and node.name == "_build_stylesheet":
+        if isinstance(node, ast.FunctionDef) and node.name in ("_build_stylesheet", "build_settings_stylesheet"):
             for ret in ast.walk(node):
                 if isinstance(ret, ast.Return) and ret.value is not None:
                     value = ret.value
@@ -128,7 +143,7 @@ def _find_stylesheet_string(tree: ast.Module) -> str:
                                 # 占位符以占位标记返回，不影响关键字检测
                                 parts.append("<EXPR>")
                         return "".join(parts)
-    raise AssertionError("未找到 _build_stylesheet 方法或其返回值")
+    raise AssertionError("未找到 build_settings_stylesheet 函数或其返回值")
 
 
 # ----- 断言断点（不依赖 pytest） -----
@@ -150,7 +165,7 @@ def test_settings_dialog_static_width_budget_invariants() -> None:
 
     missing = [name for name in ("DIALOG_WIDTH", "DIALOG_HEIGHT", "CONTENT_MARGIN", "SECTION_GAP") if name not in consts]
     if missing:
-        _fail(f"settings_window.py 缺少顶层常量: {missing}")
+        _fail(f"wordy/ui/settings.py 缺少顶层常量: {missing}")
 
     width = consts["DIALOG_WIDTH"]
     height = consts["DIALOG_HEIGHT"]
@@ -236,7 +251,7 @@ def test_settings_dialog_is_resizable_with_min_size() -> None:
 
     missing = [name for name in ("DIALOG_MIN_WIDTH", "DIALOG_MIN_HEIGHT") if name not in consts]
     if missing:
-        _fail(f"settings_window.py 缺少顶层常量: {missing}")
+        _fail(f"wordy/ui/settings.py 缺少顶层常量: {missing}")
 
     min_width = consts["DIALOG_MIN_WIDTH"]
     min_height = consts["DIALOG_MIN_HEIGHT"]
@@ -294,7 +309,7 @@ def test_settings_dialog_does_not_lock_size() -> None:
         if token in source:
             raw_hits.append(token)
     if raw_hits:
-        _fail(f"settings_window.py 原始源码包含禁用窗口标志: {raw_hits}")
+        _fail(f"wordy/ui/settings.py 原始源码包含禁用窗口标志: {raw_hits}")
 
 
 def test_settings_dialog_preserves_existing_contract() -> None:
@@ -318,7 +333,7 @@ def test_settings_combos_use_no_wheel_subclass() -> None:
     """设置页三个下拉框必须使用禁用滚轮切换的 NoWheelComboBox。"""
     source = _load_source()
     if "class NoWheelComboBox" not in source:
-        _fail("settings_window.py 必须定义 NoWheelComboBox")
+        _fail("wordy/ui/settings.py 必须定义 NoWheelComboBox")
     if source.count("NoWheelComboBox()") < 6:
         _fail("voice/backend/audio output 的属性初始化和构建处都应使用 NoWheelComboBox()")
 
@@ -327,7 +342,7 @@ def test_settings_sliders_use_no_wheel_subclass() -> None:
     """音量和透明度滑动条必须使用禁用滚轮调整的 NoWheelSlider。"""
     source = _load_source()
     if "class NoWheelSlider" not in source:
-        _fail("settings_window.py 必须定义 NoWheelSlider")
+        _fail("wordy/ui/settings.py 必须定义 NoWheelSlider")
     if source.count("NoWheelSlider(Qt.Orientation.Horizontal)") < 4:
         _fail("volume/opacity 的属性初始化和构建处都应使用 NoWheelSlider(Qt.Orientation.Horizontal)")
 
@@ -336,7 +351,7 @@ def test_settings_buttons_row_is_right_aligned() -> None:
     """底部按钮应右对齐，且取消在左、应用在右，更符合设置对话框习惯。"""
     source = _load_source()
     start = source.index("    def _build_buttons")
-    end = source.index("    def _add_separator", start)
+    end = source.index("    def _add_inner_gap", start)
     body = source[start:end]
     if body.count("button_row.addStretch(1)") != 1:
         _fail("_build_buttons 应只保留一个左侧 addStretch(1) 以右对齐按钮")
@@ -442,7 +457,29 @@ def test_settings_dialog_static_drag_position_is_not_persisted() -> None:
     )
     found = [token for token in forbidden if token in source]
     if found:
-        _fail(f"settings_window.py 不得包含拖动位置持久化/配置保存代码: {found}")
+        _fail(f"wordy/ui/settings.py 不得包含拖动位置持久化/配置保存代码: {found}")
+
+
+def test_audio_output_is_owned_by_routing_tab_and_locks_to_cable() -> None:
+    """音频输出只能在路由页构建，路由启用时必须禁用下拉框并显示 CABLE Input。"""
+    source = SETTINGS_PATH.read_text(encoding="utf-8")
+    if "_build_audio_output_section(local_layout" in source:
+        _fail("音频输出仍位于本地设置页")
+    if "_build_audio_output_section(route_layout" not in source:
+        _fail("音频输出未移动到音频路由页")
+    if "def _sync_audio_output_control" not in source or "combo.setEnabled(False)" not in source:
+        _fail("缺少路由启用时锁定音频输出下拉框的实现")
+    if "CABLE Input" not in source or "Windows WASAPI" not in source:
+        _fail("锁定输出未明确指向 Windows WASAPI CABLE Input")
+
+
+def test_audio_route_effect_test_module_is_removed() -> None:
+    """设置 UI 不得残留路由效果测试按钮、状态或回调。"""
+    source = SETTINGS_PATH.read_text(encoding="utf-8")
+    forbidden = ("效果测试", "route_test", "set_test_recording_available")
+    found = [token for token in forbidden if token in source]
+    if found:
+        _fail(f"音频路由效果测试模块仍有残留: {found}")
 
 
 # ----- 运行器 -----
@@ -483,6 +520,14 @@ def main() -> int:
         (
             "test_settings_dialog_static_drag_position_is_not_persisted",
             test_settings_dialog_static_drag_position_is_not_persisted,
+        ),
+        (
+            "test_audio_output_is_owned_by_routing_tab_and_locks_to_cable",
+            test_audio_output_is_owned_by_routing_tab_and_locks_to_cable,
+        ),
+        (
+            "test_audio_route_effect_test_module_is_removed",
+            test_audio_route_effect_test_module_is_removed,
         ),
     ]
     failures = 0

@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from qt_lifecycle import safe_qt_call
+from wordy.qt_lifecycle import safe_qt_call
 
 
 
@@ -43,7 +43,7 @@ class _LogStreamLike(Protocol):
 
 
 def _create_tts_tray_icon() -> QIcon:
-    """Create a small, high-contrast text-to-speech tray icon."""
+    """Create a geometric text-to-speech tray icon with waveform motif."""
     size = 64
     pixmap = QPixmap(size, size)
     pixmap.fill(Qt.GlobalColor.transparent)
@@ -51,44 +51,26 @@ def _create_tts_tray_icon() -> QIcon:
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
-    background = QPainterPath()
-    background.addEllipse(QRectF(2, 2, 60, 60))
-    painter.fillPath(background, QBrush(QColor("#0f5fd7")))
-    painter.setPen(QPen(QColor("#9bd7ff"), 2))
-    painter.drawPath(background)
+    # 深色圆角方形背景
+    bg = QPainterPath()
+    bg.addRoundedRect(QRectF(4, 4, 56, 56), 12, 12)
+    painter.fillPath(bg, QBrush(QColor("#0b1220")))
+    painter.setPen(QPen(QColor("#22d3a0"), 1.5))
+    painter.drawPath(bg)
 
-    bubble = QPainterPath()
-    bubble.addRoundedRect(QRectF(10, 13, 30, 30), 7, 7)
-    bubble.moveTo(21, 43)
-    bubble.lineTo(17, 51)
-    bubble.lineTo(28, 43)
-    bubble.closeSubpath()
-    painter.fillPath(bubble, QBrush(QColor("#ffffff")))
+    # 几何波形：五条等宽竖线，对称高度
+    bar_w = 4.5
+    bar_gap = 3.5
+    base_y = 42.0
+    heights = [10, 18, 26, 18, 10]
+    x_start = 16.0
 
-    painter.setPen(QPen(QColor("#0f5fd7"), 3, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
-    painter.drawLine(QPointF(17, 22), QPointF(33, 22))
-    painter.drawLine(QPointF(20, 30), QPointF(30, 30))
-
-    speaker = QPainterPath()
-    speaker.moveTo(30, 36)
-    speaker.lineTo(36, 36)
-    speaker.lineTo(44, 29)
-    speaker.lineTo(44, 51)
-    speaker.lineTo(36, 44)
-    speaker.lineTo(30, 44)
-    speaker.closeSubpath()
-    painter.fillPath(speaker, QBrush(QColor("#ffffff")))
-
-    wave_pen = QPen(QColor("#7dd3fc"), 4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
-    painter.setPen(wave_pen)
-    near_wave = QPainterPath()
-    near_wave.moveTo(47, 34)
-    near_wave.cubicTo(51, 37, 51, 43, 47, 46)
-    painter.drawPath(near_wave)
-    far_wave = QPainterPath()
-    far_wave.moveTo(52, 29)
-    far_wave.cubicTo(59, 35, 59, 45, 52, 51)
-    painter.drawPath(far_wave)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(QBrush(QColor("#22d3a0")))
+    for i, h in enumerate(heights):
+        rx = x_start + i * (bar_w + bar_gap)
+        ry = base_y - h
+        painter.drawRoundedRect(QRectF(rx, ry, bar_w, h), 1.5, 1.5)
 
     painter.end()
     return QIcon(pixmap)
@@ -204,7 +186,7 @@ class TrayApp:
     def log_stream(self) -> _LogStreamLike:
         stream = self._log_stream
         if stream is None:
-            module = importlib.import_module("log_stream")
+            module = importlib.import_module("wordy.log")
             shared = module.current_log_stream()
             stream = shared if shared is not None else module.LogStream()
             self._log_stream = stream
@@ -314,8 +296,8 @@ class TrayController:
     ``dispose()`` is idempotent and forwards exactly once to the tray app.
     """
 
-    def __init__(self, tray_app: TrayApp, overlay: object | None = None) -> None:
-        self._tray_app: TrayApp = tray_app
+    def __init__(self, tray: TrayApp, overlay: object | None = None) -> None:
+        self._tray_app: TrayApp = tray
         self._overlay: object | None = overlay
         self._disposed: bool = False
 

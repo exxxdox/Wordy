@@ -5,11 +5,12 @@
 
 from __future__ import annotations
 
+from io import BytesIO
 from unittest.mock import MagicMock
 
 import pytest
 
-from audio_player import AudioPlayer
+from wordy.audio.player import AudioPlayer
 
 
 # ---------------------------------------------------------------------------
@@ -44,6 +45,7 @@ class FakePyAudio:
 
     def __init__(self):
         self.terminate_calls = 0
+        self.open_calls: list[dict[str, object]] = []
         self._host_apis = [
             {"index": 0, "name": "MME", "type": 2},
             {"index": 1, "name": "Windows WASAPI", "type": 13},
@@ -76,7 +78,18 @@ class FakePyAudio:
     def get_format_from_width(self, width: int):
         return 8 * width  # arbitrary numeric stand-in
 
+    def get_sample_size(self, audio_format: int):
+        return {
+            1: 4,   # paFloat32
+            2: 4,   # paInt32
+            4: 3,   # paInt24
+            8: 2,   # paInt16
+            16: 1,  # paInt8
+            32: 1,  # paUInt8
+        }[audio_format]
+
     def open(self, **kwargs):
+        self.open_calls.append(kwargs)
         return self._stream
 
     def terminate(self) -> None:
@@ -87,7 +100,7 @@ class FakePyAudio:
 def _patch_pyaudio(monkeypatch):
     """Inject FakePyAudio so no real audio hardware is touched."""
     fake_pa = FakePyAudio()
-    monkeypatch.setattr("audio_player.pyaudio", MagicMock(PyAudio=lambda: fake_pa))
+    monkeypatch.setattr("wordy.audio.player.pyaudio", MagicMock(PyAudio=lambda: fake_pa))
     return fake_pa
 
 
@@ -150,7 +163,7 @@ def test_resolve_returns_none_when_default_device_lookup_raises(monkeypatch):
         raise OSError("no default device")
 
     pa.get_default_output_device_info = _boom  # type: ignore[assignment]
-    monkeypatch.setattr("audio_player.pyaudio", MagicMock(PyAudio=lambda: pa))
+    monkeypatch.setattr("wordy.audio.player.pyaudio", MagicMock(PyAudio=lambda: pa))
 
     player = AudioPlayer(output_device_name="Non-Existent")
     result = player._resolve_output_device(pa, device_index=None)
@@ -165,7 +178,7 @@ def test_resolve_returns_none_when_output_device_name_none_and_default_lookup_ra
         raise OSError("no default device")
 
     pa.get_default_output_device_info = _boom  # type: ignore[assignment]
-    monkeypatch.setattr("audio_player.pyaudio", MagicMock(PyAudio=lambda: pa))
+    monkeypatch.setattr("wordy.audio.player.pyaudio", MagicMock(PyAudio=lambda: pa))
 
     player = AudioPlayer()
     result = player._resolve_output_device(pa, device_index=None)
@@ -178,7 +191,7 @@ def test_resolve_returns_none_when_output_device_name_none_and_default_lookup_ra
 
 def test_list_output_devices_returns_filtered_outputs_with_default_flag(_patch_pyaudio):
     """list_output_devices returns only output-capable devices with is_default flag."""
-    from audio_player import list_output_devices
+    from wordy.audio.player import list_output_devices
 
     devices = list_output_devices()
     assert isinstance(devices, list)
@@ -201,7 +214,7 @@ def test_list_output_devices_returns_filtered_outputs_with_default_flag(_patch_p
 
 def test_list_output_devices_each_entry_has_host_api_fields(_patch_pyaudio):
     """Every enumerated output device must carry host_api_index, host_api_name, display_name."""
-    from audio_player import list_output_devices
+    from wordy.audio.player import list_output_devices
 
     devices = list_output_devices()
     assert len(devices) == 2
@@ -224,10 +237,10 @@ def test_list_output_devices_each_entry_has_host_api_fields(_patch_pyaudio):
 def test_list_output_devices_returns_empty_on_pyaudio_failure(monkeypatch):
     """When pyaudio.PyAudio() raises, list_output_devices must return []."""
     monkeypatch.setattr(
-        "audio_player.pyaudio",
+        "wordy.audio.player.pyaudio",
         MagicMock(side_effect=RuntimeError("no audio backend")),
     )
-    from audio_player import list_output_devices
+    from wordy.audio.player import list_output_devices
 
     devices = list_output_devices()
     assert devices == []
@@ -268,7 +281,7 @@ class FakeDuplicateOutputPyAudio(FakePyAudio):
 def _patch_duplicate_output_pyaudio(monkeypatch):
     """Inject duplicate output devices so list_output_devices filtering is isolated."""
     fake_pa = FakeDuplicateOutputPyAudio()
-    monkeypatch.setattr("audio_player.pyaudio", MagicMock(PyAudio=lambda: fake_pa))
+    monkeypatch.setattr("wordy.audio.player.pyaudio", MagicMock(PyAudio=lambda: fake_pa))
     return fake_pa
 
 
@@ -276,7 +289,7 @@ def test_list_output_devices_keeps_only_wasapi_variants_when_duplicates_exist(
     _patch_duplicate_output_pyaudio,
 ):
     """Only WASAPI output variants should be shown in the user-facing device list."""
-    from audio_player import list_output_devices
+    from wordy.audio.player import list_output_devices
 
     devices = list_output_devices()
 
@@ -294,7 +307,7 @@ def test_list_output_devices_returns_unique_wasapi_display_names(
     _patch_duplicate_output_pyaudio,
 ):
     """Every displayed output device should be a unique Windows WASAPI label."""
-    from audio_player import list_output_devices
+    from wordy.audio.player import list_output_devices
 
     devices = list_output_devices()
 
@@ -322,8 +335,8 @@ def test_list_output_devices_filters_windows_mapper_aliases_english_and_chinese(
         {"index": 4, "name": "主声音驱动程序", "maxOutputChannels": 2, "hostApi": 0},
         {"index": 5, "name": "VB-Audio Virtual Cable", "maxOutputChannels": 2, "hostApi": 1},
     ]
-    monkeypatch.setattr("audio_player.pyaudio", MagicMock(PyAudio=lambda: fake_pa))
-    from audio_player import list_output_devices
+    monkeypatch.setattr("wordy.audio.player.pyaudio", MagicMock(PyAudio=lambda: fake_pa))
+    from wordy.audio.player import list_output_devices
 
     devices = list_output_devices()
 
@@ -337,7 +350,7 @@ def test_list_output_devices_mapper_filter_does_not_drop_real_duplicates(
     _patch_duplicate_output_pyaudio,
 ):
     """The mapper-alias blacklist removes only the two alias entries, never real duplicates."""
-    from audio_player import list_output_devices
+    from wordy.audio.player import list_output_devices
 
     devices = list_output_devices()
     names = [d["name"] for d in devices]
@@ -351,7 +364,7 @@ def test_list_output_devices_mapper_filter_does_not_drop_real_duplicates(
 
 def test_list_output_devices_default_flag_only_on_default_index(_patch_duplicate_output_pyaudio):
     """is_default must be True only for the device whose index matches the default index."""
-    from audio_player import list_output_devices
+    from wordy.audio.player import list_output_devices
 
     devices = list_output_devices()
 
@@ -364,7 +377,7 @@ def test_list_output_devices_default_flag_only_on_default_index(_patch_duplicate
 
 def test_list_output_devices_preserves_existing_filtered_outputs_contract(_patch_pyaudio):
     """Original fixture still returns output-capable devices and excludes input-only devices."""
-    from audio_player import list_output_devices
+    from wordy.audio.player import list_output_devices
 
     devices = list_output_devices()
 
@@ -459,6 +472,30 @@ def test_close_stream_stops_and_closes_active_stream(_patch_pyaudio):
     assert stream.stop_calls == 1
     assert stream.close_calls == 1
     assert player._stream is None
+
+
+def test_cable_stream_upmixes_mono_pcm_to_stereo(_patch_pyaudio):
+    """VB-CABLE 双声道端点必须收到逐样本复制后的 L/R 数据。"""
+    player = AudioPlayer(output_device_name="VB-Cable Output")
+
+    assert player.open_stream(audio_format=8, channels=1, rate=48000) is True
+    player.write_stream(b"\x01\x02\x03\x04")
+
+    assert _patch_pyaudio.open_calls[-1]["channels"] == 2
+    assert _patch_pyaudio._stream.write_calls == [
+        b"\x01\x02\x01\x02\x03\x04\x03\x04"
+    ]
+
+
+def test_default_stream_keeps_mono_pcm_unchanged(_patch_pyaudio):
+    """普通设备继续使用调用方请求的单声道，避免扩大修复范围。"""
+    player = AudioPlayer()
+
+    assert player.open_stream(audio_format=8, channels=1, rate=48000) is True
+    player.write_stream(b"\x01\x02\x03\x04")
+
+    assert _patch_pyaudio.open_calls[-1]["channels"] == 1
+    assert _patch_pyaudio._stream.write_calls == [b"\x01\x02\x03\x04"]
 
 
 def test_close_stream_terminates_pyaudio_and_clears_ref(_patch_pyaudio):
@@ -581,6 +618,64 @@ def test_play_wav_finally_terminates_when_stop_stream_raises(_patch_pyaudio, tmp
     assert pa.terminate_calls == 1
 
 
+def test_play_wav_uses_actual_bytes_for_streaming_wav_duration(_patch_pyaudio, caplog):
+    """流式 WAV 的未知长度占位值不能被记录成数万秒。"""
+    import wave
+
+    wav_buffer = BytesIO()
+    with wave.open(wav_buffer, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(48000)
+        wf.writeframes(b"\x00\x00" * 480)
+
+    wav_bytes = bytearray(wav_buffer.getvalue())
+    # Cartesia 流式 WAV 使用 0xFFFFFFFF 表示 RIFF/data 长度暂时未知。
+    wav_bytes[4:8] = b"\xff\xff\xff\xff"
+    wav_bytes[40:44] = b"\xff\xff\xff\xff"
+
+    player = AudioPlayer()
+    with caplog.at_level("INFO"):
+        assert player.play_wav(BytesIO(wav_bytes)) is True
+
+    assert "总时长=0.01 秒" in caplog.text
+    assert "48695" not in caplog.text
+
+
+def test_play_wav_upmixes_mono_for_cable(_patch_pyaudio, tmp_path):
+    """完整 WAV 播放与实时流必须使用相同的 VB-CABLE 声道适配。"""
+    import wave
+
+    wav_path = tmp_path / "mono.wav"
+    with wave.open(str(wav_path), "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(48000)
+        wf.writeframes(b"\x01\x02\x03\x04")
+
+    player = AudioPlayer(output_device_name="VB-Cable Output")
+    assert player.play_wav(str(wav_path)) is True
+
+    assert _patch_pyaudio.open_calls[-1]["channels"] == 2
+    assert _patch_pyaudio._stream.write_calls == [
+        b"\x01\x02\x01\x02\x03\x04\x03\x04"
+    ]
+
+
+def test_invalid_sample_rate_error_has_specific_guidance(caplog):
+    """PortAudio -9997 应提示采样率问题，不能误报为设备独占。"""
+    player = AudioPlayer()
+
+    with caplog.at_level("ERROR"):
+        player._print_open_stream_error(
+            OSError(-9997, "Invalid sample rate"),
+            rate=44100,
+        )
+
+    assert "不支持 44100 Hz 采样率" in caplog.text
+    assert "独占" not in caplog.text
+
+
 # ---------------------------------------------------------------------------
 # open-time failure cleanup (shared _open_pyaudio_stream helper)
 # ---------------------------------------------------------------------------
@@ -605,7 +700,7 @@ def test_open_stream_terminates_pyaudio_when_device_not_found(monkeypatch):
         raise OSError("no default device")
 
     pa.get_default_output_device_info = _boom  # type: ignore[assignment]
-    monkeypatch.setattr("audio_player.pyaudio", MagicMock(PyAudio=lambda: pa))
+    monkeypatch.setattr("wordy.audio.player.pyaudio", MagicMock(PyAudio=lambda: pa))
 
     player = AudioPlayer()
 
@@ -623,7 +718,7 @@ def test_open_stream_terminates_pyaudio_when_p_open_raises(monkeypatch):
         raise OSError("device busy")
 
     pa.open = _boom_open  # type: ignore[assignment]
-    monkeypatch.setattr("audio_player.pyaudio", MagicMock(PyAudio=lambda: pa))
+    monkeypatch.setattr("wordy.audio.player.pyaudio", MagicMock(PyAudio=lambda: pa))
 
     player = AudioPlayer()
 
@@ -641,7 +736,7 @@ def test_play_wav_terminates_pyaudio_and_closes_wave_when_device_not_found(monke
         raise OSError("no default device")
 
     pa.get_default_output_device_info = _boom  # type: ignore[assignment]
-    monkeypatch.setattr("audio_player.pyaudio", MagicMock(PyAudio=lambda: pa))
+    monkeypatch.setattr("wordy.audio.player.pyaudio", MagicMock(PyAudio=lambda: pa))
 
     wav_path = _make_tiny_wav(tmp_path)
     player = AudioPlayer()
@@ -661,7 +756,7 @@ def test_play_wav_terminates_pyaudio_when_p_open_raises(monkeypatch, tmp_path):
         raise OSError("device busy")
 
     pa.open = _boom_open  # type: ignore[assignment]
-    monkeypatch.setattr("audio_player.pyaudio", MagicMock(PyAudio=lambda: pa))
+    monkeypatch.setattr("wordy.audio.player.pyaudio", MagicMock(PyAudio=lambda: pa))
 
     wav_path = _make_tiny_wav(tmp_path)
     player = AudioPlayer()
@@ -743,8 +838,8 @@ def test_list_output_devices_skips_devices_whose_info_lookup_raises(monkeypatch)
     returning the remaining successfully-queried output devices.
     """
     pa = FakePartiallyFailingPyAudio(failing_indices={1})
-    monkeypatch.setattr("audio_player.pyaudio", MagicMock(PyAudio=lambda: pa))
-    from audio_player import list_output_devices
+    monkeypatch.setattr("wordy.audio.player.pyaudio", MagicMock(PyAudio=lambda: pa))
+    from wordy.audio.player import list_output_devices
 
     devices = list_output_devices()
 
@@ -757,8 +852,8 @@ def test_list_output_devices_skips_devices_whose_info_lookup_raises(monkeypatch)
 def test_list_output_devices_returns_empty_when_all_lookups_raise(monkeypatch):
     """Characterization: all per-device exceptions still yield a clean empty list."""
     pa = FakePartiallyFailingPyAudio(failing_indices={0, 1, 2})
-    monkeypatch.setattr("audio_player.pyaudio", MagicMock(PyAudio=lambda: pa))
-    from audio_player import list_output_devices
+    monkeypatch.setattr("wordy.audio.player.pyaudio", MagicMock(PyAudio=lambda: pa))
+    from wordy.audio.player import list_output_devices
 
     devices = list_output_devices()
 
@@ -783,8 +878,8 @@ class FakeMalformedDevicePyAudio(FakePyAudio):
 def test_list_output_devices_skips_malformed_records_without_dropping_valid_devices(monkeypatch):
     """Malformed device records should not abort enumeration of later valid records."""
     pa = FakeMalformedDevicePyAudio()
-    monkeypatch.setattr("audio_player.pyaudio", MagicMock(PyAudio=lambda: pa))
-    from audio_player import list_output_devices
+    monkeypatch.setattr("wordy.audio.player.pyaudio", MagicMock(PyAudio=lambda: pa))
+    from wordy.audio.player import list_output_devices
 
     devices = list_output_devices()
 

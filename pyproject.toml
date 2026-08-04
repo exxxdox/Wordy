@@ -1,0 +1,33 @@
+[project]
+name = "wordy"
+version = "0.1.0"
+description = "常驻热键输入 → TTS 生成 → 播放，支持 VB-CABLE 音频路由"
+authors = [
+    { name = "tst", email = "forevertst@outlook.com" }
+]
+requires-python = "==3.12.*"
+dependencies = [
+    "cartesia[websockets]>=3.2",
+    "comtypes>=1.4.16",
+    "keyboard>=0.13.5",
+    "keyring>=24,<26",
+    "numpy>=1.24.0",
+    "pyaudio>=0.2.14",
+    "pyside6>=6.6,<7",
+    "requests>=2.34.2",
+    "sounddevice>=0.5.0",
+]
+
+[project.scripts]
+wordy = "wordy.main:main"
+
+[build-system]
+requires = ["uv_build>=0.12.1,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pyinstaller>=6.0",
+    "pyright>=1.1.411",
+    "pytest>=9.1.1",
+]

@@ -20,7 +20,7 @@ import threading
 from collections import deque
 from typing import Protocol, override
 
-from qt_lifecycle import safe_qt_call
+from wordy.qt_lifecycle import safe_qt_call
 
 
 
@@ -272,25 +272,17 @@ def install_log_stream(
     if log_handler not in target_logger.handlers:
         target_logger.addHandler(log_handler)
 
-    _register_current_log_stream(ring_buffer, broadcaster)
+    # 缓存为进程级 LogStream，供 tray log viewer 通过 current_log_stream() 获取
+    global _current_log_stream
+    cached = _current_log_stream
+    if cached is None or cached.buffer is not ring_buffer or cached.broadcaster is not broadcaster:
+        _current_log_stream = LogStream(buffer=ring_buffer, broadcaster=broadcaster)
 
     return broadcaster
 
 
 class LogStream:
-    """GUI-facing log stream adapter.
-
-    Owns (or shares) a :class:`LogRingBuffer` plus a Qt broadcaster so the
-    tray log window can subscribe via :meth:`attach` and receive both
-    buffered snapshots and live updates. Direct GUI-thread writes go
-    through :meth:`write`, which fans the message out to the buffer and
-    the broadcaster signal.
-
-    When ``buffer`` and ``broadcaster`` are supplied, the stream shares
-    them with an external :class:`RingBufferQtHandler` so stdlib logging
-    records routed through that handler appear in attached views without
-    creating a second pipeline.
-    """
+    """GUI-facing log stream adapter: buffer + Qt broadcaster shared with RingBufferQtHandler."""
 
     def __init__(
         self,
@@ -362,31 +354,6 @@ __all__ = [
 
 
 _current_log_stream: LogStream | None = None
-
-
-def _register_current_log_stream(
-    buffer: LogRingBuffer,
-    broadcaster: LogBroadcasterProtocol,
-) -> LogStream:
-    """Cache the latest installed pipeline as a process-wide ``LogStream``.
-
-    GUI consumers (such as the tray log window) can call
-    :func:`current_log_stream` to share the same buffer and broadcaster the
-    root logger feeds, so stdlib :mod:`logging` records and direct
-    ``stream.write`` calls converge on one in-memory pipeline.
-    """
-
-    global _current_log_stream
-    cached = _current_log_stream
-    if (
-        cached is not None
-        and cached.buffer is buffer
-        and cached.broadcaster is broadcaster
-    ):
-        return cached
-    stream = LogStream(buffer=buffer, broadcaster=broadcaster)
-    _current_log_stream = stream
-    return stream
 
 
 def current_log_stream() -> LogStream | None:
