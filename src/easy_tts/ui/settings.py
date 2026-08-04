@@ -108,6 +108,8 @@ class SettingsWindow:
         self.vb_cable_install_button: QPushButton = QPushButton()
         self._input_device_names: list[str] = []
         self._output_device_names: list[str] = []
+        # TTS 服务商专属设置容器（左绿线缩进，包含 API Key / 生成模式 / 音色）
+        self._tts_provider_container: QFrame | None = None
 
         parent = root if isinstance(root, QWidget) else None
         self.window: _SettingsDialog | None = _SettingsDialog(self, parent)
@@ -289,15 +291,23 @@ class SettingsWindow:
         self._build_audio_route_section(route_layout, state)
         route_layout.addStretch(1)
 
-        # 3. TTS 设置（含 API 选择 + Cartesia 子项）
+        # 3. TTS 设置（服务商选择 + 专属配置容器）
         tts_layout = self._create_tab_page(tab_widget, "TTS 设置")
         self._build_tts_api_section(tts_layout)
         self._add_inner_gap(tts_layout)
-        self._build_api_key_section(tts_layout, state)
-        self._add_inner_gap(tts_layout)
-        self._build_backend_section(tts_layout)
-        self._add_inner_gap(tts_layout)
-        self._build_voice_section(tts_layout, state)
+        # 服务商专属设置容器：左侧绿色强调线 + 微浅底色，视觉缩进体现层级
+        self._tts_provider_container = QFrame()
+        self._tts_provider_container.setObjectName("ttsProviderContainer")
+        provider_layout = QVBoxLayout(self._tts_provider_container)
+        provider_layout.setContentsMargins(16, 12, 16, 4)
+        provider_layout.setSpacing(0)
+        self._build_api_key_section(provider_layout, state)
+        self._add_inner_gap(provider_layout)
+        self._build_backend_section(provider_layout)
+        self._add_inner_gap(provider_layout)
+        self._build_voice_section(provider_layout, state)
+        provider_layout.addStretch(1)
+        tts_layout.addWidget(self._tts_provider_container)
         tts_layout.addStretch(1)
 
         # 4. 日志
@@ -399,15 +409,16 @@ class SettingsWindow:
 
     def _build_tts_api_section(self, parent_layout: QVBoxLayout) -> None:
         section = self._create_section(parent_layout)
-        section.addWidget(self._section_title("TTS API"))
+        section.addWidget(self._section_title("TTS 服务商"))
         self.tts_api_combo = NoWheelComboBox()
         self.tts_api_combo.setSizeAdjustPolicy(QComboBox.AdjustToContentsOnFirstShow)
         self.tts_api_combo.setMinimumContentsLength(24)
         self.tts_api_combo.view().setTextElideMode(Qt.TextElideMode.ElideRight)
         self.tts_api_combo.addItems(["Cartesia"])
         self.tts_api_combo.setCurrentIndex(0)
+        self.tts_api_combo.currentTextChanged.connect(self._on_tts_api_selected)
         section.addWidget(self.tts_api_combo)
-        section.addWidget(self._hint_label("选择 TTS 服务商。当前仅支持 Cartesia。", TEXT_MUTED))
+        section.addWidget(self._hint_label("选择 TTS 服务商，下方设置区同步切换。", TEXT_MUTED))
 
     def _build_audio_output_section(self, parent_layout: QVBoxLayout, state: SettingsState) -> None:
         section = self._create_section(parent_layout)
@@ -660,6 +671,11 @@ class SettingsWindow:
 
     def _on_tts_backend_selected(self, backend: str) -> None:
         self.pending_tts_backend = backend
+
+    def _on_tts_api_selected(self, provider: str) -> None:
+        """TTS 服务商切换：显示/隐藏对应专属设置容器。"""
+        if self._tts_provider_container is not None:
+            self._tts_provider_container.setVisible(provider == "Cartesia")
 
     def _on_log_level_selected(self, log_level: str) -> None:
         self.pending_log_level = log_level if log_level in LOG_LEVELS else "INFO"

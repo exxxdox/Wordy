@@ -153,6 +153,11 @@ def build_settings_stylesheet() -> str:
             background: {SEPARATOR_COLOR};
             border: none;
         }}
+        QFrame#ttsProviderContainer {{
+            border: 1px solid {BUTTON_GHOST_BORDER};
+            background: {ELEVATED_BG};
+            border-radius: 8px;
+        }}
         QPushButton {{
             background: {BUTTON_BG};
             color: {TEXT_PRIMARY};
