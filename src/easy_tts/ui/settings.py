@@ -71,6 +71,7 @@ class SettingsWindow:
         self.pending_audio_routing_enabled = state.audio_routing_enabled
         self.pending_mic_input_device = state.mic_input_device
         self.pending_virtual_output_device = state.virtual_output_device
+        self.pending_sidetone_enabled = state.sidetone_enabled
         self.cartesia_api_key_saved = state.cartesia_api_key_saved
         self._audio_output_label_to_identity: dict[str, AudioOutputIdentity] = {}
         self._audio_output_devices_error: Exception | None = None
@@ -181,6 +182,7 @@ class SettingsWindow:
             audio_routing_enabled=self.pending_audio_routing_enabled,
             mic_input_device=self.pending_mic_input_device,
             virtual_output_device=self.pending_virtual_output_device,
+            sidetone_enabled=self.pending_sidetone_enabled,
         )
 
     def set_recording_started(self) -> None:
@@ -510,6 +512,16 @@ class SettingsWindow:
             TEXT_MUTED,
         ))
 
+        # 返听开关 —— TTS 同步输出到系统默认扬声器/耳机，路由开启后自己也能听到
+        self.sidetone_enabled_check = CheckmarkCheckBox("返听（TTS 同步输出到默认设备）")
+        self.sidetone_enabled_check.setChecked(state.sidetone_enabled)
+        self.sidetone_enabled_check.stateChanged.connect(self._on_sidetone_enabled_changed)
+        section.addWidget(self.sidetone_enabled_check)
+        section.addWidget(self._hint_label(
+            "TTS 播放时同步在扬声器/耳机中播放，方便路由启用后自己能听到。",
+            TEXT_MUTED,
+        ))
+
         # 麦克风选择（配置 Windows 侦听）
         section.addWidget(self._section_title("麦克风输入"))
         section.addWidget(self._hint_label(
@@ -533,6 +545,9 @@ class SettingsWindow:
             self._local_audio_output_label = self.audio_output_combo.currentText()
         self.pending_audio_routing_enabled = enabled
         self._sync_audio_output_control()
+
+    def _on_sidetone_enabled_changed(self, state: int) -> None:
+        self.pending_sidetone_enabled = state == Qt.CheckState.Checked.value
 
     def _find_routing_output_label(self) -> str | None:
         """查找路由固定使用的 Windows WASAPI CABLE Input 标签。"""

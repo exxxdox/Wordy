@@ -41,6 +41,8 @@ class SettingsState:
     vb_cable_installed: bool = False
     mic_gain: float = 1.0
     tts_gain: float = 1.0
+    # 返听 (sidetone)
+    sidetone_enabled: bool = False
 
 
 @dataclass
@@ -66,3 +68,5 @@ class PendingSettings:
     virtual_output_device: str | None = None
     mic_gain: float = 1.0
     tts_gain: float = 1.0
+    # 返听 (sidetone)
+    sidetone_enabled: bool = False

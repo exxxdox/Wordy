@@ -128,6 +128,9 @@ class AppSettings:
     mic_gain: float = 1.0
     tts_gain: float = 1.0
 
+    # ---- 返听 (sidetone) ----
+    sidetone_enabled: bool = False
+
     # ---- 内部 ----
     _loaded: bool = field(default=False, init=False, repr=False)
 
@@ -170,6 +173,7 @@ class AppSettings:
         _apply_if_present(raw, "audio_output_device_name", settings, _nonempty_str)
         _apply_if_present(raw, "audio_output_device", settings, _parse_audio_output_device)
         _apply_if_present(raw, "audio_routing_enabled", settings, lambda v: v if isinstance(v, bool) else None)
+        _apply_if_present(raw, "sidetone_enabled", settings, lambda v: v if isinstance(v, bool) else None)
 
         for dev_key in ("mic_input_device", "virtual_output_device"):
             _apply_if_present(raw, dev_key, settings, _nonempty_str)

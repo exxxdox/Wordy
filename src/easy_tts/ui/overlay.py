@@ -61,6 +61,7 @@ class InputOverlay:
         on_audio_output_change: Callable[[object], None] | None = None,
         on_cartesia_api_key_change: Callable[[str | None], None] | None = None,
         on_audio_route_change: Callable[[dict[str, object]], None] | None = None,
+        on_sidetone_change: Callable[[bool], None] | None = None,
         audio_player: object | None = None,
         width: int = 540,
         height: int = 58,
@@ -78,6 +79,7 @@ class InputOverlay:
         self.on_audio_output_change = on_audio_output_change
         self.on_cartesia_api_key_change = on_cartesia_api_key_change
         self.on_audio_route_change = on_audio_route_change
+        self.on_sidetone_change = on_sidetone_change
         self._audio_player = audio_player
         self.width = width
         self.height = height
@@ -98,6 +100,8 @@ class InputOverlay:
         self._audio_routing_enabled: bool = config.audio_routing_enabled
         self._mic_input_device: str | None = config.mic_input_device
         self._virtual_output_device: str | None = config.virtual_output_device
+        # 返听 (sidetone)
+        self._sidetone_enabled: bool = config.sidetone_enabled
         self._closed = False
         self._hotkey_listener: NativeHotkeyListener | None = None
         self._settings_window: SettingsWindow | None = None
@@ -506,6 +510,7 @@ class InputOverlay:
             mic_input_device=self._mic_input_device,
             virtual_output_device=self._virtual_output_device,
             vb_cable_installed=VBCableDriverManager.is_installed(),
+            sidetone_enabled=self._sidetone_enabled,
         )
         self._recording_hotkey = False
         self._settings_window = SettingsWindow(
@@ -715,6 +720,10 @@ class InputOverlay:
         if route_update:
             config_update.update(route_update)
 
+        # ---- 返听字段（独立于路由，单独回调） ----
+        sidetone_changed = self._collect_scalar_change(pending, config_update, "sidetone_enabled",
+                                                        local_attr="_sidetone_enabled")
+
         # ---- 持久化到 JSON ----
         if config_update:
             try:
@@ -762,6 +771,12 @@ class InputOverlay:
                     saved_messages.append(f"麦克风侦听已切换为 {self._mic_input_device}")
                 else:
                     saved_messages.append("麦克风侦听已停用")
+
+        # 返听：应用变更并通知 WavTransApp
+        if sidetone_changed:
+            self._apply_scalar_and_notify(pending, saved_messages, "sidetone_enabled", "_sidetone_enabled",
+                callback=lambda: self.on_sidetone_change and self.on_sidetone_change(self._sidetone_enabled),
+                msg=lambda: "返听已启用" if self._sidetone_enabled else "返听已禁用")
 
         # fixed_center 有额外 UI 副作用
         self._apply_scalar_and_notify(pending, saved_messages, "fixed_center", "_fixed_center",

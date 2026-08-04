@@ -156,3 +156,29 @@ class TestAudioRoutingPersistence:
         assert s2.virtual_output_device == "Test Virtual"
         assert s2.mic_gain == 1.1
         assert s2.tts_gain == 1.2
+
+    def test_sidetone_enabled_round_trip(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """返听开关保存后应能完整恢复。"""
+        config_file = tmp_path / "test_config.json"
+        monkeypatch.setattr(easy_tts.config, "USER_CONFIG_FILE", config_file)
+
+        s = AppSettings.load(config_file=config_file)
+        assert s.sidetone_enabled is False
+
+        s.update(sidetone_enabled=True, config_file=config_file)
+        s2 = AppSettings.load(config_file=config_file)
+        assert s2.sidetone_enabled is True
+
+        s2.update(sidetone_enabled=False, config_file=config_file)
+        s3 = AppSettings.load(config_file=config_file)
+        assert s3.sidetone_enabled is False
+
+    def test_sidetone_enabled_invalid_type_falls_back(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """非法类型应回退到默认值 False。"""
+        import json
+        config_file = tmp_path / "test_config.json"
+        monkeypatch.setattr(easy_tts.config, "USER_CONFIG_FILE", config_file)
+
+        config_file.write_text(json.dumps({"sidetone_enabled": "not_a_bool"}), encoding="utf-8")
+        s = AppSettings.load(config_file=config_file)
+        assert s.sidetone_enabled is False

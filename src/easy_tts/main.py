@@ -22,6 +22,7 @@ from easy_tts.config import AppSettings
 from easy_tts.audio.player import AudioPlayer, OutputDeviceSelection
 from easy_tts.audio.router import AudioRouter
 from easy_tts.audio.driver import VBCableDriverManager
+from easy_tts.audio.sidetone import SidetoneAudioPlayer
 from easy_tts.ui.overlay import InputOverlay
 from easy_tts.log import install_log_stream
 import easy_tts.secret
@@ -102,6 +103,10 @@ class WavTransApp:
         self._saved_output_device_name: str | None = None
         self._settings = AppSettings.load()
         self.player = self._create_audio_player()
+        # 返听：始终创建包装器，通过开关控制是否启用。返听播放器固定输出到系统默认设备。
+        self._sidetone_player = AudioPlayer(output_device_name=None, output_device=None)
+        self._sidetone_wrapper = SidetoneAudioPlayer(self.player, self._sidetone_player)
+        self._sidetone_wrapper.set_sidetone_enabled(self._settings.sidetone_enabled)
         self.tts_backend = resolve_tts_backend(tts_backend or self._settings.tts_backend)
         self.cartesia_api_key = self._load_cartesia_api_key()
         self.voice_id = self._settings.voice_id
@@ -127,6 +132,7 @@ class WavTransApp:
             on_audio_output_change=self._on_audio_output_change,
             on_cartesia_api_key_change=self._on_cartesia_api_key_change,
             on_audio_route_change=self._on_audio_route_change,
+            on_sidetone_change=self._on_sidetone_change,
             audio_player=self.player,
         )
 
@@ -141,10 +147,10 @@ class WavTransApp:
             raise RuntimeError("Cartesia API key 读取失败") from exc
 
     def _create_tts_engine(self) -> BackendTTSEngine:
-        """按当前配置创建 TTS 引擎。"""
+        """按当前配置创建 TTS 引擎。引擎始终使用返听包装器（开关控制是否实际输出）。"""
         return create_tts_engine(
             self.tts_backend,
-            self.player,
+            self._sidetone_wrapper,
             api_key=self.cartesia_api_key,
             voice_id=self.voice_id,
             volume=self.volume,
@@ -262,6 +268,12 @@ class WavTransApp:
             self._router = None
             self._disable_routing()
             logger.info("音频路由已禁用")
+
+    def _on_sidetone_change(self, enabled: bool) -> None:
+        """切换返听：更新包装器开关并重建音频流。"""
+        self._sidetone_wrapper.set_sidetone_enabled(enabled)
+        self.tts_engine.reset_audio_output()
+        logger.info("返听%s", "已启用" if enabled else "已禁用")
 
     @staticmethod
     def _create_tts_executor() -> ThreadPoolExecutor:
