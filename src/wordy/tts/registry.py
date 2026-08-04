@@ -4,12 +4,19 @@
 """TTS 后端注册表和工厂。"""
 
 from .cartesia import CartesiaBytesTTS, CartesiaRealtimeTTS
-from .constants import DEFAULT_TTS_BACKEND, TTS_BACKEND_CARTESIA_BYTES, TTS_BACKEND_CARTESIA_REALTIME
+from .constants import (
+    DEFAULT_TTS_BACKEND,
+    TTS_BACKEND_CARTESIA_BYTES,
+    TTS_BACKEND_CARTESIA_REALTIME,
+    TTS_BACKEND_VOLCENGINE_STREAMING,
+)
 from .engine import BackendTTSEngine, TTSAudioPlayer
+from .volcengine import VolcengineStreamingTTS
 
 TTS_ENGINE_REGISTRY = {
     TTS_BACKEND_CARTESIA_BYTES: CartesiaBytesTTS,
     TTS_BACKEND_CARTESIA_REALTIME: CartesiaRealtimeTTS,
+    TTS_BACKEND_VOLCENGINE_STREAMING: VolcengineStreamingTTS,
 }
 
 
@@ -28,8 +35,20 @@ def create_tts_engine(
     api_key: str | None,
     voice_id: str | None = None,
     volume: float = 1.0,
+    volcengine_access_key: str | None = None,
 ) -> BackendTTSEngine:
     """按后端配置创建 TTS 引擎。"""
     backend = resolve_tts_backend(backend)
     engine_cls = TTS_ENGINE_REGISTRY[backend]
+
+    # Volcengine：用 volcengine_access_key 作为主 api_key（X-Api-Key 鉴权）
+    if backend == TTS_BACKEND_VOLCENGINE_STREAMING:
+        return engine_cls(
+            audio_player,
+            api_key=volcengine_access_key or api_key,
+            access_key=volcengine_access_key,
+            voice_id=voice_id,
+            volume=volume,
+        )
+
     return engine_cls(audio_player, api_key=api_key, voice_id=voice_id, volume=volume)

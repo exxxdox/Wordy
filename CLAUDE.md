@@ -7,6 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 + 新项目，不考虑兼容旧接口或数据格式，直接删除旧的增加新的
 + 修改符号时用 LSP 查找引用
 + TDD：新增/修改功能先写或修改测试
++ 所有设置页面的内容都要持久化保存
 
 ## 常用命令
 
@@ -72,6 +73,10 @@ driver.py(VBCableDriverManager) → config.py(AppSettings) → main.py(生命周
 ## TTS Worker 生命周期
 
 `WordyApp` 持有 `_TTSWorker`（单线程 `ThreadPoolExecutor` + `BackendTTSEngine`）。切换后端/API key 时旧 worker 入队 `_RetiredWorker` 到 janitor 线程异步关闭（先 `executor.shutdown` 再 `engine.close`），避免阻塞 UI。新 worker 立即可用。
+
+## 新增 TTS 引擎注意事项
+
+- **PCM 格式匹配**：Volcengine SSE 返回 `pcm_s16le`（base64 编码），PyAudio 流**必须**用 `pyaudio.paInt16` 打开。不要复用 Cartesia 的 CABLE/非CABLE 的 float32/int16 分支——Cartesia 可切换输出编码，但固定编码的引擎必须硬编码正确的 PyAudio format。
 
 ## 测试注意事项
 

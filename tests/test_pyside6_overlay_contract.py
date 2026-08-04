@@ -75,11 +75,11 @@ def _import_input_overlay(monkeypatch: pytest.MonkeyPatch):
     _test_settings = AppSettings()
     _test_settings.hotkey = _CONFIG["hotkey"]
     _test_settings.name = _CONFIG["name"]
-    _test_settings.voice_id = _CONFIG["voice_id"]
-    _test_settings.voice_name = _CONFIG["voice_name"]
+    _test_settings.cartesia_voice_id = _CONFIG["voice_id"]
+    _test_settings.cartesia_voice_name = _CONFIG["voice_name"]
     _test_settings.volume = _CONFIG["volume"]
     _test_settings.overlay_opacity = _CONFIG["overlay_opacity"]
-    _test_settings.tts_backend = _CONFIG["tts_backend"]
+    _test_settings.cartesia_tts_backend = _CONFIG["tts_backend"]
     _test_settings.fixed_center = _CONFIG["fixed_center"]
     monkeypatch.setattr(AppSettings, "load", lambda **kw: _test_settings)
     monkeypatch.setattr(AppSettings, "update", lambda self, **kw: Path("/tmp/wavtrans-test-config.json"))
@@ -358,11 +358,11 @@ def test_overlay_apply_persists_audio_output_device_name_and_invokes_callback(
     class _FakePending:
         hotkey = overlay._hotkey
         hotkey_name = overlay._hotkey_name
-        voice_id = overlay._voice_id
-        voice_name = overlay._voice_name
+        voice_id = overlay._cartesia_voice_id
+        voice_name = overlay._cartesia_voice_name
         volume = overlay._volume
         overlay_opacity = overlay._overlay_opacity
-        tts_backend = overlay._tts_backend
+        tts_backend = overlay._cartesia_tts_backend
         fixed_center = overlay._fixed_center
         audio_output_device_name = "VB-Audio Virtual Cable"
 
@@ -425,11 +425,11 @@ def test_overlay_apply_clears_audio_output_device_name_to_none(
     class _FakePending:
         hotkey = overlay._hotkey
         hotkey_name = overlay._hotkey_name
-        voice_id = overlay._voice_id
-        voice_name = overlay._voice_name
+        voice_id = overlay._cartesia_voice_id
+        voice_name = overlay._cartesia_voice_name
         volume = overlay._volume
         overlay_opacity = overlay._overlay_opacity
-        tts_backend = overlay._tts_backend
+        tts_backend = overlay._cartesia_tts_backend
         fixed_center = overlay._fixed_center
         audio_output_device_name = None
 
@@ -495,11 +495,11 @@ def test_overlay_apply_success_uses_inline_status_without_information_popup(
     class _FakePending:
         hotkey = overlay._hotkey
         hotkey_name = overlay._hotkey_name
-        voice_id = overlay._voice_id
-        voice_name = overlay._voice_name
+        voice_id = overlay._cartesia_voice_id
+        voice_name = overlay._cartesia_voice_name
         volume = 0.75
         overlay_opacity = overlay._overlay_opacity
-        tts_backend = overlay._tts_backend
+        tts_backend = overlay._cartesia_tts_backend
         fixed_center = overlay._fixed_center
         audio_output_device_name = getattr(overlay, "_audio_output_device_name", None)
 
@@ -633,11 +633,11 @@ def test_overlay_apply_persists_structured_audio_output_device_and_invokes_callb
     class _FakePending:
         hotkey = overlay._hotkey
         hotkey_name = overlay._hotkey_name
-        voice_id = overlay._voice_id
-        voice_name = overlay._voice_name
+        voice_id = overlay._cartesia_voice_id
+        voice_name = overlay._cartesia_voice_name
         volume = overlay._volume
         overlay_opacity = overlay._overlay_opacity
-        tts_backend = overlay._tts_backend
+        tts_backend = overlay._cartesia_tts_backend
         fixed_center = overlay._fixed_center
         # New structured field; legacy bare-name field kept for back-compat surface.
         audio_output_device = {"name": "Speakers (Realtek)", "host_api_name": "WASAPI"}
@@ -731,11 +731,11 @@ def test_overlay_apply_clears_structured_audio_output_device_to_none(
     class _FakePending:
         hotkey = overlay._hotkey
         hotkey_name = overlay._hotkey_name
-        voice_id = overlay._voice_id
-        voice_name = overlay._voice_name
+        voice_id = overlay._cartesia_voice_id
+        voice_name = overlay._cartesia_voice_name
         volume = overlay._volume
         overlay_opacity = overlay._overlay_opacity
-        tts_backend = overlay._tts_backend
+        tts_backend = overlay._cartesia_tts_backend
         fixed_center = overlay._fixed_center
         audio_output_device = None
         audio_output_device_name = None
@@ -833,11 +833,11 @@ def test_overlay_apply_saves_cartesia_api_key_when_action_set(
     class _FakePending:
         hotkey = overlay._hotkey
         hotkey_name = overlay._hotkey_name
-        voice_id = overlay._voice_id
-        voice_name = overlay._voice_name
+        voice_id = overlay._cartesia_voice_id
+        voice_name = overlay._cartesia_voice_name
         volume = overlay._volume
         overlay_opacity = overlay._overlay_opacity
-        tts_backend = overlay._tts_backend
+        tts_backend = overlay._cartesia_tts_backend
         fixed_center = overlay._fixed_center
         audio_output_device_name = getattr(overlay, "_audio_output_device_name", None)
         cartesia_api_key_action = "set"
@@ -948,11 +948,11 @@ def test_overlay_apply_does_not_touch_secret_store_when_action_unchanged(
     class _FakePending:
         hotkey = overlay._hotkey
         hotkey_name = overlay._hotkey_name
-        voice_id = overlay._voice_id
-        voice_name = overlay._voice_name
+        voice_id = overlay._cartesia_voice_id
+        voice_name = overlay._cartesia_voice_name
         volume = overlay._volume
         overlay_opacity = overlay._overlay_opacity
-        tts_backend = overlay._tts_backend
+        tts_backend = overlay._cartesia_tts_backend
         fixed_center = overlay._fixed_center
         audio_output_device_name = getattr(overlay, "_audio_output_device_name", None)
         cartesia_api_key_action = "unchanged"
@@ -1028,11 +1028,11 @@ def test_overlay_apply_clears_cartesia_api_key_when_action_clear(
     class _FakePending:
         hotkey = overlay._hotkey
         hotkey_name = overlay._hotkey_name
-        voice_id = overlay._voice_id
-        voice_name = overlay._voice_name
+        voice_id = overlay._cartesia_voice_id
+        voice_name = overlay._cartesia_voice_name
         volume = overlay._volume
         overlay_opacity = overlay._overlay_opacity
-        tts_backend = overlay._tts_backend
+        tts_backend = overlay._cartesia_tts_backend
         fixed_center = overlay._fixed_center
         audio_output_device_name = getattr(overlay, "_audio_output_device_name", None)
         cartesia_api_key_action = "clear"
@@ -1122,11 +1122,11 @@ def test_overlay_apply_cartesia_plaintext_fallback_shows_warning(
     class _FakePending:
         hotkey = overlay._hotkey
         hotkey_name = overlay._hotkey_name
-        voice_id = overlay._voice_id
-        voice_name = overlay._voice_name
+        voice_id = overlay._cartesia_voice_id
+        voice_name = overlay._cartesia_voice_name
         volume = overlay._volume
         overlay_opacity = overlay._overlay_opacity
-        tts_backend = overlay._tts_backend
+        tts_backend = overlay._cartesia_tts_backend
         fixed_center = overlay._fixed_center
         audio_output_device_name = getattr(overlay, "_audio_output_device_name", None)
         cartesia_api_key_action = "set"
@@ -1224,11 +1224,11 @@ def test_overlay_apply_cartesia_set_reports_rebuild_callback_failure_inline(
     class _FakePending:
         hotkey = overlay._hotkey
         hotkey_name = overlay._hotkey_name
-        voice_id = overlay._voice_id
-        voice_name = overlay._voice_name
+        voice_id = overlay._cartesia_voice_id
+        voice_name = overlay._cartesia_voice_name
         volume = overlay._volume
         overlay_opacity = overlay._overlay_opacity
-        tts_backend = overlay._tts_backend
+        tts_backend = overlay._cartesia_tts_backend
         fixed_center = overlay._fixed_center
         audio_output_device_name = getattr(overlay, "_audio_output_device_name", None)
         cartesia_api_key_action = "set"
@@ -1325,11 +1325,11 @@ def test_overlay_apply_cartesia_clear_reports_rebuild_callback_failure_inline(
     class _FakePending:
         hotkey = overlay._hotkey
         hotkey_name = overlay._hotkey_name
-        voice_id = overlay._voice_id
-        voice_name = overlay._voice_name
+        voice_id = overlay._cartesia_voice_id
+        voice_name = overlay._cartesia_voice_name
         volume = overlay._volume
         overlay_opacity = overlay._overlay_opacity
-        tts_backend = overlay._tts_backend
+        tts_backend = overlay._cartesia_tts_backend
         fixed_center = overlay._fixed_center
         audio_output_device_name = getattr(overlay, "_audio_output_device_name", None)
         cartesia_api_key_action = "clear"

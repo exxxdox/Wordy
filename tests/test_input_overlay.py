@@ -110,11 +110,15 @@ def _new_apply_overlay(module: ModuleType) -> object:
     overlay = module.InputOverlay.__new__(module.InputOverlay)
     overlay._hotkey = "f6"
     overlay._hotkey_name = "F6"
-    overlay._voice_id = "voice-a"
-    overlay._voice_name = "Voice A"
+    overlay._tts_api_provider = "Cartesia"
+    overlay._cartesia_voice_id = "voice-a"
+    overlay._cartesia_voice_name = "Voice A"
+    overlay._cartesia_tts_backend = "cartesia-bytes"
+    overlay._volcengine_voice_id = None
+    overlay._volcengine_voice_name = None
+    overlay._volcengine_tts_backend = "Volcengine Bytes"
     overlay._volume = 1.0
     overlay._overlay_opacity = 1.0
-    overlay._tts_backend = "cartesia-bytes"
     overlay._log_level = "INFO"
     overlay._fixed_center = True
     overlay._audio_output_device_name = None
@@ -137,16 +141,20 @@ def _pending_settings(overlay: object, **overrides: object) -> object:
     class Pending:
         hotkey = overlay._hotkey
         hotkey_name = overlay._hotkey_name
-        voice_id = overlay._voice_id
-        voice_name = overlay._voice_name
+        voice_id = overlay._get_active_voice_id()
+        voice_name = overlay._get_active_voice_name()
         volume = overlay._volume
         overlay_opacity = overlay._overlay_opacity
-        tts_backend = overlay._tts_backend
+        tts_backend = overlay._get_active_tts_backend()
         log_level = overlay._log_level
         fixed_center = overlay._fixed_center
         audio_output_device_name = overlay._audio_output_device_name
         cartesia_api_key_action = "unchanged"
         cartesia_api_key_value = None
+        volcengine_access_key_action = "unchanged"
+        volcengine_access_key_value = None
+        tts_api_provider = "Cartesia"
+        volcengine_app_id = None
 
     pending = Pending()
     for name, value in overrides.items():
@@ -421,7 +429,7 @@ def test_apply_oserror_rolls_back_hotkey_and_prevents_mutation(monkeypatch: pyte
     assert overlay._hotkey == "f6"
     assert overlay._hotkey_name == "F6"
     assert overlay._volume == 1.0
-    assert overlay._voice_id == "voice-a"
+    assert overlay._cartesia_voice_id == "voice-a"
     assert window.status_calls == []
 
 

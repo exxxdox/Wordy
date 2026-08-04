@@ -17,6 +17,12 @@ from PySide6.QtWidgets import QApplication, QLabel, QLineEdit, QMessageBox
 
 import wordy.secret
 from wordy.config import AppSettings, display_hotkey, get_active_config_file
+from wordy.tts.constants import (
+    TTS_API_PROVIDER_CARTESIA,
+    TTS_API_PROVIDER_VOLCENGINE,
+    TTS_BACKEND_VOLCENGINE_STREAMING,
+    TTS_BACKENDS_BY_PROVIDER,
+)
 from wordy.audio.capture import AudioCapture
 from wordy.identity import normalize_identity
 from wordy.audio.driver import VBCableDriverManager
@@ -60,6 +66,8 @@ class InputOverlay:
         on_fetch_voices: Callable[[], list[VoiceInfo]] | None = None,
         on_audio_output_change: Callable[[object], None] | None = None,
         on_cartesia_api_key_change: Callable[[str | None], None] | None = None,
+        on_tts_api_provider_change: Callable[[str], None] | None = None,
+        on_volcengine_credentials_change: Callable[[str | None], None] | None = None,
         on_audio_route_change: Callable[[dict[str, object]], None] | None = None,
         on_sidetone_change: Callable[[bool], None] | None = None,
         audio_player: object | None = None,
@@ -78,6 +86,8 @@ class InputOverlay:
         self.on_fetch_voices = on_fetch_voices
         self.on_audio_output_change = on_audio_output_change
         self.on_cartesia_api_key_change = on_cartesia_api_key_change
+        self.on_tts_api_provider_change = on_tts_api_provider_change
+        self.on_volcengine_credentials_change = on_volcengine_credentials_change
         self.on_audio_route_change = on_audio_route_change
         self.on_sidetone_change = on_sidetone_change
         self._audio_player = audio_player
@@ -86,11 +96,16 @@ class InputOverlay:
         self.poll_interval_ms = poll_interval_ms
         self._hotkey = config.hotkey
         self._hotkey_name = config.name
-        self._voice_id = config.voice_id
-        self._voice_name = config.voice_name
         self._volume = config.volume
         self._overlay_opacity = config.overlay_opacity
-        self._tts_backend = config.tts_backend
+        self._tts_api_provider = getattr(config, "tts_api_provider", "Cartesia")
+        # 按 provider 独立存储音色和 backend
+        self._cartesia_voice_id: str | None = getattr(config, "cartesia_voice_id", None) or getattr(config, "voice_id", None)
+        self._cartesia_voice_name: str | None = getattr(config, "cartesia_voice_name", None) or getattr(config, "voice_name", None)
+        self._cartesia_tts_backend: str = getattr(config, "cartesia_tts_backend", None) or config.tts_backend
+        self._volcengine_voice_id: str | None = getattr(config, "volcengine_voice_id", None)
+        self._volcengine_voice_name: str | None = getattr(config, "volcengine_voice_name", None)
+        self._volcengine_tts_backend: str = getattr(config, "volcengine_tts_backend", None) or TTS_BACKEND_VOLCENGINE_STREAMING
         self._log_level = config.log_level
         self._fixed_center = config.fixed_center
         self._window_position: WindowPosition | None = config.window_position
@@ -107,9 +122,12 @@ class InputOverlay:
         self._settings_window: SettingsWindow | None = None
         self._ignore_focus_out = False
         self._recording_hotkey = False
-        self._voices_cache: list[VoiceInfo] = []
+        # 按 provider 独立的音色缓存
+        self._cartesia_voices_cache: list[VoiceInfo] = []
+        self._volcengine_voices_cache: list[VoiceInfo] = []
         self._voices_loading = False
         self._voice_fetch_error: Exception | None = None
+        self._voices_started = False
         self._outside_click_watcher_running = False
         self._outside_mouse_down = False
         self._drag_start_mouse_x = 0
@@ -125,9 +143,50 @@ class InputOverlay:
         self.entry: QLineEdit | None = None
         self.settings_icon: QLabel | None = None
         self._outside_click_timer: QTimer | None = None
-        self._voices_started = False
         self._pre_stop_hook: Callable[[], None] | None = None
         self._event_loop_started = False
+
+    # ── 按当前 provider 路由音色/backend 状态 ──────────────────────────
+
+    def _get_active_voice_id(self) -> str | None:
+        """返回当前服务商的音色 ID。"""
+        if self._tts_api_provider == TTS_API_PROVIDER_VOLCENGINE:
+            return self._volcengine_voice_id
+        return self._cartesia_voice_id
+
+    def _get_active_voice_name(self) -> str | None:
+        """返回当前服务商的音色名称。"""
+        if self._tts_api_provider == TTS_API_PROVIDER_VOLCENGINE:
+            return self._volcengine_voice_name
+        return self._cartesia_voice_name
+
+    def _get_active_tts_backend(self) -> str:
+        """返回当前服务商的默认生成模式。"""
+        if self._tts_api_provider == TTS_API_PROVIDER_VOLCENGINE:
+            return self._volcengine_tts_backend
+        return self._cartesia_tts_backend
+
+    def _get_active_voices_cache(self) -> list[VoiceInfo]:
+        """返回当前服务商的音色缓存。"""
+        if self._tts_api_provider == TTS_API_PROVIDER_VOLCENGINE:
+            return self._volcengine_voices_cache
+        return self._cartesia_voices_cache
+
+    def _set_active_voice(self, voice_id: str | None, voice_name: str | None) -> None:
+        """设置当前服务商的音色。"""
+        if self._tts_api_provider == TTS_API_PROVIDER_VOLCENGINE:
+            self._volcengine_voice_id = voice_id
+            self._volcengine_voice_name = voice_name
+        else:
+            self._cartesia_voice_id = voice_id
+            self._cartesia_voice_name = voice_name
+
+    def _set_active_voices_cache(self, voices: list[VoiceInfo]) -> None:
+        """设置当前服务商的音色缓存。"""
+        if self._tts_api_provider == TTS_API_PROVIDER_VOLCENGINE:
+            self._volcengine_voices_cache = voices
+        else:
+            self._cartesia_voices_cache = voices
 
     @staticmethod
     def _init_audio_output_device(config: AppSettings) -> dict[str, object] | None:
@@ -487,23 +546,37 @@ class InputOverlay:
         except Exception as error:  # pragma: no cover - defensive
             logger.warning("读取 Cartesia API Key 状态失败: %s", error)
             cartesia_api_key_saved = False
+        try:
+            volc_status = wordy.secret.get_volcengine_storage_status()
+            volcengine_access_key_saved = bool(volc_status.has_key)
+        except Exception as error:
+            logger.warning("读取 Volcengine Access Key 状态失败: %s", error)
+            volcengine_access_key_saved = False
+        # 按当前 provider 取对应的音色/backend/缓存
+        active_voice_id = self._get_active_voice_id()
+        active_voice_name = self._get_active_voice_name()
+        active_tts_backend = self._get_active_tts_backend()
+        active_voices_cache = self._get_active_voices_cache()
+
         state = SettingsState(
             hotkey=self._hotkey,
             hotkey_name=self._hotkey_name,
-            voice_id=self._voice_id,
-            voice_name=self._voice_name,
+            voice_id=active_voice_id,
+            voice_name=active_voice_name,
             volume=self._volume,
-            tts_backend=self._tts_backend,
+            tts_backend=active_tts_backend,
             fixed_center=self._fixed_center,
             overlay_opacity=self._overlay_opacity,
-            voices_cache=self._voices_cache,
+            voices_cache=active_voices_cache,
             voices_loading=self._voices_loading,
             voice_fetch_error=self._voice_fetch_error,
             audio_output_devices=audio_output_devices,
             audio_output_device_name=self._audio_output_device_name,
             audio_output_device_identity=dict(self._audio_output_device) if self._audio_output_device is not None else None,
             audio_output_devices_error=audio_output_devices_error,
+            tts_api_provider=self._tts_api_provider,
             cartesia_api_key_saved=cartesia_api_key_saved,
+            volcengine_access_key_saved=volcengine_access_key_saved,
             log_level=self._log_level,
             audio_routing_enabled=self._audio_routing_enabled,
             input_devices=self._enumerate_input_devices(),
@@ -633,10 +706,20 @@ class InputOverlay:
         settings.set_record_result(hotkey, display_hotkey(hotkey))
 
     def _start_load_voices(self, show_status: bool = True) -> None:
+        """后台加载音色列表。如果设置窗口中选中的服务商与当前活跃服务商不一致，提示用户先应用设置。"""
         if self._voices_loading:
             return
-        self._voices_loading = True
+        # 检查设置窗口中是否有未应用的服务商切换
         settings = self._active_settings_window()
+        if settings is not None:
+            pending_provider = getattr(settings, "pending_tts_api_provider", None)
+            if pending_provider and pending_provider != self._tts_api_provider:
+                if show_status:
+                    settings.set_voices_error(
+                        f"请先应用设置切换到 {pending_provider}，再刷新音色列表"
+                    )
+                return
+        self._voices_loading = True
         if show_status and settings is not None:
             settings.set_voices_loading()
         threading.Thread(target=self._load_voices_worker, daemon=True).start()
@@ -659,13 +742,14 @@ class InputOverlay:
     def _finish_load_voices(self, voices: object) -> None:
         self._voices_loading = False
         if isinstance(voices, list) and all(isinstance(voice, dict) for voice in voices):
-            self._voices_cache = [dict(voice) for voice in voices]
+            self._set_active_voices_cache([dict(voice) for voice in voices])
         else:
-            self._voices_cache = []
+            self._set_active_voices_cache([])
         self._voice_fetch_error = None
         settings = self._active_settings_window()
         if settings is not None:
-            settings.set_voices_loaded(self._voices_cache, self._voice_id)
+            active_cache = self._get_active_voices_cache()
+            settings.set_voices_loaded(active_cache, self._get_active_voice_id())
 
     def _finish_load_voices_error(self, error: object) -> None:
         self._voices_loading = False
@@ -705,11 +789,11 @@ class InputOverlay:
                 config_update["window_position"] = pending_window_position
 
         # ---- 简单标量字段：compare → 存 config_update  ----
-        self._collect_scalar_change(pending, config_update, "voice_id")
-        self._collect_scalar_change(pending, config_update, "voice_name")
+        # voice/backend 按 provider 分流到不同 config key
+        self._collect_per_provider_voice(pending, config_update)
+        self._collect_per_provider_backend(pending, config_update)
         self._collect_scalar_change(pending, config_update, "volume")
         self._collect_scalar_change(pending, config_update, "overlay_opacity")
-        self._collect_scalar_change(pending, config_update, "tts_backend")
         self._collect_scalar_change(pending, config_update, "log_level")
         self._collect_scalar_change(pending, config_update, "fixed_center")
 
@@ -740,19 +824,16 @@ class InputOverlay:
             saved_messages.append(f"全局快捷键已更新为 {pending.hotkey_name}")
             settings.current_label.setText(f"当前快捷键：{pending.hotkey_name}")
 
-        self._apply_scalar_and_notify(pending, saved_messages, "voice_id", "_voice_id",
-            callback=lambda: self.on_voice_change and self.on_voice_change(self._voice_id, self._voice_name or ""),
-            msg=lambda: f"音色已更新为 {self._voice_name}")
-        self._apply_scalar_and_notify(pending, saved_messages, "voice_name", "_voice_name")
+        # 音色：按当前 provider 写入对应属性
+        self._apply_per_provider_voice(pending, saved_messages)
         self._apply_scalar_and_notify(pending, saved_messages, "volume", "_volume",
             callback=lambda: self.on_volume_change and self.on_volume_change(self._volume),
             msg=lambda: f"音量已更新为 {self._volume:.2f}x")
         self._apply_scalar_and_notify(pending, saved_messages, "overlay_opacity", "_overlay_opacity",
             side_effect=lambda: self.root is not None and self.root.set_overlay_opacity(self._overlay_opacity),
             msg=lambda: f"输入框透明度已更新为 {round(self._overlay_opacity * 100)}%")
-        self._apply_scalar_and_notify(pending, saved_messages, "tts_backend", "_tts_backend",
-            callback=lambda: self.on_tts_backend_change and self.on_tts_backend_change(self._tts_backend),
-            msg=lambda: f"模式已切换为 {self._tts_backend}")
+        # 生成模式：按当前 provider 写入对应属性
+        self._apply_per_provider_backend(pending, saved_messages)
         self._apply_scalar_and_notify(pending, saved_messages, "log_level", "_log_level",
             side_effect=lambda: logging.getLogger().setLevel(getattr(logging, self._log_level, logging.INFO)),
             msg=lambda: f"日志显示等级已切换为 {self._log_level}")
@@ -793,6 +874,34 @@ class InputOverlay:
 
         self._apply_cartesia_api_key_change(pending, saved_messages)
 
+        # Volcengine 凭据变更
+        self._apply_volcengine_credentials_change(pending, saved_messages)
+
+        # TTS 服务商切换（persist + callback）
+        tts_provider_changed = self._collect_scalar_change(pending, config_update, "tts_api_provider",
+                                                           local_attr="_tts_api_provider")
+        # 需要在 config_update 持久化前设置运行时状态
+        if tts_provider_changed:
+            self._tts_api_provider = pending.tts_api_provider
+
+        # 持久化 tts_api_provider
+        if tts_provider_changed:
+            try:
+                AppSettings.load().update(**config_update)
+            except OSError as e:
+                QMessageBox.critical(settings.window, "保存失败", f"无法保存设置：{e}")
+                return
+
+        # 服务商变更通知 main.py（持久化成功后再回调）
+        if tts_provider_changed and self.on_tts_api_provider_change is not None:
+            try:
+                self.on_tts_api_provider_change(self._tts_api_provider)
+            except Exception:
+                logger.exception("TTS 服务商切换回调失败")
+                saved_messages.append("TTS 服务商切换失败")
+            else:
+                saved_messages.append(f"TTS 服务商已切换为 {self._tts_api_provider}")
+
         # ---- 最终状态 ----
         if not saved_messages:
             settings.set_apply_status("没有设置变更")
@@ -814,6 +923,78 @@ class InputOverlay:
             config[key] = new_val
             return True
         return False
+
+    # ── per-provider voice / backend 辅助 ────────────────────────────
+
+    def _voice_config_key(self) -> tuple[str, str]:
+        """返回当前 provider 对应的 config voice_id / voice_name key。"""
+        if self._tts_api_provider == TTS_API_PROVIDER_VOLCENGINE:
+            return ("volcengine_voice_id", "volcengine_voice_name")
+        return ("cartesia_voice_id", "cartesia_voice_name")
+
+    def _backend_config_key(self) -> str:
+        """返回当前 provider 对应的 config tts_backend key。"""
+        if self._tts_api_provider == TTS_API_PROVIDER_VOLCENGINE:
+            return "volcengine_tts_backend"
+        return "cartesia_tts_backend"
+
+    def _collect_per_provider_voice(self, pending: object, config: dict[str, object]) -> None:
+        """比较 pending 音色与当前 provider 音色，写入对应的 config key。"""
+        id_key, name_key = self._voice_config_key()
+        new_vid = getattr(pending, "voice_id", None)
+        new_vname = getattr(pending, "voice_name", None)
+        old_vid = self._get_active_voice_id()
+        old_vname = self._get_active_voice_name()
+        if new_vid is not None and new_vid != old_vid:
+            config[id_key] = new_vid
+        if new_vname is not None and new_vname != old_vname:
+            config[name_key] = new_vname
+
+    def _collect_per_provider_backend(self, pending: object, config: dict[str, object]) -> None:
+        """比较 pending backend 与当前 provider backend，写入对应的 config key。"""
+        backend_key = self._backend_config_key()
+        new_backend = getattr(pending, "tts_backend", None)
+        old_backend = self._get_active_tts_backend()
+        if new_backend is not None and new_backend != old_backend:
+            config[backend_key] = new_backend
+
+    def _apply_per_provider_voice(self, pending: object, saved_messages: list[str]) -> None:
+        """应用音色变更到当前 provider 的属性，并回调通知 main.py。"""
+        new_vid = getattr(pending, "voice_id", None)
+        new_vname = getattr(pending, "voice_name", None)
+        old_vid = self._get_active_voice_id()
+        old_vname = self._get_active_voice_name()
+        if new_vid == old_vid and new_vname == old_vname:
+            return
+        self._set_active_voice(new_vid, new_vname)
+        active_name = self._get_active_voice_name()
+        if self.on_voice_change is not None:
+            try:
+                self.on_voice_change(new_vid or "", active_name or "")
+            except Exception:
+                logger.exception("Voice change callback failed")
+                saved_messages.append("音色更新失败")
+            else:
+                saved_messages.append(f"音色已更新为 {active_name}")
+
+    def _apply_per_provider_backend(self, pending: object, saved_messages: list[str]) -> None:
+        """应用生成模式变更到当前 provider 的属性，并回调通知 main.py。"""
+        new_backend = getattr(pending, "tts_backend", None)
+        old_backend = self._get_active_tts_backend()
+        if new_backend is None or new_backend == old_backend:
+            return
+        if self._tts_api_provider == TTS_API_PROVIDER_VOLCENGINE:
+            self._volcengine_tts_backend = new_backend
+        else:
+            self._cartesia_tts_backend = new_backend
+        if self.on_tts_backend_change is not None:
+            try:
+                self.on_tts_backend_change(new_backend)
+            except Exception:
+                logger.exception("TTS backend change callback failed")
+                saved_messages.append("模式切换失败")
+            else:
+                saved_messages.append(f"模式已切换为 {new_backend}")
 
     def _apply_scalar_and_notify(self, pending: object, messages: list[str],
                                   key: str, local_attr: str, *,
@@ -939,6 +1120,45 @@ class InputOverlay:
                     except Exception:
                         logger.exception("Cartesia API key change callback failed")
                         saved_messages.append("Cartesia 引擎刷新失败")
+
+    def _apply_volcengine_credentials_change(self, pending: object, saved_messages: list[str]) -> None:
+        """应用 Volcengine Access Key 的保存/清除操作。"""
+        volc_action = getattr(pending, "volcengine_access_key_action", "unchanged")
+        volc_value_raw = getattr(pending, "volcengine_access_key_value", None)
+        if volc_action == "set":
+            volc_value = volc_value_raw if isinstance(volc_value_raw, str) else ""
+            try:
+                storage_status = wordy.secret.save_volcengine_access_key(
+                    volc_value, allow_plaintext_fallback=False
+                )
+            except wordy.secret.SecretStoreError as error:
+                saved_messages.append(f"Volcengine Access Key 保存失败：{error}")
+            else:
+                if storage_status.fallback_active or storage_status.backend == wordy.secret.STORAGE_PLAINTEXT:
+                    saved_messages.append(
+                        "Volcengine Access Key 已保存（明文回退，高风险，请尽快配置 keyring）"
+                    )
+                else:
+                    saved_messages.append("Volcengine Access Key 已保存到 keyring")
+                if self.on_volcengine_credentials_change is not None:
+                    try:
+                        self.on_volcengine_credentials_change(volc_value)
+                    except Exception:
+                        logger.exception("Volcengine credentials change callback failed")
+                        saved_messages.append("Volcengine 引擎刷新失败")
+        elif volc_action == "clear":
+            try:
+                wordy.secret.delete_volcengine_access_key()
+            except wordy.secret.SecretStoreError as error:
+                saved_messages.append(f"Volcengine Access Key 清除失败：{error}")
+            else:
+                saved_messages.append("Volcengine Access Key 已清除")
+                if self.on_volcengine_credentials_change is not None:
+                    try:
+                        self.on_volcengine_credentials_change(None)
+                    except Exception:
+                        logger.exception("Volcengine credentials change callback failed")
+                        saved_messages.append("Volcengine 引擎刷新失败")
 
     def _clear_ignore_focus_out(self) -> None:
         self._ignore_focus_out = False

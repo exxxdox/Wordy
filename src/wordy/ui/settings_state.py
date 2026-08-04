@@ -31,7 +31,9 @@ class SettingsState:
     audio_output_device_name: str | None = None
     audio_output_device_identity: AudioOutputIdentity | None = None
     audio_output_devices_error: Exception | None = None
+    tts_api_provider: str = "Cartesia"
     cartesia_api_key_saved: bool = False
+    volcengine_access_key_saved: bool = False
     log_level: str = "INFO"
     # 音频路由状态
     audio_routing_enabled: bool = False
@@ -61,6 +63,9 @@ class PendingSettings:
     audio_output_device_identity: AudioOutputIdentity | None = None
     cartesia_api_key_action: str = "unchanged"
     cartesia_api_key_value: str | None = None
+    tts_api_provider: str = "Cartesia"
+    volcengine_access_key_action: str = "unchanged"
+    volcengine_access_key_value: str | None = None
     log_level: str = "INFO"
     # 音频路由待应用配置
     audio_routing_enabled: bool = False

@@ -24,7 +24,11 @@ from typing import ClassVar
 import wordy.secret
 from wordy.identity import AudioIdentity, normalize_identity
 from wordy.hotkey import iter_hotkey_parts
-from wordy.tts.constants import DEFAULT_TTS_BACKEND, TTS_BACKENDS
+from wordy.tts.constants import (
+    DEFAULT_TTS_API_PROVIDER,
+    DEFAULT_TTS_BACKEND,
+    TTS_API_PROVIDERS,
+)
 
 # ---------------------------------------------------------------------------
 # UI 常量 — settings_window.py / overlay.py 使用
@@ -107,7 +111,6 @@ class AppSettings:
     volume: float = 1.0
     overlay_opacity: float = 1.0
     fixed_center: bool = True
-    tts_backend: str = DEFAULT_TTS_BACKEND
     log_level: str = "INFO"
     window_position: dict[str, int] | None = None
 
@@ -115,11 +118,93 @@ class AppSettings:
     audio_output_device_name: str | None = None
     audio_output_device: AudioIdentity | None = None
 
-    # ---- Cartesia ----
-    voice_id: str | None = None
-    voice_name: str | None = None
-    cartesia_api_key_set: bool = False
-    cartesia_api_key_storage: str = "none"
+    # ---- TTS 引擎配置（结构化嵌套存储） ----
+    # JSON: {"Cartesia": {...}, "Volcengine": {...}}
+    tts_providers: dict[str, dict[str, object]] = field(default_factory=lambda: {
+        "Cartesia": {"voice_id": None, "voice_name": None, "backend": "Cartesia Bytes",
+                      "api_key_set": False, "api_key_storage": "none"},
+        "Volcengine": {"voice_id": None, "voice_name": None, "backend": "Volcengine Streaming",
+                        "api_key_set": False, "api_key_storage": "none"},
+    })
+    active_tts_provider: str = DEFAULT_TTS_API_PROVIDER
+
+    # ── 向后兼容属性：从嵌套 dict 读取，旧代码无需修改 ──────────────
+
+    @property
+    def tts_backend(self) -> str:
+        return str(self.tts_providers.get(self.active_tts_provider, {}).get("backend", DEFAULT_TTS_BACKEND))
+    @tts_backend.setter
+    def tts_backend(self, value: str) -> None:
+        self.tts_providers.setdefault(self.active_tts_provider, {})["backend"] = value
+
+    @property
+    def tts_api_provider(self) -> str:
+        return self.active_tts_provider
+    @tts_api_provider.setter
+    def tts_api_provider(self, value: str) -> None:
+        self.active_tts_provider = value
+
+    # -- Cartesia read/write
+    @property
+    def cartesia_voice_id(self) -> str | None:
+        v = self.tts_providers.get("Cartesia", {}).get("voice_id"); return v if isinstance(v, str) else None
+    @cartesia_voice_id.setter
+    def cartesia_voice_id(self, value: str | None) -> None: self.tts_providers.setdefault("Cartesia", {})["voice_id"] = value
+
+    @property
+    def cartesia_voice_name(self) -> str | None:
+        v = self.tts_providers.get("Cartesia", {}).get("voice_name"); return v if isinstance(v, str) else None
+    @cartesia_voice_name.setter
+    def cartesia_voice_name(self, value: str | None) -> None: self.tts_providers.setdefault("Cartesia", {})["voice_name"] = value
+
+    @property
+    def cartesia_tts_backend(self) -> str:
+        return str(self.tts_providers.get("Cartesia", {}).get("backend", DEFAULT_TTS_BACKEND))
+    @cartesia_tts_backend.setter
+    def cartesia_tts_backend(self, value: str) -> None: self.tts_providers.setdefault("Cartesia", {})["backend"] = value
+
+    @property
+    def cartesia_api_key_set(self) -> bool:
+        return bool(self.tts_providers.get("Cartesia", {}).get("api_key_set", False))
+    @cartesia_api_key_set.setter
+    def cartesia_api_key_set(self, value: bool) -> None: self.tts_providers.setdefault("Cartesia", {})["api_key_set"] = value
+
+    @property
+    def cartesia_api_key_storage(self) -> str:
+        return str(self.tts_providers.get("Cartesia", {}).get("api_key_storage", "none"))
+    @cartesia_api_key_storage.setter
+    def cartesia_api_key_storage(self, value: str) -> None: self.tts_providers.setdefault("Cartesia", {})["api_key_storage"] = value
+
+    # -- Volcengine read/write
+    @property
+    def volcengine_voice_id(self) -> str | None:
+        v = self.tts_providers.get("Volcengine", {}).get("voice_id"); return v if isinstance(v, str) else None
+    @volcengine_voice_id.setter
+    def volcengine_voice_id(self, value: str | None) -> None: self.tts_providers.setdefault("Volcengine", {})["voice_id"] = value
+
+    @property
+    def volcengine_voice_name(self) -> str | None:
+        v = self.tts_providers.get("Volcengine", {}).get("voice_name"); return v if isinstance(v, str) else None
+    @volcengine_voice_name.setter
+    def volcengine_voice_name(self, value: str | None) -> None: self.tts_providers.setdefault("Volcengine", {})["voice_name"] = value
+
+    @property
+    def volcengine_tts_backend(self) -> str:
+        return str(self.tts_providers.get("Volcengine", {}).get("backend", "Volcengine Streaming"))
+    @volcengine_tts_backend.setter
+    def volcengine_tts_backend(self, value: str) -> None: self.tts_providers.setdefault("Volcengine", {})["backend"] = value
+
+    @property
+    def volcengine_access_key_set(self) -> bool:
+        return bool(self.tts_providers.get("Volcengine", {}).get("api_key_set", False))
+    @volcengine_access_key_set.setter
+    def volcengine_access_key_set(self, value: bool) -> None: self.tts_providers.setdefault("Volcengine", {})["api_key_set"] = value
+
+    @property
+    def volcengine_access_key_storage(self) -> str:
+        return str(self.tts_providers.get("Volcengine", {}).get("api_key_storage", "none"))
+    @volcengine_access_key_storage.setter
+    def volcengine_access_key_storage(self, value: str) -> None: self.tts_providers.setdefault("Volcengine", {})["api_key_storage"] = value
 
     # ---- 音频路由 ----
     audio_routing_enabled: bool = False
@@ -156,6 +241,12 @@ class AppSettings:
         settings.cartesia_api_key_set = bool(key_status["cartesia_api_key_set"])
         settings.cartesia_api_key_storage = str(key_status["cartesia_api_key_storage"])
 
+        # 注入 Volcengine key 状态
+        volc_status = _read_volcengine_key_status()
+        settings.volcengine_access_key_set = bool(volc_status["volcengine_access_key_set"])
+        settings.volcengine_access_key_storage = str(volc_status["volcengine_access_key_storage"])
+
+
         raw = _read_json(file)
         if raw is None:
             settings._loaded = True
@@ -163,11 +254,22 @@ class AppSettings:
             _cached_config_file = file
             return settings
 
-        # 逐字段解析（仅覆盖 JSON 中存在的合法值）
+        # 逐字段解析
         _apply_if_present(raw, "volume", settings, _clamp, (MIN_VOLUME, MAX_VOLUME))
         _apply_if_present(raw, "overlay_opacity", settings, _clamp, (MIN_OVERLAY_OPACITY, MAX_OVERLAY_OPACITY))
         _apply_if_present(raw, "fixed_center", settings, lambda v: v if isinstance(v, bool) else None)
-        _apply_if_present(raw, "tts_backend", settings, lambda v: v if isinstance(v, str) and v in TTS_BACKENDS else None)
+
+        # 结构化 tts_providers
+        raw_providers = raw.get("tts_providers")
+        if isinstance(raw_providers, dict):
+            for provider_name, provider_data in raw_providers.items():
+                if isinstance(provider_data, dict) and provider_name in settings.tts_providers:
+                    target = settings.tts_providers[provider_name]
+                    for k in ("voice_id", "voice_name", "backend", "api_key_set", "api_key_storage"):
+                        if k in provider_data:
+                            target[k] = provider_data[k]
+        # active_tts_provider
+        _apply_if_present(raw, "active_tts_provider", settings, lambda v: v if isinstance(v, str) and v in TTS_API_PROVIDERS else None)
         _apply_if_present(raw, "log_level", settings, lambda v: v.strip().upper() if isinstance(v, str) and v.strip().upper() in LOG_LEVELS else None)
         _apply_if_present(raw, "window_position", settings, _parse_window_pos)
         _apply_if_present(raw, "audio_output_device_name", settings, _nonempty_str)
@@ -184,10 +286,6 @@ class AppSettings:
         if (hotkey := _nonempty_str(raw.get("hotkey"))) is not None:
             settings.hotkey = hotkey
             settings.name = _nonempty_str(raw.get("name")) or display_hotkey(hotkey)
-
-        if (voice_id := _nonempty_str(raw.get("voice_id"))) is not None:
-            settings.voice_id = voice_id
-            settings.voice_name = _nonempty_str(raw.get("voice_name")) or voice_id
 
         settings._loaded = True
         _cached_settings = settings
@@ -360,3 +458,34 @@ def _read_cartesia_key_status() -> dict[str, bool | str]:
         "cartesia_api_key_set": key_set if isinstance(key_set, bool) else False,
         "cartesia_api_key_storage": storage if isinstance(storage, str) else wordy.secret.STORAGE_NONE,
     }
+
+
+def _read_volcengine_key_status() -> dict[str, bool | str]:
+    """读取 Volcengine access key 元数据（不暴露密钥原文）。"""
+    status_getter = getattr(wordy.secret, "get_volcengine_access_key_status", None)
+    if callable(status_getter):
+        raw_status = status_getter()
+        status = raw_status if isinstance(raw_status, Mapping) else {}
+    else:
+        try:
+            storage_status = wordy.secret.get_volcengine_storage_status()
+        except Exception:
+            storage_status = {}
+        if isinstance(storage_status, Mapping):
+            raw_backend = storage_status.get("backend", wordy.secret.STORAGE_NONE)
+        else:
+            raw_backend = getattr(storage_status, "backend", wordy.secret.STORAGE_NONE)
+        storage = raw_backend if isinstance(raw_backend, str) else wordy.secret.STORAGE_NONE
+        status = {
+            "volcengine_access_key_set": storage != wordy.secret.STORAGE_NONE,
+            "volcengine_access_key_storage": storage,
+        }
+
+    key_set = status.get("volcengine_access_key_set")
+    storage = status.get("volcengine_access_key_storage")
+    return {
+        "volcengine_access_key_set": key_set if isinstance(key_set, bool) else False,
+        "volcengine_access_key_storage": storage if isinstance(storage, str) else wordy.secret.STORAGE_NONE,
+    }
+
+

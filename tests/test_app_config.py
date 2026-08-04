@@ -306,37 +306,23 @@ def test_atomic_write_preserves_original_on_failure(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 def test_voice_config_valid_and_invalid(tmp_path: Path):
-    """AppSettings.load() parses voice_id and voice_name."""
+    """AppSettings.load() parses tts_providers structured voice config."""
     cfg = tmp_path / "config.json"
-    json.dump({"voice_id": "vx", "voice_name": "Vx"}, cfg.open("w"))
+    json.dump({"tts_providers": {"Cartesia": {"voice_id": "vx", "voice_name": "Vx"}}}, cfg.open("w"))
     s = AppSettings.load(config_file=cfg)
-    assert s.voice_id == "vx"
-    assert s.voice_name == "Vx"
-
-    # voice_name missing → defaults to voice_id
-    cfg2 = tmp_path / "config2.json"
-    json.dump({"voice_id": "vx"}, cfg2.open("w"))
-    s2 = AppSettings.load(config_file=cfg2)
-    assert s2.voice_id == "vx"
-    assert s2.voice_name == "vx"
-
-    # voice_name invalid (non-string) → defaults to voice_id
-    cfg3 = tmp_path / "config3.json"
-    json.dump({"voice_id": "vx", "voice_name": 123}, cfg3.open("w"))
-    s3 = AppSettings.load(config_file=cfg3)
-    assert s3.voice_id == "vx"
-    assert s3.voice_name == "vx"
+    assert s.cartesia_voice_id == "vx"
+    assert s.cartesia_voice_name == "Vx"
 
     # No voice_id → None
     s4 = AppSettings.load(config_file=tmp_path / "nonexistent.json")
-    assert s4.voice_id is None
-    assert s4.voice_name is None
+    assert s4.cartesia_voice_id is None
+    assert s4.cartesia_voice_name is None
 
     # Empty voice_id → None
     cfg5 = tmp_path / "config5.json"
     json.dump({"voice_id": ""}, cfg5.open("w"))
     s5 = AppSettings.load(config_file=cfg5)
-    assert s5.voice_id is None
+    assert s5.cartesia_voice_id is None
 
 
 # ---------------------------------------------------------------------------
@@ -373,18 +359,18 @@ def test_load_invalid_voice(tmp_path: Path):
     cfg = tmp_path / "config.json"
     json.dump({"hotkey": "f7", "voice_id": "", "voice_name": "X"}, cfg.open("w"))
     s = AppSettings.load(config_file=cfg)
-    assert s.voice_id is None
-    assert s.voice_name is None
+    assert s.cartesia_voice_id is None
+    assert s.cartesia_voice_name is None
     assert s.hotkey == "f7"
 
 
 def test_load_voice_name_missing(tmp_path: Path):
-    """AppSettings.load() defaults voice_name to voice_id."""
+    """AppSettings.load() loads voice from structured tts_providers."""
     cfg = tmp_path / "config.json"
-    json.dump({"voice_id": "vid_42"}, cfg.open("w"))
+    json.dump({"tts_providers": {"Cartesia": {"voice_id": "vid_42", "voice_name": "Vid 42"}}}, cfg.open("w"))
     s = AppSettings.load(config_file=cfg)
-    assert s.voice_id == "vid_42"
-    assert s.voice_name == "vid_42"
+    assert s.cartesia_voice_id == "vid_42"
+    assert s.cartesia_voice_name == "Vid 42"
 
 
 def test_load_voice_config_invalid(tmp_path: Path):
@@ -392,8 +378,8 @@ def test_load_voice_config_invalid(tmp_path: Path):
     cfg = tmp_path / "config.json"
     json.dump({"hotkey": "f6"}, cfg.open("w"))
     s = AppSettings.load(config_file=cfg)
-    assert s.voice_id is None
-    assert s.voice_name is None
+    assert s.cartesia_voice_id is None
+    assert s.cartesia_voice_name is None
 
 
 # ---------------------------------------------------------------------------

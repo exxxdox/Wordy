@@ -28,7 +28,14 @@ from wordy.log import install_log_stream
 import wordy.secret
 from wordy.secret import KeyringUnavailableError
 from wordy.ui.tray import TrayApp, TrayController
-from wordy.tts.constants import TTS_BACKEND_CARTESIA_BYTES, TTS_BACKEND_CARTESIA_REALTIME
+from wordy.tts.constants import (
+    DEFAULT_TTS_BACKEND,
+    TTS_API_PROVIDER_VOLCENGINE,
+    TTS_BACKEND_CARTESIA_BYTES,
+    TTS_BACKEND_CARTESIA_REALTIME,
+    TTS_BACKEND_VOLCENGINE_STREAMING,
+    TTS_BACKENDS,
+)
 from wordy.tts.registry import create_tts_engine, resolve_tts_backend
 from wordy.tts.engine import BackendTTSEngine, TTSAudioPlayer
 
@@ -107,9 +114,15 @@ class WordyApp:
         self._sidetone_player = AudioPlayer(output_device_name=None, output_device=None)
         self._sidetone_wrapper = SidetoneAudioPlayer(self.player, self._sidetone_player)
         self._sidetone_wrapper.set_sidetone_enabled(self._settings.sidetone_enabled)
-        self.tts_backend = resolve_tts_backend(tts_backend or self._settings.tts_backend)
+        # TTS 服务商
+        self.tts_api_provider = getattr(self._settings, "tts_api_provider", "Cartesia")
+        # Cartesia 凭据
         self.cartesia_api_key = self._load_cartesia_api_key()
-        self.voice_id = self._settings.voice_id
+        # Volcengine 凭据
+        self.volcengine_access_key = self._load_volcengine_access_key()
+        # 按 provider 读取 voice/backend
+        self.tts_backend = self._resolve_active_tts_backend(tts_backend)
+        self.voice_id = self._get_active_voice_id_from_config()
         self.volume = self._settings.volume
         self._install_tts_worker(self._create_tts_worker())
 
@@ -131,6 +144,8 @@ class WordyApp:
             on_fetch_voices=self._fetch_voices,
             on_audio_output_change=self._on_audio_output_change,
             on_cartesia_api_key_change=self._on_cartesia_api_key_change,
+            on_tts_api_provider_change=self._on_tts_api_provider_change,
+            on_volcengine_credentials_change=self._on_volcengine_credentials_change,
             on_audio_route_change=self._on_audio_route_change,
             on_sidetone_change=self._on_sidetone_change,
             audio_player=self.player,
@@ -146,6 +161,43 @@ class WordyApp:
                 return None
             raise RuntimeError("Cartesia API key 读取失败") from exc
 
+    @staticmethod
+    def _load_volcengine_access_key() -> str | None:
+        """从 secret_store 读取 Volcengine access key，失败时不暴露异常内容。"""
+        try:
+            return wordy.secret.load_volcengine_access_key()
+        except Exception as exc:
+            if isinstance(exc, KeyringUnavailableError):
+                return None
+            raise RuntimeError("Volcengine access key 读取失败") from exc
+
+    def _resolve_active_tts_backend(self, cli_backend: str | None) -> str:
+        """按当前 provider 解析生效的 tts_backend（CLI > 配置 > 默认）。"""
+        if cli_backend is not None:
+            return resolve_tts_backend(cli_backend)
+        if self.tts_api_provider == TTS_API_PROVIDER_VOLCENGINE:
+            configured = getattr(self._settings, "volcengine_tts_backend", None)
+            if configured and configured in TTS_BACKENDS:
+                return configured
+            return TTS_BACKEND_VOLCENGINE_STREAMING
+        configured = getattr(self._settings, "cartesia_tts_backend", None)
+        if configured and configured in TTS_BACKENDS:
+            return configured
+        return getattr(self._settings, "tts_backend", None) or DEFAULT_TTS_BACKEND
+
+    def _get_active_voice_id_from_config(self) -> str | None:
+        """按当前 provider 从配置读取音色 ID。"""
+        if self.tts_api_provider == TTS_API_PROVIDER_VOLCENGINE:
+            return getattr(self._settings, "volcengine_voice_id", None)
+        return getattr(self._settings, "cartesia_voice_id", None) or getattr(self._settings, "voice_id", None)
+
+    def _set_active_voice_in_config(self, voice_id: str | None, voice_name: str | None) -> None:
+        """按当前 provider 写回配置的音色字段。"""
+        if self.tts_api_provider == TTS_API_PROVIDER_VOLCENGINE:
+            self._settings.update(volcengine_voice_id=voice_id, volcengine_voice_name=voice_name)
+        else:
+            self._settings.update(cartesia_voice_id=voice_id, cartesia_voice_name=voice_name)
+
     def _create_tts_engine(self) -> BackendTTSEngine:
         """按当前配置创建 TTS 引擎。引擎始终使用返听包装器（开关控制是否实际输出）。"""
         return create_tts_engine(
@@ -154,6 +206,7 @@ class WordyApp:
             api_key=self.cartesia_api_key,
             voice_id=self.voice_id,
             volume=self.volume,
+            volcengine_access_key=self.volcengine_access_key,
         )
 
     def _create_audio_player(self) -> AudioPlayer:
@@ -315,8 +368,9 @@ class WordyApp:
         return self.tts_engine.fetch_voices()
 
     def _on_voice_change(self, voice_id: str, voice_name: str) -> None:
-        """音色配置变更后同步到当前 TTS 引擎。"""
+        """音色配置变更后同步到当前 TTS 引擎（按 provider 写回配置）。"""
         self.voice_id = voice_id
+        self._set_active_voice_in_config(voice_id or None, voice_name or None)
         self.tts_engine.set_voice(voice_id)
         logger.info("音色已切换为: %s", voice_name)
 
@@ -392,6 +446,37 @@ class WordyApp:
         self._enqueue_retire_current()
         self._install_tts_worker(new_worker)
         logger.info("Cartesia API key 已更新，TTS 引擎已重建。")
+
+    def _on_tts_api_provider_change(self, provider: str) -> None:
+        """TTS 服务商切换：更新 provider 并重建 worker。"""
+        if provider == self.tts_api_provider:
+            return
+        self.tts_api_provider = provider
+        try:
+            new_worker = self._create_tts_worker()
+        except Exception:
+            raise
+        self._enqueue_retire_current()
+        self._install_tts_worker(new_worker)
+        logger.info("TTS 服务商已切换为 %s，引擎已重建。", provider)
+        # 切换后触发音色重新加载
+        self.overlay._start_load_voices(show_status=False)
+
+    def _on_volcengine_credentials_change(
+        self, access_key: str | None = None
+    ) -> None:
+        """Volcengine 凭据变更后重建当前 TTS worker。"""
+        previous_access_key = self.volcengine_access_key
+        new_access_key = access_key if access_key is not None else self._load_volcengine_access_key()
+        self.volcengine_access_key = new_access_key
+        try:
+            new_worker = self._create_tts_worker()
+        except Exception:
+            self.volcengine_access_key = previous_access_key
+            raise
+        self._enqueue_retire_current()
+        self._install_tts_worker(new_worker)
+        logger.info("Volcengine 凭据已更新，TTS 引擎已重建。")
 
     def _enqueue_retire_current(self) -> None:
         """把当前 executor+engine 作为一个 _RetiredWorker 入队 janitor。"""
