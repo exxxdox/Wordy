@@ -6,7 +6,7 @@ RuntimeError and TypeError from destroyed/deleted Qt objects."""
 
 import pytest
 
-from easy_tts.qt_lifecycle import safe_qt_call
+from wordy.qt_lifecycle import safe_qt_call
 
 
 class TestSafeQtCall:

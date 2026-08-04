@@ -165,19 +165,19 @@ def cleanup_qt_application() -> "Iterator[None]":
         pass
 
 
-# 测试间可能被 stub 替换的 easy_tts 子模块。
+# 测试间可能被 stub 替换的 wordy 子模块。
 # 在任何测试运行前保存真实引用，autouse fixture 用此快照强制恢复。
 _STUBBABLE_MODULES = (
-    "easy_tts.hotkey",
-    "easy_tts.hotkey.parser",
-    "easy_tts.hotkey.native",
-    "easy_tts.ui.overlay",
-    "easy_tts.ui.overlay_widgets",
-    "easy_tts.ui.settings",
-    "easy_tts.ui.settings_state",
-    "easy_tts.ui.settings_widgets",
-    "easy_tts.ui.settings_style",
-    "easy_tts.ui.window",
+    "wordy.hotkey",
+    "wordy.hotkey.parser",
+    "wordy.hotkey.native",
+    "wordy.ui.overlay",
+    "wordy.ui.overlay_widgets",
+    "wordy.ui.settings",
+    "wordy.ui.settings_state",
+    "wordy.ui.settings_widgets",
+    "wordy.ui.settings_style",
+    "wordy.ui.window",
 )
 
 # 强制导入真实模块并保存快照——在所有测试和 monkeypatch 之前

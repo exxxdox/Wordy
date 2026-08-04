@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
-from easy_tts.audio.capture import AudioCapture
+from wordy.audio.capture import AudioCapture
 
 
 class TestAudioCapture:
@@ -30,9 +30,9 @@ class TestAudioCapture:
         assert cap.channels == 2
         assert cap.on_data is cb
 
-    @patch("easy_tts.audio.capture.sd.query_devices")
-    @patch("easy_tts.audio.capture.sd.query_hostapis")
-    @patch("easy_tts.audio.capture.sd.default")
+    @patch("wordy.audio.capture.sd.query_devices")
+    @patch("wordy.audio.capture.sd.query_hostapis")
+    @patch("wordy.audio.capture.sd.default")
     def test_list_input_devices(self, mock_default, mock_hostapis, mock_query_devices):
         mock_query_devices.return_value = [
             {"name": "CABLE Output", "max_input_channels": 2, "max_output_channels": 0, "hostapi": 0, "default_samplerate": 48000.0},
@@ -50,8 +50,8 @@ class TestAudioCapture:
         assert devices[0]["is_default"] is True
         assert devices[1]["name"] == "立体声混音"
 
-    @patch("easy_tts.audio.capture.sd.query_devices")
-    @patch("easy_tts.audio.capture.sd.query_hostapis")
+    @patch("wordy.audio.capture.sd.query_devices")
+    @patch("wordy.audio.capture.sd.query_hostapis")
     def test_find_device_index(self, mock_hostapis, mock_query_devices):
         mock_query_devices.return_value = [
             {"name": "CABLE Output", "max_input_channels": 2, "max_output_channels": 0, "hostapi": 0, "default_samplerate": 48000.0},
@@ -65,7 +65,7 @@ class TestAudioCapture:
         idx_none = AudioCapture.find_device_index("不存在的设备")
         assert idx_none is None
 
-    @patch("easy_tts.audio.capture.sd.RawInputStream")
+    @patch("wordy.audio.capture.sd.RawInputStream")
     def test_start_stop(self, mock_stream_class):
         mock_stream = MagicMock()
         mock_stream_class.return_value = mock_stream
@@ -83,9 +83,9 @@ class TestAudioCapture:
         mock_stream.stop.assert_called_once()
         mock_stream.close.assert_called_once()
 
-    @patch("easy_tts.audio.capture.sd.query_devices")
-    @patch("easy_tts.audio.capture.sd.query_hostapis")
-    @patch("easy_tts.audio.capture.sd.default")
+    @patch("wordy.audio.capture.sd.query_devices")
+    @patch("wordy.audio.capture.sd.query_hostapis")
+    @patch("wordy.audio.capture.sd.default")
     def test_get_default_input_device_name(self, mock_default, mock_hostapis, mock_query_devices):
         """get_default_input_device_name 返回标记 is_default 的设备名。"""
         mock_query_devices.return_value = [
@@ -99,8 +99,8 @@ class TestAudioCapture:
         name = AudioCapture.get_default_input_device_name()
         assert name == "麦克风"
 
-    @patch("easy_tts.audio.capture.sd.query_devices")
-    @patch("easy_tts.audio.capture.sd.query_hostapis")
+    @patch("wordy.audio.capture.sd.query_devices")
+    @patch("wordy.audio.capture.sd.query_hostapis")
     def test_get_default_input_device_name_none_when_no_devices(self, mock_hostapis, mock_query_devices):
         """没有输入设备时 get_default_input_device_name 返回 None。"""
         mock_query_devices.return_value = []
@@ -109,7 +109,7 @@ class TestAudioCapture:
         name = AudioCapture.get_default_input_device_name()
         assert name is None
 
-    @patch("easy_tts.audio.capture.sd.RawInputStream")
+    @patch("wordy.audio.capture.sd.RawInputStream")
     def test_callback_forwards_data(self, mock_stream_class):
         mock_stream = MagicMock()
         mock_stream_class.return_value = mock_stream

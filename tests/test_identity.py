@@ -3,7 +3,7 @@
 
 """Tests for AudioIdentity TypedDict and normalize_identity helper."""
 
-from easy_tts.identity import AudioIdentity, normalize_identity
+from wordy.identity import AudioIdentity, normalize_identity
 
 
 class TestAudioIdentityTypedDict:

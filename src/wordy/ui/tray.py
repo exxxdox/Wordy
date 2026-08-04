@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from easy_tts.qt_lifecycle import safe_qt_call
+from wordy.qt_lifecycle import safe_qt_call
 
 
 
@@ -186,7 +186,7 @@ class TrayApp:
     def log_stream(self) -> _LogStreamLike:
         stream = self._log_stream
         if stream is None:
-            module = importlib.import_module("easy_tts.log")
+            module = importlib.import_module("wordy.log")
             shared = module.current_log_stream()
             stream = shared if shared is not None else module.LogStream()
             self._log_stream = stream

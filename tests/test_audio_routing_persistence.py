@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-import easy_tts.config
-from easy_tts.config import AppSettings, MIN_GAIN, MAX_GAIN
+import wordy.config
+from wordy.config import AppSettings, MIN_GAIN, MAX_GAIN
 
 
 class TestAudioRoutingPersistence:
@@ -17,7 +17,7 @@ class TestAudioRoutingPersistence:
     def test_audio_routing_fields_round_trip(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """所有 5 个音频路由字段保存后应能完整恢复。"""
         config_file = tmp_path / "test_config.json"
-        monkeypatch.setattr(easy_tts.config, "USER_CONFIG_FILE", config_file)
+        monkeypatch.setattr(wordy.config, "USER_CONFIG_FILE", config_file)
 
         # 初始默认值
         s = AppSettings.load(config_file=config_file)
@@ -48,7 +48,7 @@ class TestAudioRoutingPersistence:
     def test_audio_routing_disable_persists(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """禁用音频路由后，再次加载应仍为禁用。"""
         config_file = tmp_path / "test_config.json"
-        monkeypatch.setattr(easy_tts.config, "USER_CONFIG_FILE", config_file)
+        monkeypatch.setattr(wordy.config, "USER_CONFIG_FILE", config_file)
 
         # 先启用
         s = AppSettings.load(config_file=config_file)
@@ -64,7 +64,7 @@ class TestAudioRoutingPersistence:
     def test_audio_routing_gain_clamping(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """增益值超出范围时应被钳制到 [MIN_GAIN, MAX_GAIN]。"""
         config_file = tmp_path / "test_config.json"
-        monkeypatch.setattr(easy_tts.config, "USER_CONFIG_FILE", config_file)
+        monkeypatch.setattr(wordy.config, "USER_CONFIG_FILE", config_file)
 
         s = AppSettings.load(config_file=config_file)
         s.update(
@@ -80,7 +80,7 @@ class TestAudioRoutingPersistence:
     def test_audio_routing_empty_strings_become_none(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """空字符串设备名应被解析为 None。"""
         config_file = tmp_path / "test_config.json"
-        monkeypatch.setattr(easy_tts.config, "USER_CONFIG_FILE", config_file)
+        monkeypatch.setattr(wordy.config, "USER_CONFIG_FILE", config_file)
 
         s = AppSettings.load(config_file=config_file)
         s.update(
@@ -94,7 +94,7 @@ class TestAudioRoutingPersistence:
     def test_audio_routing_partial_save_preserves_others(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """部分更新音频路由字段时，其他字段应保持不变。"""
         config_file = tmp_path / "test_config.json"
-        monkeypatch.setattr(easy_tts.config, "USER_CONFIG_FILE", config_file)
+        monkeypatch.setattr(wordy.config, "USER_CONFIG_FILE", config_file)
 
         # 先保存完整配置
         s = AppSettings.load(config_file=config_file)
@@ -118,7 +118,7 @@ class TestAudioRoutingPersistence:
     def test_save_audio_routing_config_helper(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """update() 可替代原 save_audio_routing_config 辅助函数。"""
         config_file = tmp_path / "test_config.json"
-        monkeypatch.setattr(easy_tts.config, "USER_CONFIG_FILE", config_file)
+        monkeypatch.setattr(wordy.config, "USER_CONFIG_FILE", config_file)
 
         s = AppSettings.load(config_file=config_file)
         s.update(
@@ -138,7 +138,7 @@ class TestAudioRoutingPersistence:
     def test_load_audio_routing_config_helper(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """AppSettings.load() 即可获取所有音频路由字段，替代原 load_audio_routing_config。"""
         config_file = tmp_path / "test_config.json"
-        monkeypatch.setattr(easy_tts.config, "USER_CONFIG_FILE", config_file)
+        monkeypatch.setattr(wordy.config, "USER_CONFIG_FILE", config_file)
 
         s = AppSettings.load(config_file=config_file)
         s.update(
@@ -160,7 +160,7 @@ class TestAudioRoutingPersistence:
     def test_sidetone_enabled_round_trip(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """返听开关保存后应能完整恢复。"""
         config_file = tmp_path / "test_config.json"
-        monkeypatch.setattr(easy_tts.config, "USER_CONFIG_FILE", config_file)
+        monkeypatch.setattr(wordy.config, "USER_CONFIG_FILE", config_file)
 
         s = AppSettings.load(config_file=config_file)
         assert s.sidetone_enabled is False
@@ -177,7 +177,7 @@ class TestAudioRoutingPersistence:
         """非法类型应回退到默认值 False。"""
         import json
         config_file = tmp_path / "test_config.json"
-        monkeypatch.setattr(easy_tts.config, "USER_CONFIG_FILE", config_file)
+        monkeypatch.setattr(wordy.config, "USER_CONFIG_FILE", config_file)
 
         config_file.write_text(json.dumps({"sidetone_enabled": "not_a_bool"}), encoding="utf-8")
         s = AppSettings.load(config_file=config_file)

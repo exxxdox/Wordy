@@ -3,10 +3,10 @@ $ErrorActionPreference = 'Stop'
 Set-Location -LiteralPath $PSScriptRoot
 
 Write-Host '[dev] Starting Easy TTS...'
-uv run python -m easy_tts
+uv run python -m wordy
 $exitCode = $LASTEXITCODE
 
 if ($exitCode -ne 0) {
-    Write-Host "[dev] easy_tts exited with code $exitCode"
+    Write-Host "[dev] wordy exited with code $exitCode"
 }
 exit $exitCode

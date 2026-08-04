@@ -15,7 +15,7 @@ from PySide6.QtGui import (
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import QLabel, QLineEdit, QWidget
 
-from easy_tts.ui.theme import (
+from wordy.ui.theme import (
     ACCENT_HOVER, CONFIG_BUTTON_IDLE, GREEN_ACCENT, INPUT_BACKGROUND, INPUT_BORDER, MONO_FONT,
 )
 
@@ -26,7 +26,7 @@ _SETTINGS_SVG_PATH = _ICONS_DIR / "settings.svg"
 _settings_svg_template: str | None = None
 
 if TYPE_CHECKING:
-    from easy_tts.ui.overlay import InputOverlay
+    from wordy.ui.overlay import InputOverlay
 
 # 控件尺寸/颜色常量
 INPUT_BACKGROUND_COLOR = INPUT_BACKGROUND

@@ -41,7 +41,7 @@ _CONFIG: dict[str, Any] = {
 
 
 def _install_native_hotkey_stub(monkeypatch: pytest.MonkeyPatch) -> None:
-    module = ModuleType("easy_tts.hotkey")
+    module = ModuleType("wordy.hotkey")
 
     class NativeHotkeyListener:
         def __init__(self, *args: object, **kwargs: object) -> None:
@@ -54,11 +54,11 @@ def _install_native_hotkey_stub(monkeypatch: pytest.MonkeyPatch) -> None:
             self.started = False
 
     setattr(module, "NativeHotkeyListener", NativeHotkeyListener)
-    from easy_tts.hotkey import iter_hotkey_parts, normalize_key_part, split_hotkey
+    from wordy.hotkey import iter_hotkey_parts, normalize_key_part, split_hotkey
     setattr(module, "iter_hotkey_parts", iter_hotkey_parts)
     setattr(module, "normalize_key_part", normalize_key_part)
     setattr(module, "split_hotkey", split_hotkey)
-    monkeypatch.setitem(sys.modules, "easy_tts.hotkey", module)
+    monkeypatch.setitem(sys.modules, "wordy.hotkey", module)
 
 
 def _import_input_overlay(monkeypatch: pytest.MonkeyPatch):
@@ -67,7 +67,7 @@ def _import_input_overlay(monkeypatch: pytest.MonkeyPatch):
     _install_native_hotkey_stub(monkeypatch)
 
     # 用 AppSettings 替代已删除的 load_initial_config / save_app_config
-    from easy_tts.config import AppSettings
+    from wordy.config import AppSettings
     _test_settings = AppSettings()
     _test_settings.hotkey = _CONFIG["hotkey"]
     _test_settings.name = _CONFIG["name"]
@@ -79,10 +79,10 @@ def _import_input_overlay(monkeypatch: pytest.MonkeyPatch):
     _test_settings.fixed_center = _CONFIG["fixed_center"]
     monkeypatch.setattr(AppSettings, "load", lambda **kw: _test_settings)
     monkeypatch.setattr(AppSettings, "update", lambda self, **kw: Path("/tmp/wavtrans-test-config.json"))
-    monkeypatch.setattr("easy_tts.config.get_active_config_file", lambda: Path("/tmp/wavtrans-test-config.json"))
+    monkeypatch.setattr("wordy.config.get_active_config_file", lambda: Path("/tmp/wavtrans-test-config.json"))
 
-    original_module = sys.modules.pop("easy_tts.ui.overlay", None)
-    module = importlib.import_module("easy_tts.ui.overlay")
+    original_module = sys.modules.pop("wordy.ui.overlay", None)
+    module = importlib.import_module("wordy.ui.overlay")
 
     def skip_voice_loading(_self: object, show_status: bool = True) -> None:
         _ = show_status
@@ -101,12 +101,12 @@ def _import_tray_app(monkeypatch: pytest.MonkeyPatch):
     Returns the imported module or fails the test with a clear RED message.
     """
     _import_input_overlay(monkeypatch)
-    sys.modules.pop("easy_tts.ui.tray", None)
+    sys.modules.pop("wordy.ui.tray", None)
     try:
-        return importlib.import_module("easy_tts.ui.tray")
+        return importlib.import_module("wordy.ui.tray")
     except ModuleNotFoundError as exc:
         pytest.fail(
-            "tray module is missing. Create easy_tts/ui/tray.py exposing a TrayApp "
+            "tray module is missing. Create wordy/ui/tray.py exposing a TrayApp "
             f"class that wires QSystemTrayIcon, a QMenu with the two Chinese "
             f"actions, and delegates settings to overlay._open_settings. "
             f"Underlying error: {exc!r}"
@@ -115,12 +115,12 @@ def _import_tray_app(monkeypatch: pytest.MonkeyPatch):
 
 def _import_log_stream(monkeypatch: pytest.MonkeyPatch):
     _import_input_overlay(monkeypatch)
-    sys.modules.pop("easy_tts.log", None)
+    sys.modules.pop("wordy.log", None)
     try:
-        return importlib.import_module("easy_tts.log")
+        return importlib.import_module("wordy.log")
     except ModuleNotFoundError as exc:
         pytest.fail(
-            "log_stream module is missing. Create easy_tts/log.py exposing a "
+            "log_stream module is missing. Create wordy/log.py exposing a "
             f"LogStream class with .write(record)/.attach(view) and a "
             f"LogWindow with a black read-only QPlainTextEdit (maxBlockCount=5000). "
             f"Underlying error: {exc!r}"
@@ -134,7 +134,7 @@ def _make_tray_with_real_overlay(monkeypatch: pytest.MonkeyPatch, available: boo
         staticmethod(lambda: available),
     )
     tray_mod = _import_tray_app(monkeypatch)
-    overlay_mod = importlib.import_module("easy_tts.ui.overlay")
+    overlay_mod = importlib.import_module("wordy.ui.overlay")
     overlay = overlay_mod.InputOverlay(on_submit=lambda _t: None)
     try:
         tray = tray_mod.TrayApp(overlay)

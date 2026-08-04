@@ -1,5 +1,5 @@
 [project]
-name = "easy-tts"
+name = "wordy"
 version = "0.1.0"
 description = "常驻热键输入 → TTS 生成 → 播放，支持 VB-CABLE 音频路由"
 authors = [
@@ -19,7 +19,7 @@ dependencies = [
 ]
 
 [project.scripts]
-easy-tts = "easy_tts.main:main"
+wordy = "wordy.main:main"
 
 [build-system]
 requires = ["uv_build>=0.12.1,<0.13.0"]

@@ -5,7 +5,7 @@
 import ast
 from pathlib import Path
 
-from easy_tts.tts.labels import VoiceLabelMaps, build_voice_label_maps
+from wordy.tts.labels import VoiceLabelMaps, build_voice_label_maps
 
 
 class TestBuildVoiceLabelMaps:
@@ -54,7 +54,7 @@ class TestBuildVoiceLabelMaps:
 
 class TestBackwardCompatibleReExport:
     def test_cartesia_connect_still_exports_helpers(self):
-        from easy_tts.tts import cartesia as cartesia_connect
+        from wordy.tts import cartesia as cartesia_connect
 
         assert cartesia_connect.VoiceLabelMaps is VoiceLabelMaps
         assert cartesia_connect.build_voice_label_maps is build_voice_label_maps
@@ -62,7 +62,7 @@ class TestBackwardCompatibleReExport:
     def test_cartesia_connect_star_import_keeps_tts_classes_visible(self):
         namespace: dict[str, object] = {}
 
-        exec("from easy_tts.tts.cartesia import *", namespace)
+        exec("from wordy.tts.cartesia import *", namespace)
 
         assert "CartesiaBytesTTS" in namespace
         assert "CartesiaRealtimeTTS" in namespace
@@ -74,18 +74,18 @@ class TestImportLayering:
 
     def test_settings_window_does_not_import_from_cartesia_connect(self):
         repo_root = Path(__file__).resolve().parent.parent
-        source = (repo_root / "src" / "easy_tts" / "ui" / "settings.py").read_text(encoding="utf-8")
+        source = (repo_root / "src" / "wordy" / "ui" / "settings.py").read_text(encoding="utf-8")
         tree = ast.parse(source)
 
         offending: list[str] = []
         for node in ast.walk(tree):
-            if isinstance(node, ast.ImportFrom) and node.module == "easy_tts.tts.cartesia":
+            if isinstance(node, ast.ImportFrom) and node.module == "wordy.tts.cartesia":
                 names = [alias.name for alias in node.names]
                 if "build_voice_label_maps" in names or "VoiceLabelMaps" in names:
                     offending.append(", ".join(names))
 
         assert not offending, (
             "settings.py must import voice label helpers from "
-            "easy_tts.tts.labels, not easy_tts.tts.cartesia. "
+            "wordy.tts.labels, not wordy.tts.cartesia. "
             f"Offending imports: {offending}"
         )

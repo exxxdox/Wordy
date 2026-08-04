@@ -27,7 +27,7 @@ import pytest
 
 # secret_store imports keyring at module level. The conftest stub
 # ensures keyring + keyring.errors are already installed in sys.modules.
-import easy_tts.secret as secret_store
+import wordy.secret as secret_store
 
 
 # ---------------------------------------------------------------------------

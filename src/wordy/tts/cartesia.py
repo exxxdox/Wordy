@@ -16,7 +16,7 @@ from cartesia import Cartesia
 from websockets.sync.client import ClientConnection
 
 # 向后兼容：从 cartesia_connect 模块重新导出 voice label 辅助函数
-from easy_tts.tts.labels import VoiceLabelMaps, build_voice_label_maps  # noqa: F401
+from wordy.tts.labels import VoiceLabelMaps, build_voice_label_maps  # noqa: F401
 
 if TYPE_CHECKING:
     from cartesia.types.websocket_connection_options import WebsocketConnectionOptions

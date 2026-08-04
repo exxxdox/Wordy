@@ -17,9 +17,9 @@ import pytest
 # Ensure repo root is importable
 sys.path.insert(0, str(__file__).replace("/tests/test_main_app.py", ""))
 
-from easy_tts.config import AppSettings
-from easy_tts.tts.constants import TTS_BACKEND_CARTESIA_BYTES, TTS_BACKEND_CARTESIA_REALTIME
-from easy_tts.tts.engine import BackendTTSEngine
+from wordy.config import AppSettings
+from wordy.tts.constants import TTS_BACKEND_CARTESIA_BYTES, TTS_BACKEND_CARTESIA_REALTIME
+from wordy.tts.engine import BackendTTSEngine
 
 
 # ---------------------------------------------------------------------------
@@ -117,7 +117,7 @@ class FakeJanitorThread:
         self._alive = True
         # janitor 线程由各测试自行替换实例控制行为，不执行 target；
         # 其他线程（如 tts-connect）直接同步执行 target。
-        if self.name != "WavTransTTSJanitor":
+        if self.name != "WordyTTSJanitor":
             self.target()
 
     def is_alive(self) -> bool:
@@ -135,7 +135,7 @@ class FakeJanitorThread:
 @pytest.fixture(autouse=True)
 def _patch_dependencies(monkeypatch):
     """Monkeypatch external dependencies before importing main."""
-    monkeypatch.setattr("easy_tts.secret.load_cartesia_api_key", lambda: "fake-api-key")
+    monkeypatch.setattr("wordy.secret.load_cartesia_api_key", lambda: "fake-api-key")
     # 用 AppSettings 替代已删除的独立 load 函数
     _default_settings = AppSettings()
     _default_settings.tts_backend = TTS_BACKEND_CARTESIA_BYTES
@@ -144,23 +144,23 @@ def _patch_dependencies(monkeypatch):
     _default_settings.volume = 1.0
     monkeypatch.setattr(AppSettings, "load", lambda **kw: _default_settings)
     # Patch InputOverlay to the fake.
-    monkeypatch.setattr("easy_tts.main.InputOverlay", FakeInputOverlay)
-    monkeypatch.setattr("easy_tts.main.threading.Thread", FakeJanitorThread)
+    monkeypatch.setattr("wordy.main.InputOverlay", FakeInputOverlay)
+    monkeypatch.setattr("wordy.main.threading.Thread", FakeJanitorThread)
     # Reset shared executor instance tracking for each test.
     FakeExecutor.instances.clear()
     # Replace executor factory with synchronous fake; tests assert through it.
-    monkeypatch.setattr("easy_tts.main.WavTransApp._create_tts_executor", staticmethod(FakeExecutor))
+    monkeypatch.setattr("wordy.main.WordyApp._create_tts_executor", staticmethod(FakeExecutor))
 
 
 @pytest.fixture
 def app(monkeypatch):
-    """Return a WavTransApp instance wired with a FakeTTSEngine."""
-    import easy_tts.main as main_mod
+    """Return a WordyApp instance wired with a FakeTTSEngine."""
+    import wordy.main as main_mod
 
     engine = FakeTTSEngine(voice_id="fake-voice")
-    monkeypatch.setattr("easy_tts.main.create_tts_engine", lambda *a, **kw: engine)
+    monkeypatch.setattr("wordy.main.create_tts_engine", lambda *a, **kw: engine)
 
-    instance = main_mod.WavTransApp()
+    instance = main_mod.WordyApp()
     # Reset engine because _create_tts_engine was already called during __init__.
     instance.tts_engine = engine
     try:
@@ -194,7 +194,7 @@ class _HardExitCalled(RuntimeError):
 @pytest.mark.parametrize("system_exit_code", [None, 0, False])
 def test_run_as_main_hard_exits_after_successful_completion(monkeypatch, system_exit_code):
     """_run_as_main must flush then os._exit(0) after clean SystemExit codes."""
-    import easy_tts.main as main_mod
+    import wordy.main as main_mod
 
     events: list[str] = []
 
@@ -218,7 +218,7 @@ def test_run_as_main_hard_exits_after_successful_completion(monkeypatch, system_
 
 def test_run_as_main_hard_exits_after_normal_main_return(monkeypatch):
     """Calling _run_as_main after main() returns normally must flush then os._exit(0)."""
-    import easy_tts.main as main_mod
+    import wordy.main as main_mod
 
     events: list[str] = []
 
@@ -239,7 +239,7 @@ def test_run_as_main_hard_exits_after_normal_main_return(monkeypatch):
 @pytest.mark.parametrize("system_exit_code", [1, True, "bad"])
 def test_run_as_main_reraises_non_zero_system_exit_without_hard_exit(monkeypatch, system_exit_code):
     """Non-zero SystemExit values are failure paths and must not call os._exit."""
-    import easy_tts.main as main_mod
+    import wordy.main as main_mod
 
     hard_exit_calls: list[None] = []
 
@@ -259,7 +259,7 @@ def test_run_as_main_reraises_non_zero_system_exit_without_hard_exit(monkeypatch
 @pytest.mark.parametrize("exception", [RuntimeError("boom"), KeyboardInterrupt()])
 def test_run_as_main_reraises_base_exception_without_hard_exit(monkeypatch, exception):
     """Generic exceptions and KeyboardInterrupt must be re-raised without hard exit."""
-    import easy_tts.main as main_mod
+    import wordy.main as main_mod
 
     events: list[str] = []
 
@@ -278,7 +278,7 @@ def test_run_as_main_reraises_base_exception_without_hard_exit(monkeypatch, exce
 
 def test_hard_exit_success_flushes_then_exits(monkeypatch):
     """_hard_exit_success must flush before os._exit(0), then exit."""
-    import easy_tts.main as main_mod
+    import wordy.main as main_mod
 
     events: list[str] = []
 
@@ -297,7 +297,7 @@ def test_hard_exit_success_flushes_then_exits(monkeypatch):
 
 def test_flush_std_streams_and_logging_is_best_effort(monkeypatch):
     """Flush helper must attempt stdout, stderr, and logging.shutdown even if earlier steps fail."""
-    import easy_tts.main as main_mod
+    import wordy.main as main_mod
 
     events: list[str] = []
 
@@ -317,7 +317,7 @@ def test_flush_std_streams_and_logging_is_best_effort(monkeypatch):
 
 def test_calling_main_directly_does_not_hard_exit(monkeypatch):
     """Importing and calling main.main() must preserve app behavior without invoking os._exit."""
-    import easy_tts.main as main_mod
+    import wordy.main as main_mod
 
     events: list[str] = []
 
@@ -326,7 +326,7 @@ def test_calling_main_directly_does_not_hard_exit(monkeypatch):
             events.append("app.run")
 
     monkeypatch.setattr(main_mod, "configure_logging", lambda: events.append("configure_logging"))
-    monkeypatch.setattr(main_mod, "WavTransApp", lambda: FakeApp())
+    monkeypatch.setattr(main_mod, "WordyApp", lambda: FakeApp())
     monkeypatch.setattr(main_mod.os, "_exit", lambda code: events.append(f"exit:{code}"))
 
     main_mod.main()
@@ -336,7 +336,7 @@ def test_calling_main_directly_does_not_hard_exit(monkeypatch):
 
 def test_configure_logging_installs_log_stream_pipeline(monkeypatch):
     """configure_logging must install the in-memory/Qt log stream pipeline for tray UI."""
-    import easy_tts.main as main_mod
+    import wordy.main as main_mod
 
     install_calls: list[None] = []
 
@@ -354,7 +354,7 @@ def test_configure_logging_installs_log_stream_pipeline(monkeypatch):
 
 def test_run_prepares_overlay_tray_hook_and_disposes_tray_before_overlay_run(app, monkeypatch):
     """run() must prepare overlay UI, wire TrayApp/TrayController, hook tray disposal, then enter overlay.run()."""
-    import easy_tts.main as main_mod
+    import wordy.main as main_mod
 
     events: list[str] = []
 
@@ -400,7 +400,7 @@ def test_run_prepares_overlay_tray_hook_and_disposes_tray_before_overlay_run(app
     monkeypatch.setattr(main_mod, "TrayApp", RecordingTrayApp)
     monkeypatch.setattr(main_mod, "TrayController", RecordingTrayController)
 
-    instance = main_mod.WavTransApp()
+    instance = main_mod.WordyApp()
     instance.tts_engine = app.tts_engine
     instance._tts_executor = app._tts_executor
     instance._janitor_queue = queue.Queue()
@@ -425,7 +425,7 @@ def test_run_prepares_overlay_tray_hook_and_disposes_tray_before_overlay_run(app
 
 def test_run_disposes_tray_in_finally_when_overlay_run_raises(app, monkeypatch):
     """run() finally path must dispose the tray even if overlay.run() raises before pre-stop hook fires."""
-    import easy_tts.main as main_mod
+    import wordy.main as main_mod
 
     events: list[str] = []
 
@@ -461,7 +461,7 @@ def test_run_disposes_tray_in_finally_when_overlay_run_raises(app, monkeypatch):
     monkeypatch.setattr(main_mod, "TrayApp", RecordingTrayApp)
     monkeypatch.setattr(main_mod, "TrayController", RecordingTrayController)
 
-    instance = main_mod.WavTransApp()
+    instance = main_mod.WordyApp()
     instance.tts_engine = app.tts_engine
     instance._tts_executor = app._tts_executor
     instance._janitor_queue = queue.Queue()
@@ -486,7 +486,7 @@ def test_run_disposes_tray_in_finally_when_overlay_run_raises(app, monkeypatch):
 
 
 def test_app_uses_fake_executor_not_raw_thread(app):
-    """WavTransApp must hold a FakeExecutor (i.e. went through factory), not a raw threading object."""
+    """WordyApp must hold a FakeExecutor (i.e. went through factory), not a raw threading object."""
     assert isinstance(app._tts_executor, FakeExecutor)
     assert not isinstance(app._tts_executor, threading.Thread)
 
@@ -534,7 +534,7 @@ def test_on_submit_does_not_spawn_raw_daemon_thread(app, monkeypatch):
 
 def test_backend_switch_enqueues_old_worker_without_inline_cleanup(app, monkeypatch):
     """Backend switch must enqueue the old executor+engine for the janitor and NOT call shutdown/close inline."""
-    import easy_tts.main as main_mod
+    import wordy.main as main_mod
 
     old_engine = app.tts_engine
     old_executor = app._tts_executor
@@ -557,12 +557,12 @@ def test_backend_switch_enqueues_old_worker_without_inline_cleanup(app, monkeypa
     old_executor.shutdown = tracked_shutdown  # type: ignore[assignment]
     old_engine.close = tracked_close  # type: ignore[assignment]
 
-    monkeypatch.setattr("easy_tts.main.resolve_tts_backend", lambda name: TTS_BACKEND_CARTESIA_REALTIME)
-    monkeypatch.setattr("easy_tts.main.create_tts_engine", lambda *a, **kw: new_engine)
+    monkeypatch.setattr("wordy.main.resolve_tts_backend", lambda name: TTS_BACKEND_CARTESIA_REALTIME)
+    monkeypatch.setattr("wordy.main.create_tts_engine", lambda *a, **kw: new_engine)
 
     observed_queue: queue.Queue = queue.Queue()
     assert hasattr(app, "_janitor_queue"), (
-        "WavTransApp must expose a _janitor_queue attribute for deferred TTS cleanup"
+        "WordyApp must expose a _janitor_queue attribute for deferred TTS cleanup"
     )
     app._janitor_queue = observed_queue
 
@@ -604,8 +604,8 @@ def test_backend_switch_enqueues_old_worker_without_inline_cleanup(app, monkeypa
 def test_backend_switch_submit_after_switch_uses_new_engine_and_executor(app, monkeypatch):
     """After a backend switch, _on_submit must route work to the NEW engine and the NEW executor."""
     new_engine = FakeTTSEngine(voice_id="fake-voice")
-    monkeypatch.setattr("easy_tts.main.resolve_tts_backend", lambda name: TTS_BACKEND_CARTESIA_REALTIME)
-    monkeypatch.setattr("easy_tts.main.create_tts_engine", lambda *a, **kw: new_engine)
+    monkeypatch.setattr("wordy.main.resolve_tts_backend", lambda name: TTS_BACKEND_CARTESIA_REALTIME)
+    monkeypatch.setattr("wordy.main.create_tts_engine", lambda *a, **kw: new_engine)
 
     app._janitor_queue = queue.Queue()
 
@@ -631,11 +631,11 @@ def test_backend_switch_no_op_when_same_backend(app, monkeypatch):
     """Switching to the same backend should be a no-op and not touch the executor or janitor queue."""
     old_engine = app.tts_engine
     old_executor = app._tts_executor
-    monkeypatch.setattr("easy_tts.main.resolve_tts_backend", lambda name: TTS_BACKEND_CARTESIA_BYTES)
+    monkeypatch.setattr("wordy.main.resolve_tts_backend", lambda name: TTS_BACKEND_CARTESIA_BYTES)
 
     observed_queue: queue.Queue = queue.Queue()
     assert hasattr(app, "_janitor_queue"), (
-        "WavTransApp must expose a _janitor_queue attribute for deferred TTS cleanup"
+        "WordyApp must expose a _janitor_queue attribute for deferred TTS cleanup"
     )
     app._janitor_queue = observed_queue
 
@@ -655,7 +655,7 @@ def test_run_enqueues_current_worker_and_sentinel_then_joins_janitor(app, monkey
 
     No inline executor.shutdown / engine.close calls are allowed during run cleanup.
     """
-    import easy_tts.main as main_mod
+    import wordy.main as main_mod
 
     executor = app._tts_executor
     engine = app.tts_engine
@@ -679,7 +679,7 @@ def test_run_enqueues_current_worker_and_sentinel_then_joins_janitor(app, monkey
 
     observed_queue: queue.Queue = queue.Queue()
     assert hasattr(app, "_janitor_queue"), (
-        "WavTransApp must expose a _janitor_queue attribute for deferred TTS cleanup"
+        "WordyApp must expose a _janitor_queue attribute for deferred TTS cleanup"
     )
     app._janitor_queue = observed_queue
 
@@ -698,7 +698,7 @@ def test_run_enqueues_current_worker_and_sentinel_then_joins_janitor(app, monkey
 
     fake_janitor = FakeJanitorThread()
     assert hasattr(app, "_janitor_thread"), (
-        "WavTransApp must expose a _janitor_thread attribute for deferred TTS cleanup"
+        "WordyApp must expose a _janitor_thread attribute for deferred TTS cleanup"
     )
     app._janitor_thread = fake_janitor  # type: ignore[assignment]
 
@@ -740,13 +740,13 @@ def test_run_enqueues_current_worker_and_sentinel_then_joins_janitor(app, monkey
 
 
 def test_run_without_cartesia_api_key_does_not_eager_connect(monkeypatch):
-    import easy_tts.main as main_mod
+    import wordy.main as main_mod
 
     engine = FakeTTSEngine(voice_id="fake-voice")
-    monkeypatch.setattr("easy_tts.secret.load_cartesia_api_key", lambda: None)
-    monkeypatch.setattr("easy_tts.main.create_tts_engine", lambda *a, **kw: engine)
+    monkeypatch.setattr("wordy.secret.load_cartesia_api_key", lambda: None)
+    monkeypatch.setattr("wordy.main.create_tts_engine", lambda *a, **kw: engine)
 
-    instance = main_mod.WavTransApp()
+    instance = main_mod.WordyApp()
     run_calls: list[None] = []
     instance.overlay.run = lambda: run_calls.append(None)
     observed_queue: queue.Queue = queue.Queue()
@@ -779,7 +779,7 @@ CARTESIA_KEY_SENTINEL = "sk_main_NEW_DO_NOT_LEAK"
 
 
 def test_app_startup_loads_cartesia_api_key_from_secret_store(monkeypatch):
-    import easy_tts.main as main_mod
+    import wordy.main as main_mod
 
     secret_load_calls: list[None] = []
     engine_calls: list[dict[str, Any]] = []
@@ -792,37 +792,37 @@ def test_app_startup_loads_cartesia_api_key_from_secret_store(monkeypatch):
         engine_calls.append({"args": args, "kwargs": kwargs})
         return FakeTTSEngine(voice_id=kwargs.get("voice_id"))
 
-    monkeypatch.setattr("easy_tts.secret.load_cartesia_api_key", secret_loader, raising=False)
-    monkeypatch.setattr("easy_tts.main.create_tts_engine", factory)
+    monkeypatch.setattr("wordy.secret.load_cartesia_api_key", secret_loader, raising=False)
+    monkeypatch.setattr("wordy.main.create_tts_engine", factory)
 
-    instance = main_mod.WavTransApp()
+    instance = main_mod.WordyApp()
 
     assert secret_load_calls == [None], (
-        "WavTransApp must source the Cartesia API key from secret_store.load_cartesia_api_key()"
+        "WordyApp must source the Cartesia API key from secret_store.load_cartesia_api_key()"
     )
-    assert engine_calls, "WavTransApp must construct a TTS engine during startup"
+    assert engine_calls, "WordyApp must construct a TTS engine during startup"
     assert instance.cartesia_api_key == CARTESIA_KEY_SENTINEL
     assert engine_calls[0]["kwargs"].get("api_key") == CARTESIA_KEY_SENTINEL
 
 
 def test_app_startup_does_not_leak_cartesia_api_key_when_secret_loader_raises(monkeypatch):
-    import easy_tts.main as main_mod
+    import wordy.main as main_mod
 
     def secret_loader() -> str:
         raise RuntimeError("secret-store unavailable")
 
-    monkeypatch.setattr("easy_tts.secret.load_cartesia_api_key", secret_loader, raising=False)
-    monkeypatch.setattr("easy_tts.main.create_tts_engine", lambda *a, **kw: FakeTTSEngine(voice_id="fake-voice"))
+    monkeypatch.setattr("wordy.secret.load_cartesia_api_key", secret_loader, raising=False)
+    monkeypatch.setattr("wordy.main.create_tts_engine", lambda *a, **kw: FakeTTSEngine(voice_id="fake-voice"))
 
     with pytest.raises(RuntimeError) as exc_info:
-        main_mod.WavTransApp()
+        main_mod.WordyApp()
 
     message = str(exc_info.value)
     assert CARTESIA_KEY_SENTINEL not in message
 
 
 def test_cartesia_api_key_change_rebuilds_tts_engine_without_leaking_key(monkeypatch):
-    import easy_tts.main as main_mod
+    import wordy.main as main_mod
 
     created_engines: list[FakeTTSEngine] = []
     engine_calls: list[dict[str, Any]] = []
@@ -833,10 +833,10 @@ def test_cartesia_api_key_change_rebuilds_tts_engine_without_leaking_key(monkeyp
         engine_calls.append({"args": args, "kwargs": kwargs})
         return engine
 
-    monkeypatch.setattr("easy_tts.secret.load_cartesia_api_key", lambda: "initial-secret-key", raising=False)
-    monkeypatch.setattr("easy_tts.main.create_tts_engine", factory)
+    monkeypatch.setattr("wordy.secret.load_cartesia_api_key", lambda: "initial-secret-key", raising=False)
+    monkeypatch.setattr("wordy.main.create_tts_engine", factory)
 
-    instance = main_mod.WavTransApp()
+    instance = main_mod.WordyApp()
     old_engine = instance.tts_engine
     old_executor = instance._tts_executor
     instance._janitor_queue = queue.Queue()
@@ -847,7 +847,7 @@ def test_cartesia_api_key_change_rebuilds_tts_engine_without_leaking_key(monkeyp
         callbacks = getattr(overlay, "_callbacks", {}) if overlay is not None else {}
         callback = callbacks.get("on_cartesia_api_key_change") or callbacks.get("on_api_key_change")
     assert callable(callback), (
-        "WavTransApp must expose or wire a settings-apply callback for Cartesia API key changes"
+        "WordyApp must expose or wire a settings-apply callback for Cartesia API key changes"
     )
 
     callback(CARTESIA_KEY_SENTINEL)
@@ -870,13 +870,13 @@ def test_cartesia_api_key_change_rebuilds_tts_engine_without_leaking_key(monkeyp
 
 
 def test_on_cartesia_api_key_change_engine_build_failure_does_not_corrupt_state(monkeypatch):
-    import easy_tts.main as main_mod
+    import wordy.main as main_mod
 
     initial_engine = FakeTTSEngine(voice_id="fake-voice")
-    monkeypatch.setattr("easy_tts.secret.load_cartesia_api_key", lambda: "sk_OLD_STABLE", raising=False)
-    monkeypatch.setattr("easy_tts.main.create_tts_engine", lambda *a, **kw: initial_engine)
+    monkeypatch.setattr("wordy.secret.load_cartesia_api_key", lambda: "sk_OLD_STABLE", raising=False)
+    monkeypatch.setattr("wordy.main.create_tts_engine", lambda *a, **kw: initial_engine)
 
-    instance = main_mod.WavTransApp()
+    instance = main_mod.WordyApp()
     old_engine = instance.tts_engine
     old_executor = instance._tts_executor
     observed_queue: queue.Queue = queue.Queue()
@@ -885,7 +885,7 @@ def test_on_cartesia_api_key_change_engine_build_failure_does_not_corrupt_state(
     def failing_factory(*args: Any, **kwargs: Any) -> FakeTTSEngine:
         raise RuntimeError("build failed")
 
-    monkeypatch.setattr("easy_tts.main.create_tts_engine", failing_factory)
+    monkeypatch.setattr("wordy.main.create_tts_engine", failing_factory)
 
     with pytest.raises(RuntimeError, match="build failed"):
         instance._on_cartesia_api_key_change("sk_NEW_FAILURE")
@@ -938,12 +938,12 @@ def _patch_audio_player_factory(monkeypatch) -> list[dict[str, Any]]:
         player.output_device_name = kwargs.get("output_device_name")
         return player
 
-    monkeypatch.setattr("easy_tts.main.AudioPlayer", factory)
+    monkeypatch.setattr("wordy.main.AudioPlayer", factory)
     return calls
 
 
 def test_app_constructs_audio_player_with_loaded_output_device_name(monkeypatch):
-    """WavTransApp must call AudioPlayer with output_device_name from AppSettings."""
+    """WordyApp must call AudioPlayer with output_device_name from AppSettings."""
     s = AppSettings()
     s.tts_backend = TTS_BACKEND_CARTESIA_BYTES
     s.voice_id = "fake-voice"
@@ -953,12 +953,12 @@ def test_app_constructs_audio_player_with_loaded_output_device_name(monkeypatch)
     monkeypatch.setattr(AppSettings, "load", lambda **kw: s)
     audio_player_calls = _patch_audio_player_factory(monkeypatch)
 
-    import easy_tts.main as main_mod
+    import wordy.main as main_mod
 
     engine = FakeTTSEngine(voice_id="fake-voice")
-    monkeypatch.setattr("easy_tts.main.create_tts_engine", lambda *a, **kw: engine)
+    monkeypatch.setattr("wordy.main.create_tts_engine", lambda *a, **kw: engine)
 
-    _ = main_mod.WavTransApp()
+    _ = main_mod.WordyApp()
 
     assert audio_player_calls, "AudioPlayer must be constructed exactly once at startup"
     init_kwargs = audio_player_calls[0]["kwargs"]
@@ -978,12 +978,12 @@ def test_app_constructs_audio_player_with_none_when_no_stored_device(monkeypatch
     monkeypatch.setattr(AppSettings, "load", lambda **kw: s)
     audio_player_calls = _patch_audio_player_factory(monkeypatch)
 
-    import easy_tts.main as main_mod
+    import wordy.main as main_mod
 
     engine = FakeTTSEngine(voice_id="fake-voice")
-    monkeypatch.setattr("easy_tts.main.create_tts_engine", lambda *a, **kw: engine)
+    monkeypatch.setattr("wordy.main.create_tts_engine", lambda *a, **kw: engine)
 
-    _ = main_mod.WavTransApp()
+    _ = main_mod.WordyApp()
 
     assert audio_player_calls
     init_kwargs = audio_player_calls[0]["kwargs"]
@@ -1004,15 +1004,15 @@ def test_on_audio_output_change_updates_player_device_name(monkeypatch):
     monkeypatch.setattr(AppSettings, "load", lambda **kw: s)
     _ = _patch_audio_player_factory(monkeypatch)
 
-    import easy_tts.main as main_mod
+    import wordy.main as main_mod
 
     engine = FakeTTSEngine(voice_id="fake-voice")
-    monkeypatch.setattr("easy_tts.main.create_tts_engine", lambda *a, **kw: engine)
+    monkeypatch.setattr("wordy.main.create_tts_engine", lambda *a, **kw: engine)
 
-    instance = main_mod.WavTransApp()
+    instance = main_mod.WordyApp()
 
     handler = getattr(instance, "_on_audio_output_change", None)
-    assert callable(handler), "WavTransApp must expose _on_audio_output_change callable"
+    assert callable(handler), "WordyApp must expose _on_audio_output_change callable"
 
     handler("VB-Audio Virtual Cable")
 
@@ -1033,14 +1033,14 @@ def test_on_audio_output_change_to_none_clears_player_device_name(monkeypatch):
     monkeypatch.setattr(AppSettings, "load", lambda **kw: s)
     _ = _patch_audio_player_factory(monkeypatch)
 
-    import easy_tts.main as main_mod
+    import wordy.main as main_mod
 
     engine = FakeTTSEngine(voice_id="fake-voice")
-    monkeypatch.setattr("easy_tts.main.create_tts_engine", lambda *a, **kw: engine)
+    monkeypatch.setattr("wordy.main.create_tts_engine", lambda *a, **kw: engine)
 
-    instance = main_mod.WavTransApp()
+    instance = main_mod.WordyApp()
     handler = getattr(instance, "_on_audio_output_change", None)
-    assert callable(handler), "WavTransApp must expose _on_audio_output_change callable"
+    assert callable(handler), "WordyApp must expose _on_audio_output_change callable"
 
     handler(None)
 
@@ -1051,7 +1051,7 @@ def test_on_audio_output_change_to_none_clears_player_device_name(monkeypatch):
 
 
 def test_app_wires_on_audio_output_change_callback_to_overlay(monkeypatch):
-    """WavTransApp must pass _on_audio_output_change to InputOverlay constructor."""
+    """WordyApp must pass _on_audio_output_change to InputOverlay constructor."""
     s = AppSettings()
     s.tts_backend = TTS_BACKEND_CARTESIA_BYTES
     s.voice_id = "fake-voice"
@@ -1060,28 +1060,28 @@ def test_app_wires_on_audio_output_change_callback_to_overlay(monkeypatch):
     s.audio_output_device_name = None
     monkeypatch.setattr(AppSettings, "load", lambda **kw: s)
     _ = _patch_audio_player_factory(monkeypatch)
-    monkeypatch.setattr("easy_tts.main.InputOverlay", _RecordingInputOverlay)
+    monkeypatch.setattr("wordy.main.InputOverlay", _RecordingInputOverlay)
     _RecordingInputOverlay.last_kwargs = {}
 
-    import easy_tts.main as main_mod
+    import wordy.main as main_mod
 
     engine = FakeTTSEngine(voice_id="fake-voice")
-    monkeypatch.setattr("easy_tts.main.create_tts_engine", lambda *a, **kw: engine)
+    monkeypatch.setattr("wordy.main.create_tts_engine", lambda *a, **kw: engine)
 
-    instance = main_mod.WavTransApp()
+    instance = main_mod.WordyApp()
 
     overlay_kwargs = _RecordingInputOverlay.last_kwargs
     assert "on_audio_output_change" in overlay_kwargs, (
         f"InputOverlay must receive on_audio_output_change kwarg, got {overlay_kwargs!r}"
     )
     assert overlay_kwargs["on_audio_output_change"] == instance._on_audio_output_change, (
-        "on_audio_output_change kwarg must be bound to WavTransApp._on_audio_output_change"
+        "on_audio_output_change kwarg must be bound to WordyApp._on_audio_output_change"
     )
     assert "audio_player" in overlay_kwargs, (
         f"InputOverlay must receive audio_player kwarg, got {overlay_kwargs!r}"
     )
     assert overlay_kwargs["audio_player"] is instance.player, (
-        "audio_player kwarg must be the WavTransApp.player instance"
+        "audio_player kwarg must be the WordyApp.player instance"
     )
 
 
@@ -1115,7 +1115,7 @@ class _FakeAudioRouter:
 
     def get_stats(self):
         # 测试替身显式暴露麦克风侦听状态，匹配 AudioRouter 的运行时契约。
-        from easy_tts.audio.router import RouterStats
+        from wordy.audio.router import RouterStats
 
         return RouterStats(is_running=self.started, listen_configured=False)
 
@@ -1131,8 +1131,8 @@ class _FakeAudioRouter:
 def _patch_audio_router_for_runtime_change(monkeypatch) -> type[_FakeAudioRouter]:
     _FakeAudioRouter.instances.clear()
     _patch_audio_player_factory(monkeypatch)
-    monkeypatch.setattr("easy_tts.main.AudioRouter", _FakeAudioRouter)
-    monkeypatch.setattr("easy_tts.main.VBCableDriverManager.is_installed", lambda: True)
+    monkeypatch.setattr("wordy.main.AudioRouter", _FakeAudioRouter)
+    monkeypatch.setattr("wordy.main.VBCableDriverManager.is_installed", lambda: True)
     # AppSettings.load() returns defaults for audio routing (all disabled/None)
     s = AppSettings()
     s.tts_backend = TTS_BACKEND_CARTESIA_BYTES
@@ -1147,11 +1147,11 @@ def test_enabling_audio_route_runtime_switches_player_output(monkeypatch):
     """Runtime audio-route enable must switch player output to CABLE Input."""
     router_cls = _patch_audio_router_for_runtime_change(monkeypatch)
 
-    import easy_tts.main as main_mod
+    import wordy.main as main_mod
 
     engine = FakeTTSEngine(voice_id="fake-voice")
-    monkeypatch.setattr("easy_tts.main.create_tts_engine", lambda *a, **kw: engine)
-    app = main_mod.WavTransApp()
+    monkeypatch.setattr("wordy.main.create_tts_engine", lambda *a, **kw: engine)
+    app = main_mod.WordyApp()
 
     app._on_audio_route_change(
         {
@@ -1170,12 +1170,12 @@ def test_enabling_audio_route_uses_stored_mic_when_not_in_route_config(monkeypat
     """启用路由时若 route_config 不含 mic_input_device，应读取已持久化的麦克风设置。"""
     router_cls = _patch_audio_router_for_runtime_change(monkeypatch)
 
-    import easy_tts.main as main_mod
+    import wordy.main as main_mod
 
     engine = FakeTTSEngine(voice_id="fake-voice")
-    monkeypatch.setattr("easy_tts.main.create_tts_engine", lambda *a, **kw: engine)
+    monkeypatch.setattr("wordy.main.create_tts_engine", lambda *a, **kw: engine)
 
-    app = main_mod.WavTransApp()
+    app = main_mod.WordyApp()
     # 模拟上次会话已保存的麦克风
     app._settings.mic_input_device = "Saved Mic"
 
@@ -1195,11 +1195,11 @@ def test_audio_route_keeps_cable_output_when_local_output_changes(monkeypatch):
     """路由运行时本地输出变更只能更新恢复目标，不能覆盖 CABLE Input。"""
     _patch_audio_router_for_runtime_change(monkeypatch)
 
-    import easy_tts.main as main_mod
+    import wordy.main as main_mod
 
     engine = FakeTTSEngine(voice_id="fake-voice")
-    monkeypatch.setattr("easy_tts.main.create_tts_engine", lambda *a, **kw: engine)
-    app = main_mod.WavTransApp()
+    monkeypatch.setattr("wordy.main.create_tts_engine", lambda *a, **kw: engine)
+    app = main_mod.WordyApp()
     app._on_audio_route_change({"audio_routing_enabled": True})
     app.player.set_output_device.reset_mock()
 
@@ -1219,11 +1219,11 @@ def test_disabling_audio_route_runtime_stops_router(monkeypatch):
     """Disabling audio routing must stop router and reset output device."""
     router_cls = _patch_audio_router_for_runtime_change(monkeypatch)
 
-    import easy_tts.main as main_mod
+    import wordy.main as main_mod
 
     engine = FakeTTSEngine(voice_id="fake-voice")
-    monkeypatch.setattr("easy_tts.main.create_tts_engine", lambda *a, **kw: engine)
-    app = main_mod.WavTransApp()
+    monkeypatch.setattr("wordy.main.create_tts_engine", lambda *a, **kw: engine)
+    app = main_mod.WordyApp()
     app._on_audio_route_change({"audio_routing_enabled": True})
     router = router_cls.instances[-1]
 
@@ -1237,11 +1237,11 @@ def test_audio_route_runtime_update_can_clear_optional_devices(monkeypatch):
     """Explicit None updates from settings must clear virtual device."""
     router_cls = _patch_audio_router_for_runtime_change(monkeypatch)
 
-    import easy_tts.main as main_mod
+    import wordy.main as main_mod
 
     engine = FakeTTSEngine(voice_id="fake-voice")
-    monkeypatch.setattr("easy_tts.main.create_tts_engine", lambda *a, **kw: engine)
-    app = main_mod.WavTransApp()
+    monkeypatch.setattr("wordy.main.create_tts_engine", lambda *a, **kw: engine)
+    app = main_mod.WordyApp()
     app._on_audio_route_change(
         {
             "audio_routing_enabled": True,
@@ -1262,7 +1262,7 @@ def test_audio_route_runtime_update_can_clear_optional_devices(monkeypatch):
 # ---------------------------------------------------------------------------
 # RED contract tests for STRUCTURED audio output device identity (S3 follow-up).
 #
-# New requirement: WavTransApp consumes ``load_audio_output_device()`` (structured
+# New requirement: WordyApp consumes ``load_audio_output_device()`` (structured
 # dict ``{"name": ..., "host_api_name": ...}`` or ``None``) and propagates the
 # structured value to AudioPlayer construction and to ``player.set_output_device``
 # on change. Legacy ``load_audio_output_device_name`` / ``set_output_device_name``
@@ -1294,12 +1294,12 @@ def _patch_structured_audio_player_factory(monkeypatch) -> list[dict[str, Any]]:
         player.output_device_name = kwargs.get("output_device_name")
         return player
 
-    monkeypatch.setattr("easy_tts.main.AudioPlayer", factory)
+    monkeypatch.setattr("wordy.main.AudioPlayer", factory)
     return calls
 
 
 def test_app_constructs_audio_player_with_structured_load_audio_output_device(monkeypatch):
-    """WavTransApp must construct AudioPlayer using AppSettings.audio_output_device (structured dict).
+    """WordyApp must construct AudioPlayer using AppSettings.audio_output_device (structured dict).
 
     Contract:
       * AppSettings.load() is called and the settings instance provides audio_output_device.
@@ -1324,15 +1324,15 @@ def test_app_constructs_audio_player_with_structured_load_audio_output_device(mo
 
     audio_player_calls = _patch_structured_audio_player_factory(monkeypatch)
 
-    import easy_tts.main as main_mod
+    import wordy.main as main_mod
 
     engine = FakeTTSEngine(voice_id="fake-voice")
-    monkeypatch.setattr("easy_tts.main.create_tts_engine", lambda *a, **kw: engine)
+    monkeypatch.setattr("wordy.main.create_tts_engine", lambda *a, **kw: engine)
 
-    _ = main_mod.WavTransApp()
+    _ = main_mod.WordyApp()
 
     assert load_calls, (
-        "WavTransApp must call load_audio_output_device() during construction"
+        "WordyApp must call load_audio_output_device() during construction"
     )
     assert audio_player_calls, "AudioPlayer must be constructed exactly once at startup"
     init_kwargs = audio_player_calls[0]["kwargs"]
@@ -1362,12 +1362,12 @@ def test_app_constructs_audio_player_with_none_when_load_returns_none(monkeypatc
 
     audio_player_calls = _patch_structured_audio_player_factory(monkeypatch)
 
-    import easy_tts.main as main_mod
+    import wordy.main as main_mod
 
     engine = FakeTTSEngine(voice_id="fake-voice")
-    monkeypatch.setattr("easy_tts.main.create_tts_engine", lambda *a, **kw: engine)
+    monkeypatch.setattr("wordy.main.create_tts_engine", lambda *a, **kw: engine)
 
-    _ = main_mod.WavTransApp()
+    _ = main_mod.WordyApp()
 
     assert audio_player_calls
     init_kwargs = audio_player_calls[0]["kwargs"]
@@ -1396,14 +1396,14 @@ def test_on_audio_output_change_with_structured_device_calls_set_output_device(m
     monkeypatch.setattr(AppSettings, "load", lambda **kw: s)
     _ = _patch_structured_audio_player_factory(monkeypatch)
 
-    import easy_tts.main as main_mod
+    import wordy.main as main_mod
 
     engine = FakeTTSEngine(voice_id="fake-voice")
-    monkeypatch.setattr("easy_tts.main.create_tts_engine", lambda *a, **kw: engine)
+    monkeypatch.setattr("wordy.main.create_tts_engine", lambda *a, **kw: engine)
 
-    instance = main_mod.WavTransApp()
+    instance = main_mod.WordyApp()
     handler = getattr(instance, "_on_audio_output_change", None)
-    assert callable(handler), "WavTransApp must expose _on_audio_output_change callable"
+    assert callable(handler), "WordyApp must expose _on_audio_output_change callable"
 
     structured = {"name": "VB-Audio Virtual Cable", "host_api_name": "WASAPI"}
     handler(structured)
@@ -1436,14 +1436,14 @@ def test_on_audio_output_change_with_none_clears_via_set_output_device(monkeypat
     monkeypatch.setattr(AppSettings, "load", lambda **kw: s)
     _ = _patch_structured_audio_player_factory(monkeypatch)
 
-    import easy_tts.main as main_mod
+    import wordy.main as main_mod
 
     engine = FakeTTSEngine(voice_id="fake-voice")
-    monkeypatch.setattr("easy_tts.main.create_tts_engine", lambda *a, **kw: engine)
+    monkeypatch.setattr("wordy.main.create_tts_engine", lambda *a, **kw: engine)
 
-    instance = main_mod.WavTransApp()
+    instance = main_mod.WordyApp()
     handler = getattr(instance, "_on_audio_output_change", None)
-    assert callable(handler), "WavTransApp must expose _on_audio_output_change callable"
+    assert callable(handler), "WordyApp must expose _on_audio_output_change callable"
 
     handler(None)
 
@@ -1497,7 +1497,7 @@ class _FakeJanitorExecutor:
 
 def test_janitor_loop_drains_workers_in_shutdown_then_close_order():
     """_janitor_loop_inner must drain queued workers and call shutdown BEFORE close for each."""
-    import easy_tts.main as main_mod
+    import wordy.main as main_mod
 
     log: list[str] = []
     q: queue.Queue = queue.Queue()
@@ -1532,7 +1532,7 @@ def test_janitor_loop_drains_workers_in_shutdown_then_close_order():
 
 def test_janitor_loop_continues_after_executor_shutdown_exception():
     """If executor.shutdown raises, the janitor must still call engine.close AND process subsequent workers."""
-    import easy_tts.main as main_mod
+    import wordy.main as main_mod
 
     log: list[str] = []
     q: queue.Queue = queue.Queue()
@@ -1564,7 +1564,7 @@ def test_janitor_loop_continues_after_executor_shutdown_exception():
 
 def test_janitor_loop_continues_after_engine_close_exception():
     """If engine.close raises, the janitor must still process subsequent workers."""
-    import easy_tts.main as main_mod
+    import wordy.main as main_mod
 
     log: list[str] = []
     q: queue.Queue = queue.Queue()
@@ -1592,7 +1592,7 @@ def test_janitor_loop_continues_after_engine_close_exception():
 
 def test_janitor_loop_stops_on_sentinel_without_processing_later_items():
     """A None sentinel must terminate the loop; any items enqueued after it must be ignored."""
-    import easy_tts.main as main_mod
+    import wordy.main as main_mod
 
     log: list[str] = []
     q: queue.Queue = queue.Queue()
@@ -1622,7 +1622,7 @@ def test_janitor_loop_stops_on_sentinel_without_processing_later_items():
 
 def test_retired_worker_holds_executor_and_engine_references():
     """_RetiredWorker must expose .executor and .engine attributes matching constructor args."""
-    import easy_tts.main as main_mod
+    import wordy.main as main_mod
 
     executor = _FakeJanitorExecutor("x", [])
     engine = _FakeJanitorEngine("x", [])
@@ -1687,7 +1687,7 @@ def test_backend_switch_engine_build_failure_does_not_double_retire(app, monkeyp
     def failing_create_worker():
         raise RuntimeError("worker build failed")
 
-    monkeypatch.setattr("easy_tts.main.resolve_tts_backend", lambda name: TTS_BACKEND_CARTESIA_REALTIME)
+    monkeypatch.setattr("wordy.main.resolve_tts_backend", lambda name: TTS_BACKEND_CARTESIA_REALTIME)
     monkeypatch.setattr(app, "_create_tts_worker", failing_create_worker)
 
     with pytest.raises(RuntimeError, match="worker build failed"):

@@ -10,7 +10,7 @@ from io import BytesIO
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from easy_tts.audio.player import AudioPlayer, OutputDeviceSelection
+    from wordy.audio.player import AudioPlayer, OutputDeviceSelection
 
 logger = logging.getLogger(__name__)
 

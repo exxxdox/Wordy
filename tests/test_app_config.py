@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Tests for easy_tts.config.py AppSettings behavior."""
+"""Tests for wordy.config.py AppSettings behavior."""
 
 import json
 import os
 from pathlib import Path
 
-import easy_tts.config
-from easy_tts.config import AppSettings, display_hotkey, MIN_VOLUME, MAX_VOLUME
-from easy_tts.config import MIN_GAIN, MAX_GAIN
-from easy_tts.tts.constants import DEFAULT_TTS_BACKEND, TTS_BACKENDS
+import wordy.config
+from wordy.config import AppSettings, display_hotkey, MIN_VOLUME, MAX_VOLUME
+from wordy.config import MIN_GAIN, MAX_GAIN
+from wordy.tts.constants import DEFAULT_TTS_BACKEND, TTS_BACKENDS
 
 
 # ---------------------------------------------------------------------------
@@ -605,7 +605,7 @@ def test_load_audio_output_device_structured_overrides_legacy(tmp_path: Path):
 # Cartesia API key status propagation
 # ---------------------------------------------------------------------------
 
-import easy_tts.secret
+import wordy.secret
 
 
 def _patch_cartesia_api_key_status(monkeypatch, *, key_set: bool, storage: str):
@@ -613,7 +613,7 @@ def _patch_cartesia_api_key_status(monkeypatch, *, key_set: bool, storage: str):
     status = {"cartesia_api_key_set": key_set, "cartesia_api_key_storage": storage}
 
     monkeypatch.setattr(
-        easy_tts.secret,
+        wordy.secret,
         "get_cartesia_api_key_status",
         lambda: status.copy(),
         raising=False,
@@ -622,13 +622,13 @@ def _patch_cartesia_api_key_status(monkeypatch, *, key_set: bool, storage: str):
 
 def test_app_config_env_file_api_removed():
     """app_config must no longer expose .env migration-era API symbols."""
-    assert not hasattr(easy_tts.config, "ENV_FILE")
-    assert not hasattr(easy_tts.config, "load_cartesia_api_key")
+    assert not hasattr(wordy.config, "ENV_FILE")
+    assert not hasattr(wordy.config, "load_cartesia_api_key")
 
 
 def test_app_config_source_has_no_env_or_raw_key_access():
     """app_config source must be purged of direct env/raw-key access after migration."""
-    source = Path(easy_tts.config.__file__).read_text(encoding="utf-8")
+    source = Path(wordy.config.__file__).read_text(encoding="utf-8")
     forbidden_tokens = (".env", "CARTESIA_API_KEY", "os.environ", "os.getenv")
 
     for token in forbidden_tokens:
@@ -640,11 +640,11 @@ def test_cartesia_api_key_set_defaults_false_when_no_key(
 ):
     """No key stored anywhere -> cartesia_api_key_set is False."""
     cfg = tmp_path / "config.json"
-    _patch_cartesia_api_key_status(monkeypatch, key_set=False, storage=easy_tts.secret.STORAGE_NONE)
+    _patch_cartesia_api_key_status(monkeypatch, key_set=False, storage=wordy.secret.STORAGE_NONE)
 
     s = AppSettings.load(config_file=cfg)
     assert s.cartesia_api_key_set is False
-    assert s.cartesia_api_key_storage == easy_tts.secret.STORAGE_NONE
+    assert s.cartesia_api_key_storage == wordy.secret.STORAGE_NONE
 
 
 def test_cartesia_api_key_set_true_when_secret_store_status_reports_keyring(
@@ -652,11 +652,11 @@ def test_cartesia_api_key_set_true_when_secret_store_status_reports_keyring(
 ):
     """Status API reports keyring -> metadata mirrors status."""
     cfg = tmp_path / "config.json"
-    _patch_cartesia_api_key_status(monkeypatch, key_set=True, storage=easy_tts.secret.STORAGE_KEYRING)
+    _patch_cartesia_api_key_status(monkeypatch, key_set=True, storage=wordy.secret.STORAGE_KEYRING)
 
     s = AppSettings.load(config_file=cfg)
     assert s.cartesia_api_key_set is True
-    assert s.cartesia_api_key_storage == easy_tts.secret.STORAGE_KEYRING
+    assert s.cartesia_api_key_storage == wordy.secret.STORAGE_KEYRING
 
 
 def test_load_never_contains_raw_key(monkeypatch, tmp_path: Path, fake_keyring):
@@ -664,7 +664,7 @@ def test_load_never_contains_raw_key(monkeypatch, tmp_path: Path, fake_keyring):
     raw = "sk-do-not-leak-in-app-config"
     cfg = tmp_path / "config.json"
     json.dump({"cartesia_api_key": raw}, cfg.open("w"))
-    _patch_cartesia_api_key_status(monkeypatch, key_set=True, storage=easy_tts.secret.STORAGE_KEYRING)
+    _patch_cartesia_api_key_status(monkeypatch, key_set=True, storage=wordy.secret.STORAGE_KEYRING)
 
     s = AppSettings.load(config_file=cfg)
     # Check string fields don't contain the raw key
@@ -680,7 +680,7 @@ def test_user_config_file_never_contains_accidental_secret_fields(
     """AppSettings.update() strips/refuses accidental secret fields before JSON write."""
     sentinel = "sk_SHOULD_NOT_WRITE"
     cfg = tmp_path / "config.json"
-    _patch_cartesia_api_key_status(monkeypatch, key_set=True, storage=easy_tts.secret.STORAGE_KEYRING)
+    _patch_cartesia_api_key_status(monkeypatch, key_set=True, storage=wordy.secret.STORAGE_KEYRING)
 
     s = AppSettings.load(config_file=cfg)
     # update() only sets known fields; unknown kwargs are ignored by the dataclass
@@ -696,21 +696,21 @@ def test_user_config_file_never_contains_accidental_secret_fields(
 def test_load_initial_config_cartesia_status(monkeypatch, tmp_path: Path, fake_keyring):
     """AppSettings.load() surfaces metadata from secret_store status."""
     cfg = tmp_path / "config.json"
-    _patch_cartesia_api_key_status(monkeypatch, key_set=True, storage=easy_tts.secret.STORAGE_KEYRING)
+    _patch_cartesia_api_key_status(monkeypatch, key_set=True, storage=wordy.secret.STORAGE_KEYRING)
 
     s = AppSettings.load(config_file=cfg)
     assert s.cartesia_api_key_set is True
-    assert s.cartesia_api_key_storage == easy_tts.secret.STORAGE_KEYRING
+    assert s.cartesia_api_key_storage == wordy.secret.STORAGE_KEYRING
 
 
 def test_load_defaults_when_status_reports_no_key(monkeypatch, tmp_path: Path, fake_keyring):
     """Status API reports no key -> AppSettings reports False/STORAGE_NONE."""
     cfg = tmp_path / "config.json"
-    _patch_cartesia_api_key_status(monkeypatch, key_set=False, storage=easy_tts.secret.STORAGE_NONE)
+    _patch_cartesia_api_key_status(monkeypatch, key_set=False, storage=wordy.secret.STORAGE_NONE)
 
     s = AppSettings.load(config_file=cfg)
     assert s.cartesia_api_key_set is False
-    assert s.cartesia_api_key_storage == easy_tts.secret.STORAGE_NONE
+    assert s.cartesia_api_key_storage == wordy.secret.STORAGE_NONE
 
 
 # ---------------------------------------------------------------------------

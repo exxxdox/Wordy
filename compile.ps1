@@ -40,32 +40,32 @@ if ($LASTEXITCODE -ne 0) {
 
 # 所有需要显式声明的隐藏导入（uv 项目 src-layout 结构）
 $hiddenImports = @(
-    'easy_tts.config',
-    'easy_tts.secret',
-    'easy_tts.log',
-    'easy_tts.hotkey',
-    'easy_tts.hotkey.parser',
-    'easy_tts.hotkey.native',
-    'easy_tts.identity',
-    'easy_tts.qt_lifecycle',
-    'easy_tts.audio.capture',
-    'easy_tts.audio.player',
-    'easy_tts.audio.router',
-    'easy_tts.audio.driver',
-    'easy_tts.tts.constants',
-    'easy_tts.tts.engine',
-    'easy_tts.tts.registry',
-    'easy_tts.tts.labels',
-    'easy_tts.tts.cartesia',
-    'easy_tts.ui.overlay',
-    'easy_tts.ui.overlay_widgets',
-    'easy_tts.ui.settings',
-    'easy_tts.ui.settings_state',
-    'easy_tts.ui.settings_widgets',
-    'easy_tts.ui.settings_style',
-    'easy_tts.ui.tray',
-    'easy_tts.ui.theme',
-    'easy_tts.ui.window'
+    'wordy.config',
+    'wordy.secret',
+    'wordy.log',
+    'wordy.hotkey',
+    'wordy.hotkey.parser',
+    'wordy.hotkey.native',
+    'wordy.identity',
+    'wordy.qt_lifecycle',
+    'wordy.audio.capture',
+    'wordy.audio.player',
+    'wordy.audio.router',
+    'wordy.audio.driver',
+    'wordy.tts.constants',
+    'wordy.tts.engine',
+    'wordy.tts.registry',
+    'wordy.tts.labels',
+    'wordy.tts.cartesia',
+    'wordy.ui.overlay',
+    'wordy.ui.overlay_widgets',
+    'wordy.ui.settings',
+    'wordy.ui.settings_state',
+    'wordy.ui.settings_widgets',
+    'wordy.ui.settings_style',
+    'wordy.ui.tray',
+    'wordy.ui.theme',
+    'wordy.ui.window'
 )
 
 $hiddenImportArgs = @()
@@ -81,13 +81,13 @@ $pyinstallerArgs = @(
     '--noconfirm',
     '--onefile',
     '--windowed',
-    '--name', 'WavTrans',
+    '--name', 'Wordy',
     '--icon', $iconPath,
-    '--add-data', 'src/easy_tts/ui/icons/settings.svg;easy_tts/ui/icons',
+    '--add-data', 'src/wordy/ui/icons/settings.svg;wordy/ui/icons',
     '--collect-all', 'cartesia',
     '--collect-all', 'keyring',
     '--collect-submodules', 'websockets'
-) + $(if ($Clean) { @('--clean') } else { @() }) + $hiddenImportArgs + @('src/easy_tts/__main__.py')
+) + $(if ($Clean) { @('--clean') } else { @() }) + $hiddenImportArgs + @('src/wordy/__main__.py')
 
 & uv run pyinstaller @pyinstallerArgs
 $buildExit = $LASTEXITCODE
@@ -106,7 +106,7 @@ $buildDir = Join-Path $PSScriptRoot 'build'
 if (Test-Path -LiteralPath $buildDir -PathType Container) {
     Remove-Item -LiteralPath $buildDir -Recurse -Force
 }
-$specFile = Join-Path $PSScriptRoot 'WavTrans.spec'
+$specFile = Join-Path $PSScriptRoot 'Wordy.spec'
 if (Test-Path -LiteralPath $specFile -PathType Leaf) {
     Remove-Item -LiteralPath $specFile -Force
 }
@@ -114,7 +114,7 @@ if (Test-Path -LiteralPath $specFile -PathType Leaf) {
 $stopwatch.Stop()
 $elapsed = $stopwatch.Elapsed.ToString('mm\:ss')
 
-$outputPath = Join-Path $PSScriptRoot 'dist\WavTrans.exe'
+$outputPath = Join-Path $PSScriptRoot 'dist\Wordy.exe'
 
 Write-Host "[INFO] Build succeeded in $elapsed : $outputPath"
 

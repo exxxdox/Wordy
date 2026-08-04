@@ -18,25 +18,25 @@ from typing import cast
 from pathlib import Path
 from tempfile import gettempdir
 
-from easy_tts.config import AppSettings
-from easy_tts.audio.player import AudioPlayer, OutputDeviceSelection
-from easy_tts.audio.router import AudioRouter
-from easy_tts.audio.driver import VBCableDriverManager
-from easy_tts.audio.sidetone import SidetoneAudioPlayer
-from easy_tts.ui.overlay import InputOverlay
-from easy_tts.log import install_log_stream
-import easy_tts.secret
-from easy_tts.secret import KeyringUnavailableError
-from easy_tts.ui.tray import TrayApp, TrayController
-from easy_tts.tts.constants import TTS_BACKEND_CARTESIA_BYTES, TTS_BACKEND_CARTESIA_REALTIME
-from easy_tts.tts.registry import create_tts_engine, resolve_tts_backend
-from easy_tts.tts.engine import BackendTTSEngine, TTSAudioPlayer
+from wordy.config import AppSettings
+from wordy.audio.player import AudioPlayer, OutputDeviceSelection
+from wordy.audio.router import AudioRouter
+from wordy.audio.driver import VBCableDriverManager
+from wordy.audio.sidetone import SidetoneAudioPlayer
+from wordy.ui.overlay import InputOverlay
+from wordy.log import install_log_stream
+import wordy.secret
+from wordy.secret import KeyringUnavailableError
+from wordy.ui.tray import TrayApp, TrayController
+from wordy.tts.constants import TTS_BACKEND_CARTESIA_BYTES, TTS_BACKEND_CARTESIA_REALTIME
+from wordy.tts.registry import create_tts_engine, resolve_tts_backend
+from wordy.tts.engine import BackendTTSEngine, TTSAudioPlayer
 
 
 logger = logging.getLogger(__name__)
 
-_TTS_EXECUTOR_THREAD_NAME_PREFIX = "WavTransTTS"
-_JANITOR_THREAD_NAME = "WavTransTTSJanitor"
+_TTS_EXECUTOR_THREAD_NAME_PREFIX = "WordyTTS"
+_JANITOR_THREAD_NAME = "WordyTTSJanitor"
 _JANITOR_JOIN_TIMEOUT_SECONDS = 30.0
 
 
@@ -92,7 +92,7 @@ def configure_logging() -> None:
     install_log_stream()
 
 
-class WavTransApp:
+class WordyApp:
     """常驻热键输入 → TTS 生成 → 播放，新提交不主动中断上一段播放。"""
 
     def __init__(self, tts_backend: str | None = None):
@@ -140,7 +140,7 @@ class WavTransApp:
     def _load_cartesia_api_key() -> str | None:
         """从 secret_store 读取 Cartesia API key，失败时不暴露异常内容。"""
         try:
-            return easy_tts.secret.load_cartesia_api_key()
+            return wordy.secret.load_cartesia_api_key()
         except Exception as exc:
             if isinstance(exc, KeyringUnavailableError):
                 return None
@@ -419,7 +419,7 @@ class WavTransApp:
 
     def run(self) -> None:
         """启动常驻应用。"""
-        logger.info("WavTrans 已启动，当前 TTS 后端: %s", self.tts_backend)
+        logger.info("Wordy 已启动，当前 TTS 后端: %s", self.tts_backend)
         if not self.voice_id:
             logger.warning("提示：尚未配置音色，请先打开设置，刷新音色列表并选择一个音色。")
         logger.info("按配置的全局快捷键弹出输入框，输入文本后回车播放。")
@@ -467,7 +467,7 @@ class WavTransApp:
 
 def main():
     configure_logging()
-    app = WavTransApp()
+    app = WordyApp()
     app.run()
 
 

@@ -21,10 +21,10 @@ from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import ClassVar
 
-import easy_tts.secret
-from easy_tts.identity import AudioIdentity, normalize_identity
-from easy_tts.hotkey import iter_hotkey_parts
-from easy_tts.tts.constants import DEFAULT_TTS_BACKEND, TTS_BACKENDS
+import wordy.secret
+from wordy.identity import AudioIdentity, normalize_identity
+from wordy.hotkey import iter_hotkey_parts
+from wordy.tts.constants import DEFAULT_TTS_BACKEND, TTS_BACKENDS
 
 # ---------------------------------------------------------------------------
 # UI 常量 — settings_window.py / overlay.py 使用
@@ -335,22 +335,22 @@ def _apply_if_present(
 
 def _read_cartesia_key_status() -> dict[str, bool | str]:
     """读取 Cartesia API key 元数据（不暴露密钥原文）。"""
-    status_getter = getattr(easy_tts.secret, "get_cartesia_api_key_status", None)
+    status_getter = getattr(wordy.secret, "get_cartesia_api_key_status", None)
     if callable(status_getter):
         raw_status = status_getter()
         status = raw_status if isinstance(raw_status, Mapping) else {}
     else:
         try:
-            storage_status = easy_tts.secret.get_storage_status()
+            storage_status = wordy.secret.get_storage_status()
         except Exception:
             storage_status = {}
         if isinstance(storage_status, Mapping):
-            raw_backend = storage_status.get("backend", easy_tts.secret.STORAGE_NONE)
+            raw_backend = storage_status.get("backend", wordy.secret.STORAGE_NONE)
         else:
-            raw_backend = getattr(storage_status, "backend", easy_tts.secret.STORAGE_NONE)
-        storage = raw_backend if isinstance(raw_backend, str) else easy_tts.secret.STORAGE_NONE
+            raw_backend = getattr(storage_status, "backend", wordy.secret.STORAGE_NONE)
+        storage = raw_backend if isinstance(raw_backend, str) else wordy.secret.STORAGE_NONE
         status = {
-            "cartesia_api_key_set": storage != easy_tts.secret.STORAGE_NONE,
+            "cartesia_api_key_set": storage != wordy.secret.STORAGE_NONE,
             "cartesia_api_key_storage": storage,
         }
 
@@ -358,5 +358,5 @@ def _read_cartesia_key_status() -> dict[str, bool | str]:
     storage = status.get("cartesia_api_key_storage")
     return {
         "cartesia_api_key_set": key_set if isinstance(key_set, bool) else False,
-        "cartesia_api_key_storage": storage if isinstance(storage, str) else easy_tts.secret.STORAGE_NONE,
+        "cartesia_api_key_storage": storage if isinstance(storage, str) else wordy.secret.STORAGE_NONE,
     }

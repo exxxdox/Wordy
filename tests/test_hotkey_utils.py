@@ -3,7 +3,7 @@
 
 """Tests for hotkey_utils shared tokenization/normalization."""
 
-from easy_tts.hotkey import iter_hotkey_parts, normalize_key_part, split_hotkey
+from wordy.hotkey import iter_hotkey_parts, normalize_key_part, split_hotkey
 
 
 def test_normalize_key_part_basic():

@@ -8,7 +8,7 @@ from __future__ import annotations
 from ctypes import POINTER, c_void_p, cast, sizeof
 from unittest.mock import MagicMock, patch
 
-from easy_tts.audio.listen_policy import (
+from wordy.audio.listen_policy import (
     ListenPolicyState,
     PROPERTYKEY,
     PROPVARIANT,
@@ -164,7 +164,7 @@ def test_commit_failure_is_reported() -> None:
 
 def test_explicit_output_name_never_falls_back_to_default() -> None:
     enumerator = MagicMock()
-    with patch("easy_tts.audio.listen_policy._find_device_id", return_value=None):
+    with patch("wordy.audio.listen_policy._find_device_id", return_value=None):
         assert _find_output_device_id(enumerator, "CABLE Input") is None
 
     enumerator.GetDefaultAudioEndpoint.assert_not_called()

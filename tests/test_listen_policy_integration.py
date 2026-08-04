@@ -9,9 +9,9 @@ import os
 
 import pytest
 
-from easy_tts.audio.capture import AudioCapture
-from easy_tts.audio.driver import VBCableDriverManager
-from easy_tts.audio.listen_policy import (
+from wordy.audio.capture import AudioCapture
+from wordy.audio.driver import VBCableDriverManager
+from wordy.audio.listen_policy import (
     get_listen_policy,
     restore_listen_policy,
     set_listen_policy,

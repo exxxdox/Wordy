@@ -15,7 +15,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 .\init.ps1                     # uv sync，自动下载 Python 3.12 + 依赖
 
 # 运行
-uv run python -m easy_tts      # 启动应用
+uv run python -m wordy      # 启动应用
 .\dev.ps1                      # 开发模式（设置 EASY_TTS_DEV=1）
 
 # 测试
@@ -31,9 +31,9 @@ uv run pyright main.py src/
 
 **包管理**：uv（`pyproject.toml` + `uv.lock`）。Python 3.12 由 `.python-version` 锁定（不可删除——pyaudio 只有 cp312 wheel，3.14 会回退源码编译失败）。
 
-**入口**：`python -m easy_tts` → `src/easy_tts/__main__.py` → `src/easy_tts/main.py:main()` → `WavTransApp.run()`。
+**入口**：`python -m wordy` → `src/wordy/__main__.py` → `src/wordy/main.py:main()` → `WordyApp.run()`。
 
-**源码**：`src/easy_tts/` 下分六个子系统：
+**源码**：`src/wordy/` 下分六个子系统：
 
 | 包 | 职责 |
 |----|------|
@@ -43,7 +43,7 @@ uv run pyright main.py src/
 | `hotkey/` | `keyboard` 库快捷键解析 + Win32 原生全局热键监听(`NativeHotkeyListener`) |
 | 模块级 | `config.py`(AppSettings)、`secret.py`(keyring 密钥存储)、`log.py`(日志流)、`identity.py`(音频设备标识)、`qt_lifecycle.py`(Qt 安全调用) |
 
-**配置持久化**：`AppSettings` dataclass（`src/easy_tts/config.py`，~330 行）是唯一数据源。`AppSettings.load()` 从 `~/.wavtrans_config.json` 加载一次，属性访问零磁盘 I/O；`settings.update(key=value)` 部分更新 + 自动钳位 + 原子写入。UI 常量（`MIN_VOLUME`、`LOG_LEVELS` 等）在模块级。
+**配置持久化**：`AppSettings` dataclass（`src/wordy/config.py`，~330 行）是唯一数据源。`AppSettings.load()` 从 `~/.wavtrans_config.json` 加载一次，属性访问零磁盘 I/O；`settings.update(key=value)` 部分更新 + 自动钳位 + 原子写入。UI 常量（`MIN_VOLUME`、`LOG_LEVELS` 等）在模块级。
 
 ## VB-Cable 音频路由链路
 
@@ -71,12 +71,12 @@ driver.py(VBCableDriverManager) → config.py(AppSettings) → main.py(生命周
 
 ## TTS Worker 生命周期
 
-`WavTransApp` 持有 `_TTSWorker`（单线程 `ThreadPoolExecutor` + `BackendTTSEngine`）。切换后端/API key 时旧 worker 入队 `_RetiredWorker` 到 janitor 线程异步关闭（先 `executor.shutdown` 再 `engine.close`），避免阻塞 UI。新 worker 立即可用。
+`WordyApp` 持有 `_TTSWorker`（单线程 `ThreadPoolExecutor` + `BackendTTSEngine`）。切换后端/API key 时旧 worker 入队 `_RetiredWorker` 到 janitor 线程异步关闭（先 `executor.shutdown` 再 `engine.close`），避免阻塞 UI。新 worker 立即可用。
 
 ## 测试注意事项
 
 - `test_pyside6_*` 需要 display server，CI 环境可能跳过
 - `test_native_hotkey.py` 仅 Windows，部分测试依赖实际 Win32 API
-- 涉及 `USER_CONFIG_FILE` 的测试用 `monkeypatch.setattr(easy_tts.config, "USER_CONFIG_FILE", tmp_path)` 隔离
+- 涉及 `USER_CONFIG_FILE` 的测试用 `monkeypatch.setattr(wordy.config, "USER_CONFIG_FILE", tmp_path)` 隔离
 - PySide6 类型桩不完整——`_Widget`/`_SettingsDialog` 协议不兼容警告是已知误报，忽略
 - `conftest.py` 提供共享 fixtures（`tmp_config_file`、`mock_player` 等）

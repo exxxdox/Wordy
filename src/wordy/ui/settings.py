@@ -14,24 +14,24 @@ from PySide6.QtWidgets import (
     QPushButton, QScrollArea, QSlider, QStyle, QTabWidget, QVBoxLayout, QWidget,
 )
 
-import easy_tts.secret
-from easy_tts.config import (
+import wordy.secret
+from wordy.config import (
     LOG_LEVELS, MAX_OVERLAY_OPACITY, MAX_VOLUME, MIN_OVERLAY_OPACITY, MIN_VOLUME,
     OVERLAY_OPACITY_STEP, TTS_BACKENDS, VOLUME_STEP,
 )
-from easy_tts.identity import normalize_identity
-from easy_tts.tts.labels import VoiceLabelMaps, build_voice_label_maps
-from easy_tts.ui.theme import (
+from wordy.identity import normalize_identity
+from wordy.tts.labels import VoiceLabelMaps, build_voice_label_maps
+from wordy.ui.theme import (
     GREEN_ACCENT, TEXT_ERROR, TEXT_MUTED, TEXT_PRIMARY, TEXT_WARNING,
 )
-from easy_tts.ui.settings_state import (
+from wordy.ui.settings_state import (
     AudioOutputDevice, AudioOutputIdentity, PendingSettings, SettingsState, VoiceRecord,
 )
-from easy_tts.ui.settings_widgets import (
+from wordy.ui.settings_widgets import (
     CheckmarkCheckBox, NoWheelComboBox, NoWheelSlider, _SettingsDialog,
 )
-from easy_tts.ui.settings_style import build_settings_stylesheet
-from easy_tts.ui.window import activate_window, center_window
+from wordy.ui.settings_style import build_settings_stylesheet
+from wordy.ui.window import activate_window, center_window
 
 INPUT_TEXT_COLOR = GREEN_ACCENT
 SYSTEM_DEFAULT_AUDIO_OUTPUT_LABEL = "系统默认"
@@ -536,7 +536,7 @@ class SettingsWindow:
         section.addWidget(self.mic_input_combo)
 
     def _on_open_vb_cable_download(self, _checked: bool = False) -> None:
-        from easy_tts.audio.driver import VBCableDriverManager
+        from wordy.audio.driver import VBCableDriverManager
         VBCableDriverManager.open_download_page()
 
     def _on_audio_route_enabled_changed(self, state: int) -> None:
@@ -782,7 +782,7 @@ class SettingsWindow:
         if self.pending_cartesia_api_key_action == "clear":
             self.pending_cartesia_api_key_value = None
             return
-        normalized = easy_tts.secret.normalize_api_key_input(self.api_key_input.text())
+        normalized = wordy.secret.normalize_api_key_input(self.api_key_input.text())
         if normalized:
             self.pending_cartesia_api_key_action = "set"
             self.pending_cartesia_api_key_value = normalized

@@ -5,7 +5,7 @@
 
 from unittest.mock import patch
 
-from easy_tts.audio.driver import (
+from wordy.audio.driver import (
     VB_CABLE_INPUT_NAME,
     VB_CABLE_OUTPUT_NAME,
     VB_CABLE_DOWNLOAD_URL,
@@ -18,7 +18,7 @@ class TestVBCableDriverManager:
 
     def test_is_installed_true_when_cable_output_found(self):
         """设备名包含 CABLE Output 时返回 True。"""
-        with patch("easy_tts.audio.driver.sd.query_devices") as mock_query:
+        with patch("wordy.audio.driver.sd.query_devices") as mock_query:
             mock_query.return_value = [
                 {"name": "CABLE Output (VB-Audio Virtual Cable)", "max_input_channels": 2,
                  "max_output_channels": 0},
@@ -27,7 +27,7 @@ class TestVBCableDriverManager:
 
     def test_is_installed_true_when_cable_input_found(self):
         """设备名包含 CABLE Input 时返回 True。"""
-        with patch("easy_tts.audio.driver.sd.query_devices") as mock_query:
+        with patch("wordy.audio.driver.sd.query_devices") as mock_query:
             mock_query.return_value = [
                 {"name": "CABLE Input (VB-Audio Virtual Cable)", "max_input_channels": 0,
                  "max_output_channels": 2},
@@ -36,7 +36,7 @@ class TestVBCableDriverManager:
 
     def test_is_installed_false_when_no_cable(self):
         """无 VB-CABLE 设备时返回 False。"""
-        with patch("easy_tts.audio.driver.sd.query_devices") as mock_query:
+        with patch("wordy.audio.driver.sd.query_devices") as mock_query:
             mock_query.return_value = [
                 {"name": "Realtek Audio", "max_input_channels": 2, "max_output_channels": 2},
             ]
@@ -44,7 +44,7 @@ class TestVBCableDriverManager:
 
     def test_is_installed_handles_sd_error(self):
         """sd.query_devices 异常时返回 False 而非抛出。"""
-        with patch("easy_tts.audio.driver.sd.query_devices", side_effect=Exception("PortAudio error")):
+        with patch("wordy.audio.driver.sd.query_devices", side_effect=Exception("PortAudio error")):
             assert VBCableDriverManager.is_installed() is False
 
     def test_get_status_full_cable(self):
@@ -66,7 +66,7 @@ class TestVBCableDriverManager:
                 "max_output_channels": 2,
             },
         ]
-        with patch("easy_tts.audio.driver.sd.query_devices", return_value=devices):
+        with patch("wordy.audio.driver.sd.query_devices", return_value=devices):
             status = VBCableDriverManager.get_status()
             assert status["installed"] is True
             assert status["input_device_index"] == 1
@@ -92,8 +92,8 @@ class TestVBCableDriverManager:
         ]
         hostapis = [{"name": "MME"}, {"name": "Windows WASAPI"}]
         with (
-            patch("easy_tts.audio.driver.sd.query_devices", return_value=devices),
-            patch("easy_tts.audio.driver.sd.query_hostapis", return_value=hostapis),
+            patch("wordy.audio.driver.sd.query_devices", return_value=devices),
+            patch("wordy.audio.driver.sd.query_hostapis", return_value=hostapis),
         ):
             status = VBCableDriverManager.get_status()
 
@@ -109,8 +109,8 @@ class TestVBCableDriverManager:
             },
         ]
         with (
-            patch("easy_tts.audio.driver.sd.query_devices", return_value=devices),
-            patch("easy_tts.audio.driver.sd.query_hostapis", side_effect=RuntimeError("failed")),
+            patch("wordy.audio.driver.sd.query_devices", return_value=devices),
+            patch("wordy.audio.driver.sd.query_hostapis", side_effect=RuntimeError("failed")),
         ):
             status = VBCableDriverManager.get_status()
 
@@ -126,7 +126,7 @@ class TestVBCableDriverManager:
                 "max_output_channels": 0,
             },
         ]
-        with patch("easy_tts.audio.driver.sd.query_devices", return_value=devices):
+        with patch("wordy.audio.driver.sd.query_devices", return_value=devices):
             status = VBCableDriverManager.get_status()
             assert status["installed"] is True
             assert status["input_device_index"] == 0
@@ -134,7 +134,7 @@ class TestVBCableDriverManager:
 
     def test_get_status_handles_query_error(self):
         """查询异常时返回默认空状态。"""
-        with patch("easy_tts.audio.driver.sd.query_devices", side_effect=Exception("error")):
+        with patch("wordy.audio.driver.sd.query_devices", side_effect=Exception("error")):
             status = VBCableDriverManager.get_status()
             assert status["installed"] is False
             assert status["input_device_index"] is None
@@ -144,13 +144,13 @@ class TestVBCableDriverManager:
         devices = [
             {"name": "CABLE Input (VB-Audio)", "max_input_channels": 0, "max_output_channels": 2},
         ]
-        with patch("easy_tts.audio.driver.sd.query_devices", return_value=devices):
+        with patch("wordy.audio.driver.sd.query_devices", return_value=devices):
             idx = VBCableDriverManager.get_virtual_output_index()
             assert idx == 0
 
     def test_get_virtual_output_index_none_when_no_device(self):
         """无虚拟输出设备时返回 None。"""
-        with patch("easy_tts.audio.driver.sd.query_devices", return_value=[]):
+        with patch("wordy.audio.driver.sd.query_devices", return_value=[]):
             idx = VBCableDriverManager.get_virtual_output_index()
             assert idx is None
 
@@ -159,7 +159,7 @@ class TestVBCableDriverManager:
         devices = [
             {"name": "CABLE Output (VB-Audio)", "max_input_channels": 2, "max_output_channels": 0},
         ]
-        with patch("easy_tts.audio.driver.sd.query_devices", return_value=devices):
+        with patch("wordy.audio.driver.sd.query_devices", return_value=devices):
             idx = VBCableDriverManager.get_virtual_input_index()
             assert idx == 0
 
@@ -178,6 +178,6 @@ class TestVBCableDriverManager:
 
     def test_test_signing_enabled_handles_subprocess_error(self):
         """bcdedit 调用失败时不抛出异常。"""
-        with patch("easy_tts.audio.driver.subprocess.run", side_effect=FileNotFoundError):
+        with patch("wordy.audio.driver.subprocess.run", side_effect=FileNotFoundError):
             result = VBCableDriverManager.test_signing_enabled()
             assert result is False

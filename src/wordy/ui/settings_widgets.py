@@ -18,9 +18,9 @@ from PySide6.QtGui import QColor, QCloseEvent, QKeyEvent, QMouseEvent, QPainter,
 from PySide6.QtWidgets import QApplication, QCheckBox, QComboBox, QDialog, QSlider, QWidget
 
 if TYPE_CHECKING:
-    from easy_tts.ui.settings import SettingsWindow
+    from wordy.ui.settings import SettingsWindow
 
-from easy_tts.ui.theme import GREEN_ACCENT, SEPARATOR_COLOR, SURFACE_BG, TEXT_PRIMARY
+from wordy.ui.theme import GREEN_ACCENT, SEPARATOR_COLOR, SURFACE_BG, TEXT_PRIMARY
 
 INPUT_TEXT_COLOR = GREEN_ACCENT
 

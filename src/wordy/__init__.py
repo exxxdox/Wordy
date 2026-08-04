@@ -3,6 +3,6 @@
 
 """Easy TTS — 常驻热键输入 → TTS 生成 → 播放，支持 VB-CABLE 音频路由。"""
 
-from easy_tts.config import AppSettings
+from wordy.config import AppSettings
 
 __all__ = ["AppSettings"]

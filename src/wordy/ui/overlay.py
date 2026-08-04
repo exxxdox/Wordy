@@ -15,20 +15,20 @@ from PySide6.QtCore import QEvent, QObject, QTimer, Qt
 from PySide6.QtGui import QMouseEvent
 from PySide6.QtWidgets import QApplication, QLabel, QLineEdit, QMessageBox
 
-import easy_tts.secret
-from easy_tts.config import AppSettings, display_hotkey, get_active_config_file
-from easy_tts.audio.capture import AudioCapture
-from easy_tts.identity import normalize_identity
-from easy_tts.audio.driver import VBCableDriverManager
-from easy_tts.ui.settings_state import SettingsState
-from easy_tts.ui.settings import SettingsWindow
-from easy_tts.ui.overlay_widgets import _OverlaySignals, _OverlayWidget
-from easy_tts.ui.window import activate_window, center_window, clamp_window_position, get_cursor_position, is_left_button_down, is_point_in_widget
+import wordy.secret
+from wordy.config import AppSettings, display_hotkey, get_active_config_file
+from wordy.audio.capture import AudioCapture
+from wordy.identity import normalize_identity
+from wordy.audio.driver import VBCableDriverManager
+from wordy.ui.settings_state import SettingsState
+from wordy.ui.settings import SettingsWindow
+from wordy.ui.overlay_widgets import _OverlaySignals, _OverlayWidget
+from wordy.ui.window import activate_window, center_window, clamp_window_position, get_cursor_position, is_left_button_down, is_point_in_widget
 
-from easy_tts.qt_lifecycle import safe_qt_call
+from wordy.qt_lifecycle import safe_qt_call
 
 if TYPE_CHECKING:
-    from easy_tts.hotkey import NativeHotkeyListener
+    from wordy.hotkey import NativeHotkeyListener
 
 logger = logging.getLogger(__name__)
 
@@ -218,8 +218,8 @@ class InputOverlay:
             # still running so background threads (TTS/janitor) cannot emit
             # into a destroyed QObject after app.quit().
             try:
-                import easy_tts.log
-                easy_tts.log.shutdown_log_stream()
+                import wordy.log
+                wordy.log.shutdown_log_stream()
             except Exception:
                 # Best-effort: never let logging-cleanup failures block the
                 # GUI shutdown path.
@@ -383,7 +383,7 @@ class InputOverlay:
 
     def _register_hotkey(self) -> None:
         self._unregister_hotkey()
-        from easy_tts.hotkey import NativeHotkeyListener
+        from wordy.hotkey import NativeHotkeyListener
         hotkey_listener = NativeHotkeyListener(self._hotkey, self._hotkey_name, self._on_global_hotkey)
         self._hotkey_listener = hotkey_listener
         hotkey_listener.start()
@@ -482,7 +482,7 @@ class InputOverlay:
     def _create_settings_window(self) -> None:
         audio_output_devices, audio_output_devices_error = self._enumerate_audio_output_devices()
         try:
-            storage_status = easy_tts.secret.get_storage_status()
+            storage_status = wordy.secret.get_storage_status()
             cartesia_api_key_saved = bool(storage_status.has_key)
         except Exception as error:  # pragma: no cover - defensive
             logger.warning("读取 Cartesia API Key 状态失败: %s", error)
@@ -542,7 +542,7 @@ class InputOverlay:
 
         if used_fallback:
             try:
-                import easy_tts.audio.player as audio_player_module
+                import wordy.audio.player as audio_player_module
                 module_helper = getattr(audio_player_module, "list_output_devices", None)
                 if not callable(module_helper):
                     return [], None
@@ -757,7 +757,7 @@ class InputOverlay:
             side_effect=lambda: logging.getLogger().setLevel(getattr(logging, self._log_level, logging.INFO)),
             msg=lambda: f"日志显示等级已切换为 {self._log_level}")
 
-        # 音频路由：应用变更并通知 WavTransApp
+        # 音频路由：应用变更并通知 WordyApp
         if route_update:
             for key in ("audio_routing_enabled", "mic_input_device", "virtual_output_device"):
                 self._apply_scalar_and_notify(pending, saved_messages, key, f"_{key}")
@@ -772,7 +772,7 @@ class InputOverlay:
                 else:
                     saved_messages.append("麦克风侦听已停用")
 
-        # 返听：应用变更并通知 WavTransApp
+        # 返听：应用变更并通知 WordyApp
         if sidetone_changed:
             self._apply_scalar_and_notify(pending, saved_messages, "sidetone_enabled", "_sidetone_enabled",
                 callback=lambda: self.on_sidetone_change and self.on_sidetone_change(self._sidetone_enabled),
@@ -908,13 +908,13 @@ class InputOverlay:
         if cartesia_action == "set":
             cartesia_value = cartesia_value_raw if isinstance(cartesia_value_raw, str) else ""
             try:
-                storage_status = easy_tts.secret.save_cartesia_api_key(
+                storage_status = wordy.secret.save_cartesia_api_key(
                     cartesia_value, allow_plaintext_fallback=False
                 )
-            except easy_tts.secret.SecretStoreError as error:
+            except wordy.secret.SecretStoreError as error:
                 saved_messages.append(f"Cartesia API Key 保存失败：{error}")
             else:
-                if storage_status.fallback_active or storage_status.backend == easy_tts.secret.STORAGE_PLAINTEXT:
+                if storage_status.fallback_active or storage_status.backend == wordy.secret.STORAGE_PLAINTEXT:
                     saved_messages.append(
                         "Cartesia API Key 已保存（明文回退，高风险，请尽快配置 keyring）"
                     )
@@ -928,8 +928,8 @@ class InputOverlay:
                         saved_messages.append("Cartesia 引擎刷新失败")
         elif cartesia_action == "clear":
             try:
-                easy_tts.secret.delete_cartesia_api_key()
-            except easy_tts.secret.SecretStoreError as error:
+                wordy.secret.delete_cartesia_api_key()
+            except wordy.secret.SecretStoreError as error:
                 saved_messages.append(f"Cartesia API Key 清除失败：{error}")
             else:
                 saved_messages.append("Cartesia API Key 已清除")

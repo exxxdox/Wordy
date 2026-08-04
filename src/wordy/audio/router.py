@@ -16,7 +16,7 @@ from typing import Any, TypedDict
 
 import sounddevice as sd
 
-from easy_tts.audio.driver import VBCableDriverManager
+from wordy.audio.driver import VBCableDriverManager
 
 logger = logging.getLogger(__name__)
 
@@ -129,7 +129,7 @@ class AudioRouter:
     def _enable_mic_listen(self, mic_name: str) -> bool:
         """使用 WASAPI 的 VB-CABLE 名称配置 Windows Core Audio 侦听。"""
         try:
-            from easy_tts.audio.listen_policy import get_listen_policy, set_listen_policy
+            from wordy.audio.listen_policy import get_listen_policy, set_listen_policy
 
             original_state = get_listen_policy(mic_name)
             if original_state is None:
@@ -163,7 +163,7 @@ class AudioRouter:
     def _disable_mic_listen(self, mic_name: str) -> bool:
         """禁用指定旧设备的侦听，避免切换时错误操作新设备。"""
         try:
-            from easy_tts.audio.listen_policy import restore_listen_policy, set_listen_policy
+            from wordy.audio.listen_policy import restore_listen_policy, set_listen_policy
 
             original_state = self._listen_original_state
             original_device = self._listen_original_device

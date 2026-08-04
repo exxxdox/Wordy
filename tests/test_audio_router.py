@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from easy_tts.audio.router import AudioRouter, RouterStats
+from wordy.audio.router import AudioRouter, RouterStats
 
 
 class TestAudioRouter:
@@ -17,7 +17,7 @@ class TestAudioRouter:
         router = AudioRouter(virtual_output="CABLE Input")
         assert router.is_running() is False
 
-    @patch("easy_tts.audio.router.VBCableDriverManager.get_virtual_output_index")
+    @patch("wordy.audio.router.VBCableDriverManager.get_virtual_output_index")
     def test_start_stop(self, mock_vb_idx):
         mock_vb_idx.return_value = 99
         router = AudioRouter(virtual_output="CABLE Input")
@@ -29,7 +29,7 @@ class TestAudioRouter:
         assert router.is_running() is False
 
     def test_listen_takeover_restores_original_state(self):
-        from easy_tts.audio.listen_policy import ListenPolicyState
+        from wordy.audio.listen_policy import ListenPolicyState
 
         router = AudioRouter(virtual_output="CABLE Input")
         original = ListenPolicyState(enabled=True, output_id="original-render-id")
@@ -37,13 +37,13 @@ class TestAudioRouter:
 
         with (
             patch.object(router, "get_output_device", return_value=cable),
-            patch("easy_tts.audio.listen_policy.get_listen_policy", return_value=original),
-            patch("easy_tts.audio.listen_policy.set_listen_policy", return_value=True),
+            patch("wordy.audio.listen_policy.get_listen_policy", return_value=original),
+            patch("wordy.audio.listen_policy.set_listen_policy", return_value=True),
         ):
             assert router._enable_mic_listen("Mic") is True
 
         with patch(
-            "easy_tts.audio.listen_policy.restore_listen_policy",
+            "wordy.audio.listen_policy.restore_listen_policy",
             return_value=True,
         ) as restore:
             assert router._disable_mic_listen("Mic") is True
@@ -131,9 +131,9 @@ class TestAudioRouter:
         disable.assert_not_called()
         enable.assert_not_called()
 
-    @patch("easy_tts.audio.router.sd.query_hostapis")
-    @patch("easy_tts.audio.router.sd.query_devices")
-    @patch("easy_tts.audio.router.VBCableDriverManager.get_status")
+    @patch("wordy.audio.router.sd.query_hostapis")
+    @patch("wordy.audio.router.sd.query_devices")
+    @patch("wordy.audio.router.VBCableDriverManager.get_status")
     def test_get_output_device_requires_wasapi(
         self, mock_status, mock_devices, mock_hostapis,
     ):
@@ -157,7 +157,7 @@ class TestAudioRouter:
             "host_api_name": "Windows WASAPI",
         }
 
-    @patch("easy_tts.audio.router.VBCableDriverManager.get_virtual_output_index")
+    @patch("wordy.audio.router.VBCableDriverManager.get_virtual_output_index")
     def test_start_no_virtual_device(self, mock_vb_idx):
         mock_vb_idx.return_value = None
         router = AudioRouter(virtual_output="__nonexistent__")
@@ -181,7 +181,7 @@ class TestAudioRouter:
             assert "host_api_name" in dev
             assert "CABLE" in dev["name"]
 
-    @patch("easy_tts.audio.router.VBCableDriverManager.get_virtual_output_index")
+    @patch("wordy.audio.router.VBCableDriverManager.get_virtual_output_index")
     def test_start_without_mic_skips_listen(self, mock_vb_idx):
         """mic_device=None 时 start 不配置侦听——用户需手动选择麦克风。"""
         mock_vb_idx.return_value = 99

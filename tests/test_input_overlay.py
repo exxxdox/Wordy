@@ -12,7 +12,7 @@ from typing import cast
 
 import pytest
 
-import easy_tts.secret
+import wordy.secret
 
 from tests._stubs import PYside6_STUBS, patch_module_stubs
 
@@ -21,23 +21,23 @@ def import_input_overlay_with_stubs(monkeypatch: pytest.MonkeyPatch) -> ModuleTy
     # 保存原始模块引用，测试结束后恢复
     _STUBBED_MODULES = (
         *PYside6_STUBS,
-        "easy_tts.hotkey",
-        "easy_tts.ui.settings",
-        "easy_tts.ui.settings_state",
-        "easy_tts.ui.settings_widgets",
-        "easy_tts.ui.settings_style",
-        "easy_tts.ui.window",
-        "easy_tts.ui.overlay_widgets",
+        "wordy.hotkey",
+        "wordy.ui.settings",
+        "wordy.ui.settings_state",
+        "wordy.ui.settings_widgets",
+        "wordy.ui.settings_style",
+        "wordy.ui.window",
+        "wordy.ui.overlay_widgets",
     )
     _saved: dict[str, ModuleType | None] = {}
     for name in _STUBBED_MODULES:
         _saved[name] = sys.modules.get(name)
     patch_module_stubs(monkeypatch, _STUBBED_MODULES)
     # 同时清除 overlay 缓存以确保重新导入
-    _saved["easy_tts.ui.overlay"] = sys.modules.pop("easy_tts.ui.overlay", None)
+    _saved["wordy.ui.overlay"] = sys.modules.pop("wordy.ui.overlay", None)
     try:
-        module = importlib.import_module("easy_tts.ui.overlay")
-        sys.modules.pop("easy_tts.ui.overlay", None)
+        module = importlib.import_module("wordy.ui.overlay")
+        sys.modules.pop("wordy.ui.overlay", None)
         return module
     finally:
         # 恢复所有被修改的模块条目
@@ -347,7 +347,7 @@ def test_apply_pending_settings_no_changes_does_not_save_config(monkeypatch: pyt
     overlay = _new_apply_overlay(module)
     saved_updates: list[dict[str, object]] = []
 
-    from easy_tts.config import AppSettings
+    from wordy.config import AppSettings
 
     def fake_update(self, **kwargs: object) -> Path:
         saved_updates.append({str(k): v for k, v in kwargs.items()})
@@ -369,7 +369,7 @@ def test_apply_pending_settings_saves_and_reports_only_changed_fields(monkeypatc
     overlay = _new_apply_overlay(module)
     saved_updates: list[dict[str, object]] = []
 
-    from easy_tts.config import AppSettings
+    from wordy.config import AppSettings
 
     def fake_update(self, **kwargs: object) -> Path:
         saved_updates.append({str(k): v for k, v in kwargs.items()})
@@ -403,7 +403,7 @@ def test_apply_oserror_rolls_back_hotkey_and_prevents_mutation(monkeypatch: pyte
 
     overlay.try_register_hotkey = tracked_try_register
 
-    from easy_tts.config import AppSettings
+    from wordy.config import AppSettings
 
     def failing_update(self, **kwargs: object) -> Path:
         raise OSError("write failed")
@@ -437,7 +437,7 @@ def test_apply_audio_callback_payload_structured_dict(monkeypatch: pytest.Monkey
 
     saved_updates: list[dict[str, object]] = []
 
-    from easy_tts.config import AppSettings
+    from wordy.config import AppSettings
 
     def fake_update(self, **kwargs: object) -> Path:
         saved_updates.append({str(k): v for k, v in kwargs.items()})
@@ -471,7 +471,7 @@ def test_apply_audio_callback_payload_legacy_str(monkeypatch: pytest.MonkeyPatch
 
     saved_updates: list[dict[str, object]] = []
 
-    from easy_tts.config import AppSettings
+    from wordy.config import AppSettings
 
     def fake_update(self, **kwargs: object) -> Path:
         saved_updates.append({str(k): v for k, v in kwargs.items()})
@@ -502,7 +502,7 @@ def test_apply_audio_callback_payload_legacy_none(monkeypatch: pytest.MonkeyPatc
 
     saved_updates: list[dict[str, object]] = []
 
-    from easy_tts.config import AppSettings
+    from wordy.config import AppSettings
 
     def fake_update(self, **kwargs: object) -> Path:
         saved_updates.append({str(k): v for k, v in kwargs.items()})
@@ -529,11 +529,11 @@ def test_apply_cartesia_callback_failure_appends_status_and_does_not_raise(monke
         fallback_active = False
         backend = "keyring"
 
-    from easy_tts.config import AppSettings
+    from wordy.config import AppSettings
 
     monkeypatch.setattr(AppSettings, "load", lambda **kw: AppSettings())
     monkeypatch.setattr(AppSettings, "update", lambda self, **kw: Path("updated.json"))
-    monkeypatch.setattr(easy_tts.secret, "save_cartesia_api_key", lambda *_a, **_kw: FakeStorageStatus())
+    monkeypatch.setattr(wordy.secret, "save_cartesia_api_key", lambda *_a, **_kw: FakeStorageStatus())
     window = ApplySettingsWindowStub(
         _pending_settings(overlay, cartesia_api_key_action="set", cartesia_api_key_value="new-key")
     )
@@ -551,11 +551,11 @@ def test_apply_cartesia_callback_failure_clear_does_not_raise(monkeypatch: pytes
     overlay = _new_apply_overlay(module)
     overlay.on_cartesia_api_key_change = lambda _key: (_ for _ in ()).throw(RuntimeError("boom"))
 
-    from easy_tts.config import AppSettings
+    from wordy.config import AppSettings
 
     monkeypatch.setattr(AppSettings, "load", lambda **kw: AppSettings())
     monkeypatch.setattr(AppSettings, "update", lambda self, **kw: Path("updated.json"))
-    monkeypatch.setattr(easy_tts.secret, "delete_cartesia_api_key", lambda: None)
+    monkeypatch.setattr(wordy.secret, "delete_cartesia_api_key", lambda: None)
     window = ApplySettingsWindowStub(
         _pending_settings(overlay, cartesia_api_key_action="clear")
     )

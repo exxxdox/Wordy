@@ -7,7 +7,7 @@ from io import BytesIO
 
 import pytest
 
-from easy_tts.tts.engine import BackendTTSEngine, TTSAudioPlayer, VoiceInfo
+from wordy.tts.engine import BackendTTSEngine, TTSAudioPlayer, VoiceInfo
 
 
 # ---------------------------------------------------------------------------

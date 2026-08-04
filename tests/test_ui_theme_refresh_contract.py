@@ -3,7 +3,7 @@
 
 """RED contract tests for the modern dark UI refresh.
 
-These tests pin the palette tokens that ``easy_tts.ui.theme.py`` must expose after
+These tests pin the palette tokens that ``wordy.ui.theme.py`` must expose after
 the refresh, while preserving the existing tokens used by current code.
 They also assert structural invariants of the settings stylesheet and the
 input overlay capsule so the visual refresh cannot regress behavior.
@@ -33,7 +33,7 @@ _HEX_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
 
 def test_palette_tokens_present() -> None:
     """New modern-dark palette tokens must exist and be 6-digit hex."""
-    theme = importlib.import_module("easy_tts.ui.theme")
+    theme = importlib.import_module("wordy.ui.theme")
 
     required = (
         "SURFACE_BG",
@@ -45,7 +45,7 @@ def test_palette_tokens_present() -> None:
         "SCROLLBAR_HANDLE_HOVER",
     )
     for name in required:
-        assert hasattr(theme, name), f"easy_tts.ui.theme missing new token: {name}"
+        assert hasattr(theme, name), f"wordy.ui.theme missing new token: {name}"
         value = getattr(theme, name)
         assert isinstance(value, str), f"{name} must be a string, got {type(value)!r}"
         assert _HEX_RE.match(value), f"{name}={value!r} is not a 6-digit hex color"
@@ -53,7 +53,7 @@ def test_palette_tokens_present() -> None:
 
 def test_palette_backwards_compat_aliases_preserved() -> None:
     """Existing palette tokens must remain available and valid hex values."""
-    theme = importlib.import_module("easy_tts.ui.theme")
+    theme = importlib.import_module("wordy.ui.theme")
 
     legacy = (
         "GREEN_ACCENT",
@@ -71,7 +71,7 @@ def test_palette_backwards_compat_aliases_preserved() -> None:
         "TRANSPARENT_COLOR",
     )
     for name in legacy:
-        assert hasattr(theme, name), f"easy_tts.ui.theme dropped legacy token: {name}"
+        assert hasattr(theme, name), f"wordy.ui.theme dropped legacy token: {name}"
         value = getattr(theme, name)
         assert isinstance(value, str), f"{name} must be a string, got {type(value)!r}"
         assert _HEX_RE.match(value), f"{name}={value!r} is not a 6-digit hex color"
@@ -106,7 +106,7 @@ def _new_settings_window(monkeypatch: pytest.MonkeyPatch):
         pytest.skip(f"QApplication cannot be imported: {exc}")
         raise
     try:
-        from easy_tts.ui.settings import SettingsState, SettingsWindow
+        from wordy.ui.settings import SettingsState, SettingsWindow
     except Exception as exc:  # pragma: no cover - dependency-specific import failures
         pytest.skip(f"SettingsWindow dependencies cannot be imported: {exc}")
         raise
@@ -197,7 +197,7 @@ _OVERLAY_CONFIG = {
 
 
 def _install_native_hotkey_stub(monkeypatch: pytest.MonkeyPatch) -> None:
-    module = ModuleType("easy_tts.hotkey")
+    module = ModuleType("wordy.hotkey")
 
     class NativeHotkeyListener:
         started: bool
@@ -212,11 +212,11 @@ def _install_native_hotkey_stub(monkeypatch: pytest.MonkeyPatch) -> None:
             self.started = False
 
     setattr(module, "NativeHotkeyListener", NativeHotkeyListener)
-    from easy_tts.hotkey import iter_hotkey_parts, normalize_key_part, split_hotkey
+    from wordy.hotkey import iter_hotkey_parts, normalize_key_part, split_hotkey
     setattr(module, "iter_hotkey_parts", iter_hotkey_parts)
     setattr(module, "normalize_key_part", normalize_key_part)
     setattr(module, "split_hotkey", split_hotkey)
-    monkeypatch.setitem(sys.modules, "easy_tts.hotkey", module)
+    monkeypatch.setitem(sys.modules, "wordy.hotkey", module)
 
 
 def _import_input_overlay(monkeypatch: pytest.MonkeyPatch):
@@ -225,7 +225,7 @@ def _import_input_overlay(monkeypatch: pytest.MonkeyPatch):
     _install_native_hotkey_stub(monkeypatch)
 
     # 用 AppSettings 替代已删除的 load_initial_config / save_app_config
-    from easy_tts.config import AppSettings
+    from wordy.config import AppSettings
     _test_settings = AppSettings()
     _test_settings.hotkey = _OVERLAY_CONFIG["hotkey"]
     _test_settings.name = _OVERLAY_CONFIG["name"]
@@ -238,11 +238,11 @@ def _import_input_overlay(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(AppSettings, "load", lambda **kw: _test_settings)
     monkeypatch.setattr(AppSettings, "update", lambda self, **kw: Path("/tmp/wavtrans-test-config.json"))
     monkeypatch.setattr(
-        "easy_tts.config.get_active_config_file", lambda: Path("/tmp/wavtrans-test-config.json")
+        "wordy.config.get_active_config_file", lambda: Path("/tmp/wavtrans-test-config.json")
     )
 
-    original_module = sys.modules.pop("easy_tts.ui.overlay", None)
-    module = importlib.import_module("easy_tts.ui.overlay")
+    original_module = sys.modules.pop("wordy.ui.overlay", None)
+    module = importlib.import_module("wordy.ui.overlay")
 
     def skip_voice_loading(_self: object, show_status: bool = True) -> None:
         _ = show_status

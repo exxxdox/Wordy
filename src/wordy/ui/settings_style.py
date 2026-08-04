@@ -5,7 +5,7 @@
 
 from __future__ import annotations
 
-from easy_tts.ui.theme import (
+from wordy.ui.theme import (
     ACCENT_HOVER,
     ACCENT_PRESSED,
     BUTTON_ACTIVE_BG,

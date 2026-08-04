@@ -8,7 +8,7 @@ from __future__ import annotations
 from io import BytesIO
 from unittest.mock import MagicMock
 
-from easy_tts.audio.sidetone import SidetoneAudioPlayer
+from wordy.audio.sidetone import SidetoneAudioPlayer
 
 
 class TestSidetoneAudioPlayer:

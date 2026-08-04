@@ -20,7 +20,7 @@ import threading
 from collections import deque
 from typing import Protocol, override
 
-from easy_tts.qt_lifecycle import safe_qt_call
+from wordy.qt_lifecycle import safe_qt_call
 
 
 
