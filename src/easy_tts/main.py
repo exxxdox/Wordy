@@ -30,7 +30,7 @@ from easy_tts.secret import KeyringUnavailableError
 from easy_tts.ui.tray import TrayApp, TrayController
 from easy_tts.tts.constants import TTS_BACKEND_CARTESIA_BYTES, TTS_BACKEND_CARTESIA_REALTIME
 from easy_tts.tts.registry import create_tts_engine, resolve_tts_backend
-from easy_tts.tts.engine import BackendTTSEngine
+from easy_tts.tts.engine import BackendTTSEngine, TTSAudioPlayer
 
 
 logger = logging.getLogger(__name__)
@@ -150,7 +150,7 @@ class WavTransApp:
         """按当前配置创建 TTS 引擎。引擎始终使用返听包装器（开关控制是否实际输出）。"""
         return create_tts_engine(
             self.tts_backend,
-            self._sidetone_wrapper,
+            cast(TTSAudioPlayer, self._sidetone_wrapper),
             api_key=self.cartesia_api_key,
             voice_id=self.voice_id,
             volume=self.volume,
