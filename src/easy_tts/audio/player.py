@@ -9,6 +9,7 @@ from collections.abc import Mapping
 from io import BytesIO
 from typing import TypedDict, cast
 
+import numpy as np
 import pyaudio
 
 
@@ -158,6 +159,40 @@ def list_output_devices() -> list[OutputDeviceInfo]:
             except Exception as e:  # noqa: BLE001
                 logger.warning("pyaudio.terminate 失败: %s", e)
 
+
+def _is_device_invalid_error(error: Exception) -> bool:
+    """PortAudio -9996 (paInvalidDevice) 表示设备索引无法打开。"""
+    return "-9996" in str(error) or "Invalid device" in str(error)
+
+
+def _is_vb_cable_playback_device(p, device_index: int) -> bool:
+    """判断已解析的输出端点是否属于 VB-CABLE 播放侧。"""
+    try:
+        info = p.get_device_info_by_index(device_index)
+    except Exception as e:  # noqa: BLE001 - 诊断失败时保持原始声道配置
+        logger.warning("无法读取输出设备 %s 信息，跳过 VB-CABLE 声道适配: %s", device_index, e)
+        return False
+
+    name = info.get("name", "") if isinstance(info, Mapping) else ""
+    if not isinstance(name, str):
+        return False
+    normalized = name.casefold()
+    return (
+        "cable input" in normalized
+        or "cable in " in normalized
+        or "vb-cable" in normalized
+        or "vb-audio virtual cable" in normalized
+    )
+
+
+def _duplicate_mono_to_stereo(data: bytes, sample_width: int) -> bytes:
+    """逐样本复制单声道 PCM，避免双声道 VB-CABLE 将相邻样本拆成 L/R。"""
+    if sample_width <= 0 or len(data) % sample_width != 0:
+        raise ValueError("单声道 PCM 数据未按采样宽度对齐")
+    samples = np.frombuffer(data, dtype=np.dtype((np.void, sample_width)))
+    return np.repeat(samples, 2).tobytes()
+
+
 class AudioPlayer:
     """播放 WAV 到默认输出设备或按名称/Host API 选择的输出设备。
 
@@ -177,6 +212,16 @@ class AudioPlayer:
         self.output_device_name = output_device_name
         self._stream_p = None
         self._stream = None
+        # 记录最近一次 open_stream 的实际格式/采样率（回退后可能与请求值不同）
+        self._stream_format: int | None = None
+        self._stream_rate: int | None = None
+        self._stream_mono_upmix = False
+        self._stream_sample_width: int | None = None
+        # _open_pyaudio_stream 内部回退时写入，供调用方读取
+        self._last_actual_format: int | None = None
+        self._last_actual_rate: int | None = None
+        self._last_mono_upmix = False
+        self._last_sample_width: int | None = None
 
     def set_output_device_name(self, output_device_name: str | None) -> None:
         """更新目标输出设备名 (清空结构化选择)。传入 ``None`` 表示使用系统默认设备。"""
@@ -282,6 +327,88 @@ class AudioPlayer:
 
         return self._default_output_device_index(p)
 
+    def _try_fallback_stream_for_device(
+        self,
+        p,
+        resolved_index: int,
+        original_error: Exception,
+        **open_kwargs,
+    ) -> tuple[object | None, int | None, int | None]:
+        """格式/采样率不兼容时尝试 int16 回退，避免 WASAPI 虚拟设备静默失败。
+
+        回退顺序：
+        1. paInt16 + 请求采样率
+        2. paInt16 + 设备默认采样率
+
+        返回 ``(stream, actual_format, actual_rate)``；全部为 None 表示回退失败。
+        """
+        rate = open_kwargs.get("rate", 48000)
+
+        # Fallback 1: int16 at requested rate (float32→int16 是最常见修复)
+        try:
+            fb_kwargs = {**open_kwargs, "format": pyaudio.paInt16}
+            stream = p.open(output=True, output_device_index=resolved_index, **fb_kwargs)
+            logger.warning(
+                "目标设备不支持请求的采样格式，已回退为 int16 / %s Hz（原始错误: %s）",
+                rate,
+                original_error,
+            )
+            return stream, pyaudio.paInt16, rate
+        except Exception:
+            pass
+
+        # Fallback 2: int16 at device default rate
+        try:
+            device_info = p.get_device_info_by_index(resolved_index)
+            default_rate = int(device_info.get("defaultSampleRate", 48000))
+        except Exception:
+            default_rate = 48000
+
+        if default_rate != rate:
+            try:
+                fb_kwargs = {**open_kwargs, "format": pyaudio.paInt16, "rate": default_rate}
+                stream = p.open(output=True, output_device_index=resolved_index, **fb_kwargs)
+                logger.warning(
+                    "目标设备不支持 %s Hz 采样率，已回退为 int16 / %s Hz（原始错误: %s）",
+                    rate,
+                    default_rate,
+                    original_error,
+                )
+                return stream, pyaudio.paInt16, default_rate
+            except Exception:
+                pass
+
+        return None, None, None
+
+    def _try_open_default_device(
+        self,
+        p,
+        default_index: int,
+        original_error: Exception,
+        **open_kwargs,
+    ) -> object | None:
+        """选定的输出设备无法打开时，回退到系统默认输出设备作为最后兜底。
+
+        仅当默认设备与已选设备不同时才尝试，避免无限重试。
+        """
+        try:
+            stream = p.open(
+                output=True,
+                output_device_index=default_index,
+                **open_kwargs,
+            )
+            logger.warning(
+                "选定输出设备不可用，已回退到系统默认设备 [%s]（原始错误: %s）",
+                default_index,
+                original_error,
+            )
+            return stream
+        except Exception as fallback_error:
+            logger.error(
+                "回退到默认设备 [%s] 也失败: %s", default_index, fallback_error,
+            )
+            return None
+
     def _print_open_stream_error(self, error: Exception, *, rate: int | None = None) -> None:
         """输出打开音频流失败的提示。"""
         logger.error("无法打开音频流: %s", error)
@@ -308,8 +435,16 @@ class AudioPlayer:
         ``output_device_index``)。若提供 ``format_from_width``, 则用
         ``p.get_format_from_width(...)`` 推导 ``format`` 字段, 避免在调用方
         额外创建 PyAudio 实例。
+
+        格式/采样率不兼容时自动回退为 int16，并通过 ``_last_actual_format`` /
+        ``_last_actual_rate`` 暴露实际协商结果（调用方在返回后读取）。
         """
         p = pyaudio.PyAudio()
+
+        self._last_actual_format = None
+        self._last_actual_rate = None
+        self._last_mono_upmix = False
+        self._last_sample_width = None
 
         resolved_index = self._resolve_output_device(p, device_index)
         if resolved_index is None:
@@ -319,6 +454,13 @@ class AudioPlayer:
         if format_from_width is not None:
             open_kwargs["format"] = p.get_format_from_width(format_from_width)
 
+        # VB-CABLE 的 Windows 端点按双声道工作。实机回录验证表明，直接以
+        # 单声道打开会把相邻 PCM 样本错误拆到 L/R，造成频率翻倍和失真。
+        # 因此仅对 VB-CABLE 将设备流改成双声道，写入前再逐样本复制。
+        if open_kwargs.get("channels") == 1 and _is_vb_cable_playback_device(p, resolved_index):
+            open_kwargs["channels"] = 2
+            self._last_mono_upmix = True
+
         try:
             stream = p.open(
                 output=True,
@@ -326,10 +468,31 @@ class AudioPlayer:
                 **open_kwargs,
             )
         except Exception as e:
-            self._print_open_stream_error(e, rate=open_kwargs.get("rate"))
-            self._terminate_pyaudio(p)
-            return None, None
+            stream, fb_format, fb_rate = self._try_fallback_stream_for_device(
+                p, resolved_index, e, **open_kwargs,
+            )
+            if stream is None:
+                # 设备无效（-9996 / paInvalidDevice）：已选择设备无法打开，
+                # 回退到系统默认输出后重试，避免因无效配置导致完全无声。
+                if _is_device_invalid_error(e) and device_index is None:
+                    default_index = self._default_output_device_index(p)
+                    if default_index is not None and default_index != resolved_index:
+                        stream = self._try_open_default_device(
+                            p, default_index, e, **open_kwargs,
+                        )
+                if stream is None:
+                    self._print_open_stream_error(e, rate=open_kwargs.get("rate"))
+                    self._terminate_pyaudio(p)
+                    return None, None
+            # 更新 kwargs 以反映回退后的实际参数
+            if fb_format is not None:
+                open_kwargs["format"] = fb_format
+            if fb_rate is not None:
+                open_kwargs["rate"] = fb_rate
 
+        self._last_actual_format = open_kwargs.get("format")
+        self._last_actual_rate = open_kwargs.get("rate")
+        self._last_sample_width = p.get_sample_size(open_kwargs["format"])
         return p, stream
 
     def open_stream(
@@ -355,15 +518,59 @@ class AudioPlayer:
 
         self._stream = stream
         self._stream_p = p
+        # 记录实际协商的格式/采样率（回退后可能与请求值不同）
+        self._stream_format = self._last_actual_format
+        self._stream_rate = self._last_actual_rate
+        self._stream_mono_upmix = self._last_mono_upmix
+        self._stream_sample_width = self._last_sample_width
         logger.info("已打开流式播放到 %s", self.output_device_name or "默认输出设备")
         return True
 
     def write_stream(self, data: bytes) -> None:
-        """向已打开的原始音频流写入音频块。"""
+        """向已打开的原始音频流写入音频块。
+
+        调用方（CartesiaRealtimeTTS）已根据流格式选择匹配的 PCM 编码
+        （int16 流 → pcm_s16le，float32 流 → pcm_f32le），此处直接透传。
+        """
         if self._stream is None:
             raise RuntimeError("音频流尚未打开")
 
+        if self._stream_mono_upmix:
+            if self._stream_sample_width is None:
+                raise RuntimeError("缺少流采样宽度，无法执行 VB-CABLE 双声道转换")
+            data = _duplicate_mono_to_stereo(data, self._stream_sample_width)
+
         self._stream.write(data)
+
+    def get_stream_config(self) -> dict[str, int | None]:
+        """返回当前已打开流的实际格式与采样率，用于诊断格式兼容性问题。
+
+        未打开流时返回 ``{"format": None, "rate": None}``。
+        """
+        return {"format": self._stream_format, "rate": self._stream_rate}
+
+    def query_output_device_default_rate(self) -> int | None:
+        """查询当前选定输出设备的默认采样率，失败返回 None。
+
+        创建临时 PyAudio 实例完成查询后立即释放，不影响活跃流。
+        """
+        p = None
+        try:
+            p = pyaudio.PyAudio()
+            resolved_index = self._resolve_output_device(p, None)
+            if resolved_index is None:
+                return None
+            info = p.get_device_info_by_index(resolved_index)
+            rate = info.get("defaultSampleRate")
+            return int(rate) if rate is not None else None
+        except Exception:
+            return None
+        finally:
+            if p is not None:
+                try:
+                    p.terminate()
+                except Exception:
+                    pass
 
     @staticmethod
     def _close_stream(stream) -> None:
@@ -396,6 +603,8 @@ class AudioPlayer:
         """关闭已打开的原始音频流, 各步骤独立执行确保 refs 一定被清空。"""
         stream, self._stream = self._stream, None
         p, self._stream_p = self._stream_p, None
+        self._stream_mono_upmix = False
+        self._stream_sample_width = None
 
         self._close_stream(stream)
         self._terminate_pyaudio(p)
@@ -451,6 +660,8 @@ class AudioPlayer:
 
             data = wf.readframes(1024)
             while data:
+                if self._last_mono_upmix:
+                    data = _duplicate_mono_to_stereo(data, sample_width)
                 stream.write(data)
                 data = wf.readframes(1024)
 

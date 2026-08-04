@@ -198,6 +198,8 @@ class WavTransApp:
         if cable_device is not None:
             self.player.set_output_device(cast(OutputDeviceSelection, cable_device))
             logger.info("音频输出已切换为 CABLE Input")
+        # 输出设备变更后强制 TTS 实时引擎重建音频流，避免写入旧设备。
+        self.tts_engine.reset_audio_output()
         if router.get_stats().listen_configured:
             logger.info("麦克风侦听已自动配置并验证")
         else:
@@ -213,6 +215,8 @@ class WavTransApp:
             self.player.set_output_device(saved_device)
         else:
             self.player.set_output_device_name(saved_name)
+        # 输出设备恢复后强制 TTS 实时引擎重建音频流。
+        self.tts_engine.reset_audio_output()
 
     def _on_audio_route_change(self, route_config: dict[str, object]) -> None:
         """音频路由配置变更回调。"""
@@ -241,6 +245,8 @@ class WavTransApp:
                 cable_device = self._router.get_output_device()
                 if cable_device is not None:
                     self.player.set_output_device(cast(OutputDeviceSelection, cable_device))
+                    # 输出设备变更后强制 TTS 实时引擎重建音频流。
+                    self.tts_engine.reset_audio_output()
             logger.info("音频路由配置已更新")
 
     def _stop_router(self) -> None:
@@ -323,11 +329,15 @@ class WavTransApp:
             name_value = device.get("name") if isinstance(device, dict) else None
             device_name = name_value if isinstance(name_value, str) else None
             logger.info("音频输出设备已切换为: %s", device_name if device_name else "系统默认")
+            # 输出设备变更后强制 TTS 实时引擎重建音频流，避免写入旧设备。
+            self.tts_engine.reset_audio_output()
             return
 
         device_name = device if isinstance(device, str) else None
         self.player.set_output_device_name(device_name)
         logger.info("音频输出设备已切换为: %s", device_name if device_name else "系统默认")
+        # 输出设备变更后强制 TTS 实时引擎重建音频流。
+        self.tts_engine.reset_audio_output()
 
     def _on_tts_backend_change(self, tts_backend: str) -> None:
         """TTS 模式变更后切换当前后端引擎。

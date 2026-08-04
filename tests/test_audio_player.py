@@ -45,6 +45,7 @@ class FakePyAudio:
 
     def __init__(self):
         self.terminate_calls = 0
+        self.open_calls: list[dict[str, object]] = []
         self._host_apis = [
             {"index": 0, "name": "MME", "type": 2},
             {"index": 1, "name": "Windows WASAPI", "type": 13},
@@ -77,7 +78,18 @@ class FakePyAudio:
     def get_format_from_width(self, width: int):
         return 8 * width  # arbitrary numeric stand-in
 
+    def get_sample_size(self, audio_format: int):
+        return {
+            1: 4,   # paFloat32
+            2: 4,   # paInt32
+            4: 3,   # paInt24
+            8: 2,   # paInt16
+            16: 1,  # paInt8
+            32: 1,  # paUInt8
+        }[audio_format]
+
     def open(self, **kwargs):
+        self.open_calls.append(kwargs)
         return self._stream
 
     def terminate(self) -> None:
@@ -462,6 +474,30 @@ def test_close_stream_stops_and_closes_active_stream(_patch_pyaudio):
     assert player._stream is None
 
 
+def test_cable_stream_upmixes_mono_pcm_to_stereo(_patch_pyaudio):
+    """VB-CABLE 双声道端点必须收到逐样本复制后的 L/R 数据。"""
+    player = AudioPlayer(output_device_name="VB-Cable Output")
+
+    assert player.open_stream(audio_format=8, channels=1, rate=48000) is True
+    player.write_stream(b"\x01\x02\x03\x04")
+
+    assert _patch_pyaudio.open_calls[-1]["channels"] == 2
+    assert _patch_pyaudio._stream.write_calls == [
+        b"\x01\x02\x01\x02\x03\x04\x03\x04"
+    ]
+
+
+def test_default_stream_keeps_mono_pcm_unchanged(_patch_pyaudio):
+    """普通设备继续使用调用方请求的单声道，避免扩大修复范围。"""
+    player = AudioPlayer()
+
+    assert player.open_stream(audio_format=8, channels=1, rate=48000) is True
+    player.write_stream(b"\x01\x02\x03\x04")
+
+    assert _patch_pyaudio.open_calls[-1]["channels"] == 1
+    assert _patch_pyaudio._stream.write_calls == [b"\x01\x02\x03\x04"]
+
+
 def test_close_stream_terminates_pyaudio_and_clears_ref(_patch_pyaudio):
     """close_stream must terminate the PyAudio instance and clear its ref."""
     player = AudioPlayer()
@@ -604,6 +640,26 @@ def test_play_wav_uses_actual_bytes_for_streaming_wav_duration(_patch_pyaudio, c
 
     assert "总时长=0.01 秒" in caplog.text
     assert "48695" not in caplog.text
+
+
+def test_play_wav_upmixes_mono_for_cable(_patch_pyaudio, tmp_path):
+    """完整 WAV 播放与实时流必须使用相同的 VB-CABLE 声道适配。"""
+    import wave
+
+    wav_path = tmp_path / "mono.wav"
+    with wave.open(str(wav_path), "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(48000)
+        wf.writeframes(b"\x01\x02\x03\x04")
+
+    player = AudioPlayer(output_device_name="VB-Cable Output")
+    assert player.play_wav(str(wav_path)) is True
+
+    assert _patch_pyaudio.open_calls[-1]["channels"] == 2
+    assert _patch_pyaudio._stream.write_calls == [
+        b"\x01\x02\x01\x02\x03\x04\x03\x04"
+    ]
 
 
 def test_invalid_sample_rate_error_has_specific_guidance(caplog):

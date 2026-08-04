@@ -451,6 +451,31 @@ class TestRealtimeLifecycleLocking:
         assert tts._connection is existing
 
 
+class TestRealtimeAudioStream:
+    """Realtime output must use formats and buffers compatible with the selected device."""
+
+    def test_cable_stream_uses_safe_buffer_size(self):
+        """VB-CABLE's 7168-sample latency requires client buffers to stay below 7168 / 3."""
+        from easy_tts.tts.cartesia import pyaudio
+
+        tts, mock_player = _make_realtime_tts()
+        mock_player.output_device_name = "CABLE Input (VB-Audio Virtual Cable)"
+        mock_player.query_output_device_default_rate.return_value = 48000
+        mock_player.get_stream_config.return_value = {
+            "format": pyaudio.paInt16,
+            "rate": 48000,
+        }
+
+        tts._open_audio_stream()
+
+        mock_player.open_stream.assert_called_once_with(
+            audio_format=pyaudio.paInt16,
+            channels=1,
+            rate=48000,
+            frames_per_buffer=1024,
+        )
+
+
 class TestSharedRequestArgs:
     """Shared payload construction via CartesiaTTS._build_request_args."""
 
