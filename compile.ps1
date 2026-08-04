@@ -1,12 +1,18 @@
 # Easy TTS 打包脚本（uv 版）
-# 用法：.\compile.ps1 [-NoPause]
+# 用法：.\compile.ps1 [-Clean] [-Sync] [-NoPause]
+#
+#   -Clean   清理 PyInstaller 缓存，强制全量重编译
+#   -NoPause 编译结束后不等待按键
 
 param(
+    [switch]$Clean,
     [switch]$NoPause
 )
 
 $ErrorActionPreference = 'Stop'
 Set-Location -LiteralPath $PSScriptRoot
+
+$stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
 
 function Invoke-Pause {
     if (-not $NoPause) {
@@ -24,10 +30,13 @@ if (-not $uv) {
     exit 1
 }
 
-# 确保依赖已安装（含 pyinstaller）
-Write-Host '[INFO] Installing PyInstaller...'
-& uv add --dev pyinstaller 2>&1 | Out-Null
-& uv sync 2>&1 | Out-Null
+Write-Host '[INFO] Syncing dependencies...'
+& uv sync --group dev
+if ($LASTEXITCODE -ne 0) {
+    Write-Host "[ERROR] uv sync failed (exit code $LASTEXITCODE)"
+    Invoke-Pause
+    exit $LASTEXITCODE
+}
 
 # 所有需要显式声明的隐藏导入（uv 项目 src-layout 结构）
 $hiddenImports = @(
@@ -66,16 +75,19 @@ foreach ($mod in $hiddenImports) {
 }
 
 Write-Host '[INFO] Running PyInstaller...'
+$iconPath = Join-Path $PSScriptRoot 'wavtrans.ico'
+
 $pyinstallerArgs = @(
     '--noconfirm',
-    '--clean',
     '--onefile',
     '--windowed',
     '--name', 'WavTrans',
+    '--icon', $iconPath,
+    '--add-data', 'src/easy_tts/ui/icons/settings.svg;easy_tts/ui/icons',
     '--collect-all', 'cartesia',
     '--collect-all', 'keyring',
     '--collect-submodules', 'websockets'
-) + $hiddenImportArgs + @('src/easy_tts/main.py')
+) + $(if ($Clean) { @('--clean') } else { @() }) + $hiddenImportArgs + @('src/easy_tts/__main__.py')
 
 & uv run pyinstaller @pyinstallerArgs
 $buildExit = $LASTEXITCODE
@@ -99,8 +111,12 @@ if (Test-Path -LiteralPath $specFile -PathType Leaf) {
     Remove-Item -LiteralPath $specFile -Force
 }
 
+$stopwatch.Stop()
+$elapsed = $stopwatch.Elapsed.ToString('mm\:ss')
+
 $outputPath = Join-Path $PSScriptRoot 'dist\WavTrans.exe'
-Write-Host "[INFO] Build succeeded: $outputPath"
+
+Write-Host "[INFO] Build succeeded in $elapsed : $outputPath"
 
 Invoke-Pause
 exit 0
