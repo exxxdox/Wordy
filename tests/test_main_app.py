@@ -1090,6 +1090,7 @@ class _FakeAudioRouter:
 
     def start(self, *, mic_device: str | None = None) -> bool:  # noqa: ARG002
         self.started = True
+        self.start_mic_device = mic_device
         return True
 
     def stop(self) -> None:
@@ -1153,6 +1154,31 @@ def test_enabling_audio_route_runtime_switches_player_output(monkeypatch):
     router = router_cls.instances[-1]
     assert router.started is True
     app.player.set_output_device.assert_called_once()
+
+
+def test_enabling_audio_route_uses_stored_mic_when_not_in_route_config(monkeypatch):
+    """启用路由时若 route_config 不含 mic_input_device，应读取已持久化的麦克风设置。"""
+    router_cls = _patch_audio_router_for_runtime_change(monkeypatch)
+
+    import easy_tts.main as main_mod
+
+    engine = FakeTTSEngine(voice_id="fake-voice")
+    monkeypatch.setattr("easy_tts.main.create_tts_engine", lambda *a, **kw: engine)
+
+    app = main_mod.WavTransApp()
+    # 模拟上次会话已保存的麦克风
+    app._settings.mic_input_device = "Saved Mic"
+
+    # 仅启用路由，不传 mic_input_device（模拟已保存麦克风未变化）
+    app._on_audio_route_change({"audio_routing_enabled": True})
+
+    assert router_cls.instances
+    router = router_cls.instances[-1]
+    assert router.started is True
+    # 关键：路由器应收到已保存的麦克风
+    assert router.start_mic_device == "Saved Mic", (
+        f"启用路由时应传递已持久化的麦克风，但 start() 收到 {router.start_mic_device!r}"
+    )
 
 
 def test_audio_route_keeps_cable_output_when_local_output_changes(monkeypatch):

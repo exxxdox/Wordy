@@ -62,8 +62,9 @@ class TestAudioRouter:
             patch.object(router, "_disable_mic_listen", return_value=True) as disable,
             patch.object(router, "_enable_mic_listen", return_value=True) as enable,
         ):
-            router.set_mic_device("New Mic")
+            ok = router.set_mic_device("New Mic")
 
+        assert ok is True
         disable.assert_called_once_with("Old Mic")
         enable.assert_called_once_with("New Mic")
         assert router._mic_device == "New Mic"
@@ -79,11 +80,56 @@ class TestAudioRouter:
             patch.object(router, "_disable_mic_listen", return_value=False),
             patch.object(router, "_enable_mic_listen", return_value=True) as enable,
         ):
-            router.set_mic_device("New Mic")
+            ok = router.set_mic_device("New Mic")
 
+        assert ok is False
         enable.assert_not_called()
         assert router._mic_device == "Old Mic"
         assert router.get_stats().listen_configured is True
+
+    def test_switch_mic_rolls_back_when_new_enable_fails(self):
+        """新设备 _enable_mic_listen 失败时应回滚到旧设备。"""
+        router = AudioRouter(virtual_output="CABLE Input")
+        router._active = True
+        router._mic_device = "Old Mic"
+        router._listen_configured = True
+
+        enable_results = [False, True]  # new fails, old restore succeeds
+
+        def enable_side_effect(name):
+            return enable_results.pop(0)
+
+        with (
+            patch.object(router, "_disable_mic_listen", return_value=True) as disable,
+            patch.object(router, "_enable_mic_listen", side_effect=enable_side_effect) as enable,
+        ):
+            ok = router.set_mic_device("New Mic")
+
+        assert ok is False
+        # 先禁用旧设备，再尝试启用新设备（失败），最后恢复旧设备
+        disable.assert_called_once_with("Old Mic")
+        assert enable.call_count == 2
+        assert enable.call_args_list[0].args == ("New Mic",)
+        assert enable.call_args_list[1].args == ("Old Mic",)
+        # 回滚后状态应与初始一致
+        assert router._mic_device == "Old Mic"
+        assert router.get_stats().listen_configured is True
+
+    def test_switch_mic_no_op_when_same_device(self):
+        router = AudioRouter(virtual_output="CABLE Input")
+        router._active = True
+        router._mic_device = "Same Mic"
+        router._listen_configured = True
+
+        with (
+            patch.object(router, "_disable_mic_listen") as disable,
+            patch.object(router, "_enable_mic_listen") as enable,
+        ):
+            ok = router.set_mic_device("Same Mic")
+
+        assert ok is True
+        disable.assert_not_called()
+        enable.assert_not_called()
 
     @patch("easy_tts.audio.router.sd.query_hostapis")
     @patch("easy_tts.audio.router.sd.query_devices")
@@ -150,7 +196,7 @@ class TestAudioRouter:
         assert router.get_stats().listen_configured is False
 
     def test_set_mic_device_none_disables_listen(self):
-        """set_mic_device(None) 停用侦听。"""
+        """set_mic_device(None) 停用侦听，返回 True。"""
         router = AudioRouter(virtual_output="CABLE Input")
         router._active = True
         router._mic_device = "Old Mic"
@@ -160,8 +206,9 @@ class TestAudioRouter:
             patch.object(router, "_disable_mic_listen", return_value=True) as disable,
             patch.object(router, "_enable_mic_listen") as enable,
         ):
-            router.set_mic_device(None)
+            ok = router.set_mic_device(None)
 
+        assert ok is True
         disable.assert_called_once_with("Old Mic")
         enable.assert_not_called()
         assert router._mic_device is None

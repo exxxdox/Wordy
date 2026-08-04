@@ -88,24 +88,43 @@ class AudioRouter:
         self._active = False
         logger.info("音频路由已停用")
 
-    def set_mic_device(self, device_name: str | None) -> None:
-        """切换麦克风时先清理旧设备，再启用新设备。
+    def set_mic_device(self, device_name: str | None) -> bool:
+        """切换麦克风时先清理旧设备，再启用新设备。返回是否成功。
 
-        device_name 为 None 时停用侦听。"""
+        device_name 为 None 时停用侦听。失败时尽力恢复旧侦听状态。"""
         old = self._mic_device
+        old_listen_configured = self._listen_configured
         if old == device_name:
-            return
+            return True
 
-        # 必须显式传 old；先更新 self._mic_device 会误禁用新设备。
+        # 先禁用旧设备侦听
         if self._active and self._listen_configured and old is not None:
             if not self._disable_mic_listen(old):
                 logger.error("无法恢复旧麦克风状态，已取消切换: %s → %s", old, device_name)
-                return
+                return False
 
+        # 启用新设备侦听
         self._mic_device = device_name
         self._listen_configured = False
         if self._active and device_name is not None:
             self._listen_configured = self._enable_mic_listen(device_name)
+            if not self._listen_configured:
+                # 新设备启用失败，尽力恢复旧侦听状态。
+                logger.error("麦克风侦听切换失败，新设备未生效: %s", device_name)
+                self._mic_device = old
+                if old_listen_configured and old is not None:
+                    if self._enable_mic_listen(old):
+                        self._listen_configured = True
+                        logger.info("已恢复旧麦克风侦听: %s", old)
+                    else:
+                        logger.error("旧麦克风侦听恢复也失败: %s，侦听已丢失", old)
+                return False
+
+        if device_name is not None:
+            logger.info("麦克风侦听已切换: %s → %s", old, device_name)
+        else:
+            logger.info("麦克风侦听已停用（原: %s）", old)
+        return True
 
     def _enable_mic_listen(self, mic_name: str) -> bool:
         """使用 WASAPI 的 VB-CABLE 名称配置 Windows Core Audio 侦听。"""

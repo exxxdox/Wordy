@@ -757,8 +757,11 @@ class InputOverlay:
             if "audio_routing_enabled" in route_update:
                 label = "音频路由已启用" if self._audio_routing_enabled else "音频路由已禁用"
                 saved_messages.append(label)
-            if self._mic_input_device and "mic_input_device" in route_update:
-                saved_messages.append(f"麦克风侦听已切换为 {self._mic_input_device}")
+            if "mic_input_device" in route_update:
+                if self._mic_input_device:
+                    saved_messages.append(f"麦克风侦听已切换为 {self._mic_input_device}")
+                else:
+                    saved_messages.append("麦克风侦听已停用")
 
         # fixed_center 有额外 UI 副作用
         self._apply_scalar_and_notify(pending, saved_messages, "fixed_center", "_fixed_center",

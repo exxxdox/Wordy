@@ -233,13 +233,19 @@ class WavTransApp:
         mic_device = route_config.get("mic_input_device")
 
         if self._router is None:
+            # 首次创建路由器：mic_device 可能未在 route_config 中（用户仅启用路由，
+            # 麦克风沿用上次保存的选择），此时从已持久化的配置中读取。
+            if mic_device is None:
+                mic_device = self._settings.mic_input_device
             self._router = self._try_create_router(
                 virtual_output=virtual_device,
                 mic_device=mic_device,
             )
         else:
             if "mic_input_device" in route_config:
-                self._router.set_mic_device(mic_device if isinstance(mic_device, str) else None)
+                ok = self._router.set_mic_device(mic_device if isinstance(mic_device, str) else None)
+                if not ok:
+                    logger.error("麦克风侦听切换失败，请检查设备名称是否正确")
             if "virtual_output_device" in route_config:
                 self._router.set_virtual_output(virtual_device if isinstance(virtual_device, str) else None)
                 cable_device = self._router.get_output_device()
