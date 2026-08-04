@@ -50,6 +50,10 @@ DEFAULT_HOTKEY: dict[str, str] = {"hotkey": "f6", "name": "F6"}
 _USER_CONFIG_FILE: Path = Path.home() / ".wavtrans_config.json"
 USER_CONFIG_FILE: Path = _USER_CONFIG_FILE  # 向后兼容：测试 monkeypatch 使用
 
+# load() 缓存：同一配置文件多次调用复用同一实例，避免重复磁盘 I/O
+_cached_settings: AppSettings | None = None
+_cached_config_file: Path | None = None
+
 
 # ---------------------------------------------------------------------------
 # 工具函数
@@ -131,8 +135,17 @@ class AppSettings:
 
     @classmethod
     def load(cls, *, config_file: Path | None = None) -> AppSettings:
-        """从 JSON 文件加载配置，缺失时使用默认值。"""
+        """从 JSON 文件加载配置，缺失时使用默认值。
+
+        同一配置文件多次调用复用缓存实例，避免重复磁盘 I/O。
+        """
+        global _cached_settings, _cached_config_file
         file = config_file or USER_CONFIG_FILE  # 使用模块变量以支持 monkeypatch
+
+        # 同一配置文件且已有有效缓存，直接返回
+        if _cached_settings is not None and _cached_config_file == file and _cached_settings._loaded:
+            return _cached_settings
+
         settings = cls()
 
         # 注入 Cartesia key 状态（不触碰磁盘密钥本身）
@@ -143,6 +156,8 @@ class AppSettings:
         raw = _read_json(file)
         if raw is None:
             settings._loaded = True
+            _cached_settings = settings
+            _cached_config_file = file
             return settings
 
         # 逐字段解析（仅覆盖 JSON 中存在的合法值）
@@ -171,12 +186,18 @@ class AppSettings:
             settings.voice_name = _nonempty_str(raw.get("voice_name")) or voice_id
 
         settings._loaded = True
+        _cached_settings = settings
+        _cached_config_file = file
         return settings
 
     # ── 持久化 ─────────────────────────────────────────────────────────
 
     def save(self, *, config_file: Path | None = None) -> Path:
-        """将当前设置写入 JSON 文件（原子写入）。"""
+        """将当前设置写入 JSON 文件（原子写入）。
+
+        写入后清空缓存，确保下次 load() 重新读磁盘并走字段验证逻辑。
+        """
+        global _cached_settings, _cached_config_file
         file = config_file or USER_CONFIG_FILE
         data: dict[str, object] = {}
         for f in fields(self):
@@ -188,6 +209,10 @@ class AppSettings:
                 pass
             data[f.name] = value
         _write_json_atomic(file, data)
+        # 清空缓存；但当前实例仍是有效缓存——如果 config_file 匹配则恢复
+        if _cached_config_file == file:
+            _cached_settings = None
+            _cached_config_file = None
         return file
 
     _CLAMP_RANGES: ClassVar[dict[str, tuple[float, float]]] = {

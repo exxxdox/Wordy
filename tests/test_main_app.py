@@ -8,6 +8,7 @@ from __future__ import annotations
 import queue
 import sys
 import threading
+import time
 from typing import Any, Callable
 from unittest.mock import MagicMock
 
@@ -114,6 +115,10 @@ class FakeJanitorThread:
     def start(self) -> None:
         self.started = True
         self._alive = True
+        # janitor 线程由各测试自行替换实例控制行为，不执行 target；
+        # 其他线程（如 tts-connect）直接同步执行 target。
+        if self.name != "WavTransTTSJanitor":
+            self.target()
 
     def is_alive(self) -> bool:
         return self._alive
@@ -698,6 +703,11 @@ def test_run_enqueues_current_worker_and_sentinel_then_joins_janitor(app, monkey
     app._janitor_thread = fake_janitor  # type: ignore[assignment]
 
     app.run()
+
+    # connect() 改为后台线程执行，等待 daemon 线程完成
+    deadline = time.monotonic() + 1.0
+    while engine.connect_calls < 1 and time.monotonic() < deadline:
+        time.sleep(0.01)
 
     assert inline_calls == [], (
         f"run cleanup must defer worker shutdown/close to janitor; got inline calls {inline_calls!r}"

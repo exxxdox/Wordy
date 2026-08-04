@@ -398,6 +398,13 @@ class WavTransApp:
         except Exception as e:
             logger.error("%s 播放失败: %s", backend, e)
 
+    def _connect_async(self) -> None:
+        """后台预热 TTS 连接；失败记日志，首次播放时懒连接自动重试。"""
+        try:
+            self.tts_engine.connect()
+        except Exception as e:
+            logger.warning("TTS 后台预热连接失败: %s（首次播放时会自动重试）", e)
+
     def run(self) -> None:
         """启动常驻应用。"""
         logger.info("WavTrans 已启动，当前 TTS 后端: %s", self.tts_backend)
@@ -423,9 +430,14 @@ class WavTransApp:
             self._janitor_thread.join(timeout=_JANITOR_JOIN_TIMEOUT_SECONDS)
 
         try:
-            if self.cartesia_api_key or self.tts_backend not in {TTS_BACKEND_CARTESIA_BYTES, TTS_BACKEND_CARTESIA_REALTIME}:
-                self.tts_engine.connect()
+            # 先构建 UI（主线程必须），再后台预热 TTS 连接，避免网络/PyAudio 阻塞 UI 出现。
             self.overlay.prepare_ui()
+            if self.cartesia_api_key or self.tts_backend not in {TTS_BACKEND_CARTESIA_BYTES, TTS_BACKEND_CARTESIA_REALTIME}:
+                threading.Thread(
+                    target=self._connect_async,
+                    daemon=True,
+                    name="tts-connect",
+                ).start()
             tray_app = TrayApp(self.overlay)
             _ = TrayController(tray_app, self.overlay)
             def _pre_stop() -> None:
