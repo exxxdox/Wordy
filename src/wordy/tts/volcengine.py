@@ -22,6 +22,9 @@ TTS_SSE_URL = "https://openspeech.bytedance.com/api/v3/tts/unidirectional/sse"
 DEFAULT_RESOURCE_ID = "seed-icl-2.0"
 # 与 Cartesia 一致：48 kHz，避免 Windows SRC 失真
 DEFAULT_SAMPLE_RATE = 48000
+# PyAudio write 子块大小（帧数），避免大 chunk 阻塞 write() 数百 ms
+# 1024 帧 × 2 bytes = 2048 bytes ≈ 21ms @ 48kHz，足够小到不阻塞
+WRITE_CHUNK_FRAMES = 1024
 
 
 def _ensure_volcengine_config(
@@ -225,8 +228,16 @@ class VolcengineStreamingTTS(BackendTTSEngine):
                 if pcm_bytes:
                     chunk_count += 1
                     total_bytes += len(pcm_bytes)
-                    logger.info("Volcengine chunk #%d: %d bytes → write_stream", chunk_count, len(pcm_bytes))
-                    self.audio_player.write_stream(pcm_bytes)
+                    # 大 chunk 拆成子块写入，PyAudio write() 按子块阻塞 ~21ms，
+                    # 避免 35KB 一次性阻塞 400ms 导致 chunk 间间隙。
+                    sample_bytes = 2  # 16-bit = 2 bytes/sample
+                    sub_size = WRITE_CHUNK_FRAMES * sample_bytes
+                    for offset in range(0, len(pcm_bytes), sub_size):
+                        sub = pcm_bytes[offset:offset + sub_size]
+                        self.audio_player.write_stream(sub)
+                    logger.debug("Volcengine chunk #%d: %d bytes → %d sub-chunks",
+                                 chunk_count, len(pcm_bytes),
+                                 (len(pcm_bytes) + sub_size - 1) // sub_size)
 
             logger.info("Volcengine SSE 完成: %d 音频块, %d bytes", chunk_count, total_bytes)
             return chunk_count > 0
@@ -245,70 +256,3 @@ class VolcengineStreamingTTS(BackendTTSEngine):
         """释放资源。"""
         with self._stream_lock:
             self.audio_player.close_stream()
-
-
-# ── 测试入口 ──────────────────────────────────────────────────────────
-if __name__ == "__main__":
-    import sys as _sys
-    logging.basicConfig(level=logging.DEBUG, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
-    from wordy.config import AppSettings as _AppSettings
-    import wordy.secret as _secret
-
-    _settings = _AppSettings.load()
-    _provider = _settings.tts_providers.get("Volcengine", {})
-    _ak = _secret.load_volcengine_access_key()
-    _vid = _provider.get("voice_id")
-
-    _sys.stdout.reconfigure(encoding="utf-8")  # type: ignore[attr-defined]
-    print(f"API Key: {'set' if _ak else 'MISSING'}")
-    print(f"Speaker ID: {_vid or 'MISSING'}")
-    print(f"Endpoint: {TTS_SSE_URL}")
-    print(f"Resource: {DEFAULT_RESOURCE_ID}")
-    print(f"Sample Rate: {DEFAULT_SAMPLE_RATE}")
-
-    if not _ak or not _vid:
-        print("ERROR: configure API Key and Speaker ID in settings first")
-        _sys.exit(1)
-
-    class _DummyPlayer:  # pragma: no cover
-        output_device_name = None
-        _buf: bytearray
-
-        def open_stream(self, audio_format, channels, rate, frames_per_buffer=1024):
-            print(f"[Dummy] open_stream fmt={audio_format} ch={channels} rate={rate}")
-            self._buf = bytearray()
-            return True
-
-        def write_stream(self, data: bytes) -> None:
-            self._buf += data
-
-        def close_stream(self) -> None:
-            print(f"[Dummy] close_stream, received {len(self._buf)} bytes PCM")
-
-        def get_stream_config(self):
-            return type("Cfg", (), {"get": lambda s, k: {"format": 8, "rate": 48000}.get(k)})()
-
-        def query_output_device_default_rate(self):
-            return None
-
-    _player = _DummyPlayer()
-    engine = VolcengineStreamingTTS(audio_player=_player, api_key=_ak, voice_id=str(_vid))
-    test_text = "你好，这是一段测试语音，用于检查音质是否正常。"
-    print(f"\nText: {test_text}")
-    try:
-        ok = engine.speak(test_text)
-        print(f"Result: {'OK' if ok else 'FAIL (no audio)'} | {len(_player._buf)} bytes PCM")
-        # 保存为 WAV
-        import wave
-        from pathlib import Path
-        _out_dir = Path(".tmp")
-        _out_dir.mkdir(exist_ok=True)
-        _wav_path = _out_dir / "test.wav"
-        with wave.open(str(_wav_path), "wb") as wf:
-            wf.setnchannels(1)
-            wf.setsampwidth(2)  # 16-bit
-            wf.setframerate(DEFAULT_SAMPLE_RATE)
-            wf.writeframes(bytes(_player._buf))
-        print(f"Saved: {_wav_path} ({_wav_path.stat().st_size} bytes)")
-    except Exception as exc:
-        print(f"FAIL: {exc}")

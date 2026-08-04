@@ -135,9 +135,13 @@ class TestSidetoneAudioPlayer:
         main, sidetone = self._make_players()
         wrapper = SidetoneAudioPlayer(main, sidetone)
         wrapper.set_sidetone_enabled(True)
+        # 需要先 open_stream 创建异步 executor
+        wrapper.open_stream(8, 1, 48000)  # paInt16
         data = b"\x00\x01\x02\x03"
         wrapper.write_stream(data)
         main.write_stream.assert_called_once_with(data)
+        # 异步写入，需 close_stream 等待 executor 完成再断言
+        wrapper.close_stream()
         sidetone.write_stream.assert_called_once_with(data)
 
     def test_write_stream_skips_sidetone_when_dead(self):
@@ -154,7 +158,10 @@ class TestSidetoneAudioPlayer:
         sidetone.write_stream.side_effect = RuntimeError("stream broken")
         wrapper = SidetoneAudioPlayer(main, sidetone)
         wrapper.set_sidetone_enabled(True)
+        wrapper.open_stream(8, 1, 48000)  # paInt16
         wrapper.write_stream(b"\x00\x01")
+        # 异步写入，需等待 executor 完成
+        wrapper.close_stream()
         assert wrapper._sidetone_stream_dead is True
         # 第二次写入不应再尝试返听
         sidetone.write_stream.reset_mock()
@@ -178,11 +185,12 @@ class TestSidetoneAudioPlayer:
         main.close_stream.assert_called_once()
         sidetone.close_stream.assert_called_once()
 
-    def test_close_stream_resets_dead_flag(self):
+    def test_open_stream_resets_dead_flag(self):
+        """open_stream 重置 dead 标记，新流开始时重新尝试返听。"""
         main, sidetone = self._make_players()
         wrapper = SidetoneAudioPlayer(main, sidetone)
         wrapper._sidetone_stream_dead = True
-        wrapper.close_stream()
+        wrapper.open_stream(8, 1, 48000)  # paInt16
         assert wrapper._sidetone_stream_dead is False
 
     def test_close_stream_sidetone_failure_not_fatal(self):

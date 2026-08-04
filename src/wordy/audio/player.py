@@ -325,7 +325,14 @@ class AudioPlayer:
                 self.output_device_name,
             )
 
-        return self._default_output_device_index(p)
+        default_idx = self._default_output_device_index(p)
+        if default_idx is not None:
+            try:
+                info = p.get_device_info_by_index(default_idx)
+                logger.info("使用系统默认输出设备 [%s]: %s", default_idx, info.get("name", "?"))
+            except Exception:
+                pass
+        return default_idx
 
     def _try_fallback_stream_for_device(
         self,
@@ -523,7 +530,9 @@ class AudioPlayer:
         self._stream_rate = self._last_actual_rate
         self._stream_mono_upmix = self._last_mono_upmix
         self._stream_sample_width = self._last_sample_width
-        logger.info("已打开流式播放到 %s", self.output_device_name or "默认输出设备")
+        logger.info("已打开流式播放到 [%s] %s",
+                    self._last_actual_rate,
+                    self.output_device_name or "系统默认设备")
         return True
 
     def write_stream(self, data: bytes) -> None:

@@ -263,13 +263,10 @@ def delete_cartesia_api_key() -> StorageStatus:
 
     try:
         keyring.delete_password(SERVICE_NAME, CARTESIA_USERNAME)
-    except keyring.errors.PasswordDeleteError:
-        # Already absent: not an error for delete semantics.
+    except Exception:
+        # PasswordDeleteError (already absent) → not an error for delete semantics.
+        # Other exceptions also ignored — best-effort delete.
         pass
-    except Exception as exc:
-        raise SecretStoreError(
-            "Failed to delete secret from keyring"
-        ) from exc
 
     return StorageStatus(
         backend=STORAGE_NONE,

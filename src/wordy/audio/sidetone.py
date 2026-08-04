@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""返听（Sidetone）包装器：将 TTS 音频同时输出到主设备和系统默认设备。"""
+"""返听（Sidetone）包装器：将 TTS 音频同时输出到主设备和系统默认设备。
+
+返听流写入通过单线程 executor 异步执行，避免阻塞主链路 chunk 写入。
+"""
 
 from __future__ import annotations
 
 import logging
+import time
+from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 from typing import TYPE_CHECKING
 
@@ -21,6 +26,9 @@ class SidetoneAudioPlayer:
     通过 ``set_sidetone_enabled()`` 控制返听开关。
     开关关闭时所有方法近乎零开销直通主播放器（仅一个 bool 判断）。
     返听失败不影响主链路：stream 打开失败、写入异常均记录 warning 并继续。
+
+    返听 write_stream 通过 ``ThreadPoolExecutor(max_workers=1)`` 异步执行，
+    主链路写入立即返回，不等待返听设备。chunk 写入顺序由单 worker 保证。
     """
 
     def __init__(self, main_player: AudioPlayer, sidetone_player: AudioPlayer) -> None:
@@ -29,6 +37,8 @@ class SidetoneAudioPlayer:
         self._sidetone_enabled = False
         # 返听流是否已确认不可用（打开失败或写入异常后置位，避免重复报错）
         self._sidetone_stream_dead = False
+        # 返听异步写入 executor，close_stream 时 shutdown
+        self._sidetone_executor: ThreadPoolExecutor | None = None
 
     # ── 开关 ──────────────────────────────────────────────────────────
 
@@ -117,13 +127,26 @@ class SidetoneAudioPlayer:
         except Exception:
             self._sidetone_stream_dead = True
             logger.warning("返听设备流打开失败", exc_info=True)
+
+        # 创建新的 executor 用于本次流期间的异步返听写入
+        self._sidetone_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="sidetone-write")
         return True
 
     def write_stream(self, data: bytes) -> None:
-        """写入流数据：主设备 → 返听设备（如启用且流可用）。"""
+        """写入流数据：返听先提交到后台线程 → 主设备同步写入。两者并行执行。"""
+        # 先提交返听（后台线程立即开始 write），主链路 write 同时进行
+        if self._sidetone_enabled and not self._sidetone_stream_dead:
+            executor = self._sidetone_executor
+            if executor is not None:
+                try:
+                    executor.submit(self._sidetone_write_safe, data)
+                except Exception:
+                    self._sidetone_stream_dead = True
+                    logger.warning("返听异步写入提交失败，本次流内不再重试", exc_info=True)
         self._main.write_stream(data)
-        if not self._sidetone_enabled or self._sidetone_stream_dead:
-            return
+
+    def _sidetone_write_safe(self, data: bytes) -> None:
+        """在 executor 线程中执行返听写入，异常时标记流死。"""
         try:
             self._sidetone.write_stream(data)
         except Exception:
@@ -131,9 +154,13 @@ class SidetoneAudioPlayer:
             logger.warning("返听流写入失败，本次流内不再重试", exc_info=True)
 
     def close_stream(self) -> None:
-        """关闭流：主设备 + 返听设备。"""
+        """关闭流：等待返听异步写入完成 → 关主设备 → 关返听设备。"""
+        executor = self._sidetone_executor
+        self._sidetone_executor = None
+        if executor is not None:
+            executor.shutdown(wait=True)
+
         self._main.close_stream()
-        self._sidetone_stream_dead = False
         if self._sidetone_enabled:
             try:
                 self._sidetone.close_stream()
