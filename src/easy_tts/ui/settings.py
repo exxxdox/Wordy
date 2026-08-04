@@ -564,21 +564,27 @@ class SettingsWindow:
         if not self.pending_audio_routing_enabled:
             self._on_audio_output_selected(combo.currentText())
 
+    MIC_NONE_LABEL = "无（不侦听麦克风）"
+
     def _on_mic_input_selected(self, text: str) -> None:
-        self.pending_mic_input_device = text if text else None
+        # "无" → None，路由器不做侦听配置。
+        self.pending_mic_input_device = None if text == self.MIC_NONE_LABEL else (text if text else None)
 
     def _populate_input_devices(self, devices: list[dict[str, object]], selected: str | None) -> None:
-        """填充麦克风输入设备下拉列表。"""
+        """填充麦克风输入设备下拉列表，首项为"无"——显式表示不侦听。"""
         combo = self.mic_input_combo
         combo.blockSignals(True)
         combo.clear()
-        names: list[str] = []
+        combo.addItem(self.MIC_NONE_LABEL)
+        names: list[str] = [self.MIC_NONE_LABEL]
         for dev in devices:
             name = dev.get("name") if isinstance(dev, dict) else str(dev)
             if isinstance(name, str) and name:
                 names.append(name)
                 combo.addItem(name)
-        if selected and selected in names:
+        if selected is None:
+            combo.setCurrentIndex(0)
+        elif selected in names:
             combo.setCurrentText(selected)
         combo.blockSignals(False)
 

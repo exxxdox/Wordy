@@ -135,6 +135,38 @@ class TestAudioRouter:
             assert "host_api_name" in dev
             assert "CABLE" in dev["name"]
 
+    @patch("easy_tts.audio.router.VBCableDriverManager.get_virtual_output_index")
+    def test_start_without_mic_skips_listen(self, mock_vb_idx):
+        """mic_device=None 时 start 不配置侦听——用户需手动选择麦克风。"""
+        mock_vb_idx.return_value = 99
+        router = AudioRouter(virtual_output="CABLE Input")
+
+        with patch.object(router, "_enable_mic_listen") as enable:
+            result = router.start(mic_device=None)
+
+        assert result is True
+        enable.assert_not_called()
+        assert router._mic_device is None
+        assert router.get_stats().listen_configured is False
+
+    def test_set_mic_device_none_disables_listen(self):
+        """set_mic_device(None) 停用侦听。"""
+        router = AudioRouter(virtual_output="CABLE Input")
+        router._active = True
+        router._mic_device = "Old Mic"
+        router._listen_configured = True
+
+        with (
+            patch.object(router, "_disable_mic_listen", return_value=True) as disable,
+            patch.object(router, "_enable_mic_listen") as enable,
+        ):
+            router.set_mic_device(None)
+
+        disable.assert_called_once_with("Old Mic")
+        enable.assert_not_called()
+        assert router._mic_device is None
+        assert router.get_stats().listen_configured is False
+
     def test_noop_methods_dont_crash(self):
         """兼容的 no-op 方法不应抛异常。"""
         router = AudioRouter()

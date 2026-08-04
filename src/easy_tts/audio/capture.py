@@ -137,6 +137,15 @@ class AudioCapture:
                 return dev["index"]
         return None
 
+    @staticmethod
+    def get_default_input_device_name() -> str | None:
+        """返回系统默认 WASAPI 输入设备名称，未找到返回 ``None``。"""
+        devices = AudioCapture.list_input_devices()
+        for dev in devices:
+            if dev["is_default"]:
+                return dev["name"]
+        return None
+
     def _resolve_device_index(self) -> int | None:
         """解析目标设备索引。"""
         if self.device_name is None:

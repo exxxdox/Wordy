@@ -58,7 +58,9 @@ class AudioRouter:
     # ── 生命周期 ─────────────────────────────────────────────────────────
 
     def start(self, *, mic_device: str | None = None) -> bool:
-        """启用 TTS 路由，并尽力配置 Windows 麦克风侦听。"""
+        """启用 TTS 路由，并尽力配置 Windows 麦克风侦听。
+
+        mic_device 为 None 时不配置侦听——用户需手动选择麦克风。"""
         if self._active:
             return True
         if self._resolve_output_device() is None:
@@ -87,7 +89,9 @@ class AudioRouter:
         logger.info("音频路由已停用")
 
     def set_mic_device(self, device_name: str | None) -> None:
-        """切换麦克风时先清理旧设备，再启用新设备。"""
+        """切换麦克风时先清理旧设备，再启用新设备。
+
+        device_name 为 None 时停用侦听。"""
         old = self._mic_device
         if old == device_name:
             return
