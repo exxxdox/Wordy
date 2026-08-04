@@ -120,10 +120,8 @@ class AppSettings:
     # ---- 音频路由 ----
     audio_routing_enabled: bool = False
     mic_input_device: str | None = None
-    bridge_source_device: str | None = None
     virtual_output_device: str | None = None
     mic_gain: float = 1.0
-    bridge_gain: float = 1.0
     tts_gain: float = 1.0
 
     # ---- 内部 ----
@@ -158,10 +156,10 @@ class AppSettings:
         _apply_if_present(raw, "audio_output_device", settings, _parse_audio_output_device)
         _apply_if_present(raw, "audio_routing_enabled", settings, lambda v: v if isinstance(v, bool) else None)
 
-        for dev_key in ("mic_input_device", "bridge_source_device", "virtual_output_device"):
+        for dev_key in ("mic_input_device", "virtual_output_device"):
             _apply_if_present(raw, dev_key, settings, _nonempty_str)
 
-        for gain_key in ("mic_gain", "bridge_gain", "tts_gain"):
+        for gain_key in ("mic_gain", "tts_gain"):
             _apply_if_present(raw, gain_key, settings, _parse_gain_value)
 
         if (hotkey := _nonempty_str(raw.get("hotkey"))) is not None:
@@ -196,7 +194,6 @@ class AppSettings:
         "volume": (MIN_VOLUME, MAX_VOLUME),
         "overlay_opacity": (MIN_OVERLAY_OPACITY, MAX_OVERLAY_OPACITY),
         "mic_gain": (MIN_GAIN, MAX_GAIN),
-        "bridge_gain": (MIN_GAIN, MAX_GAIN),
         "tts_gain": (MIN_GAIN, MAX_GAIN),
     }
 

@@ -58,7 +58,11 @@ class VBCableDriverManager:
 
     @staticmethod
     def get_status() -> VBCableStatus:
-        """获取 VB-CABLE 详细状态，包括设备索引。"""
+        """获取 VB-CABLE 状态，并优先返回 Windows WASAPI 端点。
+
+        同一设备通常会被 PortAudio 以 MME/DirectSound/WASAPI 重复枚举；侦听
+        策略使用 MMDevice，因此必须优先选择与其命名域一致的 WASAPI 条目。
+        """
         status: VBCableStatus = {
             "installed": False,
             "input_device_index": None,
@@ -72,24 +76,43 @@ class VBCableDriverManager:
         except Exception as e:  # noqa: BLE001
             logger.warning("查询音频设备失败: %s", e)
             return status
+        try:
+            hostapis = sd.query_hostapis()
+        except Exception as e:  # noqa: BLE001
+            # Host API 元数据失败时仍保留名称检测能力，只是不再具备 WASAPI 优先级。
+            logger.warning("查询 Host API 失败，回退到设备枚举顺序: %s", e)
+            hostapis = []
 
+        input_rank = -1
+        output_rank = -1
         for idx, dev in enumerate(devices):
             name = dev.get("name", "")
             if not isinstance(name, str):
                 continue
+
+            try:
+                host_api_idx = dev.get("hostapi", -1)
+                host_api_name = hostapis[host_api_idx].get("name", "")
+            except Exception:  # noqa: BLE001 - 元数据缺失时仍允许兼容旧设备列表
+                host_api_name = ""
+            rank = 1 if host_api_name == "Windows WASAPI" else 0
 
             max_input = dev.get("max_input_channels", 0)
             max_output = dev.get("max_output_channels", 0)
 
             if VB_CABLE_INPUT_NAME in name and max_input > 0:
                 status["installed"] = True
-                status["input_device_index"] = idx
-                status["input_device_name"] = name
+                if rank > input_rank:
+                    input_rank = rank
+                    status["input_device_index"] = idx
+                    status["input_device_name"] = name
 
             if VB_CABLE_OUTPUT_NAME in name and max_output > 0:
                 status["installed"] = True
-                status["output_device_index"] = idx
-                status["output_device_name"] = name
+                if rank > output_rank:
+                    output_rank = rank
+                    status["output_device_index"] = idx
+                    status["output_device_name"] = name
 
         return status
 

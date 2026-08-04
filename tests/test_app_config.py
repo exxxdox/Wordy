@@ -722,21 +722,18 @@ def test_gain_config_clamps(tmp_path: Path):
     # Default
     s = AppSettings.load(config_file=tmp_path / "nonexistent.json")
     assert s.mic_gain == 1.0
-    assert s.bridge_gain == 1.0
     assert s.tts_gain == 1.0
 
     # Within range
     cfg = tmp_path / "config.json"
-    json.dump({"mic_gain": 1.5, "bridge_gain": 0.8, "tts_gain": 1.2}, cfg.open("w"))
+    json.dump({"mic_gain": 1.5, "tts_gain": 1.2}, cfg.open("w"))
     s2 = AppSettings.load(config_file=cfg)
     assert s2.mic_gain == 1.5
-    assert s2.bridge_gain == 0.8
     assert s2.tts_gain == 1.2
 
     # Clamp high
     cfg3 = tmp_path / "config3.json"
-    json.dump({"mic_gain": 3.0, "bridge_gain": -0.5, "tts_gain": 2.5}, cfg3.open("w"))
+    json.dump({"mic_gain": 3.0, "tts_gain": 2.5}, cfg3.open("w"))
     s3 = AppSettings.load(config_file=cfg3)
     assert s3.mic_gain == MAX_GAIN
-    assert s3.bridge_gain == MIN_GAIN
     assert s3.tts_gain == MAX_GAIN

@@ -97,7 +97,9 @@ class WavTransApp:
     def __init__(self, tts_backend: str | None = None):
         # 音频路由引擎（先初始化为 None，避免 _create_audio_player 访问时出错）
         self._router: AudioRouter | None = None
-        self._test_recording_path: str | None = None
+        # 路由启用时保存本地输出，关闭路由后精确恢复。
+        self._saved_output_device: OutputDeviceSelection | None = None
+        self._saved_output_device_name: str | None = None
         self._settings = AppSettings.load()
         self.player = self._create_audio_player()
         self.tts_backend = resolve_tts_backend(tts_backend or self._settings.tts_backend)
@@ -107,8 +109,6 @@ class WavTransApp:
         self._install_tts_worker(self._create_tts_worker())
 
         self._init_audio_router()
-        if self._router is not None:
-            self.player.set_router(self._router)
 
         self._janitor_queue: SimpleQueue = SimpleQueue()
         self._janitor_thread = threading.Thread(
@@ -127,8 +127,6 @@ class WavTransApp:
             on_audio_output_change=self._on_audio_output_change,
             on_cartesia_api_key_change=self._on_cartesia_api_key_change,
             on_audio_route_change=self._on_audio_route_change,
-            on_audio_route_test=self._on_audio_route_test,
-            on_play_route_test=self._play_route_test_recording,
             audio_player=self.player,
         )
 
@@ -167,43 +165,54 @@ class WavTransApp:
         if not s.audio_routing_enabled:
             return
         self._router = self._try_create_router(
-            mic_device=s.mic_input_device,
-            bridge_device=s.bridge_source_device,
             virtual_output=s.virtual_output_device,
-            mic_gain=s.mic_gain,
-            bridge_gain=s.bridge_gain,
-            tts_gain=s.tts_gain,
+            mic_device=s.mic_input_device,
         )
 
-    def _try_create_router(self, *, mic_device: object, bridge_device: object,
-                           virtual_output: object,
-                           mic_gain: object, bridge_gain: object, tts_gain: object,
-                           ) -> AudioRouter | None:
+    def _try_create_router(self, *, virtual_output: object,
+                           mic_device: object = None) -> AudioRouter | None:
         """创建并启动 AudioRouter，失败返回 None。"""
         if not VBCableDriverManager.is_installed():
             logger.warning("VB-CABLE 未安装，无法启动音频路由")
             return None
         try:
             router = AudioRouter(
-                mic_device=mic_device if isinstance(mic_device, str) else None,
-                bridge_device=bridge_device if isinstance(bridge_device, str) else None,
                 virtual_output=virtual_output if isinstance(virtual_output, str) else None,
             )
-            # 应用增益（仅传入有效数值）
-            gains: dict[str, float] = {}
-            for key, val in (("mic", mic_gain), ("bridge", bridge_gain), ("tts", tts_gain)):
-                if isinstance(val, (int, float)):
-                    gains[key] = float(val)
-            if gains:
-                router.set_gains(**gains)
-            if router.start():
-                logger.info("音频路由引擎已启动")
+            if router.start(
+                mic_device=mic_device if isinstance(mic_device, str) else None,
+            ):
+                self._enable_routing(router)
                 return router
             logger.warning("音频路由引擎启动失败")
             return None
         except Exception as e:
             logger.exception("音频路由引擎启动失败: %s", e)
             return None
+
+    def _enable_routing(self, router: AudioRouter) -> None:
+        """启用路由：保存当前输出设备，切换到 CABLE Input。"""
+        self._saved_output_device = self.player.output_device
+        self._saved_output_device_name = self.player.output_device_name
+        cable_device = router.get_output_device()
+        if cable_device is not None:
+            self.player.set_output_device(cast(OutputDeviceSelection, cable_device))
+            logger.info("音频输出已切换为 CABLE Input")
+        if router.get_stats().listen_configured:
+            logger.info("麦克风侦听已自动配置并验证")
+        else:
+            logger.warning("麦克风侦听未自动生效，请在 Windows 声音设置中手动配置到 CABLE Input")
+
+    def _disable_routing(self) -> None:
+        """停用路由：恢复路由启用前保存的本地输出设备。"""
+        saved_device = self._saved_output_device
+        saved_name = self._saved_output_device_name
+        self._saved_output_device = None
+        self._saved_output_device_name = None
+        if saved_device is not None:
+            self.player.set_output_device(saved_device)
+        else:
+            self.player.set_output_device_name(saved_name)
 
     def _on_audio_route_change(self, route_config: dict[str, object]) -> None:
         """音频路由配置变更回调。"""
@@ -216,104 +225,31 @@ class WavTransApp:
             self._stop_router()
             return
 
-        mic_device = route_config.get("mic_input_device")
-        bridge_device = route_config.get("bridge_source_device")
         virtual_device = route_config.get("virtual_output_device")
-        mic_gain = route_config.get("mic_gain")
-        bridge_gain = route_config.get("bridge_gain")
-        tts_gain = route_config.get("tts_gain")
+        mic_device = route_config.get("mic_input_device")
 
         if self._router is None:
-            # 新建路由器
             self._router = self._try_create_router(
-                mic_device=mic_device, bridge_device=bridge_device,
                 virtual_output=virtual_device,
-                mic_gain=mic_gain, bridge_gain=bridge_gain, tts_gain=tts_gain,
+                mic_device=mic_device,
             )
-            self.player.set_router(self._router)
         else:
-            # 动态更新运行中的路由器
             if "mic_input_device" in route_config:
                 self._router.set_mic_device(mic_device if isinstance(mic_device, str) else None)
-            if "bridge_source_device" in route_config:
-                self._router.set_bridge_device(bridge_device if isinstance(bridge_device, str) else None)
             if "virtual_output_device" in route_config:
                 self._router.set_virtual_output(virtual_device if isinstance(virtual_device, str) else None)
-            gain_kwargs: dict[str, float] = {}
-            for key, val in (("mic", mic_gain), ("bridge", bridge_gain), ("tts", tts_gain)):
-                if isinstance(val, (int, float)):
-                    gain_kwargs[key] = float(val)
-            if gain_kwargs:
-                self._router.set_gains(**gain_kwargs)
+                cable_device = self._router.get_output_device()
+                if cable_device is not None:
+                    self.player.set_output_device(cast(OutputDeviceSelection, cable_device))
             logger.info("音频路由配置已更新")
 
     def _stop_router(self) -> None:
-        """停止音频路由引擎并解除 player 绑定。"""
+        """停止音频路由引擎并恢复原始输出设备。"""
         if self._router is not None:
             self._router.stop()
             self._router = None
-            self.player.set_router(None)
+            self._disable_routing()
             logger.info("音频路由已禁用")
-
-    def _on_audio_route_test(self) -> str | None:
-        """启动音频路由测试：录制 5 秒混音（含 TTS "测试测试测试"），返回临时 WAV 文件路径。"""
-        if self._router is None or not self._router.is_running():
-            logger.warning("音频路由未运行，无法启动测试")
-            return None
-
-        # 启动录制
-        self._router.start_test_recording()
-
-        # 触发 TTS "测试测试测试"
-        self._on_submit("测试测试测试")
-
-        # 5 秒后停止并保存
-        def _finish_test() -> None:
-            try:
-                router = self._router
-                if router is None:
-                    logger.warning("测试录制完成前路由引擎已停止，录制丢弃")
-                    return
-                wav_bytes = router.stop_test_recording()
-                if wav_bytes is None:
-                    logger.warning("测试录制未捕获到数据")
-                    return
-                test_path = Path(gettempdir()) / "wavtrans_route_test.wav"
-                test_path.write_bytes(wav_bytes)
-                self._test_recording_path = str(test_path)
-                logger.info("测试录制已保存到 %s", self._test_recording_path)
-                # 通知 settings_window
-                if self.overlay is not None:
-                    self.overlay.notify_route_test_finished(self._test_recording_path)
-            except Exception:
-                logger.exception("测试录制保存失败")
-
-        timer = threading.Timer(5.0, _finish_test)
-        timer.name = "RouteTestTimer"
-        timer.daemon = True
-        timer.start()
-        return "recording"
-
-    def _play_route_test_recording(self) -> bool:
-        """播放最近一次录制的测试音频。在后台线程执行以避免阻塞 UI。"""
-        path = getattr(self, "_test_recording_path", None)
-        if not path:
-            logger.warning("没有可用的测试录制文件")
-            return False
-        if not Path(path).exists():
-            logger.warning("测试录制文件不存在: %s", path)
-            return False
-
-        def _play_in_background() -> None:
-            try:
-                success = self.player.play_wav(path)
-                if not success:
-                    logger.warning("播放测试录制返回失败")
-            except Exception:
-                logger.exception("播放测试录制失败")
-
-        threading.Thread(target=_play_in_background, name="PlayRouteTest", daemon=True).start()
-        return True
 
     @staticmethod
     def _create_tts_executor() -> ThreadPoolExecutor:
@@ -367,7 +303,19 @@ class WavTransApp:
         logger.info("音量已切换为: %.2fx", volume)
 
     def _on_audio_output_change(self, device: object) -> None:
-        """音频输出设备变更后同步到当前播放器。"""
+        """更新本地输出；路由运行时只更新待恢复设备，不改变 CABLE Input。"""
+        if self._router is not None and self._router.is_running():
+            if isinstance(device, dict):
+                saved = cast(OutputDeviceSelection, device)
+                self._saved_output_device = saved
+                name = saved.get("name")
+                self._saved_output_device_name = name if isinstance(name, str) else None
+            else:
+                self._saved_output_device = None
+                self._saved_output_device_name = device if isinstance(device, str) else None
+            logger.info("音频路由运行中，已保存本地输出设置，当前输出保持 CABLE Input")
+            return
+
         if isinstance(device, dict) or device is None:
             self.player.set_output_device(cast(OutputDeviceSelection, device) if device is not None else None)
             if device is None:
@@ -428,8 +376,8 @@ class WavTransApp:
     def _generate_and_play(self, engine: BackendTTSEngine, backend: str, text: str) -> None:
         """在后台 worker 中通过指定 TTS 引擎生成并播放。"""
         try:
-            # 单 worker 执行器保证同一时间只有一个 speak 在运行，
-            # 新提交会排队，不主动中断上一段播放。
+            # 路由器活跃时，播放器输出已指向 CABLE Input，
+            # TTS 语音直接播放到虚拟电缆，无需额外注入。
             engine.speak(text)
         except Exception as e:
             logger.error("%s 播放失败: %s", backend, e)

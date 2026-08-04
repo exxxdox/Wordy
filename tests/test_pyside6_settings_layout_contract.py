@@ -460,6 +460,28 @@ def test_settings_dialog_static_drag_position_is_not_persisted() -> None:
         _fail(f"easy_tts/ui/settings.py 不得包含拖动位置持久化/配置保存代码: {found}")
 
 
+def test_audio_output_is_owned_by_routing_tab_and_locks_to_cable() -> None:
+    """音频输出只能在路由页构建，路由启用时必须禁用下拉框并显示 CABLE Input。"""
+    source = SETTINGS_PATH.read_text(encoding="utf-8")
+    if "_build_audio_output_section(local_layout" in source:
+        _fail("音频输出仍位于本地设置页")
+    if "_build_audio_output_section(route_layout" not in source:
+        _fail("音频输出未移动到音频路由页")
+    if "def _sync_audio_output_control" not in source or "combo.setEnabled(False)" not in source:
+        _fail("缺少路由启用时锁定音频输出下拉框的实现")
+    if "CABLE Input" not in source or "Windows WASAPI" not in source:
+        _fail("锁定输出未明确指向 Windows WASAPI CABLE Input")
+
+
+def test_audio_route_effect_test_module_is_removed() -> None:
+    """设置 UI 不得残留路由效果测试按钮、状态或回调。"""
+    source = SETTINGS_PATH.read_text(encoding="utf-8")
+    forbidden = ("效果测试", "route_test", "set_test_recording_available")
+    found = [token for token in forbidden if token in source]
+    if found:
+        _fail(f"音频路由效果测试模块仍有残留: {found}")
+
+
 # ----- 运行器 -----
 
 def main() -> int:
@@ -498,6 +520,14 @@ def main() -> int:
         (
             "test_settings_dialog_static_drag_position_is_not_persisted",
             test_settings_dialog_static_drag_position_is_not_persisted,
+        ),
+        (
+            "test_audio_output_is_owned_by_routing_tab_and_locks_to_cable",
+            test_audio_output_is_owned_by_routing_tab_and_locks_to_cable,
+        ),
+        (
+            "test_audio_route_effect_test_module_is_removed",
+            test_audio_route_effect_test_module_is_removed,
         ),
     ]
     failures = 0

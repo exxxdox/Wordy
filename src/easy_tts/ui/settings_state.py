@@ -37,11 +37,9 @@ class SettingsState:
     audio_routing_enabled: bool = False
     input_devices: list[dict[str, object]] = field(default_factory=list)
     mic_input_device: str | None = None
-    bridge_source_device: str | None = None
     virtual_output_device: str | None = None
     vb_cable_installed: bool = False
     mic_gain: float = 1.0
-    bridge_gain: float = 1.0
     tts_gain: float = 1.0
 
 
@@ -65,8 +63,6 @@ class PendingSettings:
     # 音频路由待应用配置
     audio_routing_enabled: bool = False
     mic_input_device: str | None = None
-    bridge_source_device: str | None = None
     virtual_output_device: str | None = None
     mic_gain: float = 1.0
-    bridge_gain: float = 1.0
     tts_gain: float = 1.0

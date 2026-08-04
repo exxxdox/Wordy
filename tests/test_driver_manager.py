@@ -74,6 +74,49 @@ class TestVBCableDriverManager:
             assert "CABLE Output" in status["input_device_name"]
             assert "CABLE Input" in status["output_device_name"]
 
+    def test_get_status_prefers_wasapi_over_legacy_host_apis(self):
+        """同名重复端点中必须选择与 MMDevice 一致的 WASAPI 条目。"""
+        devices = [
+            {
+                "name": "CABLE Input (VB-Audio)",
+                "max_input_channels": 0,
+                "max_output_channels": 2,
+                "hostapi": 0,
+            },
+            {
+                "name": "CABLE Input (VB-Audio Virtual Cable)",
+                "max_input_channels": 0,
+                "max_output_channels": 2,
+                "hostapi": 1,
+            },
+        ]
+        hostapis = [{"name": "MME"}, {"name": "Windows WASAPI"}]
+        with (
+            patch("easy_tts.audio.driver.sd.query_devices", return_value=devices),
+            patch("easy_tts.audio.driver.sd.query_hostapis", return_value=hostapis),
+        ):
+            status = VBCableDriverManager.get_status()
+
+        assert status["output_device_index"] == 1
+        assert status["output_device_name"] == "CABLE Input (VB-Audio Virtual Cable)"
+
+    def test_get_status_falls_back_when_host_api_query_fails(self):
+        devices = [
+            {
+                "name": "CABLE Input (VB-Audio)",
+                "max_input_channels": 0,
+                "max_output_channels": 2,
+            },
+        ]
+        with (
+            patch("easy_tts.audio.driver.sd.query_devices", return_value=devices),
+            patch("easy_tts.audio.driver.sd.query_hostapis", side_effect=RuntimeError("failed")),
+        ):
+            status = VBCableDriverManager.get_status()
+
+        assert status["installed"] is True
+        assert status["output_device_index"] == 0
+
     def test_get_status_partial_cable(self):
         """仅安装输入端时的状态。"""
         devices = [

@@ -61,8 +61,6 @@ class InputOverlay:
         on_audio_output_change: Callable[[object], None] | None = None,
         on_cartesia_api_key_change: Callable[[str | None], None] | None = None,
         on_audio_route_change: Callable[[dict[str, object]], None] | None = None,
-        on_audio_route_test: Callable[[], str | None] | None = None,
-        on_play_route_test: Callable[[], bool] | None = None,
         audio_player: object | None = None,
         width: int = 540,
         height: int = 58,
@@ -80,8 +78,6 @@ class InputOverlay:
         self.on_audio_output_change = on_audio_output_change
         self.on_cartesia_api_key_change = on_cartesia_api_key_change
         self.on_audio_route_change = on_audio_route_change
-        self.on_audio_route_test = on_audio_route_test
-        self.on_play_route_test = on_play_route_test
         self._audio_player = audio_player
         self.width = width
         self.height = height
@@ -101,11 +97,7 @@ class InputOverlay:
         # 音频路由配置
         self._audio_routing_enabled: bool = config.audio_routing_enabled
         self._mic_input_device: str | None = config.mic_input_device
-        self._bridge_source_device: str | None = config.bridge_source_device
         self._virtual_output_device: str | None = config.virtual_output_device
-        self._mic_gain: float = config.mic_gain
-        self._bridge_gain: float = config.bridge_gain
-        self._tts_gain: float = config.tts_gain
         self._closed = False
         self._hotkey_listener: NativeHotkeyListener | None = None
         self._settings_window: SettingsWindow | None = None
@@ -512,12 +504,8 @@ class InputOverlay:
             audio_routing_enabled=self._audio_routing_enabled,
             input_devices=self._enumerate_input_devices(),
             mic_input_device=self._mic_input_device,
-            bridge_source_device=self._bridge_source_device,
             virtual_output_device=self._virtual_output_device,
             vb_cable_installed=VBCableDriverManager.is_installed(),
-            mic_gain=self._mic_gain,
-            bridge_gain=self._bridge_gain,
-            tts_gain=self._tts_gain,
         )
         self._recording_hotkey = False
         self._settings_window = SettingsWindow(
@@ -527,8 +515,6 @@ class InputOverlay:
             on_refresh_voices=self._start_load_voices,
             on_apply=self._apply_pending_settings,
             on_close=self._on_settings_window_closed,
-            on_audio_route_test=self._on_audio_route_test,
-            on_play_route_test=self._on_play_route_test,
         )
 
     def _enumerate_audio_output_devices(self) -> tuple[list[object], Exception | None]:
@@ -593,24 +579,6 @@ class InputOverlay:
                 self._register_hotkey()
             except Exception as e:
                 logger.warning("设置窗口关闭后重新注册全局快捷键 %s 失败: %s", self._hotkey_name, e)
-
-    def _on_audio_route_test(self) -> str | None:
-        """启动音频路由测试录制，返回状态。"""
-        if self.on_audio_route_test is not None:
-            return self.on_audio_route_test()
-        return None
-
-    def _on_play_route_test(self) -> bool:
-        """播放最近一次测试录制的音频。"""
-        if self.on_play_route_test is not None:
-            return self.on_play_route_test()
-        return False
-
-    def notify_route_test_finished(self, filepath: str) -> None:
-        """通知设置窗口测试录制已完成。"""
-        settings = self._active_settings_window()
-        if settings is not None:
-            settings.set_test_recording_available(filepath)
 
     def _start_record_hotkey(self) -> None:
         if self._recording_hotkey:
@@ -740,10 +708,9 @@ class InputOverlay:
         self._collect_scalar_change(pending, config_update, "log_level")
         self._collect_scalar_change(pending, config_update, "fixed_center")
 
-        # ---- 音频路由：7 个字段统一收集 ----
+        # ---- 音频路由字段 ----
         route_update: dict[str, object] = {}
-        for key in ("audio_routing_enabled", "mic_input_device", "bridge_source_device",
-                     "virtual_output_device", "mic_gain", "bridge_gain", "tts_gain"):
+        for key in ("audio_routing_enabled", "mic_input_device", "virtual_output_device"):
             self._collect_scalar_change(pending, route_update, key, local_attr=f"_{key}")
         if route_update:
             config_update.update(route_update)
@@ -783,21 +750,15 @@ class InputOverlay:
 
         # 音频路由：应用变更并通知 WavTransApp
         if route_update:
-            for key in ("audio_routing_enabled", "mic_input_device", "bridge_source_device",
-                         "virtual_output_device", "mic_gain", "bridge_gain", "tts_gain"):
+            for key in ("audio_routing_enabled", "mic_input_device", "virtual_output_device"):
                 self._apply_scalar_and_notify(pending, saved_messages, key, f"_{key}")
             if self.on_audio_route_change is not None:
                 self.on_audio_route_change(dict(route_update))
-            # 补充音频路由专用消息
             if "audio_routing_enabled" in route_update:
                 label = "音频路由已启用" if self._audio_routing_enabled else "音频路由已禁用"
-                saved_messages[-1] = label  # 替换 _apply_scalar_and_notify 的通用消息
+                saved_messages.append(label)
             if self._mic_input_device and "mic_input_device" in route_update:
-                saved_messages.append(f"麦克风已切换为 {self._mic_input_device}")
-            if "bridge_source_device" in route_update:
-                saved_messages.append(
-                    f"桥接源已切换为 {self._bridge_source_device}" if self._bridge_source_device
-                    else "桥接源已禁用")
+                saved_messages.append(f"麦克风侦听已切换为 {self._mic_input_device}")
 
         # fixed_center 有额外 UI 副作用
         self._apply_scalar_and_notify(pending, saved_messages, "fixed_center", "_fixed_center",

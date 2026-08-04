@@ -15,7 +15,7 @@ class TestAudioRoutingPersistence:
     """验证所有音频路由字段能正确保存并在重新加载后恢复。"""
 
     def test_audio_routing_fields_round_trip(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """所有 7 个音频路由字段保存后应能完整恢复。"""
+        """所有 5 个音频路由字段保存后应能完整恢复。"""
         config_file = tmp_path / "test_config.json"
         monkeypatch.setattr(easy_tts.config, "USER_CONFIG_FILE", config_file)
 
@@ -23,20 +23,16 @@ class TestAudioRoutingPersistence:
         s = AppSettings.load(config_file=config_file)
         assert s.audio_routing_enabled is False
         assert s.mic_input_device is None
-        assert s.bridge_source_device is None
         assert s.virtual_output_device is None
         assert s.mic_gain == 1.0
-        assert s.bridge_gain == 1.0
         assert s.tts_gain == 1.0
 
         # 保存一组非默认的音频路由配置
         s.update(
             audio_routing_enabled=True,
             mic_input_device="麦克风 (Realtek Audio)",
-            bridge_source_device="立体声混音",
             virtual_output_device="CABLE Input",
             mic_gain=1.5,
-            bridge_gain=0.8,
             tts_gain=2.0,
             config_file=config_file,
         )
@@ -45,10 +41,8 @@ class TestAudioRoutingPersistence:
         s2 = AppSettings.load(config_file=config_file)
         assert s2.audio_routing_enabled is True
         assert s2.mic_input_device == "麦克风 (Realtek Audio)"
-        assert s2.bridge_source_device == "立体声混音"
         assert s2.virtual_output_device == "CABLE Input"
         assert s2.mic_gain == 1.5
-        assert s2.bridge_gain == 0.8
         assert s2.tts_gain == 2.0
 
     def test_audio_routing_disable_persists(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -75,14 +69,12 @@ class TestAudioRoutingPersistence:
         s = AppSettings.load(config_file=config_file)
         s.update(
             mic_gain=3.0,
-            bridge_gain=-0.5,
             tts_gain=2.5,
             config_file=config_file,
         )
 
         s2 = AppSettings.load(config_file=config_file)
         assert s2.mic_gain == MAX_GAIN
-        assert s2.bridge_gain == MIN_GAIN
         assert s2.tts_gain == MAX_GAIN
 
     def test_audio_routing_empty_strings_become_none(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -93,13 +85,11 @@ class TestAudioRoutingPersistence:
         s = AppSettings.load(config_file=config_file)
         s.update(
             mic_input_device="  ",
-            bridge_source_device="",
             config_file=config_file,
         )
 
         s2 = AppSettings.load(config_file=config_file)
         assert s2.mic_input_device is None
-        assert s2.bridge_source_device is None
 
     def test_audio_routing_partial_save_preserves_others(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """部分更新音频路由字段时，其他字段应保持不变。"""
@@ -111,9 +101,7 @@ class TestAudioRoutingPersistence:
         s.update(
             audio_routing_enabled=True,
             mic_input_device="麦克风 A",
-            bridge_source_device="桥接 B",
             mic_gain=1.2,
-            bridge_gain=0.9,
             tts_gain=1.1,
             config_file=config_file,
         )
@@ -124,9 +112,7 @@ class TestAudioRoutingPersistence:
         s2 = AppSettings.load(config_file=config_file)
         assert s2.audio_routing_enabled is True
         assert s2.mic_input_device == "麦克风 A"
-        assert s2.bridge_source_device == "桥接 B"
         assert s2.mic_gain == 1.8
-        assert s2.bridge_gain == 0.9
         assert s2.tts_gain == 1.1
 
     def test_save_audio_routing_config_helper(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -147,7 +133,6 @@ class TestAudioRoutingPersistence:
         assert s2.mic_input_device == "Mic Test"
         assert s2.mic_gain == 1.3
         # 未提供的字段应保持默认值
-        assert s2.bridge_gain == 1.0
         assert s2.tts_gain == 1.0
 
     def test_load_audio_routing_config_helper(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -159,10 +144,8 @@ class TestAudioRoutingPersistence:
         s.update(
             audio_routing_enabled=True,
             mic_input_device="Test Mic",
-            bridge_source_device="Test Bridge",
             virtual_output_device="Test Virtual",
             mic_gain=1.1,
-            bridge_gain=0.9,
             tts_gain=1.2,
             config_file=config_file,
         )
@@ -170,8 +153,6 @@ class TestAudioRoutingPersistence:
         s2 = AppSettings.load(config_file=config_file)
         assert s2.audio_routing_enabled is True
         assert s2.mic_input_device == "Test Mic"
-        assert s2.bridge_source_device == "Test Bridge"
         assert s2.virtual_output_device == "Test Virtual"
         assert s2.mic_gain == 1.1
-        assert s2.bridge_gain == 0.9
         assert s2.tts_gain == 1.2

@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from io import BytesIO
 from unittest.mock import MagicMock
 
 import pytest
@@ -579,6 +580,44 @@ def test_play_wav_finally_terminates_when_stop_stream_raises(_patch_pyaudio, tmp
 
     assert stream.close_calls == 1
     assert pa.terminate_calls == 1
+
+
+def test_play_wav_uses_actual_bytes_for_streaming_wav_duration(_patch_pyaudio, caplog):
+    """流式 WAV 的未知长度占位值不能被记录成数万秒。"""
+    import wave
+
+    wav_buffer = BytesIO()
+    with wave.open(wav_buffer, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(48000)
+        wf.writeframes(b"\x00\x00" * 480)
+
+    wav_bytes = bytearray(wav_buffer.getvalue())
+    # Cartesia 流式 WAV 使用 0xFFFFFFFF 表示 RIFF/data 长度暂时未知。
+    wav_bytes[4:8] = b"\xff\xff\xff\xff"
+    wav_bytes[40:44] = b"\xff\xff\xff\xff"
+
+    player = AudioPlayer()
+    with caplog.at_level("INFO"):
+        assert player.play_wav(BytesIO(wav_bytes)) is True
+
+    assert "总时长=0.01 秒" in caplog.text
+    assert "48695" not in caplog.text
+
+
+def test_invalid_sample_rate_error_has_specific_guidance(caplog):
+    """PortAudio -9997 应提示采样率问题，不能误报为设备独占。"""
+    player = AudioPlayer()
+
+    with caplog.at_level("ERROR"):
+        player._print_open_stream_error(
+            OSError(-9997, "Invalid sample rate"),
+            rate=44100,
+        )
+
+    assert "不支持 44100 Hz 采样率" in caplog.text
+    assert "独占" not in caplog.text
 
 
 # ---------------------------------------------------------------------------

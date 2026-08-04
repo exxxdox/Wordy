@@ -27,6 +27,9 @@ from .engine import BackendTTSEngine, TTSAudioPlayer, VoiceInfo
 logger = logging.getLogger(__name__)
 
 DEFAULT_CARTESIA_VERSION = "2026-03-01"
+# 直接请求 Cartesia 生成 48 kHz，使返回 PCM 与 VB-CABLE WASAPI 格式一致。
+# 播放器原样输出，不在本地重采样或改写 WAV 采样率。
+DEFAULT_CARTESIA_SAMPLE_RATE = 48000
 VOICES_URL = "https://api.cartesia.ai/voices?is_owner=true"
 BYTES_TTS_URL = "https://api.cartesia.ai/tts/bytes"
 REALTIME_PING_INTERVAL_SECONDS = 60
@@ -95,7 +98,7 @@ class CartesiaTTS(BackendTTSEngine):
         api_key: str | None = None,
         voice_id: str | None = None,
         model_id: str = "sonic-3.5",
-        sample_rate: int = 44100,
+        sample_rate: int = DEFAULT_CARTESIA_SAMPLE_RATE,
         volume: float = 1.0,
     ):
         super().__init__(audio_player=audio_player, voice_id=voice_id, volume=volume)
@@ -161,7 +164,7 @@ class CartesiaBytesTTS(CartesiaTTS):
         voice_id: str | None = None,
         model_id: str = "sonic-3.5",
         version: str = DEFAULT_CARTESIA_VERSION,
-        sample_rate: int = 44100,
+        sample_rate: int = DEFAULT_CARTESIA_SAMPLE_RATE,
         timeout: int = 60,
         volume: float = 1.0,
     ):
@@ -212,7 +215,7 @@ class CartesiaRealtimeTTS(CartesiaTTS):
         api_key: str | None = None,
         voice_id: str | None = None,
         model_id: str = "sonic-3.5",
-        sample_rate: int = 44100,
+        sample_rate: int = DEFAULT_CARTESIA_SAMPLE_RATE,
         volume: float = 1.0,
     ):
         super().__init__(

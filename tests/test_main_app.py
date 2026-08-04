@@ -924,6 +924,7 @@ def _patch_audio_player_factory(monkeypatch) -> list[dict[str, Any]]:
             player.output_device_name = name
 
         player.set_output_device_name.side_effect = set_output_device_name
+        player.output_device = kwargs.get("output_device")
         player.output_device_name = kwargs.get("output_device_name")
         return player
 
@@ -1079,22 +1080,15 @@ class _FakeAudioRouter:
 
     def __init__(
         self,
-        mic_device: str | None = None,
-        bridge_device: str | None = None,
         virtual_output: str | None = None,
     ) -> None:
-        self.mic_device = mic_device
-        self.bridge_device = bridge_device
         self.virtual_output = virtual_output
         self.started = False
         self.stopped = False
-        self.set_mic_device_calls: list[str | None] = []
-        self.set_bridge_device_calls: list[str | None] = []
         self.set_virtual_output_calls: list[str | None] = []
-        self.gains: list[dict[str, float | None]] = []
         type(self).instances.append(self)
 
-    def start(self) -> bool:
+    def start(self, *, mic_device: str | None = None) -> bool:  # noqa: ARG002
         self.started = True
         return True
 
@@ -1105,28 +1099,22 @@ class _FakeAudioRouter:
     def is_running(self) -> bool:
         return self.started
 
-    def set_mic_device(self, device_name: str | None) -> bool:
-        self.set_mic_device_calls.append(device_name)
-        self.mic_device = device_name
-        return True
+    def get_output_device(self) -> dict | None:
+        return {"name": "CABLE Input", "host_api_name": "Windows WASAPI"}
 
-    def set_bridge_device(self, device_name: str | None) -> bool:
-        self.set_bridge_device_calls.append(device_name)
-        self.bridge_device = device_name
-        return True
+    def get_stats(self):
+        # 测试替身显式暴露麦克风侦听状态，匹配 AudioRouter 的运行时契约。
+        from easy_tts.audio.router import RouterStats
+
+        return RouterStats(is_running=self.started, listen_configured=False)
+
+    def set_mic_device(self, device_name: str | None) -> None:  # noqa: ARG002
+        pass
 
     def set_virtual_output(self, device_name: str | None) -> bool:
         self.set_virtual_output_calls.append(device_name)
         self.virtual_output = device_name
         return True
-
-    def set_gains(
-        self,
-        mic: float | None = None,
-        bridge: float | None = None,
-        tts: float | None = None,
-    ) -> None:
-        self.gains.append({"mic": mic, "bridge": bridge, "tts": tts})
 
 
 def _patch_audio_router_for_runtime_change(monkeypatch) -> type[_FakeAudioRouter]:
@@ -1144,8 +1132,8 @@ def _patch_audio_router_for_runtime_change(monkeypatch) -> type[_FakeAudioRouter
     return _FakeAudioRouter
 
 
-def test_enabling_audio_route_runtime_attaches_router_to_player(monkeypatch):
-    """Runtime audio-route enable must inject the new router into AudioPlayer."""
+def test_enabling_audio_route_runtime_switches_player_output(monkeypatch):
+    """Runtime audio-route enable must switch player output to CABLE Input."""
     router_cls = _patch_audio_router_for_runtime_change(monkeypatch)
 
     import easy_tts.main as main_mod
@@ -1157,8 +1145,6 @@ def test_enabling_audio_route_runtime_attaches_router_to_player(monkeypatch):
     app._on_audio_route_change(
         {
             "audio_routing_enabled": True,
-            "mic_input_device": "Mic",
-            "bridge_source_device": "Bridge",
             "virtual_output_device": "Cable",
         }
     )
@@ -1166,11 +1152,35 @@ def test_enabling_audio_route_runtime_attaches_router_to_player(monkeypatch):
     assert router_cls.instances
     router = router_cls.instances[-1]
     assert router.started is True
-    app.player.set_router.assert_called_with(router)
+    app.player.set_output_device.assert_called_once()
 
 
-def test_disabling_audio_route_runtime_detaches_router_from_player(monkeypatch):
-    """Disabling audio routing must clear AudioPlayer's stale router reference."""
+def test_audio_route_keeps_cable_output_when_local_output_changes(monkeypatch):
+    """路由运行时本地输出变更只能更新恢复目标，不能覆盖 CABLE Input。"""
+    _patch_audio_router_for_runtime_change(monkeypatch)
+
+    import easy_tts.main as main_mod
+
+    engine = FakeTTSEngine(voice_id="fake-voice")
+    monkeypatch.setattr("easy_tts.main.create_tts_engine", lambda *a, **kw: engine)
+    app = main_mod.WavTransApp()
+    app._on_audio_route_change({"audio_routing_enabled": True})
+    app.player.set_output_device.reset_mock()
+
+    local_output = {"name": "Speakers", "host_api_name": "Windows WASAPI"}
+    app._on_audio_output_change(local_output)
+
+    app.player.set_output_device.assert_not_called()
+    assert app._saved_output_device == local_output
+    assert app._saved_output_device_name == "Speakers"
+
+    app._on_audio_route_change({"audio_routing_enabled": False})
+
+    app.player.set_output_device.assert_called_once_with(local_output)
+
+
+def test_disabling_audio_route_runtime_stops_router(monkeypatch):
+    """Disabling audio routing must stop router and reset output device."""
     router_cls = _patch_audio_router_for_runtime_change(monkeypatch)
 
     import easy_tts.main as main_mod
@@ -1180,17 +1190,15 @@ def test_disabling_audio_route_runtime_detaches_router_from_player(monkeypatch):
     app = main_mod.WavTransApp()
     app._on_audio_route_change({"audio_routing_enabled": True})
     router = router_cls.instances[-1]
-    app.player.set_router.reset_mock()
 
     app._on_audio_route_change({"audio_routing_enabled": False})
 
     assert router.stopped is True
     assert app._router is None
-    app.player.set_router.assert_called_once_with(None)
 
 
 def test_audio_route_runtime_update_can_clear_optional_devices(monkeypatch):
-    """Explicit None updates from settings must clear bridge and virtual devices."""
+    """Explicit None updates from settings must clear virtual device."""
     router_cls = _patch_audio_router_for_runtime_change(monkeypatch)
 
     import easy_tts.main as main_mod
@@ -1201,7 +1209,6 @@ def test_audio_route_runtime_update_can_clear_optional_devices(monkeypatch):
     app._on_audio_route_change(
         {
             "audio_routing_enabled": True,
-            "bridge_source_device": "Bridge",
             "virtual_output_device": "Cable",
         }
     )
@@ -1209,12 +1216,10 @@ def test_audio_route_runtime_update_can_clear_optional_devices(monkeypatch):
 
     app._on_audio_route_change(
         {
-            "bridge_source_device": None,
             "virtual_output_device": None,
         }
     )
 
-    assert router.set_bridge_device_calls[-1] is None
     assert router.set_virtual_output_calls[-1] is None
 
 

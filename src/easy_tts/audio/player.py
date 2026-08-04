@@ -169,20 +169,14 @@ class AudioPlayer:
         output_device_name: str | None = None,
         *,
         output_device: OutputDeviceSelection | None = None,
-        router: object | None = None,
     ):
         self.output_device: OutputDeviceSelection | None = output_device
         if output_device is not None and output_device_name is None:
             # 保持 ``output_device_name`` 兼容性: 结构化选择存在时同步 raw name。
             output_device_name = output_device.get("name")
         self.output_device_name = output_device_name
-        self._router = router
         self._stream_p = None
         self._stream = None
-
-    def set_router(self, router: object | None) -> None:
-        """设置音频路由器，用于 TTS 音频注入。"""
-        self._router = router
 
     def set_output_device_name(self, output_device_name: str | None) -> None:
         """更新目标输出设备名 (清空结构化选择)。传入 ``None`` 表示使用系统默认设备。"""
@@ -288,9 +282,16 @@ class AudioPlayer:
 
         return self._default_output_device_index(p)
 
-    def _print_open_stream_error(self, error: Exception) -> None:
+    def _print_open_stream_error(self, error: Exception, *, rate: int | None = None) -> None:
         """输出打开音频流失败的提示。"""
         logger.error("无法打开音频流: %s", error)
+        # PortAudio -9997 表示设备不接受请求采样率，并非设备被独占。
+        if "-9997" in str(error) or "Invalid sample rate" in str(error):
+            logger.error(
+                "目标输出设备不支持 %s Hz 采样率，请让音源采样率与设备默认采样率保持一致",
+                rate if rate is not None else "当前",
+            )
+            return
         logger.error("请确保目标输出设备没有被其他程序独占")
 
     def _open_pyaudio_stream(
@@ -325,7 +326,7 @@ class AudioPlayer:
                 **open_kwargs,
             )
         except Exception as e:
-            self._print_open_stream_error(e)
+            self._print_open_stream_error(e, rate=open_kwargs.get("rate"))
             self._terminate_pyaudio(p)
             return None, None
 
@@ -418,6 +419,12 @@ class AudioPlayer:
         sample_width = wf.getsampwidth()
         framerate = wf.getframerate()
         frames = wf.getnframes()
+        if isinstance(wav_path, BytesIO) and frames >= 0x7FFFFFFF:
+            # 仅在流式 WAV 使用未知长度占位值时读取实际 PCM，避免普通内存 WAV 被额外复制。
+            actual_pcm = wf.readframes(frames)
+            bytes_per_frame = channels * sample_width
+            frames = len(actual_pcm) // bytes_per_frame
+            wf.rewind()
         duration = frames / float(framerate)
 
         logger.info(
@@ -439,34 +446,12 @@ class AudioPlayer:
             wf.close()
             return False
 
-        logger.info("开始播放到 %s...", self.output_device_name or "默认输出设备")
-        logger.info("按 Ctrl+C 停止播放")
-
-        # 提前解析路由器注入回调，避免每帧重复 getattr/callable
-        _inject_fn = None
-        _inject_needs_format = False
-        if self._router is not None:
-            fn = getattr(self._router, "inject_tts_from_wav", None)
-            if callable(fn):
-                _inject_fn = fn
-                _inject_needs_format = True
-            else:
-                fn = getattr(self._router, "inject_tts", None)
-                if callable(fn):
-                    _inject_fn = fn
-
         try:
+            logger.info("开始播放到 %s...", self.output_device_name or "默认输出设备")
+
             data = wf.readframes(1024)
             while data:
                 stream.write(data)
-                if _inject_fn is not None:
-                    try:
-                        if _inject_needs_format:
-                            _inject_fn(data, src_rate=framerate, src_channels=channels)
-                        else:
-                            _inject_fn(data)
-                    except Exception:
-                        logger.exception("TTS 音频注入路由器失败")
                 data = wf.readframes(1024)
 
             logger.info("播放完成!")

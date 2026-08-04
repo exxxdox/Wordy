@@ -30,6 +30,7 @@ from easy_tts.tts.cartesia import (
     _raw_float_output_format,
     _raise_for_status,
     logger as cartesia_logger,
+    DEFAULT_CARTESIA_SAMPLE_RATE,
     DEFAULT_CARTESIA_VERSION,
 )
 
@@ -472,17 +473,18 @@ class TestSharedRequestArgs:
     def test_default_constants_preserved(self):
         """DEFAULT_CARTESIA_VERSION and default model/sample_rate/volume must stay stable."""
         assert DEFAULT_CARTESIA_VERSION == "2026-03-01"
+        assert DEFAULT_CARTESIA_SAMPLE_RATE == 48000
 
         bytes_tts = self._make_bytes(volume=1.0)
         assert bytes_tts.model_id == "sonic-3.5"
-        assert bytes_tts.sample_rate == 44100
+        assert bytes_tts.sample_rate == DEFAULT_CARTESIA_SAMPLE_RATE
         assert bytes_tts.volume == 1.0
         assert bytes_tts.version == DEFAULT_CARTESIA_VERSION
         assert bytes_tts.timeout == 60
 
         realtime_tts = self._make_realtime(volume=1.0)
         assert realtime_tts.model_id == "sonic-3.5"
-        assert realtime_tts.sample_rate == 44100
+        assert realtime_tts.sample_rate == DEFAULT_CARTESIA_SAMPLE_RATE
         assert realtime_tts.volume == 1.0
 
     def test_build_request_args_structure(self):
