@@ -287,10 +287,10 @@ def test_input_overlay_capsule_invariants_preserved(monkeypatch: pytest.MonkeyPa
 
         settings_button = getattr(root, "settings_button", None)
         assert settings_button is not None, "overlay root must expose settings_button attribute"
-        settings_style = settings_button.styleSheet() or ""
-        assert "font-size: 18px" in settings_style, (
-            "settingsButton stylesheet must include 'font-size: 18px'"
-        )
+        # 设置图标改用 QPixmap 绘制，不再依赖文本 stylesheet
+        pixmap = settings_button.pixmap()
+        assert pixmap is not None, "settingsButton must have a pixmap set"
+        assert not pixmap.isNull(), "settingsButton pixmap must be valid"
 
         size = root.size()
         assert size.width() == 540, f"overlay root width must be 540, got {size.width()}"

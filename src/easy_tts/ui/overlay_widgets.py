@@ -5,13 +5,25 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from PySide6.QtCore import QEvent, QObject, Qt, Signal
-from PySide6.QtGui import QColor, QKeyEvent, QMouseEvent, QPainter, QPainterPath, QPaintEvent
+from PySide6.QtGui import (
+    QColor, QKeyEvent, QMouseEvent, QPainter, QPainterPath, QPaintEvent, QPen, QPixmap,
+)
+from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import QLabel, QLineEdit, QWidget
 
-from easy_tts.ui.theme import ACCENT_HOVER, CONFIG_BUTTON_IDLE, GREEN_ACCENT, INPUT_BACKGROUND, INPUT_BORDER
+from easy_tts.ui.theme import (
+    ACCENT_HOVER, CONFIG_BUTTON_IDLE, GREEN_ACCENT, INPUT_BACKGROUND, INPUT_BORDER, MONO_FONT,
+)
+
+# Material Symbols 设置图标 SVG 路径
+_ICONS_DIR = Path(__file__).resolve().parent / "icons"
+_SETTINGS_SVG_PATH = _ICONS_DIR / "settings.svg"
+# 缓存已加载的 SVG 模板文本
+_settings_svg_template: str | None = None
 
 if TYPE_CHECKING:
     from easy_tts.ui.overlay import InputOverlay
@@ -25,9 +37,11 @@ CONFIG_BUTTON_HOVER_TEXT_COLOR = ACCENT_HOVER
 SETTINGS_BUTTON_FONT_SIZE = 18
 SETTINGS_BUTTON_CENTER_X_OFFSET = 34
 SETTINGS_BUTTON_ENTRY_RIGHT_PADDING = 92
-ENTRY_LEFT_PADDING = 20
+# 终端风格：左侧 prompt + 缩进
+PROMPT_LEFT = 10
+ENTRY_LEFT_PADDING = 32
 ENTRY_VERTICAL_PADDING = 9
-WINDOW_RADIUS = 18
+WINDOW_RADIUS = 14
 
 
 class _OverlaySignals(QObject):
@@ -47,7 +61,7 @@ class _OverlaySignals(QObject):
 
 
 class _OverlayWidget(QWidget):
-    """无边框透明胶囊输入框。"""
+    """无边框透明胶囊输入框 —— 终端风格。"""
 
     def __init__(self, owner: "InputOverlay", signals: _OverlaySignals) -> None:
         super().__init__()
@@ -61,6 +75,23 @@ class _OverlayWidget(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setFixedSize(owner.width, owner.height)
         self.setMouseTracking(True)
+
+        # 终端风格 `>` 提示符
+        prompt_font_size = 22
+        self.prompt_label = QLabel(">", self)
+        self.prompt_label.setObjectName("overlayPrompt")
+        self.prompt_label.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+        prompt_y = (owner.height - prompt_font_size - 4) // 2
+        self.prompt_label.setGeometry(PROMPT_LEFT, prompt_y, 18, prompt_font_size + 4)
+        self.prompt_label.setStyleSheet(f'''
+            QLabel#overlayPrompt {{
+                color: {CONFIG_BUTTON_TEXT_COLOR};
+                background: transparent;
+                font-family: {MONO_FONT};
+                font-size: {prompt_font_size}px;
+                font-weight: bold;
+            }}
+        ''')
 
         self.entry = QLineEdit(self)
         self.entry.setObjectName("overlayEntry")
@@ -79,35 +110,82 @@ class _OverlayWidget(QWidget):
                 selection-background-color: {CONFIG_BUTTON_HOVER_TEXT_COLOR};
                 selection-color: {INPUT_BACKGROUND_COLOR};
                 border: none;
-                font-family: "Segoe UI";
+                font-family: {MONO_FONT};
                 font-size: 24px;
                 padding: 0;
             }}
         ''')
 
-        self.settings_button = QLabel("⚙", self)
+        # Material Symbols SVG 设置图标（透明背景）
+        icon_size = 24
+        settings_hit_size = icon_size + 4  # 28px 点击区域
+        settings_x = owner.width - SETTINGS_BUTTON_CENTER_X_OFFSET - settings_hit_size // 2
+        settings_y = (owner.height - settings_hit_size) // 2
+        self.settings_button = QLabel(self)
         self.settings_button.setObjectName("settingsButton")
         self.settings_button.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.settings_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        settings_hit_size = SETTINGS_BUTTON_FONT_SIZE + 6
-        settings_x = owner.width - SETTINGS_BUTTON_CENTER_X_OFFSET - settings_hit_size // 2
-        settings_y = (owner.height - settings_hit_size) // 2
         self.settings_button.setGeometry(settings_x, settings_y, settings_hit_size, settings_hit_size)
+        self.settings_button.setPixmap(self._make_settings_icon(icon_size, CONFIG_BUTTON_TEXT_COLOR))
         self.settings_button.installEventFilter(signals)
+        self._settings_icon_size = icon_size
         self.set_settings_hover(False)
 
     def paintEvent(self, _event: QPaintEvent) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        border_color = QColor(INPUT_BORDER_COLOR)
-        background_color = QColor(INPUT_BACKGROUND_COLOR)
-        border_color.setAlphaF(self._overlay_opacity)
-        background_color.setAlphaF(self._overlay_opacity)
-        painter.setPen(border_color)
-        painter.setBrush(background_color)
+        w, h = self.width(), self.height()
+
+        # 1. 点阵背景纹理 —— 终端屏幕质感
+        dot_color = QColor(INPUT_TEXT_COLOR)
+        dot_color.setAlphaF(0.025 * self._overlay_opacity)
+        dot_pen = QPen(dot_color, 1.0)
+        dot_pen.setDashPattern([1, 5])
+        painter.setPen(dot_pen)
+        for y in range(2, h - 2, 6):
+            painter.drawLine(2, y, w - 2, y)
+
+        # 2. 胶囊背景
+        bg_color = QColor(INPUT_BACKGROUND_COLOR)
+        bg_color.setAlphaF(self._overlay_opacity)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(bg_color)
         path = QPainterPath()
-        path.addRoundedRect(1, 1, self.width() - 2, self.height() - 2, WINDOW_RADIUS, WINDOW_RADIUS)
+        path.addRoundedRect(1, 1, w - 2, h - 2, WINDOW_RADIUS, WINDOW_RADIUS)
         painter.drawPath(path)
+
+        # 3. 内发光边框 —— 绿色微光
+        glow_outer = QColor(INPUT_TEXT_COLOR)
+        glow_outer.setAlphaF(0.12 * self._overlay_opacity)
+        glow_pen = QPen(glow_outer, 2.0)
+        painter.setPen(glow_pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRoundedRect(2, 2, w - 4, h - 4, WINDOW_RADIUS - 1, WINDOW_RADIUS - 1)
+
+        # 5. 外边框
+        border_color = QColor(INPUT_BORDER_COLOR)
+        border_color.setAlphaF(self._overlay_opacity)
+        painter.setPen(QPen(border_color, 1.0))
+        painter.drawRoundedRect(1, 1, w - 2, h - 2, WINDOW_RADIUS, WINDOW_RADIUS)
+
+    @staticmethod
+    def _make_settings_icon(size: int, color: str) -> QPixmap:
+        """用 Material Symbols SVG 渲染设置齿轮图标，替换颜色后光栅化。"""
+        global _settings_svg_template
+        if _settings_svg_template is None:
+            _settings_svg_template = _SETTINGS_SVG_PATH.read_text(encoding="utf-8")
+
+        # Material Symbols 默认 fill="#e3e3e3"，替换为目标色
+        svg_data = _settings_svg_template.replace("#e3e3e3", color)
+
+        pixmap = QPixmap(size, size)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        renderer = QSvgRenderer(svg_data.encode("utf-8"))
+        p = QPainter(pixmap)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        renderer.render(p)
+        p.end()
+        return pixmap
 
     def set_overlay_opacity(self, opacity: float) -> None:
         self._overlay_opacity = opacity
@@ -147,11 +225,6 @@ class _OverlayWidget(QWidget):
 
     def set_settings_hover(self, hovered: bool) -> None:
         color = CONFIG_BUTTON_HOVER_TEXT_COLOR if hovered else CONFIG_BUTTON_TEXT_COLOR
-        self.settings_button.setStyleSheet(f'''
-            QLabel#settingsButton {{
-                color: {color};
-                background: transparent;
-                font-family: "Segoe UI";
-                font-size: {SETTINGS_BUTTON_FONT_SIZE}px;
-            }}
-        ''')
+        self.settings_button.setPixmap(
+            self._make_settings_icon(self._settings_icon_size, color)
+        )

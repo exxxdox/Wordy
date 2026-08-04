@@ -13,6 +13,7 @@ from easy_tts.ui.theme import (
     BUTTON_GHOST_BORDER,
     ELEVATED_BG,
     GREEN_ACCENT,
+    MONO_FONT,
     SCROLLBAR_HANDLE,
     SCROLLBAR_HANDLE_HOVER,
     SEPARATOR_COLOR,
@@ -33,20 +34,25 @@ def build_settings_stylesheet() -> str:
         QFrame#dialogShell {{
             background: {SURFACE_BG};
             border: 1px solid {BUTTON_GHOST_BORDER};
-            border-radius: 18px;
+            border-radius: 14px;
         }}
         QLabel#dialogTitle {{
             color: {TEXT_PRIMARY};
-            font-size: 16px;
+            font-size: 15px;
             font-weight: 700;
-            padding: 18px 0 12px 0;
+            padding: 16px 0 10px 0;
             border: none;
+            font-family: {MONO_FONT};
+            letter-spacing: 2px;
         }}
         QLabel#sectionTitle {{
             color: {TEXT_PRIMARY};
-            font-size: 12px;
+            font-size: 11px;
             font-weight: 700;
             border: none;
+            font-family: {MONO_FONT};
+            text-transform: uppercase;
+            letter-spacing: 1px;
         }}
         QLabel#bodyLabel, QLabel#bodyLabelEmphasis {{
             font-size: 10px;
@@ -55,6 +61,7 @@ def build_settings_stylesheet() -> str:
         QLabel#bodyLabelEmphasis {{
             font-size: 11px;
             font-weight: 600;
+            font-family: {MONO_FONT};
         }}
         QLabel#hintLabel {{
             font-size: 12px;
@@ -78,20 +85,22 @@ def build_settings_stylesheet() -> str:
             alignment: center;
         }}
         QTabWidget#settingsTabs QTabBar {{
-            background: {SURFACE_BG};
+            background: {WINDOW_BG};
             border: 1px solid {BUTTON_GHOST_BORDER};
-            border-radius: 12px;
-            padding: 4px;
+            border-radius: 10px;
+            padding: 3px;
         }}
         QTabWidget#settingsTabs QTabBar::tab {{
             background: transparent;
             color: {TEXT_MUTED};
             border: 1px solid transparent;
-            border-radius: 9px;
-            padding: 8px 12px;
-            margin: 0 2px;
+            border-radius: 7px;
+            padding: 7px 12px;
+            margin: 0 1px;
             min-width: 90px;
             font-weight: 600;
+            font-family: {MONO_FONT};
+            font-size: 11px;
         }}
         QTabWidget#settingsTabs QTabBar::tab:hover {{
             background: {ELEVATED_BG};
@@ -105,12 +114,13 @@ def build_settings_stylesheet() -> str:
         }}
         QTabWidget#settingsTabs QTabBar::tab:selected {{
             background: {BUTTON_ACTIVE_BG};
-            color: {TEXT_PRIMARY};
+            color: {GREEN_ACCENT};
             border-color: {GREEN_ACCENT};
         }}
         QTabWidget#settingsTabs QTabBar::tab:selected:hover {{
             background: {BUTTON_ACTIVE_BG};
             border-color: {ACCENT_HOVER};
+            color: {ACCENT_HOVER};
         }}
         QTabWidget#settingsTabs QTabBar::tab:focus {{
             outline: none;
@@ -118,14 +128,14 @@ def build_settings_stylesheet() -> str:
         }}
         QScrollBar:vertical {{
             background: transparent;
-            width: 10px;
+            width: 8px;
             margin: 8px 3px 8px 0;
             border: none;
         }}
         QScrollBar::handle:vertical {{
             background: {SCROLLBAR_HANDLE};
             min-height: 30px;
-            border-radius: 4px;
+            border-radius: 3px;
         }}
         QScrollBar::handle:vertical:hover {{
             background: {SCROLLBAR_HANDLE_HOVER};
@@ -147,7 +157,7 @@ def build_settings_stylesheet() -> str:
             background: {BUTTON_BG};
             color: {TEXT_PRIMARY};
             border: 1px solid {BUTTON_GHOST_BORDER};
-            border-radius: 10px;
+            border-radius: 8px;
             padding: 7px 16px;
             font-weight: 600;
         }}
@@ -198,7 +208,7 @@ def build_settings_stylesheet() -> str:
             background: {ELEVATED_BG};
             color: {TEXT_PRIMARY};
             border: 1px solid {BUTTON_GHOST_BORDER};
-            border-radius: 10px;
+            border-radius: 8px;
             padding: 7px 28px 7px 10px;
             selection-background-color: {BUTTON_ACTIVE_BG};
         }}
@@ -222,7 +232,7 @@ def build_settings_stylesheet() -> str:
             background: {ELEVATED_BG};
             color: {TEXT_PRIMARY};
             border: 1px solid {BUTTON_GHOST_BORDER};
-            border-radius: 10px;
+            border-radius: 8px;
             padding: 4px;
             outline: none;
             selection-background-color: {BUTTON_ACTIVE_BG};
@@ -232,7 +242,7 @@ def build_settings_stylesheet() -> str:
             background: {ELEVATED_BG};
             color: {TEXT_PRIMARY};
             border: 1px solid {BUTTON_GHOST_BORDER};
-            border-radius: 10px;
+            border-radius: 8px;
             padding: 7px 10px;
             selection-background-color: {BUTTON_ACTIVE_BG};
             selection-color: {TEXT_PRIMARY};
@@ -244,19 +254,19 @@ def build_settings_stylesheet() -> str:
             border-color: {GREEN_ACCENT};
         }}
         QSlider::groove:horizontal {{
-            height: 6px;
+            height: 4px;
             background: {SEPARATOR_COLOR};
-            border-radius: 3px;
+            border-radius: 2px;
         }}
         QSlider::sub-page:horizontal {{
             background: {GREEN_ACCENT};
-            border-radius: 3px;
+            border-radius: 2px;
         }}
         QSlider::handle:horizontal {{
-            width: 16px;
-            height: 16px;
+            width: 14px;
+            height: 14px;
             margin: -5px 0;
-            border-radius: 8px;
+            border-radius: 7px;
             background: {TEXT_PRIMARY};
             border: 2px solid {GREEN_ACCENT};
         }}

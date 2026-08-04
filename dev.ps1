@@ -1,0 +1,12 @@
+# Easy TTS 开发启动脚本（显示控制台日志）
+$ErrorActionPreference = 'Stop'
+Set-Location -LiteralPath $PSScriptRoot
+
+Write-Host '[dev] Starting Easy TTS...'
+uv run python -m easy_tts
+$exitCode = $LASTEXITCODE
+
+if ($exitCode -ne 0) {
+    Write-Host "[dev] easy_tts exited with code $exitCode"
+}
+exit $exitCode

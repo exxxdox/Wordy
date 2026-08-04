@@ -1,0 +1,1 @@
+powershell.exe -File "dev.ps1"
