@@ -13,34 +13,28 @@
 
 from __future__ import annotations
 
-import os
-import tempfile
 import threading
-import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import ClassVar
 
 import wordy.secret
+from wordy._toml_serializer import read_toml, write_toml_atomic
+from wordy.hotkey import display_hotkey
 from wordy.identity import AudioIdentity, normalize_identity
-from wordy.hotkey import iter_hotkey_parts
 from wordy.tts.constants import (
     DEFAULT_TTS_API_PROVIDER,
     DEFAULT_TTS_BACKEND,
     TTS_API_PROVIDERS,
 )
-
-# ---------------------------------------------------------------------------
-# UI 常量 — settings_window.py / overlay.py 使用
-# ---------------------------------------------------------------------------
-MIN_VOLUME = 0.5
-MAX_VOLUME = 2.0
-VOLUME_STEP = 0.05
-MIN_OVERLAY_OPACITY = 0.30
-MAX_OVERLAY_OPACITY = 1.0
-OVERLAY_OPACITY_STEP = 0.05
-LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
+from wordy.constants import (
+    LOG_LEVELS,
+    MAX_OVERLAY_OPACITY,
+    MAX_VOLUME,
+    MIN_OVERLAY_OPACITY,
+    MIN_VOLUME,
+)
 
 _USER_CONFIG_FILE: Path = Path.home() / ".wordy.toml"
 USER_CONFIG_FILE: Path = _USER_CONFIG_FILE  # 测试 monkeypatch 使用
@@ -57,27 +51,6 @@ _cached_config_file: Path | None = None
 def get_active_config_file() -> Path:
     """返回用户级配置文件路径。"""
     return _USER_CONFIG_FILE
-
-
-def display_hotkey(hotkey: str) -> str:
-    """将 keyboard 包快捷键字符串格式化为用户可读名称。"""
-    display_parts: list[str] = []
-    for _, key in iter_hotkey_parts(hotkey):
-        if key in {"ctrl", "control"}:
-            display_parts.append("Ctrl")
-        elif key == "alt":
-            display_parts.append("Alt")
-        elif key == "shift":
-            display_parts.append("Shift")
-        elif key in {"windows", "win", "left windows", "right windows"}:
-            display_parts.append("Win")
-        elif key.startswith("f") and key[1:].isdigit():
-            display_parts.append(key.upper())
-        elif len(key) == 1:
-            display_parts.append(key.upper())
-        else:
-            display_parts.append(" ".join(word.capitalize() for word in key.split()))
-    return "+".join(display_parts) if display_parts else hotkey
 
 
 def _clamp(value: float, lo: float, hi: float) -> float:
@@ -260,7 +233,7 @@ class AppSettings:
 
         settings = cls()
         settings._config_file = file  # 记住配置文件路径，后续 save() 默认使用
-        raw = _read_toml(file)
+        raw = read_toml(file)
         if raw is None:
             _inject_key_status(settings)
             settings._loaded = True
@@ -394,7 +367,7 @@ class AppSettings:
             if f.name.startswith("_"):
                 continue
             data[f.name] = getattr(self, f.name)
-        _write_toml_atomic(file, data)
+        write_toml_atomic(file, data)
 
     # ── 批量更新（保留兼容）───────────────────────────────────────────
 
@@ -431,96 +404,6 @@ def _inject_key_status(settings: AppSettings) -> None:
             s = {}
         settings.tts_providers.setdefault(provider, {})["api_key_set"] = bool(s.get("cartesia_api_key_set", s.get("volcengine_access_key_set", s.get("key_set", False))))
         settings.tts_providers.setdefault(provider, {})["api_key_storage"] = str(s.get("cartesia_api_key_storage", s.get("volcengine_access_key_storage", s.get("storage", "none"))))
-
-
-# ---------------------------------------------------------------------------
-# TOML 读写辅助
-# ---------------------------------------------------------------------------
-
-def _read_toml(path: Path) -> dict[str, object] | None:
-    """读取并校验 TOML 文件，失败返回 None。"""
-    if not path.exists():
-        return None
-    try:
-        with path.open("rb") as f:
-            data: object = tomllib.load(f)
-    except (OSError, tomllib.TOMLDecodeError):
-        return None
-    if not isinstance(data, dict):
-        return None
-    return {str(k): v for k, v in data.items()}
-
-
-def _write_toml_atomic(path: Path, data: dict[str, object]) -> None:
-    """原子写入 TOML：temp → flush → fsync → replace。"""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".atomic_wordy_", suffix=".toml")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(_to_toml(data))
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, path)
-    except Exception:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
-
-
-# ---------------------------------------------------------------------------
-# 手写 TOML 序列化器（零依赖，替代 tomli-w）
-# ---------------------------------------------------------------------------
-
-def _to_toml(data: dict[str, object]) -> str:
-    """将扁平 + 一级嵌套 dict 序列化为 TOML 字符串。"""
-    lines: list[str] = []
-    nested: dict[str, dict[str, object]] = {}
-    for key, value in data.items():
-        if isinstance(value, dict) and not _is_inline_table(value):
-            nested[key] = value
-        elif value is not None:
-            lines.append(f"{key} = {_toml_value(value)}")
-    for table_name, table_data in nested.items():
-        lines.append("")
-        lines.append(f"[{table_name}]")
-        for k, v in table_data.items():
-            if v is not None:
-                lines.append(f"{k} = {_toml_value(v)}")
-    return "\n".join(lines) + "\n"
-
-
-def _is_inline_table(value: dict[str, object]) -> bool:
-    """判断 dict 是否应为 TOML 内联表（小、扁平、无嵌套 dict 值）。"""
-    if len(value) > 3:
-        return False
-    for v in value.values():
-        if isinstance(v, dict):
-            return False
-    return True
-
-
-def _toml_value(value: object) -> str:
-    """将单个 Python 值转为 TOML 字面量。"""
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if isinstance(value, int):
-        return str(value)
-    if isinstance(value, float):
-        return str(value)
-    if isinstance(value, str):
-        # 转义反斜杠和双引号
-        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
-        return f'"{escaped}"'
-    if isinstance(value, dict):
-        # 内联表：{name = "Speakers", host_api_name = "MME"}
-        items = ", ".join(f"{k} = {_toml_value(v)}"
-                          for k, v in value.items() if v is not None)
-        return "{" + items + "}"
-    if value is None:
-        return '""'  # TOML 无 null，写入空字符串作为标记
-    return f'"{value}"'
 
 
 # ---------------------------------------------------------------------------

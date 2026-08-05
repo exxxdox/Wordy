@@ -16,7 +16,8 @@ from PySide6.QtGui import QMouseEvent
 from PySide6.QtWidgets import QApplication, QLabel, QLineEdit, QMessageBox
 
 import wordy.secret
-from wordy.config import AppSettings, display_hotkey, get_active_config_file
+from wordy.config import AppSettings, get_active_config_file
+from wordy.hotkey import display_hotkey
 from wordy.tts.constants import (
     TTS_API_PROVIDER_CARTESIA,
     TTS_API_PROVIDER_VOLCENGINE,

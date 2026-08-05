@@ -108,22 +108,27 @@ class ApplySettingsWindowStub:
 
 def _new_apply_overlay(module: ModuleType) -> object:
     overlay = module.InputOverlay.__new__(module.InputOverlay)
+    # 注入 _cfg（AppSettings 单例），覆盖旧 mirror 字段模式
+    from wordy.config import AppSettings
+    cfg = AppSettings()
+    cfg.active_tts_provider = "Cartesia"
+    cfg.cartesia_voice_id = "voice-a"
+    cfg.cartesia_voice_name = "Voice A"
+    cfg.cartesia_tts_backend = "cartesia-bytes"
+    cfg.volcengine_voice_id = None
+    cfg.volcengine_voice_name = None
+    cfg.volcengine_tts_backend = "Volcengine Bytes"
+    cfg.volume = 1.0
+    cfg.overlay_opacity = 1.0
+    cfg.log_level = "INFO"
+    cfg.fixed_center = True
+    cfg.audio_output_device_name = None
+    cfg.audio_output_device = None
+    cfg.window_position = None
+    overlay._cfg = cfg
     overlay._hotkey = "f6"
     overlay._hotkey_name = "F6"
     overlay._tts_api_provider = "Cartesia"
-    overlay._cartesia_voice_id = "voice-a"
-    overlay._cartesia_voice_name = "Voice A"
-    overlay._cartesia_tts_backend = "cartesia-bytes"
-    overlay._volcengine_voice_id = None
-    overlay._volcengine_voice_name = None
-    overlay._volcengine_tts_backend = "Volcengine Bytes"
-    overlay._volume = 1.0
-    overlay._overlay_opacity = 1.0
-    overlay._log_level = "INFO"
-    overlay._fixed_center = True
-    overlay._audio_output_device_name = None
-    overlay._audio_output_device = None
-    overlay._window_position = None
     overlay._last_saved_config_file = Path("config.json")
     overlay.root = None
     overlay.width = 0
@@ -138,17 +143,18 @@ def _new_apply_overlay(module: ModuleType) -> object:
 
 
 def _pending_settings(overlay: object, **overrides: object) -> object:
+    cfg = overlay._cfg
     class Pending:
         hotkey = overlay._hotkey
         hotkey_name = overlay._hotkey_name
         voice_id = overlay._get_active_voice_id()
         voice_name = overlay._get_active_voice_name()
-        volume = overlay._volume
-        overlay_opacity = overlay._overlay_opacity
+        volume = cfg.volume
+        overlay_opacity = cfg.overlay_opacity
         tts_backend = overlay._get_active_tts_backend()
-        log_level = overlay._log_level
-        fixed_center = overlay._fixed_center
-        audio_output_device_name = overlay._audio_output_device_name
+        log_level = cfg.log_level
+        fixed_center = cfg.fixed_center
+        audio_output_device_name = cfg.audio_output_device_name
         cartesia_api_key_action = "unchanged"
         cartesia_api_key_value = None
         volcengine_access_key_action = "unchanged"

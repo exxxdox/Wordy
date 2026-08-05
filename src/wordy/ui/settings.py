@@ -14,9 +14,9 @@ from PySide6.QtWidgets import (
     QPushButton, QScrollArea, QSlider, QStyle, QTabWidget, QVBoxLayout, QWidget,
 )
 
-import wordy.secret
-from wordy.config import (
-    AppSettings, LOG_LEVELS, MAX_OVERLAY_OPACITY, MAX_VOLUME,
+from wordy.config import AppSettings
+from wordy.constants import (
+    LOG_LEVELS, MAX_OVERLAY_OPACITY, MAX_VOLUME,
     MIN_OVERLAY_OPACITY, MIN_VOLUME, OVERLAY_OPACITY_STEP, VOLUME_STEP,
 )
 from wordy.tts.constants import (
