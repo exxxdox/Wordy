@@ -78,7 +78,7 @@ class InputOverlay:
         if sys.platform != "win32":
             raise RuntimeError("InputOverlay 仅支持 Windows")
 
-        config = AppSettings.load()
+        self._cfg = AppSettings.load()  # 单例——唯一数据源，不镜像副本
         self.on_submit = on_submit
         self.on_voice_change = on_voice_change
         self.on_volume_change = on_volume_change
@@ -94,29 +94,6 @@ class InputOverlay:
         self.width = width
         self.height = height
         self.poll_interval_ms = poll_interval_ms
-        self._hotkey = config.hotkey
-        self._hotkey_name = config.name
-        self._volume = config.volume
-        self._overlay_opacity = config.overlay_opacity
-        self._tts_api_provider = getattr(config, "tts_api_provider", "Cartesia")
-        # 按 provider 独立存储音色和 backend
-        self._cartesia_voice_id: str | None = getattr(config, "cartesia_voice_id", None) or getattr(config, "voice_id", None)
-        self._cartesia_voice_name: str | None = getattr(config, "cartesia_voice_name", None) or getattr(config, "voice_name", None)
-        self._cartesia_tts_backend: str = getattr(config, "cartesia_tts_backend", None) or config.tts_backend
-        self._volcengine_voice_id: str | None = getattr(config, "volcengine_voice_id", None)
-        self._volcengine_voice_name: str | None = getattr(config, "volcengine_voice_name", None)
-        self._volcengine_tts_backend: str = getattr(config, "volcengine_tts_backend", None) or TTS_BACKEND_VOLCENGINE_STREAMING
-        self._log_level = config.log_level
-        self._fixed_center = config.fixed_center
-        self._window_position: WindowPosition | None = config.window_position
-        self._audio_output_device_name: str | None = config.audio_output_device_name
-        self._audio_output_device: dict[str, object] | None = self._init_audio_output_device(config)
-        # 音频路由配置
-        self._audio_routing_enabled: bool = config.audio_routing_enabled
-        self._mic_input_device: str | None = config.mic_input_device
-        self._virtual_output_device: str | None = config.virtual_output_device
-        # 返听 (sidetone)
-        self._sidetone_enabled: bool = config.sidetone_enabled
         self._closed = False
         self._hotkey_listener: NativeHotkeyListener | None = None
         self._settings_window: SettingsWindow | None = None
@@ -150,58 +127,43 @@ class InputOverlay:
 
     def _get_active_voice_id(self) -> str | None:
         """返回当前服务商的音色 ID。"""
-        if self._tts_api_provider == TTS_API_PROVIDER_VOLCENGINE:
-            return self._volcengine_voice_id
-        return self._cartesia_voice_id
+        if self._cfg.active_tts_provider == TTS_API_PROVIDER_VOLCENGINE:
+            return self._cfg.volcengine_voice_id
+        return self._cfg.cartesia_voice_id
 
     def _get_active_voice_name(self) -> str | None:
         """返回当前服务商的音色名称。"""
-        if self._tts_api_provider == TTS_API_PROVIDER_VOLCENGINE:
-            return self._volcengine_voice_name
-        return self._cartesia_voice_name
+        if self._cfg.active_tts_provider == TTS_API_PROVIDER_VOLCENGINE:
+            return self._cfg.volcengine_voice_name
+        return self._cfg.cartesia_voice_name
 
     def _get_active_tts_backend(self) -> str:
         """返回当前服务商的默认生成模式。"""
-        if self._tts_api_provider == TTS_API_PROVIDER_VOLCENGINE:
-            return self._volcengine_tts_backend
-        return self._cartesia_tts_backend
+        if self._cfg.active_tts_provider == TTS_API_PROVIDER_VOLCENGINE:
+            return self._cfg.volcengine_tts_backend
+        return self._cfg.cartesia_tts_backend
 
     def _get_active_voices_cache(self) -> list[VoiceInfo]:
         """返回当前服务商的音色缓存。"""
-        if self._tts_api_provider == TTS_API_PROVIDER_VOLCENGINE:
+        if self._cfg.active_tts_provider == TTS_API_PROVIDER_VOLCENGINE:
             return self._volcengine_voices_cache
         return self._cartesia_voices_cache
 
     def _set_active_voice(self, voice_id: str | None, voice_name: str | None) -> None:
         """设置当前服务商的音色。"""
-        if self._tts_api_provider == TTS_API_PROVIDER_VOLCENGINE:
-            self._volcengine_voice_id = voice_id
-            self._volcengine_voice_name = voice_name
+        if self._cfg.active_tts_provider == TTS_API_PROVIDER_VOLCENGINE:
+            self._cfg.volcengine_voice_id = voice_id
+            self._cfg.volcengine_voice_name = voice_name
         else:
-            self._cartesia_voice_id = voice_id
-            self._cartesia_voice_name = voice_name
+            self._cfg.cartesia_voice_id = voice_id
+            self._cfg.cartesia_voice_name = voice_name
 
     def _set_active_voices_cache(self, voices: list[VoiceInfo]) -> None:
         """设置当前服务商的音色缓存。"""
-        if self._tts_api_provider == TTS_API_PROVIDER_VOLCENGINE:
+        if self._cfg.active_tts_provider == TTS_API_PROVIDER_VOLCENGINE:
             self._volcengine_voices_cache = voices
         else:
             self._cartesia_voices_cache = voices
-
-    @staticmethod
-    def _init_audio_output_device(config: AppSettings) -> dict[str, object] | None:
-        """从 AppSettings 提取音频输出设备身份信息."""
-        raw = config.audio_output_device
-        if isinstance(raw, dict):
-            name = raw.get("name")
-            if isinstance(name, str) and name:
-                host_api = raw.get("host_api_name")
-                host_api_value = host_api if isinstance(host_api, str) and host_api else None
-                return dict(normalize_identity(name, host_api_value))
-        legacy_name = config.audio_output_device_name
-        if isinstance(legacy_name, str) and legacy_name:
-            return dict(normalize_identity(legacy_name))
-        return None
 
     def prepare_ui(self) -> None:
         """Ensure UI is created (idempotent)."""
@@ -220,7 +182,7 @@ class InputOverlay:
         """启动热键监听并进入 Qt 事件循环。"""
         self._ensure_ui()
         if self._try_register_startup_hotkey():
-            logger.info("已启动输入框监听，按 %s 弹出输入框。", self._hotkey_name)
+            logger.info("已启动输入框监听，按 %s 弹出输入框。", self._cfg.name)
         logger.warning("提示：独占全屏游戏不保证能显示置顶窗口，请优先使用无边框窗口化。")
         try:
             if self._app is not None:
@@ -325,17 +287,17 @@ class InputOverlay:
 
     def try_register_hotkey(self, hotkey: str, name: str) -> bool:
         """只更新运行中的全局快捷键，不保存配置。"""
-        old_hotkey = self._hotkey
-        old_name = self._hotkey_name
+        old_hotkey = self._cfg.hotkey
+        old_name = self._cfg.name
         self._unregister_hotkey()
-        self._hotkey = hotkey
-        self._hotkey_name = name
+        self._cfg.hotkey = hotkey
+        self._cfg.name = name
         try:
             self._register_hotkey()
         except Exception as e:
             logger.warning("注册 %s 失败: %s", name, e)
-            self._hotkey = old_hotkey
-            self._hotkey_name = old_name
+            self._cfg.hotkey = old_hotkey
+            self._cfg.name = old_name
             try:
                 self._register_hotkey()
             except Exception as restore_error:
@@ -348,7 +310,7 @@ class InputOverlay:
         try:
             self._register_hotkey()
         except Exception as error:
-            logger.warning("启动时注册全局快捷键 %s 失败: %s", self._hotkey_name, error)
+            logger.warning("启动时注册全局快捷键 %s 失败: %s", self._cfg.name, error)
             self._show_startup_hotkey_conflict(error)
             return False
         return True
@@ -363,7 +325,7 @@ class InputOverlay:
             return
 
         message = (
-            f"当前全局快捷键 {self._hotkey_name} 无法注册，可能已被其他程序占用。"
+            f"当前全局快捷键 {self._cfg.name} 无法注册，可能已被其他程序占用。"
             "请录制并应用新的全局快捷键。"
         )
         settings.set_hotkey_warning(message)
@@ -397,7 +359,7 @@ class InputOverlay:
             self._signals.voices_error.connect(self._finish_load_voices_error)
         if self.root is None and self._signals is not None:
             self.root = _OverlayWidget(self, self._signals)
-            self.root.set_overlay_opacity(self._overlay_opacity)
+            self.root.set_overlay_opacity(self._cfg.overlay_opacity)
             self.entry = self.root.entry
             self.settings_icon = self.root.settings_button
             self.root.hide()
@@ -443,7 +405,7 @@ class InputOverlay:
     def _register_hotkey(self) -> None:
         self._unregister_hotkey()
         from wordy.hotkey import NativeHotkeyListener
-        hotkey_listener = NativeHotkeyListener(self._hotkey, self._hotkey_name, self._on_global_hotkey)
+        hotkey_listener = NativeHotkeyListener(self._cfg.hotkey, self._cfg.name, self._on_global_hotkey)
         self._hotkey_listener = hotkey_listener
         hotkey_listener.start()
 
@@ -453,7 +415,7 @@ class InputOverlay:
         try:
             self._hotkey_listener.stop()
         except Exception as e:
-            logger.warning("注销全局快捷键 %s 失败: %s", self._hotkey_name, e)
+            logger.warning("注销全局快捷键 %s 失败: %s", self._cfg.name, e)
         finally:
             self._hotkey_listener = None
 
@@ -461,7 +423,7 @@ class InputOverlay:
         if self._recording_hotkey:
             logger.info("全局快捷键触发，但当前正在录制快捷键，已忽略。")
             return
-        logger.info("全局快捷键触发: %s", self._hotkey_name)
+        logger.info("全局快捷键触发: %s", self._cfg.name)
         signals = self._signals
         if signals is not None:
             signals.hotkey_triggered.emit()
@@ -472,10 +434,10 @@ class InputOverlay:
     def _position_window_for_show(self) -> None:
         if self.root is None:
             return
-        if self._fixed_center or self._window_position is None:
+        if self._cfg.fixed_center or self._cfg.window_position is None:
             center_window(self.root, self.width, self.height)
             return
-        x, y = self._clamp_window_position(self._window_position["x"], self._window_position["y"])
+        x, y = self._clamp_window_position(self._cfg.window_position["x"], self._cfg.window_position["y"])
         self.root.setGeometry(x, y, self.width, self.height)
 
     def _clamp_window_position(self, x: int, y: int) -> tuple[int, int]:
@@ -499,7 +461,7 @@ class InputOverlay:
 
     def _on_overlay_mouse_press(self, event: QMouseEvent) -> None:
         self._focus_entry()
-        if self._fixed_center or self.root is None:
+        if self._cfg.fixed_center or self.root is None:
             return
         self._ignore_focus_out = True
         self._is_dragging_window = True
@@ -510,7 +472,7 @@ class InputOverlay:
         self._drag_start_window_y = self.root.y()
 
     def _on_overlay_mouse_move(self, event: QMouseEvent) -> None:
-        if self._fixed_center or not self._is_dragging_window or self.root is None:
+        if self._cfg.fixed_center or not self._is_dragging_window or self.root is None:
             return
         position = event.globalPosition().toPoint()
         x = self._drag_start_window_x + position.x() - self._drag_start_mouse_x
@@ -519,12 +481,12 @@ class InputOverlay:
         self.root.setGeometry(x, y, self.width, self.height)
 
     def _on_overlay_mouse_release(self) -> None:
-        if self._fixed_center or not self._is_dragging_window or self.root is None:
+        if self._cfg.fixed_center or not self._is_dragging_window or self.root is None:
             return
         self._is_dragging_window = False
         x, y = self._clamp_window_position(self.root.x(), self.root.y())
-        self._window_position = {"x": x, "y": y}
-        config_file = AppSettings.load().update(window_position=self._window_position)
+        self._cfg.window_position = {"x": x, "y": y}
+        config_file = AppSettings.load().update(window_position=self._cfg.window_position)
         self._last_saved_config_file = config_file
         QTimer.singleShot(100, self._clear_ignore_focus_out)
 
@@ -636,7 +598,7 @@ class InputOverlay:
             try:
                 self._register_hotkey()
             except Exception as e:
-                logger.warning("设置窗口关闭后重新注册全局快捷键 %s 失败: %s", self._hotkey_name, e)
+                logger.warning("设置窗口关闭后重新注册全局快捷键 %s 失败: %s", self._cfg.name, e)
 
     def _start_record_hotkey(self) -> None:
         if self._recording_hotkey:
@@ -670,7 +632,7 @@ class InputOverlay:
             try:
                 self._register_hotkey()
             except Exception as e:
-                logger.warning("重新注册全局快捷键 %s 失败: %s", self._hotkey_name, e)
+                logger.warning("重新注册全局快捷键 %s 失败: %s", self._cfg.name, e)
                 register_error = e
         if settings is None:
             return
@@ -730,58 +692,39 @@ class InputOverlay:
             settings.set_voices_error(self._voice_fetch_error)
 
     def _on_settings_field_changed(self, field_name: str, value: object) -> None:
-        """设置窗口字段变更回调。持久化已由 AppSettings.__setattr__ 完成，此处仅处理运行时副作用。"""
+        """设置变更副作用——持久化已由 AppSettings.__setattr__ 完成，self._cfg 即该单例。"""
         if field_name == "hotkey":
-            # 热键：由 SettingsWindow.set_record_result 触发，已存储在 _recorded_hotkey
             settings = self._active_settings_window()
             if settings is not None and settings._recorded_hotkey and settings._recorded_hotkey_name:
                 hotkey = settings._recorded_hotkey
                 hotkey_name = settings._recorded_hotkey_name
                 if self.try_register_hotkey(hotkey, hotkey_name):
-                    self._hotkey = hotkey
-                    self._hotkey_name = hotkey_name
-                    AppSettings.load().update(hotkey=hotkey, name=hotkey_name)
+                    self._cfg.update(hotkey=hotkey, name=hotkey_name)
                 else:
                     settings.set_hotkey_warning("快捷键注册失败，可能被占用")
 
         elif field_name == "volume":
-            self._volume = float(value)  # type: ignore[arg-type]
             if self.on_volume_change:
-                self.on_volume_change(self._volume)
+                self.on_volume_change(float(value))  # type: ignore[arg-type]
 
         elif field_name == "overlay_opacity":
-            self._overlay_opacity = float(value)  # type: ignore[arg-type]
             if self.root:
-                self.root.set_overlay_opacity(self._overlay_opacity)
+                self.root.set_overlay_opacity(float(value))  # type: ignore[arg-type]
 
         elif field_name == "fixed_center":
-            self._fixed_center = bool(value)
-            if self._fixed_center and self.root:
+            if bool(value) and self.root:
                 center_window(self.root, self.width, self.height)
 
         elif field_name == "log_level":
-            self._log_level = str(value)
             import logging as _log_mod
-            _log_mod.getLogger().setLevel(getattr(_log_mod, self._log_level, _log_mod.INFO))
+            _log_mod.getLogger().setLevel(getattr(_log_mod, str(value), _log_mod.INFO))
 
         elif field_name == "active_tts_provider":
-            self._tts_api_provider = str(value)
             if self.on_tts_api_provider_change:
-                self.on_tts_api_provider_change(self._tts_api_provider)
+                self.on_tts_api_provider_change(str(value))
 
         elif field_name in ("cartesia_voice_id", "cartesia_voice_name",
                             "volcengine_voice_id", "volcengine_voice_name"):
-            if field_name.startswith("cartesia"):
-                if field_name == "cartesia_voice_id":
-                    self._cartesia_voice_id = str(value) if value else None
-                else:
-                    self._cartesia_voice_name = str(value) if value else None
-            else:
-                if field_name == "volcengine_voice_id":
-                    self._volcengine_voice_id = str(value) if value else None
-                else:
-                    self._volcengine_voice_name = str(value) if value else None
-            # 按当前 provider 取最新 voice_id/voice_name 通知 WordyApp 重建引擎
             if self.on_voice_change:
                 active_vid = self._get_active_voice_id() or ""
                 active_vname = self._get_active_voice_name() or ""
@@ -789,39 +732,35 @@ class InputOverlay:
 
         elif field_name in ("cartesia_tts_backend", "volcengine_tts_backend"):
             if self.on_tts_backend_change:
-                active_backend = str(value) if value else self._get_active_tts_backend()
-                self.on_tts_backend_change(active_backend)
+                self.on_tts_backend_change(str(value) if value else self._get_active_tts_backend())
 
         elif field_name == "audio_output_device":
             self._handle_audio_output_change(value)
 
         elif field_name == "audio_routing_enabled":
-            self._audio_routing_enabled = bool(value)
             if self.on_audio_route_change:
-                self.on_audio_route_change({"audio_routing_enabled": self._audio_routing_enabled})
+                self.on_audio_route_change({"audio_routing_enabled": bool(value)})
 
         elif field_name == "mic_input_device":
-            self._mic_input_device = value if isinstance(value, str) else None
             if self.on_audio_route_change:
-                self.on_audio_route_change({"mic_input_device": self._mic_input_device})
+                self.on_audio_route_change({"mic_input_device": value if isinstance(value, str) else None})
 
         elif field_name == "sidetone_enabled":
-            self._sidetone_enabled = bool(value)
             if self.on_sidetone_change:
-                self.on_sidetone_change(self._sidetone_enabled)
+                self.on_sidetone_change(bool(value))
 
     def _handle_audio_output_change(self, value: object) -> None:
         """音频输出设备变更的运行时处理。"""
         if isinstance(value, dict):
-            self._audio_output_device = dict(value)
+            self._cfg.audio_output_device = dict(value)  # type: ignore[assignment]
             name = value.get("name")
-            self._audio_output_device_name = name if isinstance(name, str) else None
+            self._cfg.audio_output_device_name = name if isinstance(name, str) else None
         else:
-            self._audio_output_device = None
-            self._audio_output_device_name = None
+            self._cfg.audio_output_device = None  # type: ignore[assignment]
+            self._cfg.audio_output_device_name = None
         if self.on_audio_output_change:
             try:
-                self.on_audio_output_change(self._audio_output_device)
+                self.on_audio_output_change(self._cfg.audio_output_device)
             except Exception:
                 logger.exception("音频输出设备变更通知失败")
 

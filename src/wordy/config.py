@@ -160,6 +160,15 @@ class AppSettings:
         """当前活跃 provider 的配置。"""
         return self.get_provider(self.active_tts_provider)
 
+    # ── Provider 字段写入辅助 ──────────────────────────────────────────
+
+    def _set_provider_field(self, provider: str, key: str, value: object) -> None:
+        """写入 provider 子 dict 中的字段，并触发 notify + debounce save。"""
+        self.get_provider(provider)[key] = value
+        if self._loaded:
+            self._notify_listeners(key, value)
+            self._debounced_save()
+
     # ── 向后兼容属性：委托给 get_provider ────────────────────────────
 
     @property
@@ -178,109 +187,68 @@ class AppSettings:
     @tts_api_provider.setter
     def tts_api_provider(self, value: str) -> None:
         self.active_tts_provider = value
-        # 赋值 self.active_tts_provider 触发 __setattr__，无需手动 save
 
-    # -- Cartesia read/write
+    # -- Cartesia
     @property
     def cartesia_voice_id(self) -> str | None:
         v = self.get_provider("Cartesia").get("voice_id"); return v if isinstance(v, str) else None
     @cartesia_voice_id.setter
-    def cartesia_voice_id(self, value: str | None) -> None:
-        self.get_provider("Cartesia")["voice_id"] = value
-        if self._loaded:
-            self._notify_listeners("cartesia_voice_id", value)
-            self._debounced_save()
+    def cartesia_voice_id(self, value: str | None) -> None: self._set_provider_field("Cartesia", "voice_id", value)
 
     @property
     def cartesia_voice_name(self) -> str | None:
         v = self.get_provider("Cartesia").get("voice_name"); return v if isinstance(v, str) else None
     @cartesia_voice_name.setter
-    def cartesia_voice_name(self, value: str | None) -> None:
-        self.get_provider("Cartesia")["voice_name"] = value
-        if self._loaded:
-            self._notify_listeners("cartesia_voice_name", value)
-            self._debounced_save()
+    def cartesia_voice_name(self, value: str | None) -> None: self._set_provider_field("Cartesia", "voice_name", value)
 
     @property
     def cartesia_tts_backend(self) -> str:
         return str(self.get_provider("Cartesia").get("backend", DEFAULT_TTS_BACKEND))
     @cartesia_tts_backend.setter
-    def cartesia_tts_backend(self, value: str) -> None:
-        self.get_provider("Cartesia")["backend"] = value
-        if self._loaded:
-            self._notify_listeners("cartesia_tts_backend", value)
-            self._debounced_save()
+    def cartesia_tts_backend(self, value: str) -> None: self._set_provider_field("Cartesia", "backend", value)
 
     @property
     def cartesia_api_key_set(self) -> bool:
         return bool(self.get_provider("Cartesia").get("api_key_set", False))
     @cartesia_api_key_set.setter
-    def cartesia_api_key_set(self, value: bool) -> None:
-        self.get_provider("Cartesia")["api_key_set"] = value
-        if self._loaded:
-            self._notify_listeners("cartesia_api_key_set", value)
-            self._debounced_save()
+    def cartesia_api_key_set(self, value: bool) -> None: self._set_provider_field("Cartesia", "api_key_set", value)
 
     @property
     def cartesia_api_key_storage(self) -> str:
         return str(self.get_provider("Cartesia").get("api_key_storage", "none"))
     @cartesia_api_key_storage.setter
-    def cartesia_api_key_storage(self, value: str) -> None:
-        self.get_provider("Cartesia")["api_key_storage"] = value
-        if self._loaded:
-            self._notify_listeners("cartesia_api_key_storage", value)
-            self._debounced_save()
+    def cartesia_api_key_storage(self, value: str) -> None: self._set_provider_field("Cartesia", "api_key_storage", value)
 
-    # -- Volcengine read/write
+    # -- Volcengine
     @property
     def volcengine_voice_id(self) -> str | None:
         v = self.get_provider("Volcengine").get("voice_id"); return v if isinstance(v, str) else None
     @volcengine_voice_id.setter
-    def volcengine_voice_id(self, value: str | None) -> None:
-        self.get_provider("Volcengine")["voice_id"] = value
-        if self._loaded:
-            self._notify_listeners("volcengine_voice_id", value)
-            self._debounced_save()
+    def volcengine_voice_id(self, value: str | None) -> None: self._set_provider_field("Volcengine", "voice_id", value)
 
     @property
     def volcengine_voice_name(self) -> str | None:
         v = self.get_provider("Volcengine").get("voice_name"); return v if isinstance(v, str) else None
     @volcengine_voice_name.setter
-    def volcengine_voice_name(self, value: str | None) -> None:
-        self.get_provider("Volcengine")["voice_name"] = value
-        if self._loaded:
-            self._notify_listeners("volcengine_voice_name", value)
-            self._debounced_save()
+    def volcengine_voice_name(self, value: str | None) -> None: self._set_provider_field("Volcengine", "voice_name", value)
 
     @property
     def volcengine_tts_backend(self) -> str:
         return str(self.get_provider("Volcengine").get("backend", "Volcengine Streaming"))
     @volcengine_tts_backend.setter
-    def volcengine_tts_backend(self, value: str) -> None:
-        self.get_provider("Volcengine")["backend"] = value
-        if self._loaded:
-            self._notify_listeners("volcengine_tts_backend", value)
-            self._debounced_save()
+    def volcengine_tts_backend(self, value: str) -> None: self._set_provider_field("Volcengine", "backend", value)
 
     @property
     def volcengine_access_key_set(self) -> bool:
         return bool(self.get_provider("Volcengine").get("api_key_set", False))
     @volcengine_access_key_set.setter
-    def volcengine_access_key_set(self, value: bool) -> None:
-        self.get_provider("Volcengine")["api_key_set"] = value
-        if self._loaded:
-            self._notify_listeners("volcengine_access_key_set", value)
-            self._debounced_save()
+    def volcengine_access_key_set(self, value: bool) -> None: self._set_provider_field("Volcengine", "api_key_set", value)
 
     @property
     def volcengine_access_key_storage(self) -> str:
         return str(self.get_provider("Volcengine").get("api_key_storage", "none"))
     @volcengine_access_key_storage.setter
-    def volcengine_access_key_storage(self, value: str) -> None:
-        self.get_provider("Volcengine")["api_key_storage"] = value
-        if self._loaded:
-            self._notify_listeners("volcengine_access_key_storage", value)
-            self._debounced_save()
+    def volcengine_access_key_storage(self, value: str) -> None: self._set_provider_field("Volcengine", "api_key_storage", value)
 
     # ── 工厂方法 ──────────────────────────────────────────────────────
 
@@ -415,13 +383,14 @@ class AppSettings:
     # ── 持久化 ─────────────────────────────────────────────────────────
 
     def save(self, *, config_file: Path | None = None) -> Path:
-        """将当前设置写入 TOML 文件（原子写入）。
+        """将当前设置写入 TOML 文件（原子写入，线程安全）。
 
         不清空缓存——in-memory 实例始终是最新的。
         返回写入的文件路径。
         """
         file = config_file or self._config_file or USER_CONFIG_FILE
-        self._save_to_disk_inner(file)
+        with self._save_lock:
+            self._save_to_disk_inner(file)
         return file
 
     def _save_to_disk_inner(self, config_file: Path | None = None) -> None:
@@ -612,65 +581,3 @@ def _apply_if_present(
     parsed = parser(raw[key], *parser_args) if parser_args else parser(raw[key])
     if parsed is not None:
         setattr(settings, key, parsed)
-
-
-# ---------------------------------------------------------------------------
-# 密钥状态读取（保留兼容）
-# ---------------------------------------------------------------------------
-
-def _read_cartesia_key_status() -> dict[str, bool | str]:
-    """读取 Cartesia API key 元数据（不暴露密钥原文）。"""
-    status_getter = getattr(wordy.secret, "get_cartesia_api_key_status", None)
-    if callable(status_getter):
-        raw_status = status_getter()
-        status = raw_status if isinstance(raw_status, Mapping) else {}
-    else:
-        try:
-            storage_status = wordy.secret.get_storage_status()
-        except Exception:
-            storage_status = {}
-        if isinstance(storage_status, Mapping):
-            raw_backend = storage_status.get("backend", wordy.secret.STORAGE_NONE)
-        else:
-            raw_backend = getattr(storage_status, "backend", wordy.secret.STORAGE_NONE)
-        storage = raw_backend if isinstance(raw_backend, str) else wordy.secret.STORAGE_NONE
-        status = {
-            "cartesia_api_key_set": storage != wordy.secret.STORAGE_NONE,
-            "cartesia_api_key_storage": storage,
-        }
-
-    key_set = status.get("cartesia_api_key_set")
-    storage = status.get("cartesia_api_key_storage")
-    return {
-        "cartesia_api_key_set": key_set if isinstance(key_set, bool) else False,
-        "cartesia_api_key_storage": storage if isinstance(storage, str) else wordy.secret.STORAGE_NONE,
-    }
-
-
-def _read_volcengine_key_status() -> dict[str, bool | str]:
-    """读取 Volcengine access key 元数据（不暴露密钥原文）。"""
-    status_getter = getattr(wordy.secret, "get_volcengine_access_key_status", None)
-    if callable(status_getter):
-        raw_status = status_getter()
-        status = raw_status if isinstance(raw_status, Mapping) else {}
-    else:
-        try:
-            storage_status = wordy.secret.get_volcengine_storage_status()
-        except Exception:
-            storage_status = {}
-        if isinstance(storage_status, Mapping):
-            raw_backend = storage_status.get("backend", wordy.secret.STORAGE_NONE)
-        else:
-            raw_backend = getattr(storage_status, "backend", wordy.secret.STORAGE_NONE)
-        storage = raw_backend if isinstance(raw_backend, str) else wordy.secret.STORAGE_NONE
-        status = {
-            "volcengine_access_key_set": storage != wordy.secret.STORAGE_NONE,
-            "volcengine_access_key_storage": storage,
-        }
-
-    key_set = status.get("volcengine_access_key_set")
-    storage = status.get("volcengine_access_key_storage")
-    return {
-        "volcengine_access_key_set": key_set if isinstance(key_set, bool) else False,
-        "volcengine_access_key_storage": storage if isinstance(storage, str) else wordy.secret.STORAGE_NONE,
-    }

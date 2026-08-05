@@ -120,10 +120,8 @@ class WordyApp:
         self.cartesia_api_key = self._load_cartesia_api_key()
         # Volcengine 凭据
         self.volcengine_access_key = self._load_volcengine_access_key()
-        # 按 provider 读取 voice/backend
+        # 按 provider 读取 backend（voice/volume 从 config 实时读，不镜像）
         self.tts_backend = self._resolve_active_tts_backend(tts_backend)
-        self.voice_id = self._get_active_voice_id_from_config()
-        self.volume = self._settings.volume
         self._install_tts_worker(self._create_tts_worker())
 
         self._init_audio_router()
@@ -204,8 +202,8 @@ class WordyApp:
             self.tts_backend,
             cast(TTSAudioPlayer, self._sidetone_wrapper),
             api_key=self.cartesia_api_key,
-            voice_id=self.voice_id,
-            volume=self.volume,
+            voice_id=self._get_active_voice_id_from_config(),
+            volume=self._settings.volume,
             volcengine_access_key=self.volcengine_access_key,
         )
 
@@ -354,7 +352,7 @@ class WordyApp:
             logger.warning("提交文本为空，已忽略。")
             return
 
-        if not self.voice_id:
+        if not self._get_active_voice_id_from_config():
             logger.error("缺少音色配置，请先打开设置，刷新音色列表并选择一个音色。")
             return
 
@@ -369,14 +367,14 @@ class WordyApp:
 
     def _on_voice_change(self, voice_id: str, voice_name: str) -> None:
         """音色配置变更后同步到当前 TTS 引擎（按 provider 写回配置）。"""
-        self.voice_id = voice_id
+        # voice_id 已在 config 中，直接写引擎即可
         self._set_active_voice_in_config(voice_id or None, voice_name or None)
         self.tts_engine.set_voice(voice_id)
         logger.info("音色已切换为: %s", voice_name)
 
     def _on_volume_change(self, volume: float) -> None:
         """音量配置变更后同步到当前 TTS 引擎。"""
-        self.volume = volume
+        self._settings.volume = volume
         self.tts_engine.set_volume(volume)
         logger.info("音量已切换为: %.2fx", volume)
 
@@ -455,7 +453,7 @@ class WordyApp:
         # 切换 provider 后同步新 provider 的 backend 和 voice_id，
         # 否则 _create_tts_engine 仍使用旧 provider 的配置
         self.tts_backend = self._resolve_active_tts_backend(None)
-        self.voice_id = self._get_active_voice_id_from_config()
+        # voice_id 每次从 _create_tts_engine → _get_active_voice_id_from_config() 实时读取
         try:
             new_worker = self._create_tts_worker()
         except Exception:
@@ -509,7 +507,7 @@ class WordyApp:
     def run(self) -> None:
         """启动常驻应用。"""
         logger.info("Wordy 已启动，当前 TTS 后端: %s", self.tts_backend)
-        if not self.voice_id:
+        if not self._get_active_voice_id_from_config():
             logger.warning("提示：尚未配置音色，请先打开设置，刷新音色列表并选择一个音色。")
         logger.info("按配置的全局快捷键弹出输入框，输入文本后回车播放。")
         tray_app: TrayApp | None = None
