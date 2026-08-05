@@ -282,9 +282,7 @@ class CartesiaRealtimeTTS(CartesiaTTS):
 
         # VB-CABLE 默认内部延迟为 7168 samples，官方要求内部延迟至少为
         # 最大客户端 buffer 的 3 倍。4096 会超过 7168 / 3 的安全上限并可能
-        # 触发 Pull loss / DMA error；1024 仍能提供充足余量。CABLE 模式已在
-        # _send_and_play_once 中收齐音频后连续写入，无需靠放大客户端 buffer
-        # 掩盖网络 chunk 间隔。
+        # 触发 Pull loss / DMA error；1024 仍能提供充足余量。
         buffer_size = 1024
 
         primary_format = pyaudio.paInt16 if prefer_int16 else pyaudio.paFloat32
@@ -410,41 +408,21 @@ class CartesiaRealtimeTTS(CartesiaTTS):
         ctx.push(text)
         ctx.no_more_inputs()
 
-        # CABLE 等虚拟设备无硬件 DMA buffer，chunk 间 write_stream 的间隔
-        # 会导致 PortAudio ring buffer 排空 → 静音间隙 → 声音不连贯。
-        # 先收齐全部 chunk 再连续写入，消除 chunk 间空洞。
-        device_name = (self.audio_player.output_device_name or "").lower()
-        is_cable = isinstance(device_name, str) and any(
-            kw in device_name for kw in ("cable", "vb-audio")
-        )
-
-        if is_cable:
-            chunks: list[bytes] = []
-            for response in ctx.receive():
-                if response.type == "chunk" and response.audio:
-                    chunks.append(response.audio)
-                elif response.type == "error":
-                    message = getattr(response, "message", "") or getattr(response, "title", "")
-                    raise RuntimeError(f"Cartesia realtime 返回错误: {message}")
-                elif response.type == "done":
-                    break
-            total_bytes = sum(len(c) for c in chunks)
-            logger.debug(
-                "CABLE 模式：收齐 %d 个 chunk（%d bytes），开始连续写入",
-                len(chunks), total_bytes,
-            )
-            for chunk in chunks:
-                self.audio_player.write_stream(chunk)
-        else:
-            for response in ctx.receive():
-                if response.type == "chunk" and response.audio:
-                    logger.debug("Received audio chunk (%s bytes, context_id=%s)", len(response.audio), response.context_id)
-                    self.audio_player.write_stream(response.audio)
-                elif response.type == "error":
-                    message = getattr(response, "message", "") or getattr(response, "title", "")
-                    raise RuntimeError(f"Cartesia realtime 返回错误: {message}")
-                elif response.type == "done":
-                    break
+        # 流式写入：收到 chunk 立即写入，不做缓冲。
+        # 对 CABLE 等虚拟设备可能因 chunk 间隔产生轻微间隙；
+        # 介意延迟的用户可切换 bytes 模式。
+        for response in ctx.receive():
+            if response.type == "chunk" and response.audio:
+                logger.debug(
+                    "Received audio chunk (%s bytes, context_id=%s)",
+                    len(response.audio), response.context_id,
+                )
+                self.audio_player.write_stream(response.audio)
+            elif response.type == "error":
+                message = getattr(response, "message", "") or getattr(response, "title", "")
+                raise RuntimeError(f"Cartesia realtime 返回错误: {message}")
+            elif response.type == "done":
+                break
         return True
 
     def speak(self, text: str) -> bool:
