@@ -78,6 +78,7 @@ Write-Host '[INFO] Running PyInstaller...'
 $iconPath = Join-Path $PSScriptRoot 'wavtrans.ico'
 
 $pyinstallerArgs = @(
+    '-m', 'PyInstaller',
     '--noconfirm',
     '--onefile',
     '--windowed',
@@ -89,7 +90,8 @@ $pyinstallerArgs = @(
     '--collect-submodules', 'websockets'
 ) + $(if ($Clean) { @('--clean') } else { @() }) + $hiddenImportArgs + @('src/wordy/__main__.py')
 
-& uv run pyinstaller @pyinstallerArgs
+# uv trampoline (.venv/Scripts/pyinstaller.exe) fails canonicalize on Windows — use python -m PyInstaller
+& uv run python @pyinstallerArgs
 $buildExit = $LASTEXITCODE
 
 Write-Host ''
