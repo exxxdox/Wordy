@@ -448,10 +448,14 @@ class WordyApp:
         logger.info("Cartesia API key 已更新，TTS 引擎已重建。")
 
     def _on_tts_api_provider_change(self, provider: str) -> None:
-        """TTS 服务商切换：更新 provider 并重建 worker。"""
+        """TTS 服务商切换：更新 provider、backend、voice_id 并重建 worker。"""
         if provider == self.tts_api_provider:
             return
         self.tts_api_provider = provider
+        # 切换 provider 后同步新 provider 的 backend 和 voice_id，
+        # 否则 _create_tts_engine 仍使用旧 provider 的配置
+        self.tts_backend = self._resolve_active_tts_backend(None)
+        self.voice_id = self._get_active_voice_id_from_config()
         try:
             new_worker = self._create_tts_worker()
         except Exception:

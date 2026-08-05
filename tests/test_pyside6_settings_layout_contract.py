@@ -348,17 +348,21 @@ def test_settings_sliders_use_no_wheel_subclass() -> None:
 
 
 def test_settings_buttons_row_is_right_aligned() -> None:
-    """底部按钮应右对齐，且取消在左、应用在右，更符合设置对话框习惯。"""
+    """底部按钮应右对齐，单个退出按钮。"""
     source = _load_source()
     start = source.index("    def _build_buttons")
     end = source.index("    def _add_inner_gap", start)
     body = source[start:end]
     if body.count("button_row.addStretch(1)") != 1:
         _fail("_build_buttons 应只保留一个左侧 addStretch(1) 以右对齐按钮")
-    cancel_pos = body.find("cancel_button = QPushButton")
-    apply_pos = body.find("apply_button = QPushButton")
-    if cancel_pos == -1 or apply_pos == -1 or cancel_pos > apply_pos:
-        _fail("_build_buttons 中取消按钮应位于应用按钮之前")
+    exit_pos = body.find("exit_button = QPushButton")
+    if exit_pos == -1:
+        _fail("_build_buttons 应包含退出按钮")
+    # 确保不再有旧的应用/取消按钮
+    if "apply_button" in body:
+        _fail("_build_buttons 不应包含应用按钮（已改为直接保存）")
+    if "cancel_button" in body:
+        _fail("_build_buttons 不应包含取消按钮（已改为退出按钮）")
 
 
 def test_settings_dialog_static_window_flags_include_frameless_and_topmost() -> None:

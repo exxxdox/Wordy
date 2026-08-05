@@ -240,7 +240,7 @@ class TrayApp:
                 tray_icon.hide()
             except RuntimeError:
                 pass
-            safe_qt_call(lambda: tray_icon.setContextMenu(None))
+            safe_qt_call(lambda: tray_icon.setContextMenu(None))  # type: ignore[arg-type]
             try:
                 tray_icon.deleteLater()
             except RuntimeError:

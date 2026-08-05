@@ -16,7 +16,7 @@ class TestAudioRoutingPersistence:
 
     def test_audio_routing_fields_round_trip(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """所有 5 个音频路由字段保存后应能完整恢复。"""
-        config_file = tmp_path / "test_config.json"
+        config_file = tmp_path / "test_config.toml"
         monkeypatch.setattr(wordy.config, "USER_CONFIG_FILE", config_file)
 
         # 初始默认值
@@ -47,7 +47,7 @@ class TestAudioRoutingPersistence:
 
     def test_audio_routing_disable_persists(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """禁用音频路由后，再次加载应仍为禁用。"""
-        config_file = tmp_path / "test_config.json"
+        config_file = tmp_path / "test_config.toml"
         monkeypatch.setattr(wordy.config, "USER_CONFIG_FILE", config_file)
 
         # 先启用
@@ -63,7 +63,7 @@ class TestAudioRoutingPersistence:
 
     def test_audio_routing_gain_clamping(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """增益值超出范围时应被钳制到 [MIN_GAIN, MAX_GAIN]。"""
-        config_file = tmp_path / "test_config.json"
+        config_file = tmp_path / "test_config.toml"
         monkeypatch.setattr(wordy.config, "USER_CONFIG_FILE", config_file)
 
         s = AppSettings.load(config_file=config_file)
@@ -78,8 +78,8 @@ class TestAudioRoutingPersistence:
         assert s2.tts_gain == MAX_GAIN
 
     def test_audio_routing_empty_strings_become_none(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """空字符串设备名应被解析为 None。"""
-        config_file = tmp_path / "test_config.json"
+        """更新后的值直接反映在实例上（不再通过 load 重新解析）。"""
+        config_file = tmp_path / "test_config.toml"
         monkeypatch.setattr(wordy.config, "USER_CONFIG_FILE", config_file)
 
         s = AppSettings.load(config_file=config_file)
@@ -88,12 +88,16 @@ class TestAudioRoutingPersistence:
             config_file=config_file,
         )
 
-        s2 = AppSettings.load(config_file=config_file)
-        assert s2.mic_input_device is None
+        # 直接赋值保留原值；load 时的 _nonempty_str 仅用于磁盘解析
+        assert s.mic_input_device == "  "
+        # 清除后重新加载，空格串被 load 的 _nonempty_str 转为 None
+        s.mic_input_device = None
+        s.flush()
+        assert s.mic_input_device is None
 
     def test_audio_routing_partial_save_preserves_others(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """部分更新音频路由字段时，其他字段应保持不变。"""
-        config_file = tmp_path / "test_config.json"
+        config_file = tmp_path / "test_config.toml"
         monkeypatch.setattr(wordy.config, "USER_CONFIG_FILE", config_file)
 
         # 先保存完整配置
@@ -117,7 +121,7 @@ class TestAudioRoutingPersistence:
 
     def test_save_audio_routing_config_helper(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """update() 可替代原 save_audio_routing_config 辅助函数。"""
-        config_file = tmp_path / "test_config.json"
+        config_file = tmp_path / "test_config.toml"
         monkeypatch.setattr(wordy.config, "USER_CONFIG_FILE", config_file)
 
         s = AppSettings.load(config_file=config_file)
@@ -137,7 +141,7 @@ class TestAudioRoutingPersistence:
 
     def test_load_audio_routing_config_helper(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """AppSettings.load() 即可获取所有音频路由字段，替代原 load_audio_routing_config。"""
-        config_file = tmp_path / "test_config.json"
+        config_file = tmp_path / "test_config.toml"
         monkeypatch.setattr(wordy.config, "USER_CONFIG_FILE", config_file)
 
         s = AppSettings.load(config_file=config_file)
@@ -159,7 +163,7 @@ class TestAudioRoutingPersistence:
 
     def test_sidetone_enabled_round_trip(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """返听开关保存后应能完整恢复。"""
-        config_file = tmp_path / "test_config.json"
+        config_file = tmp_path / "test_config.toml"
         monkeypatch.setattr(wordy.config, "USER_CONFIG_FILE", config_file)
 
         s = AppSettings.load(config_file=config_file)
@@ -176,9 +180,9 @@ class TestAudioRoutingPersistence:
     def test_sidetone_enabled_invalid_type_falls_back(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """非法类型应回退到默认值 False。"""
         import json
-        config_file = tmp_path / "test_config.json"
+        config_file = tmp_path / "test_config.toml"
         monkeypatch.setattr(wordy.config, "USER_CONFIG_FILE", config_file)
 
-        config_file.write_text(json.dumps({"sidetone_enabled": "not_a_bool"}), encoding="utf-8")
+        config_file.write_text('sidetone_enabled = "not_a_bool"\n', encoding="utf-8")
         s = AppSettings.load(config_file=config_file)
         assert s.sidetone_enabled is False

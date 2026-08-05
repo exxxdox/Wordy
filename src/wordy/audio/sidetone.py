@@ -9,7 +9,6 @@
 from __future__ import annotations
 
 import logging
-import time
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 from typing import TYPE_CHECKING

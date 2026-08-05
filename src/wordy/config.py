@@ -5,17 +5,18 @@
 
 用法::
 
-    settings = AppSettings.load()         # 启动时加载一次
+    settings = AppSettings.load()         # 启动时加载一次（单例）
     volume = settings.volume              # 属性读取（无磁盘 I/O）
-    settings.update(volume=1.5)           # 单字段更新 + 自动持久化
-    settings.save()                       # 显式持久化
+    settings.volume = 1.5                 # 直接赋值 → 自动持久化到 TOML
+    settings.flush()                      # 显式刷新待写入的 debounced 变更
 """
 
 from __future__ import annotations
 
-import json
 import os
 import tempfile
+import threading
+import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass, field, fields
 from pathlib import Path
@@ -51,7 +52,7 @@ DEFAULT_FIXED_CENTER = True
 DEFAULT_LOG_LEVEL = "INFO"
 DEFAULT_HOTKEY: dict[str, str] = {"hotkey": "f6", "name": "F6"}
 
-_USER_CONFIG_FILE: Path = Path.home() / ".wavtrans_config.json"
+_USER_CONFIG_FILE: Path = Path.home() / ".wordy.toml"
 USER_CONFIG_FILE: Path = _USER_CONFIG_FILE  # 向后兼容：测试 monkeypatch 使用
 
 # load() 缓存：同一配置文件多次调用复用同一实例，避免重复磁盘 I/O
@@ -102,12 +103,12 @@ class AppSettings:
     """所有应用设置的单一数据源。
 
     启动时 ``AppSettings.load()`` 一次，后续通过属性读取（零磁盘 I/O）。
-    修改设置使用 ``update(**kwargs)`` 自动持久化。
+    直接赋值属性（``settings.volume = 1.5``）自动持久化到 TOML 文件。
     """
 
     # ---- 快捷键与界面 ----
     hotkey: str = "f6"
-    name: str = "F6"  # JSON 持久化 key 为 "name"（非 hotkey_name）
+    name: str = "F6"  # TOML 持久化 key 为 "name"（非 hotkey_name）
     volume: float = 1.0
     overlay_opacity: float = 1.0
     fixed_center: bool = True
@@ -119,7 +120,7 @@ class AppSettings:
     audio_output_device: AudioIdentity | None = None
 
     # ---- TTS 引擎配置（结构化嵌套存储） ----
-    # JSON: {"Cartesia": {...}, "Volcengine": {...}}
+    # TOML: [tts_providers.Cartesia] / [tts_providers.Volcengine]
     tts_providers: dict[str, dict[str, object]] = field(default_factory=lambda: {
         "Cartesia": {"voice_id": None, "voice_name": None, "backend": "Cartesia Bytes",
                       "api_key_set": False, "api_key_storage": "none"},
@@ -127,6 +128,33 @@ class AppSettings:
                         "api_key_set": False, "api_key_storage": "none"},
     })
     active_tts_provider: str = DEFAULT_TTS_API_PROVIDER
+
+    # ---- 音频路由 ----
+    audio_routing_enabled: bool = False
+    mic_input_device: str | None = None
+    virtual_output_device: str | None = None
+    mic_gain: float = 1.0
+    tts_gain: float = 1.0
+
+    # ---- 返听 (sidetone) ----
+    sidetone_enabled: bool = False
+
+    # ---- 内部 ----
+    _loaded: bool = field(default=False, init=False, repr=False)
+    _config_file: Path | None = field(default=None, init=False, repr=False)
+    _listeners: list = field(default_factory=list, init=False, repr=False)
+    _save_timer: threading.Timer | None = field(default=None, init=False, repr=False)
+    _save_lock: ClassVar[threading.Lock] = threading.Lock()
+
+    # 滑块类字段用 debounce，其他字段立即写入
+    _DEBOUNCED_FIELDS: ClassVar[set[str]] = {"volume", "overlay_opacity", "mic_gain", "tts_gain"}
+
+    _CLAMP_RANGES: ClassVar[dict[str, tuple[float, float]]] = {
+        "volume": (MIN_VOLUME, MAX_VOLUME),
+        "overlay_opacity": (MIN_OVERLAY_OPACITY, MAX_OVERLAY_OPACITY),
+        "mic_gain": (MIN_GAIN, MAX_GAIN),
+        "tts_gain": (MIN_GAIN, MAX_GAIN),
+    }
 
     # ── ProviderConfig ────────────────────────────────────────────────
 
@@ -145,94 +173,127 @@ class AppSettings:
     def tts_backend(self) -> str:
         return str(self.active_provider_config().get("backend", DEFAULT_TTS_BACKEND))
     @tts_backend.setter
-    def tts_backend(self, value: str) -> None: self.active_provider_config()["backend"] = value
+    def tts_backend(self, value: str) -> None:
+        self.active_provider_config()["backend"] = value
+        if self._loaded:
+            self._notify_listeners("tts_backend", value)
+            self._debounced_save()
 
     @property
     def tts_api_provider(self) -> str:
         return self.active_tts_provider
     @tts_api_provider.setter
-    def tts_api_provider(self, value: str) -> None: self.active_tts_provider = value
+    def tts_api_provider(self, value: str) -> None:
+        self.active_tts_provider = value
+        # 赋值 self.active_tts_provider 触发 __setattr__，无需手动 save
 
     # -- Cartesia read/write
     @property
     def cartesia_voice_id(self) -> str | None:
         v = self.get_provider("Cartesia").get("voice_id"); return v if isinstance(v, str) else None
     @cartesia_voice_id.setter
-    def cartesia_voice_id(self, value: str | None) -> None: self.get_provider("Cartesia")["voice_id"] = value
+    def cartesia_voice_id(self, value: str | None) -> None:
+        self.get_provider("Cartesia")["voice_id"] = value
+        if self._loaded:
+            self._notify_listeners("cartesia_voice_id", value)
+            self._debounced_save()
 
     @property
     def cartesia_voice_name(self) -> str | None:
         v = self.get_provider("Cartesia").get("voice_name"); return v if isinstance(v, str) else None
     @cartesia_voice_name.setter
-    def cartesia_voice_name(self, value: str | None) -> None: self.get_provider("Cartesia")["voice_name"] = value
+    def cartesia_voice_name(self, value: str | None) -> None:
+        self.get_provider("Cartesia")["voice_name"] = value
+        if self._loaded:
+            self._notify_listeners("cartesia_voice_name", value)
+            self._debounced_save()
 
     @property
     def cartesia_tts_backend(self) -> str:
         return str(self.get_provider("Cartesia").get("backend", DEFAULT_TTS_BACKEND))
     @cartesia_tts_backend.setter
-    def cartesia_tts_backend(self, value: str) -> None: self.get_provider("Cartesia")["backend"] = value
+    def cartesia_tts_backend(self, value: str) -> None:
+        self.get_provider("Cartesia")["backend"] = value
+        if self._loaded:
+            self._notify_listeners("cartesia_tts_backend", value)
+            self._debounced_save()
 
     @property
     def cartesia_api_key_set(self) -> bool:
         return bool(self.get_provider("Cartesia").get("api_key_set", False))
     @cartesia_api_key_set.setter
-    def cartesia_api_key_set(self, value: bool) -> None: self.get_provider("Cartesia")["api_key_set"] = value
+    def cartesia_api_key_set(self, value: bool) -> None:
+        self.get_provider("Cartesia")["api_key_set"] = value
+        if self._loaded:
+            self._notify_listeners("cartesia_api_key_set", value)
+            self._debounced_save()
 
     @property
     def cartesia_api_key_storage(self) -> str:
         return str(self.get_provider("Cartesia").get("api_key_storage", "none"))
     @cartesia_api_key_storage.setter
-    def cartesia_api_key_storage(self, value: str) -> None: self.get_provider("Cartesia")["api_key_storage"] = value
+    def cartesia_api_key_storage(self, value: str) -> None:
+        self.get_provider("Cartesia")["api_key_storage"] = value
+        if self._loaded:
+            self._notify_listeners("cartesia_api_key_storage", value)
+            self._debounced_save()
 
     # -- Volcengine read/write
     @property
     def volcengine_voice_id(self) -> str | None:
         v = self.get_provider("Volcengine").get("voice_id"); return v if isinstance(v, str) else None
     @volcengine_voice_id.setter
-    def volcengine_voice_id(self, value: str | None) -> None: self.get_provider("Volcengine")["voice_id"] = value
+    def volcengine_voice_id(self, value: str | None) -> None:
+        self.get_provider("Volcengine")["voice_id"] = value
+        if self._loaded:
+            self._notify_listeners("volcengine_voice_id", value)
+            self._debounced_save()
 
     @property
     def volcengine_voice_name(self) -> str | None:
         v = self.get_provider("Volcengine").get("voice_name"); return v if isinstance(v, str) else None
     @volcengine_voice_name.setter
-    def volcengine_voice_name(self, value: str | None) -> None: self.get_provider("Volcengine")["voice_name"] = value
+    def volcengine_voice_name(self, value: str | None) -> None:
+        self.get_provider("Volcengine")["voice_name"] = value
+        if self._loaded:
+            self._notify_listeners("volcengine_voice_name", value)
+            self._debounced_save()
 
     @property
     def volcengine_tts_backend(self) -> str:
         return str(self.get_provider("Volcengine").get("backend", "Volcengine Streaming"))
     @volcengine_tts_backend.setter
-    def volcengine_tts_backend(self, value: str) -> None: self.get_provider("Volcengine")["backend"] = value
+    def volcengine_tts_backend(self, value: str) -> None:
+        self.get_provider("Volcengine")["backend"] = value
+        if self._loaded:
+            self._notify_listeners("volcengine_tts_backend", value)
+            self._debounced_save()
 
     @property
     def volcengine_access_key_set(self) -> bool:
         return bool(self.get_provider("Volcengine").get("api_key_set", False))
     @volcengine_access_key_set.setter
-    def volcengine_access_key_set(self, value: bool) -> None: self.get_provider("Volcengine")["api_key_set"] = value
+    def volcengine_access_key_set(self, value: bool) -> None:
+        self.get_provider("Volcengine")["api_key_set"] = value
+        if self._loaded:
+            self._notify_listeners("volcengine_access_key_set", value)
+            self._debounced_save()
 
     @property
     def volcengine_access_key_storage(self) -> str:
         return str(self.get_provider("Volcengine").get("api_key_storage", "none"))
     @volcengine_access_key_storage.setter
-    def volcengine_access_key_storage(self, value: str) -> None: self.get_provider("Volcengine")["api_key_storage"] = value
-
-    # ---- 音频路由 ----
-    audio_routing_enabled: bool = False
-    mic_input_device: str | None = None
-    virtual_output_device: str | None = None
-    mic_gain: float = 1.0
-    tts_gain: float = 1.0
-
-    # ---- 返听 (sidetone) ----
-    sidetone_enabled: bool = False
-
-    # ---- 内部 ----
-    _loaded: bool = field(default=False, init=False, repr=False)
+    def volcengine_access_key_storage(self, value: str) -> None:
+        self.get_provider("Volcengine")["api_key_storage"] = value
+        if self._loaded:
+            self._notify_listeners("volcengine_access_key_storage", value)
+            self._debounced_save()
 
     # ── 工厂方法 ──────────────────────────────────────────────────────
 
     @classmethod
     def load(cls, *, config_file: Path | None = None) -> AppSettings:
-        """从 JSON 文件加载配置，缺失时使用默认值。
+        """从 TOML 文件加载配置，缺失时使用默认值。
 
         同一配置文件多次调用复用缓存实例，避免重复磁盘 I/O。
         """
@@ -244,7 +305,8 @@ class AppSettings:
             return _cached_settings
 
         settings = cls()
-        raw = _read_json(file)
+        settings._config_file = file  # 记住配置文件路径，后续 save() 默认使用
+        raw = _read_toml(file)
         if raw is None:
             _inject_key_status(settings)
             settings._loaded = True
@@ -291,55 +353,125 @@ class AppSettings:
         _cached_config_file = file
         return settings
 
+    # ── __setattr__ 自动保存 ──────────────────────────────────────────
+
+    def __setattr__(self, name: str, value: object) -> None:
+        """属性赋值时自动持久化（_loaded 之后）。
+
+        私有字段（``_`` 前缀）直接赋值不触发保存。
+        滑块类字段走 debounce，其他字段立即写入。
+        """
+        # 内部/私有字段：直接赋值，不触发保存
+        if name.startswith("_"):
+            object.__setattr__(self, name, value)
+            return
+        # float 范围字段：clamp
+        if name in self._CLAMP_RANGES and isinstance(value, (int, float)):
+            lo, hi = self._CLAMP_RANGES[name]
+            value = _clamp(float(value), lo, hi)
+        object.__setattr__(self, name, value)
+        if self._loaded:
+            self._notify_listeners(name, value)
+            if name in self._DEBOUNCED_FIELDS:
+                self._debounced_save()
+            else:
+                self.save()
+
+    # ── 监听器 ─────────────────────────────────────────────────────────
+
+    def add_listener(self, cb) -> None:
+        """注册字段变更监听器 ``cb(field_name, value)``。"""
+        self._listeners.append(cb)
+
+    def remove_listener(self, cb) -> bool:
+        """移除监听器。返回 True 表示成功移除。"""
+        try:
+            self._listeners.remove(cb)
+            return True
+        except ValueError:
+            return False
+
+    def _notify_listeners(self, name: str, value: object) -> None:
+        """通知所有监听器某字段已变更。"""
+        for cb in self._listeners:
+            try:
+                cb(name, value)
+            except Exception:
+                pass  # 监听器异常不应影响保存流程
+
+    # ── 去抖动保存 ────────────────────────────────────────────────────
+
+    def _debounced_save(self) -> None:
+        """150ms 去抖动：滑块快速拖拽只写一次磁盘。"""
+        if self._save_timer is not None:
+            self._save_timer.cancel()
+        self._save_timer = threading.Timer(0.15, self._do_save)
+        self._save_timer.daemon = True
+        self._save_timer.start()
+
+    def flush(self) -> None:
+        """取消 pending timer 并立即写入磁盘（对话框关闭/应用退出时调用）。"""
+        if self._save_timer is not None:
+            self._save_timer.cancel()
+            self._save_timer = None
+        self.save()
+
+    def _do_save(self) -> None:
+        """Timer 回调：在独立线程中执行写入。"""
+        with self._save_lock:
+            self._save_timer = None
+            self._save_to_disk_inner()
+
     # ── 持久化 ─────────────────────────────────────────────────────────
 
     def save(self, *, config_file: Path | None = None) -> Path:
-        """将当前设置写入 JSON 文件（原子写入）。
+        """将当前设置写入 TOML 文件（原子写入）。
 
-        写入后清空缓存，确保下次 load() 重新读磁盘并走字段验证逻辑。
+        不清空缓存——in-memory 实例始终是最新的。
+        返回写入的文件路径。
         """
-        global _cached_settings, _cached_config_file
-        file = config_file or USER_CONFIG_FILE
+        file = config_file or self._config_file or USER_CONFIG_FILE
+        self._save_to_disk_inner(file)
+        return file
+
+    def _save_to_disk_inner(self, config_file: Path | None = None) -> None:
+        """内部写入逻辑（不加锁，调用方负责加锁）。"""
+        file = config_file or self._config_file or USER_CONFIG_FILE
         data: dict[str, object] = {}
         for f in fields(self):
             if f.name.startswith("_"):
                 continue
-            value = getattr(self, f.name)
-            if value is not None or f.default is not None:
-                # 始终写入所有非 None 字段 + 默认非 None 字段
-                pass
-            data[f.name] = value
-        _write_json_atomic(file, data)
-        # 清空缓存；但当前实例仍是有效缓存——如果 config_file 匹配则恢复
-        if _cached_config_file == file:
-            _cached_settings = None
-            _cached_config_file = None
-        return file
+            data[f.name] = getattr(self, f.name)
+        _write_toml_atomic(file, data)
 
-    _CLAMP_RANGES: ClassVar[dict[str, tuple[float, float]]] = {
-        "volume": (MIN_VOLUME, MAX_VOLUME),
-        "overlay_opacity": (MIN_OVERLAY_OPACITY, MAX_OVERLAY_OPACITY),
-        "mic_gain": (MIN_GAIN, MAX_GAIN),
-        "tts_gain": (MIN_GAIN, MAX_GAIN),
-    }
+    # ── 批量更新（保留兼容）───────────────────────────────────────────
 
     def update(self, *, config_file: Path | None = None, **kwargs: object) -> Path:
-        """部分更新设置并持久化。float 类型字段自动钳位到有效范围。
+        """批量更新设置并一次性持久化（不会逐字段触发 debounce）。
 
-        用法: ``settings.update(volume=1.5, hotkey="f9", name="F9")``
+        用法: ``settings.update(volume=1.5, hotkey="f9")``
         """
+        old_loaded = self._loaded
+        self._loaded = False  # 抑制逐字段 __setattr__ 保存
+        try:
+            for key, value in kwargs.items():
+                if key.startswith("_") or not hasattr(self, key):
+                    continue
+                if key in self._CLAMP_RANGES and isinstance(value, (int, float)):
+                    lo, hi = self._CLAMP_RANGES[key]
+                    value = _clamp(float(value), lo, hi)
+                setattr(self, key, value)
+        finally:
+            self._loaded = old_loaded
+        # 批量通知（一次性）
         for key, value in kwargs.items():
-            if key.startswith("_") or not hasattr(self, key):
-                continue
-            if key in self._CLAMP_RANGES and isinstance(value, (int, float)):
-                lo, hi = self._CLAMP_RANGES[key]
-                value = _clamp(float(value), lo, hi)
-            setattr(self, key, value)
+            if not key.startswith("_") and hasattr(self, key):
+                self._notify_listeners(key, value)
         return self.save(config_file=config_file)
 
 
 def _inject_key_status(settings: AppSettings) -> None:
-    """从 live keyring 注入密钥状态，覆盖 JSON 中可能已过期的旧值。"""
+    """从 live keyring 注入密钥状态，覆盖 TOML 中可能已过期的旧值。"""
     for provider, status_fn in (("Cartesia", wordy.secret.get_cartesia_api_key_status), ("Volcengine", wordy.secret.get_volcengine_access_key_status)):
         try:
             s = status_fn()
@@ -350,30 +482,30 @@ def _inject_key_status(settings: AppSettings) -> None:
 
 
 # ---------------------------------------------------------------------------
-# JSON ↔ 字段解析辅助
+# TOML 读写辅助
 # ---------------------------------------------------------------------------
 
-def _read_json(path: Path) -> dict[str, object] | None:
-    """读取并校验 JSON 文件，失败返回 None。"""
+def _read_toml(path: Path) -> dict[str, object] | None:
+    """读取并校验 TOML 文件，失败返回 None。"""
     if not path.exists():
         return None
     try:
-        with path.open("r", encoding="utf-8") as f:
-            data: object = json.load(f)
-    except (OSError, json.JSONDecodeError):
+        with path.open("rb") as f:
+            data: object = tomllib.load(f)
+    except (OSError, tomllib.TOMLDecodeError):
         return None
     if not isinstance(data, dict):
         return None
     return {str(k): v for k, v in data.items()}
 
 
-def _write_json_atomic(path: Path, data: dict[str, object]) -> None:
-    """原子写入 JSON：temp → flush → fsync → replace。"""
+def _write_toml_atomic(path: Path, data: dict[str, object]) -> None:
+    """原子写入 TOML：temp → flush → fsync → replace。"""
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".atomic_wavtrans_", suffix=".json")
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".atomic_wordy_", suffix=".toml")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
+            f.write(_to_toml(data))
             f.flush()
             os.fsync(f.fileno())
         os.replace(tmp, path)
@@ -384,6 +516,64 @@ def _write_json_atomic(path: Path, data: dict[str, object]) -> None:
             pass
         raise
 
+
+# ---------------------------------------------------------------------------
+# 手写 TOML 序列化器（零依赖，替代 tomli-w）
+# ---------------------------------------------------------------------------
+
+def _to_toml(data: dict[str, object]) -> str:
+    """将扁平 + 一级嵌套 dict 序列化为 TOML 字符串。"""
+    lines: list[str] = []
+    nested: dict[str, dict[str, object]] = {}
+    for key, value in data.items():
+        if isinstance(value, dict) and not _is_inline_table(value):
+            nested[key] = value
+        elif value is not None:
+            lines.append(f"{key} = {_toml_value(value)}")
+    for table_name, table_data in nested.items():
+        lines.append("")
+        lines.append(f"[{table_name}]")
+        for k, v in table_data.items():
+            if v is not None:
+                lines.append(f"{k} = {_toml_value(v)}")
+    return "\n".join(lines) + "\n"
+
+
+def _is_inline_table(value: dict[str, object]) -> bool:
+    """判断 dict 是否应为 TOML 内联表（小、扁平、无嵌套 dict 值）。"""
+    if len(value) > 3:
+        return False
+    for v in value.values():
+        if isinstance(v, dict):
+            return False
+    return True
+
+
+def _toml_value(value: object) -> str:
+    """将单个 Python 值转为 TOML 字面量。"""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return str(value)
+    if isinstance(value, str):
+        # 转义反斜杠和双引号
+        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+        return f'"{escaped}"'
+    if isinstance(value, dict):
+        # 内联表：{name = "Speakers", host_api_name = "MME"}
+        items = ", ".join(f"{k} = {_toml_value(v)}"
+                          for k, v in value.items() if v is not None)
+        return "{" + items + "}"
+    if value is None:
+        return '""'  # TOML 无 null，写入空字符串作为标记
+    return f'"{value}"'
+
+
+# ---------------------------------------------------------------------------
+# 字段解析辅助
+# ---------------------------------------------------------------------------
 
 def _nonempty_str(value: object) -> str | None:
     """非空字符串，否则 None。"""
@@ -433,13 +623,17 @@ def _apply_if_present(
     parser,  # Callable[[object], T | None]
     parser_args: tuple = (),
 ) -> None:
-    """如果 JSON 中存在 key 且解析成功，则覆盖 settings 对应字段。"""
+    """如果 TOML 中存在 key 且解析成功，则覆盖 settings 对应字段。"""
     if key not in raw:
         return
     parsed = parser(raw[key], *parser_args) if parser_args else parser(raw[key])
     if parsed is not None:
         setattr(settings, key, parsed)
 
+
+# ---------------------------------------------------------------------------
+# 密钥状态读取（保留兼容）
+# ---------------------------------------------------------------------------
 
 def _read_cartesia_key_status() -> dict[str, bool | str]:
     """读取 Cartesia API key 元数据（不暴露密钥原文）。"""
@@ -497,5 +691,3 @@ def _read_volcengine_key_status() -> dict[str, bool | str]:
         "volcengine_access_key_set": key_set if isinstance(key_set, bool) else False,
         "volcengine_access_key_storage": storage if isinstance(storage, str) else wordy.secret.STORAGE_NONE,
     }
-
-

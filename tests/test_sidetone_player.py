@@ -65,7 +65,7 @@ class TestSidetoneAudioPlayer:
         main, sidetone = self._make_players()
         wrapper = SidetoneAudioPlayer(main, sidetone)
         dev = {"name": "New", "host_api_name": "WASAPI"}
-        wrapper.output_device = dev
+        wrapper.output_device = dev  # type: ignore[assignment]
         assert main.output_device == dev
 
     # ── open_stream ─────────────────────────────────────────────────

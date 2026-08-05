@@ -549,7 +549,7 @@ class AudioPlayer:
                 raise RuntimeError("缺少流采样宽度，无法执行 VB-CABLE 双声道转换")
             data = _duplicate_mono_to_stereo(data, self._stream_sample_width)
 
-        self._stream.write(data)
+        self._stream.write(data)  # type: ignore[union-attr]
 
     def get_stream_config(self) -> dict[str, int | None]:
         """返回当前已打开流的实际格式与采样率，用于诊断格式兼容性问题。
@@ -671,7 +671,7 @@ class AudioPlayer:
             while data:
                 if self._last_mono_upmix:
                     data = _duplicate_mono_to_stereo(data, sample_width)
-                stream.write(data)
+                stream.write(data)  # type: ignore[union-attr]
                 data = wf.readframes(1024)
 
             logger.info("播放完成!")
