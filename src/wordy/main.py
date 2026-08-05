@@ -273,6 +273,7 @@ class WordyApp:
         logger.info("按配置的全局快捷键弹出输入框，输入文本后回车播放。")
         tray_app: TrayApp | None = None
         tray_disposed = False
+        background_stopped = False
 
         def dispose_tray_once() -> None:
             nonlocal tray_disposed
@@ -283,7 +284,11 @@ class WordyApp:
                 tray_app.dispose()
 
         def _stop_background_threads() -> None:
-            """在 app.quit() 之前停止后台线程。"""
+            """在 app.quit() 之前停止后台线程（幂等）。"""
+            nonlocal background_stopped
+            if background_stopped:
+                return
+            background_stopped = True
             self.routing.stop()
             self.tts_manager.shutdown()
 
