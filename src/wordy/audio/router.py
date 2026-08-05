@@ -91,9 +91,9 @@ class AudioRouter:
     def set_mic_device(self, device_name: str | None) -> bool:
         """切换麦克风时先清理旧设备，再启用新设备。返回是否成功。
 
-        device_name 为 None 时停用侦听。失败时尽力恢复旧侦听状态。"""
+        device_name 为 None 时停用侦听。新设备启用失败不回滚旧侦听，
+        仅记录错误——用户可手动重试或切回旧设备。"""
         old = self._mic_device
-        old_listen_configured = self._listen_configured
         if old == device_name:
             return True
 
@@ -109,16 +109,8 @@ class AudioRouter:
         if self._active and device_name is not None:
             self._listen_configured = self._enable_mic_listen(device_name)
             if not self._listen_configured:
-                # 新设备启用失败，尽力恢复旧侦听状态。
-                logger.error("麦克风侦听切换失败，新设备未生效: %s", device_name)
-                self._mic_device = old
-                if old_listen_configured and old is not None:
-                    if self._enable_mic_listen(old):
-                        self._listen_configured = True
-                        logger.debug("已恢复旧麦克风侦听: %s", old)
-                    else:
-                        logger.error("旧麦克风侦听恢复也失败: %s，侦听已丢失", old)
-                return False
+                # 不回滚旧侦听——旧设备已正确恢复，新设备只是未开启侦听。
+                logger.error("麦克风输入侦听失败，新设备未生效: %s", device_name)
 
         if device_name is not None:
             logger.debug("麦克风侦听已切换: %s → %s", old, device_name)

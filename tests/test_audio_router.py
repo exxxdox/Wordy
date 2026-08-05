@@ -87,33 +87,26 @@ class TestAudioRouter:
         assert router._mic_device == "Old Mic"
         assert router.get_stats().listen_configured is True
 
-    def test_switch_mic_rolls_back_when_new_enable_fails(self):
-        """新设备 _enable_mic_listen 失败时应回滚到旧设备。"""
+    def test_switch_mic_no_rollback_when_new_enable_fails(self):
+        """新设备 _enable_mic_listen 失败时不回滚旧侦听，仅记录错误。"""
         router = AudioRouter(virtual_output="CABLE Input")
         router._active = True
         router._mic_device = "Old Mic"
         router._listen_configured = True
 
-        enable_results = [False, True]  # new fails, old restore succeeds
-
-        def enable_side_effect(name):
-            return enable_results.pop(0)
-
         with (
             patch.object(router, "_disable_mic_listen", return_value=True) as disable,
-            patch.object(router, "_enable_mic_listen", side_effect=enable_side_effect) as enable,
+            patch.object(router, "_enable_mic_listen", return_value=False) as enable,
         ):
             ok = router.set_mic_device("New Mic")
 
-        assert ok is False
-        # 先禁用旧设备，再尝试启用新设备（失败），最后恢复旧设备
+        # 不因新设备启用失败而返回 False
+        assert ok is True
         disable.assert_called_once_with("Old Mic")
-        assert enable.call_count == 2
-        assert enable.call_args_list[0].args == ("New Mic",)
-        assert enable.call_args_list[1].args == ("Old Mic",)
-        # 回滚后状态应与初始一致
-        assert router._mic_device == "Old Mic"
-        assert router.get_stats().listen_configured is True
+        enable.assert_called_once_with("New Mic")
+        # _mic_device 已更新为新设备，但侦听未生效
+        assert router._mic_device == "New Mic"
+        assert router.get_stats().listen_configured is False
 
     def test_switch_mic_no_op_when_same_device(self):
         router = AudioRouter(virtual_output="CABLE Input")
