@@ -8,6 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 + 修改符号时用 LSP 查找引用
 + TDD：新增/修改功能先写或修改测试
 + 所有设置页面的内容都要持久化保存
++ pyright和测试错误要清零，不管是否这次引入
 
 ## 常用命令
 
