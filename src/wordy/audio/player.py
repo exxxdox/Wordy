@@ -38,17 +38,6 @@ class OutputDeviceInfo(TypedDict):
     is_default: bool
 
 
-class InputDeviceInfo(TypedDict):
-    """枚举出的输入设备记录。"""
-
-    index: int
-    name: str
-    host_api_index: int
-    host_api_name: str
-    display_name: str
-    is_default: bool
-
-
 class OutputDeviceSelection(TypedDict, total=False):
     """结构化输出设备选择: 通过 ``name`` + ``host_api_name`` 精确锁定 Host API 实例。"""
 
@@ -201,15 +190,10 @@ class AudioPlayer:
 
     def __init__(
         self,
-        output_device_name: str | None = None,
         *,
         output_device: OutputDeviceSelection | None = None,
     ):
         self.output_device: OutputDeviceSelection | None = output_device
-        if output_device is not None and output_device_name is None:
-            # 保持 ``output_device_name`` 兼容性: 结构化选择存在时同步 raw name。
-            output_device_name = output_device.get("name")
-        self.output_device_name = output_device_name
         self._stream_p = None
         self._stream = None
         # 记录最近一次 open_stream 的实际格式/采样率（回退后可能与请求值不同）
@@ -223,22 +207,16 @@ class AudioPlayer:
         self._last_mono_upmix = False
         self._last_sample_width: int | None = None
 
-    def set_output_device_name(self, output_device_name: str | None) -> None:
-        """更新目标输出设备名 (清空结构化选择)。传入 ``None`` 表示使用系统默认设备。"""
-        self.output_device_name = output_device_name
-        self.output_device = None
+    @property
+    def output_device_name(self) -> str | None:
+        """从结构化 output_device 派生设备名，仅用于显示和诊断。"""
+        if self.output_device is None:
+            return None
+        return self.output_device.get("name")
 
     def set_output_device(self, output_device: OutputDeviceSelection | None) -> None:
-        """更新结构化输出设备选择, 同步 ``output_device_name`` 以保持向后兼容。"""
+        """更新输出设备选择，传入 ``None`` 表示使用系统默认设备。"""
         self.output_device = output_device
-        if output_device is None:
-            self.output_device_name = None
-        else:
-            self.output_device_name = output_device.get("name")
-
-    def list_output_devices(self) -> list[OutputDeviceInfo]:
-        """实例方法委托到模块级 ``list_output_devices()``, 便于调用方直接通过 player 调用。"""
-        return list_output_devices()
 
     def _lookup_named_output_device(
         self,
@@ -284,10 +262,7 @@ class AudioPlayer:
         优先级:
         1. 显式 ``device_index``
         2. 结构化 ``output_device`` 精确匹配 ``(name, host_api_name)``
-        3. 旧版 ``output_device_name`` 按 raw name 精确匹配 (第一个命中胜出)
-        4. 默认输出设备
-
-        命名 / 结构化设备查找失败时记录警告后回退到默认设备索引; 默认设备查找失败时返回 ``None``。
+        3. 默认输出设备
         """
         if device_index is not None:
             return device_index
@@ -296,34 +271,11 @@ class AudioPlayer:
             name = self.output_device.get("name")
             host_api_name = self.output_device.get("host_api_name")
             if name:
-                structured_index = self._lookup_named_output_device(
-                    p, name, host_api_name=host_api_name
-                )
-                if structured_index is not None:
-                    logger.info(
-                        "找到设备 [%s]: %s @ %s",
-                        structured_index,
-                        name,
-                        host_api_name or "<any>",
-                    )
-                    return structured_index
-
-                logger.warning(
-                    "未找到输出设备 %r @ host_api=%r, 回退到默认输出设备",
-                    name,
-                    host_api_name,
-                )
-
-        elif self.output_device_name:
-            named_index = self._lookup_named_output_device(p, self.output_device_name)
-            if named_index is not None:
-                logger.debug("找到设备 [%s]: %s", named_index, self.output_device_name)
-                return named_index
-
-            logger.warning(
-                "未找到名为 %r 的输出设备, 回退到默认输出设备",
-                self.output_device_name,
-            )
+                idx = self._lookup_named_output_device(p, name, host_api_name=host_api_name)
+                if idx is not None:
+                    logger.debug("找到设备 [%s]: %s @ %s", idx, name, host_api_name or "<any>")
+                    return idx
+                logger.warning("未找到输出设备 %r @ host_api=%r, 回退到默认输出设备", name, host_api_name)
 
         default_idx = self._default_output_device_index(p)
         if default_idx is not None:

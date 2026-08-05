@@ -105,18 +105,20 @@ def _patch_pyaudio(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Constructor tests — output_device_name
+# Constructor tests
 # ---------------------------------------------------------------------------
 
-def test_audio_player_ctor_accepts_output_device_name():
-    """AudioPlayer(output_device_name='VB-Cable Output') stores the name."""
-    player = AudioPlayer(output_device_name="VB-Cable Output")
+def test_audio_player_ctor_accepts_output_device():
+    """AudioPlayer(output_device={'name': ..., 'host_api_name': ...}) stores the device."""
+    player = AudioPlayer(output_device={"name": "VB-Cable Output", "host_api_name": "WASAPI"})
     assert player.output_device_name == "VB-Cable Output"
+    assert player.output_device == {"name": "VB-Cable Output", "host_api_name": "WASAPI"}
 
 
 def test_audio_player_ctor_defaults_to_system_default_device():
-    """AudioPlayer() with no args sets output_device_name to None."""
+    """AudioPlayer() with no args sets output_device to None."""
     player = AudioPlayer()
+    assert player.output_device is None
     assert player.output_device_name is None
 
 
@@ -127,22 +129,10 @@ def test_audio_player_ctor_rejects_legacy_mode_kwarg():
         AudioPlayer(**{legacy_key: "default"})
 
 
-# ---------------------------------------------------------------------------
-# _resolve_output_device tests
-# ---------------------------------------------------------------------------
-
-def test_resolve_uses_explicit_device_index_when_provided(_patch_pyaudio):
-    """Explicit device_index must win over any selected name."""
-    pa = _patch_pyaudio
-    player = AudioPlayer(output_device_name="VB-Cable Output")
-    result = player._resolve_output_device(pa, device_index=0)
-    assert result == 0
-
-
 def test_resolve_uses_named_output_device_when_set(_patch_pyaudio):
-    """When output_device_name is set, _resolve_output_device returns its index."""
+    """When output_device is set, _resolve_output_device returns its index."""
     pa = _patch_pyaudio
-    player = AudioPlayer(output_device_name="VB-Cable Output")
+    player = AudioPlayer(output_device={"name": "VB-Cable Output", "host_api_name": None})
     result = player._resolve_output_device(pa, device_index=None)
     assert result == 1
 
@@ -150,7 +140,7 @@ def test_resolve_uses_named_output_device_when_set(_patch_pyaudio):
 def test_resolve_falls_back_to_default_when_named_device_missing(_patch_pyaudio):
     """Missing named device must fall back to default device index, not crash."""
     pa = _patch_pyaudio
-    player = AudioPlayer(output_device_name="Non-Existent Device")
+    player = AudioPlayer(output_device={"name": "Non-Existent Device", "host_api_name": None})
     result = player._resolve_output_device(pa, device_index=None)
     assert result == 0  # falls back to default
 
@@ -165,7 +155,7 @@ def test_resolve_returns_none_when_default_device_lookup_raises(monkeypatch):
     pa.get_default_output_device_info = _boom  # type: ignore[assignment]
     monkeypatch.setattr("wordy.audio.player.pyaudio", MagicMock(PyAudio=lambda: pa))
 
-    player = AudioPlayer(output_device_name="Non-Existent")
+    player = AudioPlayer(output_device={"name": "Non-Existent", "host_api_name": None})
     result = player._resolve_output_device(pa, device_index=None)
     assert result is None
 
@@ -427,15 +417,15 @@ def test_audio_player_structured_selection_directsound_picks_index_3(
     assert result == 3
 
 
-def test_audio_player_legacy_name_only_resolution_still_works(
+def test_audio_player_named_device_without_host_api_matches_first(
     _patch_duplicate_output_pyaudio,
 ):
-    """Legacy string output_device_name must keep resolving by exact name (first match wins)."""
+    """host_api_name=None 时按设备名匹配第一个 output-capable 设备。"""
     pa = _patch_duplicate_output_pyaudio
-    player = AudioPlayer(output_device_name="VB-Audio Virtual Cable")
+    player = AudioPlayer(output_device={"name": "VB-Audio Virtual Cable", "host_api_name": None})
 
     result = player._resolve_output_device(pa, device_index=None)
-    assert result == 4  # first VB-Audio entry (DirectSound) wins under legacy lookup
+    assert result == 4  # first VB-Audio entry wins when host_api_name not specified
 
 
 def test_audio_player_structured_selection_missing_host_api_falls_back_to_default(
@@ -476,7 +466,7 @@ def test_close_stream_stops_and_closes_active_stream(_patch_pyaudio):
 
 def test_cable_stream_upmixes_mono_pcm_to_stereo(_patch_pyaudio):
     """VB-CABLE 双声道端点必须收到逐样本复制后的 L/R 数据。"""
-    player = AudioPlayer(output_device_name="VB-Cable Output")
+    player = AudioPlayer(output_device={"name": "VB-Cable Output", "host_api_name": None})
 
     assert player.open_stream(audio_format=8, channels=1, rate=48000) is True
     player.write_stream(b"\x01\x02\x03\x04")
@@ -653,7 +643,7 @@ def test_play_wav_upmixes_mono_for_cable(_patch_pyaudio, tmp_path):
         wf.setframerate(48000)
         wf.writeframes(b"\x01\x02\x03\x04")
 
-    player = AudioPlayer(output_device_name="VB-Cable Output")
+    player = AudioPlayer(output_device={"name": "VB-Cable Output", "host_api_name": None})
     assert player.play_wav(str(wav_path)) is True
 
     assert _patch_pyaudio.open_calls[-1]["channels"] == 2

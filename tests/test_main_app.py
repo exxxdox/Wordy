@@ -930,15 +930,25 @@ def _patch_audio_player_factory(monkeypatch) -> list[dict[str, Any]]:
     def factory(*args: Any, **kwargs: Any) -> MagicMock:
         calls.append({"args": args, "kwargs": kwargs})
         player = MagicMock(name="AudioPlayer")
-        player.set_output_device_name_calls = []
+        # 模拟 output_device_name 为 output_device 的派生属性
+        player.set_output_device_calls = []
 
-        def set_output_device_name(name: str | None) -> None:
-            player.set_output_device_name_calls.append(name)
-            player.output_device_name = name
+        def set_output_device(device: Any) -> None:
+            player.set_output_device_calls.append(device)
+            player.output_device = device
+            # 派生 output_device_name
+            if isinstance(device, dict):
+                player.output_device_name = device.get("name")
+            else:
+                player.output_device_name = None
 
-        player.set_output_device_name.side_effect = set_output_device_name
+        player.set_output_device.side_effect = set_output_device
         player.output_device = kwargs.get("output_device")
-        player.output_device_name = kwargs.get("output_device_name")
+        player.output_device_name = (
+            kwargs["output_device"].get("name")
+            if isinstance(kwargs.get("output_device"), dict)
+            else None
+        )
         return player
 
     monkeypatch.setattr("wordy.main.AudioPlayer", factory)
@@ -952,6 +962,7 @@ def test_app_constructs_audio_player_with_loaded_output_device_name(monkeypatch)
     s.voice_id = "fake-voice"
     s.voice_name = "Fake"
     s.volume = 1.0
+    s.audio_output_device = {"name": "VB-Audio Virtual Cable", "host_api_name": "WASAPI"}
     s.audio_output_device_name = "VB-Audio Virtual Cable"
     monkeypatch.setattr(AppSettings, "load", lambda **kw: s)
     audio_player_calls = _patch_audio_player_factory(monkeypatch)
@@ -965,8 +976,8 @@ def test_app_constructs_audio_player_with_loaded_output_device_name(monkeypatch)
 
     assert audio_player_calls, "AudioPlayer must be constructed exactly once at startup"
     init_kwargs = audio_player_calls[0]["kwargs"]
-    assert init_kwargs.get("output_device_name") == "VB-Audio Virtual Cable", (
-        f"AudioPlayer must receive output_device_name from load helper, got {init_kwargs!r}"
+    assert init_kwargs.get("output_device", {}).get("name") == "VB-Audio Virtual Cable", (
+        f"AudioPlayer must receive output_device with name from load helper, got {init_kwargs!r}"
     )
 
 
@@ -990,14 +1001,14 @@ def test_app_constructs_audio_player_with_none_when_no_stored_device(monkeypatch
 
     assert audio_player_calls
     init_kwargs = audio_player_calls[0]["kwargs"]
-    assert "output_device_name" in init_kwargs, (
-        f"AudioPlayer must receive output_device_name kwarg even when None, got {init_kwargs!r}"
+    assert "output_device" in init_kwargs, (
+        f"AudioPlayer must receive output_device kwarg even when None, got {init_kwargs!r}"
     )
-    assert init_kwargs["output_device_name"] is None
+    assert init_kwargs.get("output_device") is None
 
 
 def test_on_audio_output_change_updates_player_device_name(monkeypatch):
-    """_on_audio_output_change(name) must propagate the name to the audio player."""
+    """结构化 dict 音频设备变更应更新 player.output_device 和派生属性 output_device_name。"""
     s = AppSettings()
     s.tts_backend = TTS_BACKEND_CARTESIA_BYTES
     s.voice_id = "fake-voice"
@@ -1017,7 +1028,7 @@ def test_on_audio_output_change_updates_player_device_name(monkeypatch):
     handler = getattr(instance.routing, "on_output_device_change", None)
     assert callable(handler), "RoutingController must expose on_output_device_change callable"
 
-    handler("VB-Audio Virtual Cable")
+    handler({"name": "VB-Audio Virtual Cable", "host_api_name": "WASAPI"})
 
     player = instance.player
     assert getattr(player, "output_device_name", None) == "VB-Audio Virtual Cable", (
@@ -1211,7 +1222,7 @@ def test_audio_route_keeps_cable_output_when_local_output_changes(monkeypatch):
 
     app.player.set_output_device.assert_not_called()
     assert app.routing._saved_output_device == local_output
-    assert app.routing._saved_output_device_name == "Speakers"
+    assert app.routing._saved_output_device == local_output
 
     app.routing.apply_config({"audio_routing_enabled": False})
 
@@ -1281,20 +1292,19 @@ def _patch_structured_audio_player_factory(monkeypatch) -> list[dict[str, Any]]:
         calls.append({"args": args, "kwargs": kwargs})
         player = MagicMock(name="AudioPlayer")
         player.set_output_device_calls = []
-        player.set_output_device_name_calls = []
 
         def set_output_device(device: Any) -> None:
             player.set_output_device_calls.append(device)
             player.output_device = device
-
-        def set_output_device_name(name: str | None) -> None:
-            player.set_output_device_name_calls.append(name)
-            player.output_device_name = name
+            player.output_device_name = device.get("name") if isinstance(device, dict) else None
 
         player.set_output_device.side_effect = set_output_device
-        player.set_output_device_name.side_effect = set_output_device_name
         player.output_device = kwargs.get("output_device")
-        player.output_device_name = kwargs.get("output_device_name")
+        player.output_device_name = (
+            kwargs["output_device"].get("name")
+            if isinstance(kwargs.get("output_device"), dict)
+            else None
+        )
         return player
 
     monkeypatch.setattr("wordy.main.AudioPlayer", factory)
@@ -1416,7 +1426,7 @@ def test_on_audio_output_change_with_structured_device_calls_set_output_device(m
     assert set_calls, (
         f"player.set_output_device must be invoked with the structured device, "
         f"got set_output_device_calls={set_calls!r}, "
-        f"set_output_device_name_calls={getattr(player, 'set_output_device_name_calls', None)!r}"
+        f"output_device={getattr(player, 'output_device', None)!r}"
     )
     assert set_calls[-1] == structured, (
         f"player.set_output_device must receive the exact structured dict, got {set_calls[-1]!r}"

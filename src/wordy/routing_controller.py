@@ -37,7 +37,6 @@ class RoutingController:
         self._router: AudioRouter | None = None
         # 路由启用时保存本地输出，关闭后精确恢复
         self._saved_output_device: OutputDeviceSelection | None = None
-        self._saved_output_device_name: str | None = None
         # 输出设备变更回调（通知 TTS engine 重建音频流）
         self._on_output_device_changed = on_output_device_changed
 
@@ -81,7 +80,6 @@ class RoutingController:
         """启用路由：保存当前输出设备，切换到 CABLE Input。"""
         self._router = router
         self._saved_output_device = self._player.output_device
-        self._saved_output_device_name = self._player.output_device_name
         cable_device = router.get_output_device()
         if cable_device is not None:
             self._player.set_output_device(cast(OutputDeviceSelection, cable_device))
@@ -97,13 +95,8 @@ class RoutingController:
     def _disable_routing(self) -> None:
         """停用路由：恢复路由启用前保存的本地输出设备。"""
         saved_device = self._saved_output_device
-        saved_name = self._saved_output_device_name
         self._saved_output_device = None
-        self._saved_output_device_name = None
-        if saved_device is not None:
-            self._player.set_output_device(saved_device)
-        else:
-            self._player.set_output_device_name(saved_name)
+        self._player.set_output_device(saved_device)
         self._notify_output_device_changed()
 
     def _notify_output_device_changed(self) -> None:
@@ -157,48 +150,23 @@ class RoutingController:
     def on_output_device_change(self, device: object) -> None:
         """更新本地输出设备。
 
-        路由运行时只更新待恢复设备名，不改变 CABLE Input；
+        路由运行时只保存待恢复设备，不改变 CABLE Input；
         路由停止时直接应用到 player。
         """
         if self._router is not None and self._router.is_running():
             if isinstance(device, dict):
-                saved = cast(OutputDeviceSelection, device)
-                self._saved_output_device = saved
-                name = saved.get("name")
-                self._saved_output_device_name = (
-                    name if isinstance(name, str) else None
-                )
+                self._saved_output_device = cast(OutputDeviceSelection, device)
             else:
                 self._saved_output_device = None
-                self._saved_output_device_name = (
-                    device if isinstance(device, str) else None
-                )
             logger.debug("音频侦听运行中，已保存本地输出设置，当前输出保持 CABLE Input")
             return
 
-        if isinstance(device, dict) or device is None:
-            self._player.set_output_device(
-                cast(OutputDeviceSelection, device) if device is not None else None
-            )
-            if device is None:
-                self._player.set_output_device_name(None)
-            name_value = (
-                device.get("name") if isinstance(device, dict) else None
-            )
-            device_name = name_value if isinstance(name_value, str) else None
-            logger.info(
-                "音频输出设备已切换为: %s",
-                device_name if device_name else "系统默认",
-            )
-            self._notify_output_device_changed()
-            return
-
-        device_name = device if isinstance(device, str) else None
-        self._player.set_output_device_name(device_name)
-        logger.info(
-            "音频输出设备已切换为: %s",
-            device_name if device_name else "系统默认",
-        )
+        if isinstance(device, dict):
+            self._player.set_output_device(cast(OutputDeviceSelection, device))
+        else:
+            self._player.set_output_device(None)
+        name = device.get("name") if isinstance(device, dict) else None
+        logger.info("音频输出设备已切换为: %s", name if name else "系统默认")
         self._notify_output_device_changed()
 
     @property

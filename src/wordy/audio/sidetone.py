@@ -55,10 +55,6 @@ class SidetoneAudioPlayer:
     def output_device_name(self) -> str | None:
         return self._main.output_device_name
 
-    @output_device_name.setter
-    def output_device_name(self, value: str | None) -> None:
-        self._main.output_device_name = value
-
     @property
     def output_device(self) -> OutputDeviceSelection | None:
         return self._main.output_device
@@ -180,4 +176,7 @@ class SidetoneAudioPlayer:
 
     def set_output_device_name(self, name: str | None) -> None:
         """设置主设备输出名称（不影响返听设备）。"""
-        self._main.set_output_device_name(name)
+        if name is None:
+            self._main.set_output_device(None)
+        else:
+            self._main.set_output_device({"name": name, "host_api_name": None})

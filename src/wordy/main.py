@@ -62,9 +62,7 @@ class WordyApp:
         self.player = self._create_audio_player()
 
         # ── 返听 ───────────────────────────────────────────────────────
-        self._sidetone_player = AudioPlayer(
-            output_device_name=None, output_device=None
-        )
+        self._sidetone_player = AudioPlayer()
         self._sidetone_wrapper = SidetoneAudioPlayer(
             self.player, self._sidetone_player
         )
@@ -156,7 +154,6 @@ class WordyApp:
         s = self._settings
         return AudioPlayer(
             output_device=cast(OutputDeviceSelection, s.audio_output_device) if s.audio_output_device is not None else None,
-            output_device_name=s.audio_output_device_name,
         )
 
     # ── 测试兼容属性（委托到 tts_manager）─────────────────────────────────
