@@ -23,16 +23,12 @@ from wordy.tts.engine import TTSAudioPlayer
 
 
 class TestBuildAuthHeaders:
-    def test_new_console_preferred(self) -> None:
-        headers = _build_auth_headers(api_key="k1", app_id="a1", access_key="ak1")
+    def test_api_key_header(self) -> None:
+        headers = _build_auth_headers(api_key="k1")
         assert headers == {"X-Api-Key": "k1"}
 
-    def test_legacy_console_fallback(self) -> None:
-        headers = _build_auth_headers(api_key=None, app_id="a1", access_key="ak1")
-        assert headers == {"X-Api-App-Id": "a1", "X-Api-Access-Key": "ak1"}
-
-    def test_no_credentials_returns_empty(self) -> None:
-        assert _build_auth_headers(None, None, None) == {}
+    def test_no_key_returns_empty(self) -> None:
+        assert _build_auth_headers(None) == {}
 
 
 class TestBuildRequestBody:
@@ -58,19 +54,16 @@ class TestDecodeBase64Audio:
 
 
 class TestEnsureVolcengineConfig:
-    def test_new_console_auth_ok(self) -> None:
-        _ensure_volcengine_config(api_key="k", app_id=None, access_key=None, voice_id="BV001")
+    def test_auth_ok(self) -> None:
+        _ensure_volcengine_config(api_key="k", voice_id="BV001")
 
-    def test_legacy_auth_ok(self) -> None:
-        _ensure_volcengine_config(api_key=None, app_id="a", access_key="ak", voice_id="BV001")
-
-    def test_missing_all_credentials_raises(self) -> None:
+    def test_missing_api_key_raises(self) -> None:
         with pytest.raises(RuntimeError, match="缺少火山引擎"):
-            _ensure_volcengine_config(api_key=None, app_id=None, access_key=None, voice_id="BV001")
+            _ensure_volcengine_config(api_key=None, voice_id="BV001")
 
     def test_missing_voice_id_raises(self) -> None:
         with pytest.raises(RuntimeError, match="缺少音色"):
-            _ensure_volcengine_config(api_key="k", app_id=None, access_key=None, voice_id=None)
+            _ensure_volcengine_config(api_key="k", voice_id=None)
 
 
 class TestVolcengineStreamingTTS:

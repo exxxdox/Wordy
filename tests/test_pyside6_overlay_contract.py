@@ -925,7 +925,7 @@ def test_overlay_apply_does_not_touch_secret_store_when_action_unchanged(
         lambda *a, **kw: save_calls.append((a, kw))
         or secret_store_mod.StorageStatus(
             backend=secret_store_mod.STORAGE_KEYRING, has_key=True,
-            keyring_available=True, fallback_active=False,
+            keyring_available=True,
         ),
     )
     monkeypatch.setattr(
@@ -933,7 +933,7 @@ def test_overlay_apply_does_not_touch_secret_store_when_action_unchanged(
         lambda *a, **kw: delete_calls.append((a, kw))
         or secret_store_mod.StorageStatus(
             backend=secret_store_mod.STORAGE_NONE, has_key=False,
-            keyring_available=True, fallback_active=False,
+            keyring_available=True,
         ),
     )
 
@@ -1012,7 +1012,7 @@ def test_overlay_apply_clears_cartesia_api_key_when_action_clear(
         delete_calls.append(())
         return secret_store_mod.StorageStatus(
             backend=secret_store_mod.STORAGE_NONE, has_key=False,
-            keyring_available=True, fallback_active=False,
+            keyring_available=True,
         )
 
     monkeypatch.setattr(secret_store_mod, "delete_cartesia_api_key", _fake_delete)
@@ -1103,7 +1103,7 @@ def test_overlay_apply_cartesia_plaintext_fallback_shows_warning(
     ) -> secret_store_mod.StorageStatus:
         save_calls.append((value, allow_plaintext_fallback))
         return secret_store_mod.StorageStatus(
-            backend=secret_store_mod.STORAGE_PLAINTEXT,
+            backend=secret_store_mod.STORAGE_KEYRING,
             has_key=True,
             keyring_available=False,
             fallback_active=True,

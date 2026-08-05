@@ -29,34 +29,21 @@ WRITE_CHUNK_FRAMES = 1024
 
 def _ensure_volcengine_config(
     api_key: str | None,
-    app_id: str | None,
-    access_key: str | None,
     voice_id: str | None,
 ) -> None:
     """校验 Volcengine TTS 必要配置。"""
-    has_new_auth = bool(api_key)
-    has_legacy_auth = bool(app_id) and bool(access_key)
-    if not has_new_auth and not has_legacy_auth:
+    if not api_key:
         raise RuntimeError(
-            "缺少火山引擎 API Key（新控制台）或 App ID + Access Key（旧控制台），请先在设置中配置"
+            "缺少火山引擎 API Key，请先在设置中配置"
         )
     if not voice_id:
         raise RuntimeError("缺少音色 ID，请在设置中输入 Speaker ID")
 
 
-def _build_auth_headers(
-    api_key: str | None,
-    app_id: str | None,
-    access_key: str | None,
-) -> dict[str, str]:
-    """按优先级构造鉴权 header：新控制台 X-Api-Key > 旧控制台。"""
+def _build_auth_headers(api_key: str | None) -> dict[str, str]:
+    """构造 X-Api-Key 鉴权 header。"""
     if api_key:
         return {"X-Api-Key": api_key}
-    if app_id and access_key:
-        return {
-            "X-Api-App-Id": app_id,
-            "X-Api-Access-Key": access_key,
-        }
     return {}
 
 
@@ -127,7 +114,7 @@ class VolcengineStreamingTTS(BackendTTSEngine):
 
     def _build_headers(self) -> dict[str, str]:
         """构造包含鉴权和资源 ID 的请求头。"""
-        headers = _build_auth_headers(self.api_key, None, self.access_key)
+        headers = _build_auth_headers(self.api_key)
         headers["X-Api-Resource-Id"] = self.resource_id
         headers["Content-Type"] = "application/json"
         headers["Accept"] = "text/event-stream"
@@ -195,7 +182,7 @@ class VolcengineStreamingTTS(BackendTTSEngine):
 
     def _send_and_play(self, text: str) -> bool:
         """发送 SSE 请求并流式播放返回的音频块。"""
-        _ensure_volcengine_config(self.api_key, None, self.access_key, self.voice_id)
+        _ensure_volcengine_config(self.api_key, self.voice_id)
 
         self._open_audio_stream()
         headers = self._build_headers()

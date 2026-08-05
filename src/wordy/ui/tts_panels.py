@@ -116,7 +116,8 @@ class CartesiaPanel(_BasePanel):
         sec = self._create_section(parent)
         sec.addWidget(self._section_title("Cartesia API Key"))
         saved = "已保存" if state.cartesia_api_key_saved else "未保存"
-        sec.addWidget(self._body_label(f"当前密钥：{saved}", TEXT_MUTED))
+        self.key_status_label = self._body_label(f"当前密钥：{saved}", TEXT_MUTED)
+        sec.addWidget(self.key_status_label)
         key_row = QHBoxLayout()
         key_row.setContentsMargins(0, 0, 0, 0)
         key_row.setSpacing(INLINE_GAP)
@@ -204,7 +205,7 @@ class CartesiaPanel(_BasePanel):
     # ── API key ──────────────────────────────────────────────────────
 
     def _on_save_key(self, _checked: bool = False) -> None:
-        """保存 API Key 到 keyring。"""
+        """保存 API Key 到 keyring 并触发引擎重建 + 音色刷新。"""
         raw = self.api_key_input.text()
         normalized = wordy.secret.normalize_api_key_input(raw) if raw else ""
         if not normalized:
@@ -214,17 +215,26 @@ class CartesiaPanel(_BasePanel):
             wordy.secret.save_cartesia_api_key(normalized)
             self.api_key_input.clear()
             AppSettings.load().cartesia_api_key_set = True
-            self._set_label(self.api_status, "API Key 已保存到 keyring。", INPUT_TEXT_COLOR)
+            # 更新"当前密钥"状态标签
+            self._set_label(self.key_status_label, "当前密钥：已保存", INPUT_TEXT_COLOR)
+            self._set_label(self.api_status, "粘贴 API Key 后点击保存，立即生效。", TEXT_MUTED)
+            # 通知 overlay 重建 TTS 引擎 + 自动加载音色列表
+            if self._on_field_changed is not None:
+                self._on_field_changed("cartesia_api_key", normalized)
         except Exception as e:
             self._set_label(self.api_status, f"保存失败：{e}", TEXT_ERROR)
 
     def _on_clear_key(self, _checked: bool = False) -> None:
-        """清除已保存的 API Key。"""
+        """清除已保存的 API Key 并触发引擎重建。"""
         try:
             wordy.secret.delete_cartesia_api_key()
             AppSettings.load().cartesia_api_key_set = False
             self.api_key_input.clear()
+            self._set_label(self.key_status_label, "当前密钥：未保存", TEXT_MUTED)
             self._set_label(self.api_status, "API Key 已清除。", INPUT_TEXT_COLOR)
+            # 通知 overlay 重建引擎（无密钥状态）
+            if self._on_field_changed is not None:
+                self._on_field_changed("cartesia_api_key", None)
         except Exception as e:
             self._set_label(self.api_status, f"清除失败：{e}", TEXT_ERROR)
 
@@ -266,7 +276,8 @@ class VolcenginePanel(_BasePanel):
         sec = self._create_section(parent)
         sec.addWidget(self._section_title("火山引擎 API Key（X-Api-Key）"))
         saved = "已保存" if state.volcengine_access_key_saved else "未保存"
-        sec.addWidget(self._body_label(f"当前密钥：{saved}", TEXT_MUTED))
+        self.key_status_label = self._body_label(f"当前密钥：{saved}", TEXT_MUTED)
+        sec.addWidget(self.key_status_label)
         self.api_key_input = QLineEdit()
         self.api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
         ph = "粘贴新密钥后点击保存" if state.volcengine_access_key_saved else "粘贴密钥"
@@ -307,7 +318,7 @@ class VolcenginePanel(_BasePanel):
     # ── handlers ─────────────────────────────────────────────────────
 
     def _on_save_key(self, _checked: bool = False) -> None:
-        """保存 Access Key 到 keyring。"""
+        """保存 Access Key 到 keyring 并触发引擎重建。"""
         raw = self.api_key_input.text()
         normalized = raw.strip() if raw else ""
         if not normalized:
@@ -317,17 +328,26 @@ class VolcenginePanel(_BasePanel):
             wordy.secret.save_volcengine_access_key(normalized)
             self.api_key_input.clear()
             AppSettings.load().volcengine_access_key_set = True
-            self._set_label(self.api_status, "Access Key 已保存到 keyring。", INPUT_TEXT_COLOR)
+            # 更新"当前密钥"状态标签
+            self._set_label(self.key_status_label, "当前密钥：已保存", INPUT_TEXT_COLOR)
+            self._set_label(self.api_status, "粘贴 API Key 后点击保存，立即生效。", TEXT_MUTED)
+            # 通知 overlay 重建 TTS 引擎
+            if self._on_field_changed is not None:
+                self._on_field_changed("volcengine_access_key", normalized)
         except Exception as e:
             self._set_label(self.api_status, f"保存失败：{e}", TEXT_ERROR)
 
     def _on_clear_key(self, _checked: bool = False) -> None:
-        """清除已保存的 Access Key。"""
+        """清除已保存的 Access Key 并触发引擎重建。"""
         try:
             wordy.secret.delete_volcengine_access_key()
             AppSettings.load().volcengine_access_key_set = False
             self.api_key_input.clear()
+            self._set_label(self.key_status_label, "当前密钥：未保存", TEXT_MUTED)
             self._set_label(self.api_status, "Access Key 已清除。", INPUT_TEXT_COLOR)
+            # 通知 overlay 重建引擎（无密钥状态）
+            if self._on_field_changed is not None:
+                self._on_field_changed("volcengine_access_key", None)
         except Exception as e:
             self._set_label(self.api_status, f"清除失败：{e}", TEXT_ERROR)
 

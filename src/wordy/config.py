@@ -42,15 +42,8 @@ MAX_OVERLAY_OPACITY = 1.0
 OVERLAY_OPACITY_STEP = 0.05
 LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 
-# 向后兼容常量
-DEFAULT_VOLUME = 1.0
-DEFAULT_OVERLAY_OPACITY = 1.0
-DEFAULT_FIXED_CENTER = True
-DEFAULT_LOG_LEVEL = "INFO"
-DEFAULT_HOTKEY: dict[str, str] = {"hotkey": "f6", "name": "F6"}
-
 _USER_CONFIG_FILE: Path = Path.home() / ".wordy.toml"
-USER_CONFIG_FILE: Path = _USER_CONFIG_FILE  # 向后兼容：测试 monkeypatch 使用
+USER_CONFIG_FILE: Path = _USER_CONFIG_FILE  # 测试 monkeypatch 使用
 
 # load() 缓存：同一配置文件多次调用复用同一实例，避免重复磁盘 I/O
 _cached_settings: AppSettings | None = None

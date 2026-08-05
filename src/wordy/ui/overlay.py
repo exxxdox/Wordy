@@ -503,14 +503,14 @@ class InputOverlay:
     def _create_settings_window(self) -> None:
         audio_output_devices, audio_output_devices_error = self._enumerate_audio_output_devices()
         try:
-            storage_status = wordy.secret.get_storage_status()
-            cartesia_api_key_saved = bool(storage_status.has_key)
+            cartesia_status = wordy.secret.get_cartesia_api_key_status()
+            cartesia_api_key_saved = bool(cartesia_status.get("cartesia_api_key_set", False))
         except Exception as error:  # pragma: no cover - defensive
             logger.warning("读取 Cartesia API Key 状态失败: %s", error)
             cartesia_api_key_saved = False
         try:
-            volc_status = wordy.secret.get_volcengine_storage_status()
-            volcengine_access_key_saved = bool(volc_status.has_key)
+            volc_status = wordy.secret.get_volcengine_access_key_status()
+            volcengine_access_key_saved = bool(volc_status.get("volcengine_access_key_set", False))
         except Exception as error:
             logger.warning("读取 Volcengine Access Key 状态失败: %s", error)
             volcengine_access_key_saved = False
@@ -748,6 +748,16 @@ class InputOverlay:
         elif field_name == "sidetone_enabled":
             if self.on_sidetone_change:
                 self.on_sidetone_change(bool(value))
+
+        elif field_name == "cartesia_api_key":
+            if self.on_cartesia_api_key_change:
+                self.on_cartesia_api_key_change(str(value) if value else None)
+            # 密钥保存后自动刷新音色列表
+            self._start_load_voices(show_status=True)
+
+        elif field_name == "volcengine_access_key":
+            if self.on_volcengine_credentials_change:
+                self.on_volcengine_credentials_change(str(value) if value else None)
 
     def _handle_audio_output_change(self, value: object) -> None:
         """音频输出设备变更的运行时处理。"""

@@ -187,7 +187,7 @@ class WordyApp:
         """按当前 provider 从配置读取音色 ID。"""
         if self.tts_api_provider == TTS_API_PROVIDER_VOLCENGINE:
             return getattr(self._settings, "volcengine_voice_id", None)
-        return getattr(self._settings, "cartesia_voice_id", None) or getattr(self._settings, "voice_id", None)
+        return getattr(self._settings, "cartesia_voice_id", None)
 
     def _set_active_voice_in_config(self, voice_id: str | None, voice_name: str | None) -> None:
         """按当前 provider 写回配置的音色字段。"""

@@ -52,23 +52,6 @@ class TestBuildVoiceLabelMaps:
         assert result.selected_label is None
 
 
-class TestBackwardCompatibleReExport:
-    def test_cartesia_connect_still_exports_helpers(self):
-        from wordy.tts import cartesia as cartesia_connect
-
-        assert cartesia_connect.VoiceLabelMaps is VoiceLabelMaps
-        assert cartesia_connect.build_voice_label_maps is build_voice_label_maps
-
-    def test_cartesia_connect_star_import_keeps_tts_classes_visible(self):
-        namespace: dict[str, object] = {}
-
-        exec("from wordy.tts.cartesia import *", namespace)
-
-        assert "CartesiaBytesTTS" in namespace
-        assert "CartesiaRealtimeTTS" in namespace
-        assert namespace["VoiceLabelMaps"] is VoiceLabelMaps
-
-
 class TestImportLayering:
     """settings_window.py 不应再依赖 cartesia_connect 拿到 voice label 辅助。"""
 
