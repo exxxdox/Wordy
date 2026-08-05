@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""音频路由控制器。
+"""音频侦听控制器。
 
 从 ``main.py:WordyApp`` 抽出，封装 AudioRouter 生命周期、
 麦克风切换、输出设备保存/恢复等逻辑。
@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 class RoutingController:
-    """管理音频路由引擎生命周期。
+    """管理音频侦听引擎生命周期。
 
     不持有 TTS engine 引用——输出设备变更时通过回调通知调用方重建音频流。
     """
@@ -60,7 +60,7 @@ class RoutingController:
     ) -> AudioRouter | None:
         """创建并启动 AudioRouter，失败返回 None。"""
         if not VBCableDriverManager.is_installed():
-            logger.warning("VB-CABLE 未安装，无法启动音频路由")
+            logger.warning("VB-CABLE 未安装，无法启动音频侦听")
             return None
         try:
             router = AudioRouter(
@@ -71,10 +71,10 @@ class RoutingController:
             ):
                 self._enable_routing(router)
                 return router
-            logger.warning("音频路由引擎启动失败")
+            logger.warning("音频侦听引擎启动失败")
             return None
         except Exception as e:
-            logger.exception("音频路由引擎启动失败: %s", e)
+            logger.exception("音频侦听引擎启动失败: %s", e)
             return None
 
     def _enable_routing(self, router: AudioRouter) -> None:
@@ -113,7 +113,7 @@ class RoutingController:
     # ── 路由配置变更 ──────────────────────────────────────────────────────
 
     def apply_config(self, route_config: dict[str, object]) -> None:
-        """音频路由配置变更回调。"""
+        """音频侦听配置变更回调。"""
         enabled = (
             bool(route_config["audio_routing_enabled"])
             if "audio_routing_enabled" in route_config
@@ -150,7 +150,7 @@ class RoutingController:
                         cast(OutputDeviceSelection, cable_device)
                     )
                     self._notify_output_device_changed()
-            logger.debug("音频路由配置已更新")
+            logger.debug("音频侦听配置已更新")
 
     # ── 输出设备变更（路由运行中只保存，不修改当前设备）──────────────────
 
@@ -173,7 +173,7 @@ class RoutingController:
                 self._saved_output_device_name = (
                     device if isinstance(device, str) else None
                 )
-            logger.debug("音频路由运行中，已保存本地输出设置，当前输出保持 CABLE Input")
+            logger.debug("音频侦听运行中，已保存本地输出设置，当前输出保持 CABLE Input")
             return
 
         if isinstance(device, dict) or device is None:
@@ -209,7 +209,7 @@ class RoutingController:
             self._router.stop()
             self._router = None
             self._disable_routing()
-            logger.debug("音频路由已禁用")
+            logger.debug("音频侦听已禁用")
 
     @property
     def is_running(self) -> bool:

@@ -51,7 +51,7 @@ def configure_logging() -> None:
 class WordyApp:
     """常驻热键输入 → TTS 生成 → 播放。
 
-    TTS 生命周期委托给 TTSManager，音频路由委托给 RoutingController。
+    TTS 生命周期委托给 TTSManager，音频侦听委托给 RoutingController。
     WordyApp 只负责组件装配、UI 回调接线和关机编排。
     """
 

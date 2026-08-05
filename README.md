@@ -1,12 +1,12 @@
 # Easy TTS
 
-常驻热键输入 → TTS 生成 → 播放。支持 VB-CABLE 虚拟音频路由，将 TTS 音频与麦克风实时混音后输出到虚拟设备。
+常驻热键输入 → TTS 生成 → 播放。支持 VB-CABLE 虚拟音频侦听，将 TTS 音频与麦克风实时混音后输出到虚拟设备。
 
 ## 环境要求
 
 - **uv**（Python 包管理器，[安装指南](#安装-uv)）
 - Windows 10/11
-- VB-CABLE（可选，[音频路由](#音频路由vb-cable) 功能需要）
+- VB-CABLE（可选，[音频侦听](#音频侦听vb-cable) 功能需要）
 
 ## 快速开始
 
@@ -28,9 +28,9 @@ powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
 
 或参考 [uv 官方安装文档](https://docs.astral.sh/uv/getting-started/installation/)。
 
-## 音频路由（VB-CABLE）
+## 音频侦听（VB-CABLE）
 
-音频路由功能可将 TTS 输出与麦克风、桥接音源实时混音，输出到虚拟音频设备（其他应用如 Discord/OBS 可捕获）。
+音频侦听功能可将 TTS 输出与麦克风、桥接音源实时混音，输出到虚拟音频设备（其他应用如 Discord/OBS 可捕获）。
 
 ### 安装 VB-CABLE
 
@@ -39,10 +39,10 @@ powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
 3. 解压后右键 `VBCABLE_Setup_x64.exe` → 以管理员身份运行
 4. 重启电脑
 
-### 启用音频路由
+### 启用音频侦听
 
-1. 启动应用后打开设置 → **音频路由** 选项卡
-2. 勾选"启用音频路由"
+1. 启动应用后打开设置 → **音频侦听** 选项卡
+2. 勾选"启用音频侦听"
 3. 选择麦克风、桥接源设备
 4. 点击"应用"
 
@@ -65,7 +65,7 @@ uv add --dev <dev-package>
 | 文件 | 说明 |
 |------|------|
 | `main.py` | 应用入口，生命周期管理 |
-| `audio_router.py` | 音频路由引擎（混音、TTS 注入） |
+| `audio_router.py` | 音频侦听引擎（混音、TTS 注入） |
 | `audio_capture.py` | 麦克风/音频输入捕获（sounddevice） |
 | `audio_player.py` | WAV 播放器（pyaudio） |
 | `driver_manager.py` | VB-CABLE 驱动检测 |

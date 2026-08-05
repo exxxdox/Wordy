@@ -47,7 +47,7 @@ uv run pyright main.py src/
 
 **配置持久化**：`AppSettings` dataclass（`src/wordy/config.py`，~330 行）是唯一数据源。`AppSettings.load()` 从 `~/.wavtrans_config.json` 加载一次，属性访问零磁盘 I/O；`settings.update(key=value)` 部分更新 + 自动钳位 + 原子写入。UI 常量（`MIN_VOLUME`、`LOG_LEVELS` 等）在模块级。
 
-## VB-Cable 音频路由链路
+## VB-Cable 音频侦听链路
 
 ```
 driver.py(VBCableDriverManager) → config.py(AppSettings) → main.py(生命周期)
@@ -55,7 +55,7 @@ driver.py(VBCableDriverManager) → config.py(AppSettings) → main.py(生命周
     → listen_policy.py(Windows "侦听此设备" COM/WASAPI 策略管理)
   → player.py(AudioPlayer: TTS 播放到 CABLE Input)
   → capture.py(AudioCapture: sounddevice RawInputStream 输入枚举)
-  → ui/settings.py(音频路由设置页签)
+  → ui/settings.py(音频侦听设置页签)
 ```
 
 **路由原理**（不再做软件混音）：

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""音频路由配置持久化往返测试。"""
+"""音频侦听配置持久化往返测试。"""
 
 from pathlib import Path
 
@@ -12,10 +12,10 @@ from wordy.config import AppSettings
 
 
 class TestAudioRoutingPersistence:
-    """验证所有音频路由字段能正确保存并在重新加载后恢复。"""
+    """验证所有音频侦听字段能正确保存并在重新加载后恢复。"""
 
     def test_audio_routing_fields_round_trip(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """音频路由字段保存后应能完整恢复。"""
+        """音频侦听字段保存后应能完整恢复。"""
         config_file = tmp_path / "test_config.toml"
         monkeypatch.setattr(wordy.config, "USER_CONFIG_FILE", config_file)
 
@@ -25,7 +25,7 @@ class TestAudioRoutingPersistence:
         assert s.mic_input_device is None
         assert s.virtual_output_device is None
 
-        # 保存一组非默认的音频路由配置
+        # 保存一组非默认的音频侦听配置
         s.update(
             audio_routing_enabled=True,
             mic_input_device="麦克风 (Realtek Audio)",
@@ -40,7 +40,7 @@ class TestAudioRoutingPersistence:
         assert s2.virtual_output_device == "CABLE Input"
 
     def test_audio_routing_disable_persists(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """禁用音频路由后，再次加载应仍为禁用。"""
+        """禁用音频侦听后，再次加载应仍为禁用。"""
         config_file = tmp_path / "test_config.toml"
         monkeypatch.setattr(wordy.config, "USER_CONFIG_FILE", config_file)
 
@@ -74,7 +74,7 @@ class TestAudioRoutingPersistence:
         assert s.mic_input_device is None
 
     def test_audio_routing_partial_save_preserves_others(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """部分更新音频路由字段时，其他字段应保持不变。"""
+        """部分更新音频侦听字段时，其他字段应保持不变。"""
         config_file = tmp_path / "test_config.toml"
         monkeypatch.setattr(wordy.config, "USER_CONFIG_FILE", config_file)
 
@@ -110,7 +110,7 @@ class TestAudioRoutingPersistence:
         assert s2.mic_input_device == "Mic Test"
 
     def test_load_audio_routing_config_helper(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """AppSettings.load() 即可获取所有音频路由字段，替代原 load_audio_routing_config。"""
+        """AppSettings.load() 即可获取所有音频侦听字段，替代原 load_audio_routing_config。"""
         config_file = tmp_path / "test_config.toml"
         monkeypatch.setattr(wordy.config, "USER_CONFIG_FILE", config_file)
 

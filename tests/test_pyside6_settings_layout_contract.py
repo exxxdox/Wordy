@@ -470,7 +470,7 @@ def test_audio_output_is_owned_by_routing_tab_and_locks_to_cable() -> None:
     if "_build_audio_output_section(local_layout" in source:
         _fail("音频输出仍位于本地设置页")
     if "_build_audio_output_section(route_layout" not in source:
-        _fail("音频输出未移动到音频路由页")
+        _fail("音频输出未移动到音频侦听页")
     if "def _sync_audio_output_control" not in source or "combo.setEnabled(False)" not in source:
         _fail("缺少路由启用时锁定音频输出下拉框的实现")
     if "CABLE Input" not in source or "Windows WASAPI" not in source:
@@ -483,7 +483,7 @@ def test_audio_route_effect_test_module_is_removed() -> None:
     forbidden = ("效果测试", "route_test", "set_test_recording_available")
     found = [token for token in forbidden if token in source]
     if found:
-        _fail(f"音频路由效果测试模块仍有残留: {found}")
+        _fail(f"音频侦听效果测试模块仍有残留: {found}")
 
 
 # ----- 运行器 -----

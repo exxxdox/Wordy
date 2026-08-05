@@ -93,7 +93,7 @@ class SettingsWindow:
         self.opacity_value_label: QLabel = QLabel()
         self.opacity_slider: QSlider = NoWheelSlider(Qt.Orientation.Horizontal)
         self.fixed_center_check: QCheckBox = QCheckBox()
-        # 音频路由 UI
+        # 音频侦听 UI
         self.audio_route_enabled_check: QCheckBox = QCheckBox()
         self.virtual_output_combo: QComboBox = NoWheelComboBox()
         self.audio_route_status_label: QLabel = QLabel()
@@ -257,8 +257,8 @@ class SettingsWindow:
         self._build_position_section(local_layout, s)
         local_layout.addStretch(1)
 
-        # 2. 音频路由
-        route_layout = self._create_tab_page(tab_widget, "音频路由")
+        # 2. 音频侦听
+        route_layout = self._create_tab_page(tab_widget, "音频侦听")
         self._build_audio_output_section(route_layout, state, s)
         self._add_inner_gap(route_layout)
         self._build_audio_route_section(route_layout, state, s)
@@ -417,7 +417,7 @@ class SettingsWindow:
 
     def _build_audio_route_section(self, parent_layout: QVBoxLayout, state: SettingsState, s: AppSettings) -> None:
         section = self._create_section(parent_layout)
-        section.addWidget(self._section_title("音频路由"))
+        section.addWidget(self._section_title("音频侦听"))
 
         # VB-CABLE 状态
         if state.vb_cable_installed:
@@ -439,12 +439,12 @@ class SettingsWindow:
             self._add_inner_gap(parent_layout)
 
         # 启用开关
-        self.audio_route_enabled_check = CheckmarkCheckBox("启用音频路由")
+        self.audio_route_enabled_check = CheckmarkCheckBox("启用音频侦听")
         self.audio_route_enabled_check.setChecked(s.audio_routing_enabled)
         self.audio_route_enabled_check.stateChanged.connect(self._on_audio_route_enabled_changed)
         section.addWidget(self.audio_route_enabled_check)
         section.addWidget(self._hint_label(
-            "TTS 输出到 CABLE Input，自动配置麦克风侦听。在 Discord/游戏里选 CABLE Output 即可。",
+            "配置的麦克风的输入会发送到CABLE Output，在Discord/游戏里选 CABLE Output 即可。",
             TEXT_MUTED,
         ))
 
@@ -459,7 +459,7 @@ class SettingsWindow:
         ))
 
         # 麦克风选择
-        section.addWidget(self._section_title("麦克风输入"))
+        section.addWidget(self._section_title("麦克风被侦听"))
         section.addWidget(self._hint_label(
             "选择麦克风，开启路由后自动配置 Windows 侦听。",
             TEXT_MUTED,
@@ -512,7 +512,7 @@ class SettingsWindow:
             combo.setEnabled(False)
             self._set_label(
                 self.audio_output_status_label,
-                "音频路由已启用，输出固定为 VB-CABLE Input，不可更改。",
+                "音频侦听已启用，输出固定为 VB-CABLE Input，不可更改。",
                 INPUT_TEXT_COLOR,
             )
         else:
@@ -552,7 +552,7 @@ class SettingsWindow:
         self.on_field_changed("mic_input_device", device)
 
     def _populate_input_devices(self, devices: list[dict[str, object]], selected: str | None) -> None:
-        """填充麦克风输入设备下拉列表，首项为"无"。"""
+        """填充麦克风被侦听设备下拉列表，首项为"无"。"""
         combo = self.mic_input_combo
         combo.blockSignals(True)
         combo.clear()

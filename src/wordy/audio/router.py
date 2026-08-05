@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""音频路由引擎。
+"""音频侦听引擎。
 
 不捕获麦克风——由 Windows "侦听此设备" 功能将 mic 直通到 VB-CABLE Input。
 本模块只负责：启用时将 TTS 音频输出重定向到 VB-CABLE Input，
@@ -29,14 +29,14 @@ class RouterOutputDevice(TypedDict):
 
 @dataclass
 class RouterStats:
-    """音频路由状态，区分 TTS 路由与麦克风侦听是否均已就绪。"""
+    """音频侦听状态，区分 TTS 路由与麦克风侦听是否均已就绪。"""
 
     is_running: bool = False
     listen_configured: bool = False
 
 
 class AudioRouter:
-    """音频路由引擎。
+    """音频侦听引擎。
 
     启用时 TTS 输出重定向到 VB-CABLE Input。
     麦克风直通由 Windows 系统"侦听此设备"功能处理——零延迟、零 CPU。
@@ -73,7 +73,7 @@ class AudioRouter:
         if mic_device is not None:
             self._listen_configured = self._enable_mic_listen(mic_device)
 
-        logger.info("TTS 音频路由已启用（TTS → CABLE Input）")
+        logger.info("TTS 音频侦听已启用（TTS → CABLE Input）")
         return True
 
     def stop(self) -> None:
@@ -82,11 +82,11 @@ class AudioRouter:
         if self._listen_configured and self._mic_device is not None:
             restored = self._disable_mic_listen(self._mic_device)
             if not restored:
-                logger.error("音频路由已停止，但麦克风原侦听状态恢复失败: %s", self._mic_device)
+                logger.error("音频侦听已停止，但麦克风原侦听状态恢复失败: %s", self._mic_device)
         # 恢复失败时保留状态和快照，允许调用方再次 stop 重试。
         self._listen_configured = self._listen_configured and not restored
         self._active = False
-        logger.info("音频路由已停用")
+        logger.info("音频侦听已停用")
 
     def set_mic_device(self, device_name: str | None) -> bool:
         """切换麦克风时先清理旧设备，再启用新设备。返回是否成功。
@@ -110,7 +110,7 @@ class AudioRouter:
             self._listen_configured = self._enable_mic_listen(device_name)
             if not self._listen_configured:
                 # 不回滚旧侦听——旧设备已正确恢复，新设备只是未开启侦听。
-                logger.error("麦克风输入侦听失败，新设备未生效: %s", device_name)
+                logger.error("麦克风被侦听失败，新设备未生效: %s", device_name)
 
         if device_name is not None:
             logger.debug("麦克风侦听已切换: %s → %s", old, device_name)

@@ -144,7 +144,7 @@ class VBCableDriverManager:
             "2. 下载 VBCABLE_Driver_Pack45.zip\n"
             "3. 解压后右键 VBCABLE_Setup_x64.exe → 以管理员身份运行\n"
             "4. 安装完成后重启电脑\n"
-            "5. 返回本应用，音频路由功能将自动启用"
+            "5. 返回本应用，音频侦听功能将自动启用"
         )
 
     @staticmethod

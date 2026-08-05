@@ -92,7 +92,7 @@ class AppSettings:
     })
     active_tts_provider: str = DEFAULT_TTS_API_PROVIDER
 
-    # ---- 音频路由 ----
+    # ---- 音频侦听 ----
     audio_routing_enabled: bool = False
     mic_input_device: str | None = None
     virtual_output_device: str | None = None

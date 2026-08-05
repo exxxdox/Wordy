@@ -196,7 +196,7 @@ def _duplicate_mono_to_stereo(data: bytes, sample_width: int) -> bytes:
 class AudioPlayer:
     """播放 WAV 到默认输出设备或按名称/Host API 选择的输出设备。
 
-    支持可选的音频路由器注入，使 TTS 音频同时混入虚拟设备。
+    支持可选的音频侦听器注入，使 TTS 音频同时混入虚拟设备。
     """
 
     def __init__(
