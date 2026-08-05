@@ -223,6 +223,7 @@ class SettingsWindow:
 
     def _build(self, state: SettingsState) -> None:
         assert self.window is not None, "window must be created before _build"
+        self._state = state
         s = self._settings  # 当前 live config
         outer_layout = QVBoxLayout(self.window)
         outer_layout.setContentsMargins(0, 0, 0, 0)
@@ -262,6 +263,8 @@ class SettingsWindow:
         self._build_audio_output_section(route_layout, state, s)
         self._add_inner_gap(route_layout)
         self._build_audio_route_section(route_layout, state, s)
+        self._add_inner_gap(route_layout)
+        self._build_sidetone_section(route_layout, s)
         route_layout.addStretch(1)
 
         # 3. TTS 设置
@@ -422,7 +425,7 @@ class SettingsWindow:
         # VB-CABLE 状态
         if state.vb_cable_installed:
             self.audio_route_status_label = self._hint_label(
-                "VB-CABLE 已安装。TTS + 麦克风 → CABLE Input，其他应用选 CABLE Output 即可。",
+                "VB-CABLE 已安装。TTS + 麦克风 → CABLE Input，其他应用的输入设备选 CABLE Output 即可。",
                 INPUT_TEXT_COLOR,
             )
         else:
@@ -436,40 +439,37 @@ class SettingsWindow:
             self.vb_cable_install_button = QPushButton("下载并安装 VB-CABLE")
             self.vb_cable_install_button.clicked.connect(self._on_open_vb_cable_download)
             section.addWidget(self.vb_cable_install_button)
-            self._add_inner_gap(parent_layout)
 
         # 启用开关
         self.audio_route_enabled_check = CheckmarkCheckBox("启用音频侦听")
         self.audio_route_enabled_check.setChecked(s.audio_routing_enabled)
         self.audio_route_enabled_check.stateChanged.connect(self._on_audio_route_enabled_changed)
         section.addWidget(self.audio_route_enabled_check)
-        section.addWidget(self._hint_label(
-            "配置的麦克风的输入会发送到CABLE Output，在Discord/游戏里选 CABLE Output 即可。",
-            TEXT_MUTED,
-        ))
 
-        # 返听开关
-        self.sidetone_enabled_check = CheckmarkCheckBox("返听（TTS 同步输出到默认设备）")
-        self.sidetone_enabled_check.setChecked(s.sidetone_enabled)
-        self.sidetone_enabled_check.stateChanged.connect(self._on_sidetone_enabled_changed)
-        section.addWidget(self.sidetone_enabled_check)
-        section.addWidget(self._hint_label(
-            "TTS 播放时同步在扬声器/耳机中播放，方便路由启用后自己能听到。",
-            TEXT_MUTED,
-        ))
-
-        # 麦克风选择
+        # 麦克风选择（音频侦听子项）
         section.addWidget(self._section_title("麦克风被侦听"))
-        section.addWidget(self._hint_label(
-            "选择麦克风，开启路由后自动配置 Windows 侦听。",
-            TEXT_MUTED,
-        ))
         self.mic_input_combo = NoWheelComboBox()
         self.mic_input_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContentsOnFirstShow)
         self.mic_input_combo.setMinimumContentsLength(24)
         self._populate_input_devices(state.input_devices, s.mic_input_device)
         self.mic_input_combo.currentTextChanged.connect(self._on_mic_input_selected)
         section.addWidget(self.mic_input_combo)
+        self.mic_listen_status_label = QLabel()
+        self.mic_listen_status_label.setObjectName("hintLabel")
+        self._update_mic_listen_status(s, state)
+        section.addWidget(self.mic_listen_status_label)
+
+    def _build_sidetone_section(self, parent_layout: QVBoxLayout, s: AppSettings) -> None:
+        section = self._create_section(parent_layout)
+        section.addWidget(self._section_title("返听"))
+        self.sidetone_enabled_check = CheckmarkCheckBox("启用返听（TTS 同步输出到默认设备）")
+        self.sidetone_enabled_check.setChecked(s.sidetone_enabled)
+        self.sidetone_enabled_check.stateChanged.connect(self._on_sidetone_enabled_changed)
+        section.addWidget(self.sidetone_enabled_check)
+        section.addWidget(self._hint_label(
+            "TTS 播放时同步在扬声器/耳机中播放，方便音频侦听启用后自己能听到声音。",
+            TEXT_MUTED,
+        ))
 
     def _on_open_vb_cable_download(self, _checked: bool = False) -> None:
         from wordy.audio.driver import VBCableDriverManager
@@ -482,6 +482,7 @@ class SettingsWindow:
             self._local_audio_output_label = self.audio_output_combo.currentText()
         s.audio_routing_enabled = enabled  # auto-save
         self._sync_audio_output_control(s)
+        self._update_mic_listen_status(s, self._state)
         self.on_field_changed("audio_routing_enabled", enabled)
 
     def _on_sidetone_enabled_changed(self, state: int) -> None:
@@ -550,6 +551,36 @@ class SettingsWindow:
         device = None if text == self.MIC_NONE_LABEL else (text if text else None)
         self._settings.mic_input_device = device  # auto-save
         self.on_field_changed("mic_input_device", device)
+        self._update_mic_listen_status(self._settings, self._state)
+
+    def _update_mic_listen_status(self, s: AppSettings, state: SettingsState | None) -> None:
+        """更新麦克风侦听状态提示。VB-CABLE 安装检查在 section 顶部，此处只关注侦听结果。"""
+        listen_ok = state.mic_listen_configured if state is not None else False
+
+        if not s.audio_routing_enabled:
+            self._set_label(
+                self.mic_listen_status_label,
+                "启用音频侦听后自动配置",
+                TEXT_MUTED,
+            )
+        elif not s.mic_input_device:
+            self._set_label(
+                self.mic_listen_status_label,
+                "选择麦克风后自动配置",
+                TEXT_MUTED,
+            )
+        elif listen_ok:
+            self._set_label(
+                self.mic_listen_status_label,
+                "麦克风侦听成功",
+                INPUT_TEXT_COLOR,
+            )
+        else:
+            self._set_label(
+                self.mic_listen_status_label,
+                "麦克风侦听失败——请检查设备是否被占用",
+                TEXT_ERROR,
+            )
 
     def _populate_input_devices(self, devices: list[dict[str, object]], selected: str | None) -> None:
         """填充麦克风被侦听设备下拉列表，首项为"无"。"""

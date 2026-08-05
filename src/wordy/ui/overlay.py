@@ -71,6 +71,7 @@ class InputOverlay:
         on_volcengine_credentials_change: Callable[[str | None], None] | None = None,
         on_audio_route_change: Callable[[dict[str, object]], None] | None = None,
         on_sidetone_change: Callable[[bool], None] | None = None,
+        on_query_mic_listen_status: Callable[[], bool] | None = None,
         audio_player: object | None = None,
         width: int = 540,
         height: int = 58,
@@ -91,6 +92,7 @@ class InputOverlay:
         self.on_volcengine_credentials_change = on_volcengine_credentials_change
         self.on_audio_route_change = on_audio_route_change
         self.on_sidetone_change = on_sidetone_change
+        self.on_query_mic_listen_status = on_query_mic_listen_status
         self._audio_player = audio_player
         self.width = width
         self.height = height
@@ -517,6 +519,11 @@ class InputOverlay:
             volcengine_access_key_saved = False
 
         # 运行时数据（非持久化）
+        mic_listen_configured = (
+            self.on_query_mic_listen_status()
+            if callable(self.on_query_mic_listen_status)
+            else False
+        )
         state = SettingsState(
             voices_cache=self._get_active_voices_cache(),
             voices_loading=self._voices_loading,
@@ -527,6 +534,7 @@ class InputOverlay:
             cartesia_api_key_saved=cartesia_api_key_saved,
             volcengine_access_key_saved=volcengine_access_key_saved,
             vb_cable_installed=VBCableDriverManager.is_installed(),
+            mic_listen_configured=mic_listen_configured,
         )
         self._recording_hotkey = False
         self._settings_window = SettingsWindow(
@@ -741,10 +749,12 @@ class InputOverlay:
         elif field_name == "audio_routing_enabled":
             if self.on_audio_route_change:
                 self.on_audio_route_change({"audio_routing_enabled": bool(value)})
+            self._refresh_mic_listen_status()
 
         elif field_name == "mic_input_device":
             if self.on_audio_route_change:
                 self.on_audio_route_change({"mic_input_device": value if isinstance(value, str) else None})
+            self._refresh_mic_listen_status()
 
         elif field_name == "sidetone_enabled":
             if self.on_sidetone_change:
@@ -759,6 +769,23 @@ class InputOverlay:
         elif field_name == "volcengine_access_key":
             if self.on_volcengine_credentials_change:
                 self.on_volcengine_credentials_change(str(value) if value else None)
+
+    def _refresh_mic_listen_status(self) -> None:
+        """路由变更后刷新设置窗口中麦克风侦听状态。"""
+        settings = self._active_settings_window()
+        if settings is None:
+            return
+        listen_ok = (
+            self.on_query_mic_listen_status()
+            if callable(self.on_query_mic_listen_status)
+            else False
+        )
+        if hasattr(settings, '_state'):
+            settings._state.mic_listen_configured = listen_ok  # type: ignore[union-attr]
+        settings._update_mic_listen_status(
+            self._cfg,
+            getattr(settings, '_state', None),
+        )
 
     def _handle_audio_output_change(self, value: object) -> None:
         """音频输出设备变更的运行时处理。"""

@@ -36,3 +36,5 @@ class SettingsState:
 
     # 驱动检测（运行时扫描）
     vb_cable_installed: bool = False
+    # 麦克风侦听运行时状态
+    mic_listen_configured: bool = False

@@ -201,6 +201,17 @@ class RoutingController:
         )
         self._notify_output_device_changed()
 
+    @property
+    def is_mic_listen_configured(self) -> bool:
+        """返回麦克风侦听是否已在运行时成功配置。"""
+        if self._router is None:
+            return False
+        return self._router.get_stats().listen_configured
+
+    @property
+    def is_running(self) -> bool:
+        return self._router is not None and self._router.is_running()
+
     # ── 停止 ───────────────────────────────────────────────────────────────
 
     def stop(self) -> None:
@@ -210,7 +221,3 @@ class RoutingController:
             self._router = None
             self._disable_routing()
             logger.debug("音频侦听已禁用")
-
-    @property
-    def is_running(self) -> bool:
-        return self._router is not None and self._router.is_running()

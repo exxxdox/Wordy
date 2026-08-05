@@ -110,6 +110,7 @@ class WordyApp:
             on_volcengine_credentials_change=self._on_volcengine_credentials_change,
             on_audio_route_change=self.routing.apply_config,
             on_sidetone_change=self._on_sidetone_change,
+            on_query_mic_listen_status=lambda: self.routing.is_mic_listen_configured,
             audio_player=self.player,
         )
 
