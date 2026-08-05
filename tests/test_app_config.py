@@ -8,7 +8,6 @@ from pathlib import Path
 
 import wordy.config
 from wordy.config import AppSettings, display_hotkey, MIN_VOLUME, MAX_VOLUME
-from wordy.config import MIN_GAIN, MAX_GAIN
 from wordy.tts.constants import DEFAULT_TTS_BACKEND, TTS_BACKENDS
 
 
@@ -731,33 +730,6 @@ def test_load_defaults_when_status_reports_no_key(monkeypatch, tmp_path: Path, f
     s = AppSettings.load(config_file=cfg)
     assert s.cartesia_api_key_set is False
     assert s.cartesia_api_key_storage == wordy.secret.STORAGE_NONE
-
-
-# ---------------------------------------------------------------------------
-# Gain clamping through AppSettings.load()
-# ---------------------------------------------------------------------------
-
-def test_gain_config_clamps(tmp_path: Path):
-    """AppSettings.load() clamps gain values between MIN_GAIN and MAX_GAIN."""
-    # Default
-    s = AppSettings.load(config_file=tmp_path / "nonexistent.toml")
-    assert s.mic_gain == 1.0
-    assert s.tts_gain == 1.0
-
-    # Within range
-    cfg = tmp_path / "config.toml"
-    s2 = AppSettings.load(config_file=cfg)
-    s2.update(mic_gain=1.5, tts_gain=1.2, config_file=cfg)
-    s3 = AppSettings.load(config_file=cfg)
-    assert s3.mic_gain == 1.5
-    assert s3.tts_gain == 1.2
-
-    # Clamp high
-    cfg3 = tmp_path / "config3.toml"
-    s4 = AppSettings.load(config_file=cfg3)
-    s4.update(mic_gain=3.0, tts_gain=2.5, config_file=cfg3)
-    assert s4.mic_gain == MAX_GAIN
-    assert s4.tts_gain == MAX_GAIN
 
 
 # ---------------------------------------------------------------------------

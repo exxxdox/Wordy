@@ -40,9 +40,6 @@ VOLUME_STEP = 0.05
 MIN_OVERLAY_OPACITY = 0.30
 MAX_OVERLAY_OPACITY = 1.0
 OVERLAY_OPACITY_STEP = 0.05
-MIN_GAIN = 0.0
-MAX_GAIN = 2.0
-GAIN_STEP = 0.05
 LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 
 # 向后兼容常量
@@ -133,8 +130,6 @@ class AppSettings:
     audio_routing_enabled: bool = False
     mic_input_device: str | None = None
     virtual_output_device: str | None = None
-    mic_gain: float = 1.0
-    tts_gain: float = 1.0
 
     # ---- 返听 (sidetone) ----
     sidetone_enabled: bool = False
@@ -147,13 +142,11 @@ class AppSettings:
     _save_lock: ClassVar[threading.Lock] = threading.Lock()
 
     # 滑块类字段用 debounce，其他字段立即写入
-    _DEBOUNCED_FIELDS: ClassVar[set[str]] = {"volume", "overlay_opacity", "mic_gain", "tts_gain"}
+    _DEBOUNCED_FIELDS: ClassVar[set[str]] = {"volume", "overlay_opacity"}
 
     _CLAMP_RANGES: ClassVar[dict[str, tuple[float, float]]] = {
         "volume": (MIN_VOLUME, MAX_VOLUME),
         "overlay_opacity": (MIN_OVERLAY_OPACITY, MAX_OVERLAY_OPACITY),
-        "mic_gain": (MIN_GAIN, MAX_GAIN),
-        "tts_gain": (MIN_GAIN, MAX_GAIN),
     }
 
     # ── ProviderConfig ────────────────────────────────────────────────
@@ -339,9 +332,6 @@ class AppSettings:
 
         for dev_key in ("mic_input_device", "virtual_output_device"):
             _apply_if_present(raw, dev_key, settings, _nonempty_str)
-
-        for gain_key in ("mic_gain", "tts_gain"):
-            _apply_if_present(raw, gain_key, settings, _parse_gain_value)
 
         if (hotkey := _nonempty_str(raw.get("hotkey"))) is not None:
             settings.hotkey = hotkey
@@ -607,13 +597,6 @@ def _parse_audio_output_device(raw: object) -> AudioIdentity | None:
         else:
             return None
     return normalize_identity(name.strip(), host)
-
-
-def _parse_gain_value(value: object) -> float | None:
-    """解析增益值，钳位到 [0, 2]。"""
-    if not isinstance(value, (int, float)):
-        return None
-    return _clamp(float(value), MIN_GAIN, MAX_GAIN)
 
 
 def _apply_if_present(
