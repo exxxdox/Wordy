@@ -145,7 +145,7 @@ class VolcengineStreamingTTS(BackendTTSEngine):
             actual_rate = stream_config.get("rate")
             if actual_rate is not None:
                 self.sample_rate = actual_rate
-            logger.info("Volcengine 流式音频输出已打开 (paInt16, %s Hz)", actual_rate)
+            logger.debug("Volcengine 流式音频输出已打开 (paInt16, %s Hz)", actual_rate)
             return
 
         # int16 失败 → 尝试 float32 兜底（此时 PCM 会被错当 float 播，但至少不崩溃）
@@ -161,10 +161,13 @@ class VolcengineStreamingTTS(BackendTTSEngine):
         """解析单行 SSE 数据。返回 (pcm_bytes | None, is_done)。"""
         if not line or line.startswith(":"):
             return None, False
+        if line.startswith("event:"):
+            logger.debug("Volcengine SSE 事件: %s", line)
+            return None, False
         try:
             event = json.loads(line)
         except json.JSONDecodeError:
-            logger.debug("Volcengine SSE 跳过非 JSON 行: %s", line[:80])
+            logger.debug("Volcengine SSE 无法解析的行: %s", line[:80])
             return None, False
 
         code = event.get("code")
@@ -226,7 +229,7 @@ class VolcengineStreamingTTS(BackendTTSEngine):
                                  chunk_count, len(pcm_bytes),
                                  (len(pcm_bytes) + sub_size - 1) // sub_size)
 
-            logger.info("Volcengine SSE 完成: %d 音频块, %d bytes", chunk_count, total_bytes)
+            logger.debug("Volcengine SSE 完成: %d 音频块, %d bytes", chunk_count, total_bytes)
             return chunk_count > 0
         finally:
             self.audio_player.close_stream()

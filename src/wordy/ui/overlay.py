@@ -421,9 +421,9 @@ class InputOverlay:
 
     def _on_global_hotkey(self) -> None:
         if self._recording_hotkey:
-            logger.info("全局快捷键触发，但当前正在录制快捷键，已忽略。")
+            logger.debug("全局快捷键触发，但当前正在录制快捷键，已忽略。")
             return
-        logger.info("全局快捷键触发: %s", self._cfg.name)
+        logger.debug("全局快捷键触发: %s", self._cfg.name)
         signals = self._signals
         if signals is not None:
             signals.hotkey_triggered.emit()

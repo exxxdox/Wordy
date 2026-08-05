@@ -219,7 +219,7 @@ class AudioCapture:
             try:
                 stream.stop()
                 stream.close()
-                logger.info("音频捕获已停止")
+                logger.debug("音频捕获已停止")
             except Exception as e:
                 logger.warning("停止音频捕获流失败: %s", e)
 

@@ -474,5 +474,5 @@ def _set_listen(
         )
         return False
 
-    logger.info("倾听策略已更新并验证: enabled=%s", enabled)
+    logger.debug("倾听策略已更新并验证: enabled=%s", enabled)
     return True

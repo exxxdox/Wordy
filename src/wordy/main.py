@@ -254,11 +254,11 @@ class WordyApp:
         cable_device = router.get_output_device()
         if cable_device is not None:
             self.player.set_output_device(cast(OutputDeviceSelection, cable_device))
-            logger.info("音频输出已切换为 CABLE Input")
+            logger.debug("音频输出已切换为 CABLE Input")
         # 输出设备变更后强制 TTS 实时引擎重建音频流，避免写入旧设备。
         self.tts_engine.reset_audio_output()
         if router.get_stats().listen_configured:
-            logger.info("麦克风侦听已自动配置并验证")
+            logger.debug("麦克风侦听已自动配置并验证")
         else:
             logger.warning("麦克风侦听未自动生效，请在 Windows 声音设置中手动配置到 CABLE Input")
 
@@ -310,7 +310,7 @@ class WordyApp:
                     self.player.set_output_device(cast(OutputDeviceSelection, cable_device))
                     # 输出设备变更后强制 TTS 实时引擎重建音频流。
                     self.tts_engine.reset_audio_output()
-            logger.info("音频路由配置已更新")
+            logger.debug("音频路由配置已更新")
 
     def _stop_router(self) -> None:
         """停止音频路由引擎并恢复原始输出设备。"""
@@ -318,13 +318,13 @@ class WordyApp:
             self._router.stop()
             self._router = None
             self._disable_routing()
-            logger.info("音频路由已禁用")
+            logger.debug("音频路由已禁用")
 
     def _on_sidetone_change(self, enabled: bool) -> None:
         """切换返听：更新包装器开关并重建音频流。"""
         self._sidetone_wrapper.set_sidetone_enabled(enabled)
         self.tts_engine.reset_audio_output()
-        logger.info("返听%s", "已启用" if enabled else "已禁用")
+        logger.debug("返听%s", "已启用" if enabled else "已禁用")
 
     @staticmethod
     def _create_tts_executor() -> ThreadPoolExecutor:
@@ -376,7 +376,7 @@ class WordyApp:
         """音量配置变更后同步到当前 TTS 引擎。"""
         self._settings.volume = volume
         self.tts_engine.set_volume(volume)
-        logger.info("音量已切换为: %.2fx", volume)
+        logger.debug("音量已切换为: %.2fx", volume)
 
     def _on_audio_output_change(self, device: object) -> None:
         """更新本地输出；路由运行时只更新待恢复设备，不改变 CABLE Input。"""
@@ -389,7 +389,7 @@ class WordyApp:
             else:
                 self._saved_output_device = None
                 self._saved_output_device_name = device if isinstance(device, str) else None
-            logger.info("音频路由运行中，已保存本地输出设置，当前输出保持 CABLE Input")
+            logger.debug("音频路由运行中，已保存本地输出设置，当前输出保持 CABLE Input")
             return
 
         if isinstance(device, dict) or device is None:

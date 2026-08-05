@@ -317,7 +317,7 @@ class AudioPlayer:
         elif self.output_device_name:
             named_index = self._lookup_named_output_device(p, self.output_device_name)
             if named_index is not None:
-                logger.info("找到设备 [%s]: %s", named_index, self.output_device_name)
+                logger.debug("找到设备 [%s]: %s", named_index, self.output_device_name)
                 return named_index
 
             logger.warning(
@@ -329,7 +329,7 @@ class AudioPlayer:
         if default_idx is not None:
             try:
                 info = p.get_device_info_by_index(default_idx)
-                logger.info("使用系统默认输出设备 [%s]: %s", default_idx, info.get("name", "?"))
+                logger.debug("使用系统默认输出设备 [%s]: %s", default_idx, info.get("name", "?"))
             except Exception:
                 pass
         return default_idx
@@ -530,7 +530,7 @@ class AudioPlayer:
         self._stream_rate = self._last_actual_rate
         self._stream_mono_upmix = self._last_mono_upmix
         self._stream_sample_width = self._last_sample_width
-        logger.info("已打开流式播放到 [%s] %s",
+        logger.debug("已打开流式播放到 [%s] %s",
                     self._last_actual_rate,
                     self.output_device_name or "系统默认设备")
         return True
@@ -674,7 +674,7 @@ class AudioPlayer:
                 stream.write(data)  # type: ignore[union-attr]
                 data = wf.readframes(1024)
 
-            logger.info("播放完成!")
+            logger.debug("播放完成!")
         except KeyboardInterrupt:
             logger.warning("用户中断播放")
         except Exception as e:

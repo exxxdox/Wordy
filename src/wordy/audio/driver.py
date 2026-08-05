@@ -131,7 +131,7 @@ class VBCableDriverManager:
     @staticmethod
     def open_download_page() -> None:
         """打开 VB-CABLE 下载页面。"""
-        logger.info("正在打开 VB-CABLE 下载页面: %s", VB_CABLE_DOWNLOAD_URL)
+        logger.debug("正在打开 VB-CABLE 下载页面: %s", VB_CABLE_DOWNLOAD_URL)
         webbrowser.open(VB_CABLE_DOWNLOAD_URL)
 
     @staticmethod

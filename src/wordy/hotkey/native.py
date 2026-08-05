@@ -267,7 +267,7 @@ class NativeHotkeyListener:
             self._ready.set()
             return
 
-        logger.info("已注册 Windows 原生全局快捷键: %s", self.name)
+        logger.debug("已注册 Windows 原生全局快捷键: %s", self.name)
         self._ready.set()
 
         msg = MSG()
@@ -281,4 +281,4 @@ class NativeHotkeyListener:
         finally:
             if not user32.UnregisterHotKey(None, HOTKEY_ID):
                 logger.warning("注销 Windows 原生全局快捷键 %s 失败: %s", self.name, ctypes.get_last_error())
-            logger.info("已停止 Windows 原生全局快捷键: %s", self.name)
+            logger.debug("已停止 Windows 原生全局快捷键: %s", self.name)

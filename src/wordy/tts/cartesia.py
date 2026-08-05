@@ -255,7 +255,7 @@ class CartesiaRealtimeTTS(CartesiaTTS):
         return self.client
 
     def _open_audio_stream(self) -> None:
-        logger.info("正在打开 PyAudio 流式输出...")
+        logger.debug("正在打开 PyAudio 流式输出...")
 
         # VB-CABLE 虚拟设备 WASAPI 端点对 float32 处理不可靠（驱动层可能
         # 错当 int16 解析致 PCM 变声）。主动使用 int16 + 让 Cartesia 输出
@@ -335,7 +335,7 @@ class CartesiaRealtimeTTS(CartesiaTTS):
         raise RuntimeError("无法打开 PyAudio 流式输出")
 
     def _open_websocket(self) -> None:
-        logger.info("正在连接 Cartesia realtime websocket...")
+        logger.debug("正在连接 Cartesia realtime websocket...")
         client = self._get_client()
         websocket_options: dict[str, Any] = {
             "ping_interval": REALTIME_PING_INTERVAL_SECONDS,

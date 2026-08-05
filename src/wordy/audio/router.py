@@ -115,15 +115,15 @@ class AudioRouter:
                 if old_listen_configured and old is not None:
                     if self._enable_mic_listen(old):
                         self._listen_configured = True
-                        logger.info("已恢复旧麦克风侦听: %s", old)
+                        logger.debug("已恢复旧麦克风侦听: %s", old)
                     else:
                         logger.error("旧麦克风侦听恢复也失败: %s，侦听已丢失", old)
                 return False
 
         if device_name is not None:
-            logger.info("麦克风侦听已切换: %s → %s", old, device_name)
+            logger.debug("麦克风侦听已切换: %s → %s", old, device_name)
         else:
-            logger.info("麦克风侦听已停用（原: %s）", old)
+            logger.debug("麦克风侦听已停用（原: %s）", old)
         return True
 
     def _enable_mic_listen(self, mic_name: str) -> bool:
@@ -146,7 +146,7 @@ class AudioRouter:
                 # 仅在配置成功后记录快照，供 stop/切换设备时精确恢复。
                 self._listen_original_state = original_state
                 self._listen_original_device = mic_name
-                logger.info("已启用并验证麦克风侦听: %s → %s", mic_name, target_name)
+                logger.debug("已启用并验证麦克风侦听: %s → %s", mic_name, target_name)
                 return True
 
             logger.warning(
