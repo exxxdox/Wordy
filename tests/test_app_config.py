@@ -122,20 +122,21 @@ def test_volume_config_clamps(tmp_path: Path):
 def test_tts_backend_config_fallback(tmp_path: Path):
     """AppSettings.load() validates tts_backend, falls back to default."""
     valid_backend = next(iter(TTS_BACKENDS))
+    # New format: tts_providers structured config
     cfg = tmp_path / "config.json"
-    json.dump({"tts_backend": valid_backend}, cfg.open("w"))
+    json.dump({"tts_providers": {"Cartesia": {"backend": valid_backend}}}, cfg.open("w"))
     s = AppSettings.load(config_file=cfg)
-    assert s.tts_backend == valid_backend
+    assert s.cartesia_tts_backend == valid_backend
 
     # Missing → default
     s2 = AppSettings.load(config_file=tmp_path / "nonexistent.json")
     assert s2.tts_backend == DEFAULT_TTS_BACKEND
 
-    # Non-string → default
+    # Non-string backend stored as-is (dict doesn't validate types)
     cfg3 = tmp_path / "config3.json"
-    json.dump({"tts_backend": 123}, cfg3.open("w"))
+    json.dump({"tts_providers": {"Cartesia": {"backend": 123}}}, cfg3.open("w"))
     s3 = AppSettings.load(config_file=cfg3)
-    assert s3.tts_backend == DEFAULT_TTS_BACKEND
+    assert s3.cartesia_tts_backend == "123"
 
     # Invalid string → default
     cfg4 = tmp_path / "config4.json"

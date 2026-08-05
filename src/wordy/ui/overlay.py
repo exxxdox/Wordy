@@ -563,6 +563,10 @@ class InputOverlay:
             hotkey_name=self._hotkey_name,
             voice_id=active_voice_id,
             voice_name=active_voice_name,
+            cartesia_voice_id=self._cartesia_voice_id,
+            cartesia_voice_name=self._cartesia_voice_name,
+            volcengine_voice_id=self._volcengine_voice_id,
+            volcengine_voice_name=self._volcengine_voice_name,
             volume=self._volume,
             tts_backend=active_tts_backend,
             fixed_center=self._fixed_center,
@@ -788,8 +792,22 @@ class InputOverlay:
             if window_position_changed:
                 config_update["window_position"] = pending_window_position
 
-        # ---- 简单标量字段：compare → 存 config_update  ----
-        # voice/backend 按 provider 分流到不同 config key
+        # ---- 服务商切换必须最先执行，同步更新 main.py 的 provider ----
+        tts_provider_changed = self._collect_scalar_change(pending, config_update, "tts_api_provider",
+                                                           local_attr="_tts_api_provider")
+        if tts_provider_changed:
+            self._tts_api_provider = pending.tts_api_provider
+            # 立即通知 main.py，确保后续 voice 回调写入正确的 provider config
+            if self.on_tts_api_provider_change is not None:
+                try:
+                    self.on_tts_api_provider_change(self._tts_api_provider)
+                except Exception:
+                    logger.exception("TTS 服务商切换回调失败")
+                    saved_messages.append("TTS 服务商切换失败")
+                else:
+                    saved_messages.append(f"TTS 服务商已切换为 {self._tts_api_provider}")
+
+        # ---- 音色/生成模式：按（可能已更新的）provider 分流 ----
         self._collect_per_provider_voice(pending, config_update)
         self._collect_per_provider_backend(pending, config_update)
         self._collect_scalar_change(pending, config_update, "volume")
@@ -877,30 +895,6 @@ class InputOverlay:
         # Volcengine 凭据变更
         self._apply_volcengine_credentials_change(pending, saved_messages)
 
-        # TTS 服务商切换（persist + callback）
-        tts_provider_changed = self._collect_scalar_change(pending, config_update, "tts_api_provider",
-                                                           local_attr="_tts_api_provider")
-        # 需要在 config_update 持久化前设置运行时状态
-        if tts_provider_changed:
-            self._tts_api_provider = pending.tts_api_provider
-
-        # 持久化 tts_api_provider
-        if tts_provider_changed:
-            try:
-                AppSettings.load().update(**config_update)
-            except OSError as e:
-                QMessageBox.critical(settings.window, "保存失败", f"无法保存设置：{e}")
-                return
-
-        # 服务商变更通知 main.py（持久化成功后再回调）
-        if tts_provider_changed and self.on_tts_api_provider_change is not None:
-            try:
-                self.on_tts_api_provider_change(self._tts_api_provider)
-            except Exception:
-                logger.exception("TTS 服务商切换回调失败")
-                saved_messages.append("TTS 服务商切换失败")
-            else:
-                saved_messages.append(f"TTS 服务商已切换为 {self._tts_api_provider}")
 
         # ---- 最终状态 ----
         if not saved_messages:
@@ -962,6 +956,9 @@ class InputOverlay:
         """应用音色变更到当前 provider 的属性，并回调通知 main.py。"""
         new_vid = getattr(pending, "voice_id", None)
         new_vname = getattr(pending, "voice_name", None)
+        # 空值不覆盖已保存的配置（用户未选择音色时保护现有值）
+        if new_vid is None:
+            return
         old_vid = self._get_active_voice_id()
         old_vname = self._get_active_voice_name()
         if new_vid == old_vid and new_vname == old_vname:

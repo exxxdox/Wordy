@@ -28,6 +28,7 @@ from wordy.tts.labels import VoiceLabelMaps, build_voice_label_maps
 from wordy.ui.theme import (
     GREEN_ACCENT, TEXT_ERROR, TEXT_MUTED, TEXT_PRIMARY, TEXT_WARNING,
 )
+from wordy.ui.tts_panels import PROVIDER_PANELS
 from wordy.ui.settings_state import (
     AudioOutputDevice, AudioOutputIdentity, PendingSettings, SettingsState, VoiceRecord,
 )
@@ -176,26 +177,29 @@ class SettingsWindow:
         # 路由启用时下拉框显示的是固定 CABLE Input，不能覆盖已保存的本地输出。
         if not self.pending_audio_routing_enabled:
             self._on_audio_output_selected(self.audio_output_combo.currentText())
-        self._sync_pending_cartesia_api_key()
-        self._sync_pending_volcengine_key()
-        return PendingSettings(
+        pending = PendingSettings(
             hotkey, hotkey_name,
-            self.pending_voice_id, self.pending_voice_name,
+            None, None,  # voice_id, voice_name — panels fill via collect_pending
             self.pending_volume, self.pending_overlay_opacity,
             self.pending_tts_backend, self.pending_fixed_center,
+            None, None, None, None,  # per-provider voice (panels fill)
             self.pending_audio_output_device_name,
             self.pending_audio_output_device_identity,
-            self.pending_cartesia_api_key_action,
-            self.pending_cartesia_api_key_value,
+            "unchanged", None,  # cartesia defaults
             self.pending_tts_api_provider,
-            self.pending_volcengine_access_key_action,
-            self.pending_volcengine_access_key_value,
+            "unchanged", None,  # volcengine defaults
             self.pending_log_level,
             audio_routing_enabled=self.pending_audio_routing_enabled,
             mic_input_device=self.pending_mic_input_device,
             virtual_output_device=self.pending_virtual_output_device,
             sidetone_enabled=self.pending_sidetone_enabled,
         )
+        # 仅活跃面板同步 pending
+        active_panel = PROVIDER_PANELS.get(self.pending_tts_api_provider)
+        if active_panel is not None:
+            active_panel.sync_pending()
+            active_panel.collect_pending(pending)
+        return pending
 
     def set_recording_started(self) -> None:
         """更新为快捷键录制中状态。"""
@@ -225,25 +229,23 @@ class SettingsWindow:
         self._set_label(self.record_status_label, text, TEXT_ERROR)
 
     def set_voices_loading(self) -> None:
-        """更新为音色加载中状态。"""
-        self.refresh_voices_button.setEnabled(False)
-        self.refresh_voices_button.setText("加载中...")
-        self._set_label(self.voice_status_label, "正在加载音色列表...", TEXT_WARNING)
+        """更新为音色加载中状态（委托给活跃面板）。"""
+        panel = PROVIDER_PANELS.get(self.pending_tts_api_provider)
+        if panel is not None:
+            panel.set_voices_loading()
 
     def set_voices_error(self, error: Exception | str) -> None:
         """显示音色加载错误。"""
-        self.refresh_voices_button.setEnabled(True)
-        self.refresh_voices_button.setText("刷新音色列表")
-        self._set_label(self.voice_status_label, f"加载失败：{error}", TEXT_ERROR)
+        panel = PROVIDER_PANELS.get(self.pending_tts_api_provider)
+        if panel is not None:
+            panel.set_voices_error(error)
 
     def set_voices_loaded(self, voices: list[VoiceRecord], selected_voice_id: str | None) -> list[str]:
         """填充音色列表。"""
-        self.refresh_voices_button.setEnabled(True)
-        self.refresh_voices_button.setText("刷新音色列表")
-        label_maps = build_voice_label_maps(voices, selected_voice_id)
-        self._apply_voice_label_maps(label_maps)
-        self._set_label(self.voice_status_label, f"已加载 {len(label_maps.labels)} 个音色", INPUT_TEXT_COLOR)
-        return label_maps.labels
+        panel = PROVIDER_PANELS.get(self.pending_tts_api_provider)
+        if panel is not None:
+            return panel.set_voices_loaded(voices, selected_voice_id)
+        return []
 
     def set_apply_status(self, text: str, color: str = INPUT_TEXT_COLOR) -> None:
         self._set_label(self.apply_status_label, text, color)
@@ -309,18 +311,29 @@ class SettingsWindow:
         tts_layout = self._create_tab_page(tab_widget, "TTS 设置")
         self._build_tts_api_section(tts_layout)
         self._add_inner_gap(tts_layout)
-        # 服务商专属设置容器：左侧绿色强调线 + 微浅底色，视觉缩进体现层级
+        # 服务商专属设置容器：每个 provider 通过面板提供独立 UI
         self._tts_provider_container = QFrame()
         self._tts_provider_container.setObjectName("ttsProviderContainer")
-        provider_layout = QVBoxLayout(self._tts_provider_container)
-        provider_layout.setContentsMargins(16, 12, 16, 4)
-        provider_layout.setSpacing(0)
-        self._build_api_key_section(provider_layout, state)
-        self._add_inner_gap(provider_layout)
-        self._build_backend_section(provider_layout)
-        self._add_inner_gap(provider_layout)
-        self._build_voice_section(provider_layout, state)
-        provider_layout.addStretch(1)
+        container_layout = QVBoxLayout(self._tts_provider_container)
+        container_layout.setContentsMargins(16, 12, 16, 4)
+        container_layout.setSpacing(0)
+
+        # 生成模式（provider-agnostic）
+        self._build_backend_section(container_layout)
+
+        # 各 provider 面板（堆叠，按 provider 切换可见性）
+        self._provider_panel_widgets: dict[str, QFrame] = {}
+        for name, panel in PROVIDER_PANELS.items():
+            wrapper = QFrame()
+            layout = QVBoxLayout(wrapper)
+            layout.setContentsMargins(0, 12, 0, 0)
+            layout.setSpacing(0)
+            panel.build(layout, state, self.on_refresh_voices, None)  # type: ignore[arg-type]
+            wrapper.setVisible(name == state.tts_api_provider)
+            container_layout.addWidget(wrapper)
+            self._provider_panel_widgets[name] = wrapper
+
+        container_layout.addStretch(1)
         tts_layout.addWidget(self._tts_provider_container)
         tts_layout.addStretch(1)
 
@@ -348,121 +361,6 @@ class SettingsWindow:
         self.record_button = QPushButton("录制快捷键")
         self.record_button.clicked.connect(lambda _checked=False: self.on_record_hotkey())
         section.addWidget(self.record_button, 0, Qt.AlignmentFlag.AlignLeft)
-
-    def _build_voice_section(self, parent_layout: QVBoxLayout, state: SettingsState) -> None:
-        section = self._create_section(parent_layout)
-        section.addWidget(self._section_title("音色设置"))
-        voice_display = state.voice_name or state.voice_id or "未设置"
-        section.addWidget(self._body_label(f"当前音色：{voice_display}", TEXT_MUTED))
-
-        # Cartesia：下拉选择
-        self.voice_combo = NoWheelComboBox()
-        self.voice_combo.setSizeAdjustPolicy(QComboBox.AdjustToContentsOnFirstShow)
-        self.voice_combo.setMinimumContentsLength(24)
-        self.voice_combo.view().setTextElideMode(Qt.TextElideMode.ElideRight)
-        self.voice_combo.currentTextChanged.connect(self._on_voice_selected)
-        section.addWidget(self.voice_combo)
-        self._apply_voice_label_maps(build_voice_label_maps(state.voices_cache, state.voice_id))
-
-        # Volcengine：手填 Speaker ID 文本框
-        self._volc_speaker_input = QLineEdit()
-        self._volc_speaker_input.setPlaceholderText("Speaker ID，如 BV001_streaming")
-        if state.tts_api_provider == TTS_API_PROVIDER_VOLCENGINE and state.voice_id:
-            self._volc_speaker_input.setText(state.voice_id)
-        self._volc_speaker_input.textChanged.connect(self._on_volc_speaker_id_changed)
-        section.addWidget(self._volc_speaker_input)
-
-        voice_footer = QHBoxLayout()
-        voice_footer.setContentsMargins(0, 8, 0, 0)
-        voice_footer.setSpacing(INLINE_GAP)
-        self.refresh_voices_button = QPushButton("刷新音色列表")
-        self.refresh_voices_button.clicked.connect(lambda _checked=False: self.on_refresh_voices())
-        voice_footer.addWidget(self.refresh_voices_button, 0, Qt.AlignmentFlag.AlignLeft)
-
-        # 按 provider 设置初始可见性
-        is_volc = state.tts_api_provider == TTS_API_PROVIDER_VOLCENGINE
-        self.voice_combo.setVisible(not is_volc)
-        self.refresh_voices_button.setVisible(not is_volc)
-        self._volc_speaker_input.setVisible(is_volc)
-        if state.voices_loading:
-            self.refresh_voices_button.setEnabled(False)
-            self.refresh_voices_button.setText("加载中...")
-        status_text = "点击刷新后加载 Cartesia 音色"
-        status_color = TEXT_MUTED
-        if state.voices_cache:
-            status_text = f"已缓存 {len(state.voices_cache)} 个音色"
-            status_color = INPUT_TEXT_COLOR
-        elif state.voices_loading:
-            status_text = "正在后台加载音色列表..."
-            status_color = TEXT_WARNING
-        elif state.voice_fetch_error is not None:
-            status_text = f"上次加载失败：{state.voice_fetch_error}"
-            status_color = TEXT_ERROR
-        self.voice_status_label = self._hint_label(status_text, status_color)
-        voice_footer.addWidget(self.voice_status_label, 1)
-        section.addLayout(voice_footer)
-
-    def _build_api_key_section(self, parent_layout: QVBoxLayout, state: SettingsState) -> None:
-        """构建 TTS 服务商 API Key 区域（含 Cartesia 和 Volcengine 两个子容器，按需切换）。"""
-        # -- Cartesia 子容器 --
-        self._cartesia_key_container = QFrame()
-        cartesia_layout = QVBoxLayout(self._cartesia_key_container)
-        cartesia_layout.setContentsMargins(0, 0, 0, 0)
-        cartesia_layout.setSpacing(6)
-        cartesia_layout.addWidget(self._section_title("Cartesia API Key"))
-        saved_status = "已保存" if state.cartesia_api_key_saved else "未保存"
-        self._cartesia_saved_label = self._body_label(f"当前密钥：{saved_status}", TEXT_MUTED)
-        cartesia_layout.addWidget(self._cartesia_saved_label)
-
-        self.api_key_input = QLineEdit()
-        self.api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
-        placeholder = "已保存；留空保持不变" if state.cartesia_api_key_saved else "未保存；粘贴新密钥后应用"
-        self.api_key_input.setPlaceholderText(placeholder)
-        self.api_key_input.textChanged.connect(self._on_api_key_text_changed)
-        cartesia_layout.addWidget(self.api_key_input)
-
-        cartesia_footer = QHBoxLayout()
-        cartesia_footer.setContentsMargins(0, 8, 0, 0)
-        cartesia_footer.setSpacing(INLINE_GAP)
-        self.clear_api_key_button = QPushButton("清除已保存密钥")
-        self.clear_api_key_button.clicked.connect(self._on_clear_api_key_clicked)
-        cartesia_footer.addWidget(self.clear_api_key_button, 0, Qt.AlignmentFlag.AlignLeft)
-        self.api_key_status_label = self._hint_label("支持粘贴 CARTESIA_API_KEY=...；输入内容只在应用时提交。", TEXT_MUTED)
-        cartesia_footer.addWidget(self.api_key_status_label, 1)
-        cartesia_layout.addLayout(cartesia_footer)
-        parent_layout.addWidget(self._cartesia_key_container)
-
-        # -- Volcengine 子容器 --
-        self._volcengine_key_container = QFrame()
-        volc_layout = QVBoxLayout(self._volcengine_key_container)
-        volc_layout.setContentsMargins(0, 0, 0, 0)
-        volc_layout.setSpacing(6)
-        volc_layout.addWidget(self._section_title("火山引擎 API Key（新控制台 X-Api-Key）"))
-        ve_saved = "已保存" if state.volcengine_access_key_saved else "未保存"
-        self._volc_saved_label = self._body_label(f"当前密钥：{ve_saved}", TEXT_MUTED)
-        volc_layout.addWidget(self._volc_saved_label)
-
-        self._volc_api_key_input = QLineEdit()
-        self._volc_api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
-        ve_placeholder = "已保存；留空保持不变" if state.volcengine_access_key_saved else "未保存；粘贴新密钥后应用"
-        self._volc_api_key_input.setPlaceholderText(ve_placeholder)
-        self._volc_api_key_input.textChanged.connect(self._on_volc_api_key_text_changed)
-        volc_layout.addWidget(self._volc_api_key_input)
-
-        volc_footer = QHBoxLayout()
-        volc_footer.setContentsMargins(0, 8, 0, 0)
-        volc_footer.setSpacing(INLINE_GAP)
-        self._volc_clear_button = QPushButton("清除已保存密钥")
-        self._volc_clear_button.clicked.connect(self._on_clear_volc_key_clicked)
-        volc_footer.addWidget(self._volc_clear_button, 0, Qt.AlignmentFlag.AlignLeft)
-        self._volc_api_key_status_label = self._hint_label("火山引擎新控制台的 API Key；输入内容只在应用时提交。", TEXT_MUTED)
-        volc_footer.addWidget(self._volc_api_key_status_label, 1)
-        volc_layout.addLayout(volc_footer)
-
-        parent_layout.addWidget(self._volcengine_key_container)
-
-        # 按当前 provider 设置初始可见性
-        self._update_api_key_section_for_provider(self.pending_tts_api_provider)
 
     def _build_backend_section(self, parent_layout: QVBoxLayout) -> None:
         section = self._create_section(parent_layout)
@@ -768,41 +666,79 @@ class SettingsWindow:
     def _on_voice_selected(self, label: str) -> None:
         self._set_pending_voice_from_label(label)
 
-    def _on_volc_speaker_id_changed(self, text: str) -> None:
-        """Volcengine Speaker ID 文本变更。"""
-        sid = text.strip()
-        self.pending_voice_id = sid if sid else None
-        self.pending_voice_name = sid if sid else None
-
     def _on_tts_backend_selected(self, backend: str) -> None:
         self.pending_tts_backend = backend
 
+    @property
+    def api_key_input(self):
+        p = PROVIDER_PANELS.get(self.pending_tts_api_provider)
+        return getattr(p, "api_key_input", None) if p is not None else None
+    @api_key_input.setter
+    def api_key_input(self, v): pass
+
+    @property
+    def voice_combo(self):
+        p = PROVIDER_PANELS.get(self.pending_tts_api_provider)
+        return getattr(p, "voice_combo", None) if p is not None else None
+    @voice_combo.setter
+    def voice_combo(self, v): pass
+
+    @property
+    def refresh_voices_button(self):
+        p = PROVIDER_PANELS.get(self.pending_tts_api_provider)
+        return getattr(p, "refresh_btn", None) if p is not None else None
+    @refresh_voices_button.setter
+    def refresh_voices_button(self, v): pass
+
+    @property
+    def voice_status_label(self):
+        p = PROVIDER_PANELS.get(self.pending_tts_api_provider)
+        return getattr(p, "voice_status", None) if p is not None else None
+    @voice_status_label.setter
+    def voice_status_label(self, v): pass
+
+    @property
+    def voice_label_to_id(self) -> dict[str, str]:
+        p = PROVIDER_PANELS.get(self.pending_tts_api_provider)
+        return getattr(p, "voice_label_to_id", {}) if p is not None else {}
+    @voice_label_to_id.setter
+    def voice_label_to_id(self, v): pass
+
+    @property
+    def voice_label_to_name(self) -> dict[str, str]:
+        p = PROVIDER_PANELS.get(self.pending_tts_api_provider)
+        return getattr(p, "voice_label_to_name", {}) if p is not None else {}
+    @voice_label_to_name.setter
+    def voice_label_to_name(self, v): pass
+
+    @property
+    def clear_api_key_button(self):
+        p = PROVIDER_PANELS.get(self.pending_tts_api_provider)
+        return getattr(p, "clear_key_btn", None) if p is not None else None
+    @clear_api_key_button.setter
+    def clear_api_key_button(self, v): pass
+
+    @property
+    def api_key_status_label(self):
+        p = PROVIDER_PANELS.get(self.pending_tts_api_provider)
+        return getattr(p, "api_status", None) if p is not None else None
+    @api_key_status_label.setter
+    def api_key_status_label(self, v): pass
+
     def _on_tts_api_selected(self, provider: str) -> None:
-        """TTS 服务商切换：刷新 API Key 区、生成模式下拉、音色列表。"""
+        """TTS 服务商切换：切换面板可见性 + 刷新生成模式下拉。"""
         if provider == self.pending_tts_api_provider:
             return
         self.pending_tts_api_provider = provider
-        if self._tts_provider_container is None:
-            return
-        # API Key 区切换
-        self._update_api_key_section_for_provider(provider)
         # 生成模式下拉框按 provider 过滤
         self._populate_backend_combo_for_provider(provider)
-        # 音色区：Cartesia 用下拉选择，Volcengine 用手填文本框
-        is_volc = provider == TTS_API_PROVIDER_VOLCENGINE
-        self.voice_combo.setVisible(not is_volc)
-        self.refresh_voices_button.setVisible(not is_volc)
-        if hasattr(self, "_volc_speaker_input"):
-            self._volc_speaker_input.setVisible(is_volc)
-        self.voice_combo.blockSignals(True)
-        self.voice_combo.clear()
-        self.voice_combo.blockSignals(False)
-        self.voice_label_to_id.clear()
-        self.voice_label_to_name.clear()
-        if is_volc:
-            self._set_label(self.voice_status_label, "输入 Speaker ID（火山引擎控制台 → 豆包语音 → 音色列表）", TEXT_MUTED)
-        else:
-            self._set_label(self.voice_status_label, "请点击刷新加载 Cartesia 音色列表", TEXT_WARNING)
+        # 切换面板可见性
+        for name, widget in self._provider_panel_widgets.items():
+            widget.setVisible(name == provider)
+        # 通知面板
+        panel = PROVIDER_PANELS.get(provider)
+        if panel is not None:
+            panel.on_selected()
 
     def _on_log_level_selected(self, log_level: str) -> None:
         self.pending_log_level = log_level if log_level in LOG_LEVELS else "INFO"
@@ -876,68 +812,6 @@ class SettingsWindow:
             self._set_label(self.audio_output_status_label, f"已发现 {len(labels)} 个输出设备", TEXT_MUTED)
         else:
             self._set_label(self.audio_output_status_label, "未发现输出设备，将使用系统默认", TEXT_MUTED)
-
-    def _on_api_key_text_changed(self, _text: str) -> None:
-        self.pending_cartesia_api_key_action = "unchanged"
-        self.pending_cartesia_api_key_value = None
-        self._set_label(self.api_key_status_label, "输入新密钥后点击应用；留空保持不变。", TEXT_MUTED)
-
-    def _on_clear_api_key_clicked(self, _checked: bool = False) -> None:
-        self.api_key_input.blockSignals(True)
-        self.api_key_input.clear()
-        self.api_key_input.blockSignals(False)
-        self.pending_cartesia_api_key_action = "clear"
-        self.pending_cartesia_api_key_value = None
-        self._set_label(self.api_key_status_label, "点击应用后清除已保存密钥。", TEXT_WARNING)
-
-    def _sync_pending_cartesia_api_key(self) -> None:
-        if self.pending_cartesia_api_key_action == "clear":
-            self.pending_cartesia_api_key_value = None
-            return
-        normalized = wordy.secret.normalize_api_key_input(self.api_key_input.text())
-        if normalized:
-            self.pending_cartesia_api_key_action = "set"
-            self.pending_cartesia_api_key_value = normalized
-            return
-        self.pending_cartesia_api_key_action = "unchanged"
-        self.pending_cartesia_api_key_value = None
-
-    # ── Volcengine API Key 处理 ──────────────────────────────────────
-
-    def _update_api_key_section_for_provider(self, provider: str) -> None:
-        """按 TTS 服务商切换 API Key 设置区可见性。"""
-        is_cartesia = provider == TTS_API_PROVIDER_CARTESIA
-        if hasattr(self, "_cartesia_key_container") and self._cartesia_key_container is not None:
-            self._cartesia_key_container.setVisible(is_cartesia)
-        if hasattr(self, "_volcengine_key_container") and self._volcengine_key_container is not None:
-            self._volcengine_key_container.setVisible(not is_cartesia)
-
-    def _on_volc_api_key_text_changed(self, _text: str) -> None:
-        self.pending_volcengine_access_key_action = "unchanged"
-        self.pending_volcengine_access_key_value = None
-        self._set_label(self._volc_api_key_status_label, "输入新密钥后点击应用；留空保持不变。", TEXT_MUTED)
-
-    def _on_clear_volc_key_clicked(self, _checked: bool = False) -> None:
-        self._volc_api_key_input.blockSignals(True)
-        self._volc_api_key_input.clear()
-        self._volc_api_key_input.blockSignals(False)
-        self.pending_volcengine_access_key_action = "clear"
-        self.pending_volcengine_access_key_value = None
-        self._set_label(self._volc_api_key_status_label, "点击应用后清除已保存密钥。", TEXT_WARNING)
-
-    def _sync_pending_volcengine_key(self) -> None:
-        """同步 Volcengine Access Key pending 状态。"""
-        if self.pending_volcengine_access_key_action == "clear":
-            self.pending_volcengine_access_key_value = None
-            return
-        raw = self._volc_api_key_input.text() if hasattr(self, "_volc_api_key_input") else ""
-        normalized = raw.strip()
-        if normalized:
-            self.pending_volcengine_access_key_action = "set"
-            self.pending_volcengine_access_key_value = normalized
-            return
-        self.pending_volcengine_access_key_action = "unchanged"
-        self.pending_volcengine_access_key_value = None
 
     def _on_audio_output_selected(self, device_label: str) -> None:
         if self.pending_audio_routing_enabled:

@@ -459,8 +459,8 @@ class WordyApp:
         self._enqueue_retire_current()
         self._install_tts_worker(new_worker)
         logger.info("TTS 服务商已切换为 %s，引擎已重建。", provider)
-        # 切换后触发音色重新加载
-        self.overlay._start_load_voices(show_status=False)
+        # 触发后台加载（含 loading 指示器，用户可见）
+        self.overlay._start_load_voices(show_status=True)
 
     def _on_volcengine_credentials_change(
         self, access_key: str | None = None

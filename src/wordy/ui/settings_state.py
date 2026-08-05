@@ -27,6 +27,10 @@ class SettingsState:
     voices_cache: list[VoiceRecord]
     voices_loading: bool
     voice_fetch_error: Exception | None
+    cartesia_voice_id: str | None = None
+    cartesia_voice_name: str | None = None
+    volcengine_voice_id: str | None = None
+    volcengine_voice_name: str | None = None
     audio_output_devices: list[AudioOutputDevice] | list[str] = field(default_factory=list)
     audio_output_device_name: str | None = None
     audio_output_device_identity: AudioOutputIdentity | None = None
@@ -59,6 +63,10 @@ class PendingSettings:
     overlay_opacity: float
     tts_backend: str
     fixed_center: bool
+    cartesia_voice_id: str | None = None
+    cartesia_voice_name: str | None = None
+    volcengine_voice_id: str | None = None
+    volcengine_voice_name: str | None = None
     audio_output_device_name: str | None = None
     audio_output_device_identity: AudioOutputIdentity | None = None
     cartesia_api_key_action: str = "unchanged"

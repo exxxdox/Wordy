@@ -25,7 +25,7 @@ from wordy.tts.engine import BackendTTSEngine, TTSAudioPlayer
 
 class FakeFakeEngine(BackendTTSEngine):
     """Fake TTS engine for testing."""
-    def __init__(self, audio_player, api_key=None, voice_id=None, volume=1.0):
+    def __init__(self, audio_player, api_key=None, voice_id=None, volume=1.0, access_key=None):
         self.audio_player = audio_player
         self.api_key = api_key
         self.voice_id = voice_id
