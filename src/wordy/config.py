@@ -103,7 +103,6 @@ class AppSettings:
     # ---- 内部 ----
     _loaded: bool = field(default=False, init=False, repr=False)
     _config_file: Path | None = field(default=None, init=False, repr=False)
-    _listeners: list = field(default_factory=list, init=False, repr=False)
     _save_timer: threading.Timer | None = field(default=None, init=False, repr=False)
     _save_lock: ClassVar[threading.Lock] = threading.Lock()
 
@@ -132,7 +131,6 @@ class AppSettings:
         """写入 provider 子 dict 中的字段，并触发 notify + debounce save。"""
         self.get_provider(provider)[key] = value
         if self._loaded:
-            self._notify_listeners(key, value)
             self._debounced_save()
 
     # ── 向后兼容属性：委托给 get_provider ────────────────────────────
@@ -144,7 +142,6 @@ class AppSettings:
     def tts_backend(self, value: str) -> None:
         self.active_provider_config()["backend"] = value
         if self._loaded:
-            self._notify_listeners("tts_backend", value)
             self._debounced_save()
 
     @property
@@ -295,33 +292,11 @@ class AppSettings:
             value = _clamp(float(value), lo, hi)
         object.__setattr__(self, name, value)
         if self._loaded:
-            self._notify_listeners(name, value)
             if name in self._DEBOUNCED_FIELDS:
                 self._debounced_save()
             else:
                 self.save()
 
-    # ── 监听器 ─────────────────────────────────────────────────────────
-
-    def add_listener(self, cb) -> None:
-        """注册字段变更监听器 ``cb(field_name, value)``。"""
-        self._listeners.append(cb)
-
-    def remove_listener(self, cb) -> bool:
-        """移除监听器。返回 True 表示成功移除。"""
-        try:
-            self._listeners.remove(cb)
-            return True
-        except ValueError:
-            return False
-
-    def _notify_listeners(self, name: str, value: object) -> None:
-        """通知所有监听器某字段已变更。"""
-        for cb in self._listeners:
-            try:
-                cb(name, value)
-            except Exception:
-                pass  # 监听器异常不应影响保存流程
 
     # ── 去抖动保存 ────────────────────────────────────────────────────
 
@@ -388,10 +363,6 @@ class AppSettings:
                 setattr(self, key, value)
         finally:
             self._loaded = old_loaded
-        # 批量通知（一次性）
-        for key, value in kwargs.items():
-            if not key.startswith("_") and hasattr(self, key):
-                self._notify_listeners(key, value)
         return self.save(config_file=config_file)
 
 

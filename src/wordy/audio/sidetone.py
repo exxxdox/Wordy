@@ -174,9 +174,4 @@ class SidetoneAudioPlayer:
         """设置主设备输出目标（不影响返听设备）。"""
         self._main.set_output_device(output_device)
 
-    def set_output_device_name(self, name: str | None) -> None:
-        """设置主设备输出名称（不影响返听设备）。"""
-        if name is None:
-            self._main.set_output_device(None)
-        else:
-            self._main.set_output_device({"name": name, "host_api_name": None})
+

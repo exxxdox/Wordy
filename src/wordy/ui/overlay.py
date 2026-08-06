@@ -44,7 +44,6 @@ OUTSIDE_CLICK_INTERVAL_MS = 80
 FOCUS_CLEAR_DELAY_MS = 260
 SETTINGS_IGNORE_FOCUS_DELAY_MS = 300
 VoiceInfo: TypeAlias = dict[str, object]
-WindowPosition: TypeAlias = dict[str, int]
 
 
 def normalize_input_text(text: str) -> str:
@@ -152,14 +151,6 @@ class InputOverlay:
             return self._volcengine_voices_cache
         return self._cartesia_voices_cache
 
-    def _set_active_voice(self, voice_id: str | None, voice_name: str | None) -> None:
-        """设置当前服务商的音色。"""
-        if self._cfg.active_tts_provider == TTS_API_PROVIDER_VOLCENGINE:
-            self._cfg.volcengine_voice_id = voice_id
-            self._cfg.volcengine_voice_name = voice_name
-        else:
-            self._cfg.cartesia_voice_id = voice_id
-            self._cfg.cartesia_voice_name = voice_name
 
     def _set_active_voices_cache(self, voices: list[VoiceInfo]) -> None:
         """设置当前服务商的音色缓存。"""

@@ -40,9 +40,5 @@ INPUT_BORDER = "#070b15"
 # 设置图标默认色（未悬停）
 CONFIG_BUTTON_IDLE = "#4a6b66"
 
-# 透明色键（用于无边框圆角窗口透明背景）
-TRANSPARENT_COLOR = "#ff00ff"
-
 # 字体栈 —— 终端/极客风格用等宽字体，UI 标签用系统无衬线
 MONO_FONT = '"Cascadia Code", "JetBrains Mono", "Consolas", "Courier New", monospace'
-UI_FONT = '"Segoe UI", system-ui, sans-serif'

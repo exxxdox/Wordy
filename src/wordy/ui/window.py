@@ -9,7 +9,7 @@ import ctypes
 import importlib
 import sys
 from ctypes import wintypes
-from typing import Any, Protocol, SupportsInt, cast
+from typing import Any, Protocol, cast
 
 SW_SHOW = 5
 _IS_WINDOWS = sys.platform.startswith("win")

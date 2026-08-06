@@ -9,7 +9,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Protocol
+from typing import Any
 
 from PySide6.QtWidgets import (
     QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout,
@@ -26,35 +26,6 @@ from wordy.ui.settings_widgets import NoWheelComboBox
 INPUT_TEXT_COLOR = GREEN_ACCENT
 INLINE_GAP = 10
 BUTTON_MIN_WIDTH = 88
-
-
-class TTSProviderPanel(Protocol):
-    """每个 TTS 服务商提供一个面板，贡献自己的设置 UI 控件。"""
-
-    def build(
-        self, parent: QVBoxLayout, state: Any, on_refresh_voices: Any,
-        on_field_changed: Any = None,
-    ) -> None:
-        """首次构建面板 UI。"""
-        ...
-
-    def on_selected(self) -> None:
-        """provider 被选中时调用（切换 provider、初次显示）。"""
-        ...
-
-    def set_voices_loading(self) -> None:
-        """音色加载中状态。"""
-        ...
-
-    def set_voices_error(self, error: Exception | str) -> None:
-        """音色加载失败状态。"""
-        ...
-
-    def set_voices_loaded(
-        self, voices: list[dict[str, object]], selected_voice_id: str | None
-    ) -> list[str]:
-        """音色加载完成，返回 label 列表。"""
-        ...
 
 
 # ── 面板基类：共享控件构建 ────────────────────────────────────────────

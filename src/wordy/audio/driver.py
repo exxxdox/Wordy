@@ -9,7 +9,6 @@
 from __future__ import annotations
 
 import logging
-import subprocess
 import webbrowser
 from typing import TypedDict
 
@@ -123,44 +122,12 @@ class VBCableDriverManager:
         return status.get("output_device_index")
 
     @staticmethod
-    def get_virtual_input_index() -> int | None:
-        """获取虚拟麦克风（CABLE Output）的设备索引，用于读取。"""
-        status = VBCableDriverManager.get_status()
-        return status.get("input_device_index")
-
-    @staticmethod
     def open_download_page() -> None:
         """打开 VB-CABLE 下载页面。"""
         logger.debug("正在打开 VB-CABLE 下载页面: %s", VB_CABLE_DOWNLOAD_URL)
         webbrowser.open(VB_CABLE_DOWNLOAD_URL)
 
-    @staticmethod
-    def get_install_instructions() -> str:
-        """返回安装指导文本。"""
-        return (
-            "本功能需要 VB-CABLE 虚拟音频驱动。\n\n"
-            "安装步骤:\n"
-            "1. 点击“打开下载页面”前往 vb-audio.com\n"
-            "2. 下载 VBCABLE_Driver_Pack45.zip\n"
-            "3. 解压后右键 VBCABLE_Setup_x64.exe → 以管理员身份运行\n"
-            "4. 安装完成后重启电脑\n"
-            "5. 返回本应用，音频侦听功能将自动启用"
-        )
 
-    @staticmethod
-    def test_signing_enabled() -> bool:
-        """检查系统是否启用了测试签名模式（开发调试用）。"""
-        try:
-            result = subprocess.run(
-                ["bcdedit", "/enum", "{current}"],
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=5,
-            )
-            return "testsigning" in result.stdout.lower() and "Yes" in result.stdout
-        except Exception:  # noqa: BLE001
-            return False
 
 
 __all__ = [

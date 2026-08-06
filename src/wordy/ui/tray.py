@@ -104,10 +104,6 @@ class _LogWindow(QWidget):
         layout.addWidget(self._text_edit)
         self.setLayout(layout)
 
-    @property
-    def text_edit(self) -> QPlainTextEdit:
-        return self._text_edit
-
     def append_log(self, message: str) -> None:
         scrollbar = self._text_edit.verticalScrollBar()
         at_bottom = scrollbar.value() >= scrollbar.maximum() - 4

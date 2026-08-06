@@ -68,15 +68,12 @@ def test_palette_backwards_compat_aliases_preserved() -> None:
         "BUTTON_BG",
         "BUTTON_ACTIVE_BG",
         "CONFIG_BUTTON_IDLE",
-        "TRANSPARENT_COLOR",
     )
     for name in legacy:
         assert hasattr(theme, name), f"wordy.ui.theme dropped legacy token: {name}"
         value = getattr(theme, name)
         assert isinstance(value, str), f"{name} must be a string, got {type(value)!r}"
         assert _HEX_RE.match(value), f"{name}={value!r} is not a 6-digit hex color"
-
-    assert theme.TRANSPARENT_COLOR == "#ff00ff"
 
 
 # ---------------------------------------------------------------------------

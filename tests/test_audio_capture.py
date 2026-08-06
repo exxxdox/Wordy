@@ -83,31 +83,6 @@ class TestAudioCapture:
         mock_stream.stop.assert_called_once()
         mock_stream.close.assert_called_once()
 
-    @patch("wordy.audio.capture.sd.query_devices")
-    @patch("wordy.audio.capture.sd.query_hostapis")
-    @patch("wordy.audio.capture.sd.default")
-    def test_get_default_input_device_name(self, mock_default, mock_hostapis, mock_query_devices):
-        """get_default_input_device_name 返回标记 is_default 的设备名。"""
-        mock_query_devices.return_value = [
-            {"name": "CABLE Output", "max_input_channels": 2, "max_output_channels": 0, "hostapi": 0, "default_samplerate": 48000.0},
-            {"name": "麦克风", "max_input_channels": 2, "max_output_channels": 0, "hostapi": 0, "default_samplerate": 48000.0},
-            {"name": "立体声混音", "max_input_channels": 2, "max_output_channels": 0, "hostapi": 0, "default_samplerate": 44100.0},
-        ]
-        mock_hostapis.return_value = [{"name": "Windows WASAPI"}]
-        mock_default.device = [1, None]
-
-        name = AudioCapture.get_default_input_device_name()
-        assert name == "麦克风"
-
-    @patch("wordy.audio.capture.sd.query_devices")
-    @patch("wordy.audio.capture.sd.query_hostapis")
-    def test_get_default_input_device_name_none_when_no_devices(self, mock_hostapis, mock_query_devices):
-        """没有输入设备时 get_default_input_device_name 返回 None。"""
-        mock_query_devices.return_value = []
-        mock_hostapis.return_value = [{"name": "Windows WASAPI"}]
-
-        name = AudioCapture.get_default_input_device_name()
-        assert name is None
 
     @patch("wordy.audio.capture.sd.RawInputStream")
     def test_callback_forwards_data(self, mock_stream_class):

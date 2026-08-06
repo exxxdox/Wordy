@@ -207,12 +207,8 @@ class TestAudioRouter:
         assert router._mic_device is None
         assert router.get_stats().listen_configured is False
 
-    def test_noop_methods_dont_crash(self):
-        """兼容的 no-op 方法不应抛异常。"""
+    def test_set_mic_device_with_string_does_not_crash(self):
+        """set_mic_device 应能接受字符串设备名不抛异常。"""
         router = AudioRouter()
         router.set_mic_device("test")
-        router.set_gains(mic=1.0, tts=1.0)
-        router.inject_tts(b"")
-        router.inject_tts_array(None)  # type: ignore[arg-type]
-        router.inject_tts_from_wav(b"", 44100, 1)
-        router.set_on_stats(None)
+        assert router._mic_device == "test"

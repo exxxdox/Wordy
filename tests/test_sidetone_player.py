@@ -48,14 +48,6 @@ class TestSidetoneAudioPlayer:
         wrapper = SidetoneAudioPlayer(main, sidetone)
         assert wrapper.output_device_name == "Speakers"
 
-    def test_output_device_name_setter_delegates_to_main(self):
-        main, sidetone = self._make_players()
-        main.reset_mock()
-        wrapper = SidetoneAudioPlayer(main, sidetone)
-        wrapper.set_output_device_name("New Device")
-        main.set_output_device.assert_called_once_with(
-            {"name": "New Device", "host_api_name": None})
-
     def test_output_device_delegates_to_main(self):
         main, sidetone = self._make_players()
         dev = {"name": "Test", "host_api_name": "WASAPI"}
@@ -280,10 +272,3 @@ class TestSidetoneAudioPlayer:
         wrapper.set_output_device({"name": "CABLE Input", "host_api_name": "WASAPI"})
         main.set_output_device.assert_called_once_with(
             {"name": "CABLE Input", "host_api_name": "WASAPI"})
-
-    def test_set_output_device_name_affects_main_only(self):
-        main, sidetone = self._make_players()
-        wrapper = SidetoneAudioPlayer(main, sidetone)
-        wrapper.set_output_device_name("Speakers")
-        main.set_output_device.assert_called_once_with(
-            {"name": "Speakers", "host_api_name": None})

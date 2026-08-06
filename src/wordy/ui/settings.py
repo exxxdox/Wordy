@@ -95,11 +95,8 @@ class SettingsWindow:
         self.fixed_center_check: QCheckBox = QCheckBox()
         # 音频侦听 UI
         self.audio_route_enabled_check: QCheckBox = QCheckBox()
-        self.virtual_output_combo: QComboBox = NoWheelComboBox()
         self.audio_route_status_label: QLabel = QLabel()
         self.vb_cable_install_button: QPushButton = QPushButton()
-        self._input_device_names: list[str] = []
-        self._output_device_names: list[str] = []
         # TTS 服务商专属设置容器
         self._tts_provider_container: QFrame | None = None
 

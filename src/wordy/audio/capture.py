@@ -62,7 +62,6 @@ class AudioCapture:
         self.on_data = on_data
 
         self._stream: sd.RawInputStream | None = None
-        self._device_index: int | None = None
         self._lock = threading.Lock()
         self._running = False
 
@@ -137,15 +136,6 @@ class AudioCapture:
                 return dev["index"]
         return None
 
-    @staticmethod
-    def get_default_input_device_name() -> str | None:
-        """返回系统默认 WASAPI 输入设备名称，未找到返回 ``None``。"""
-        devices = AudioCapture.list_input_devices()
-        for dev in devices:
-            if dev["is_default"]:
-                return dev["name"]
-        return None
-
     def _resolve_device_index(self) -> int | None:
         """解析目标设备索引。"""
         if self.device_name is None:
@@ -193,7 +183,6 @@ class AudioCapture:
                 )
                 self._stream.start()
                 self._running = True
-                self._device_index = device_idx
                 logger.info(
                     "音频捕获已启动: device=%s, sr=%s, ch=%s, block=%s",
                     self.device_name or f"[{device_idx}]",
@@ -213,7 +202,6 @@ class AudioCapture:
             self._running = False
             stream = self._stream
             self._stream = None
-            self._device_index = None
 
         if stream is not None:
             try:
@@ -227,17 +215,6 @@ class AudioCapture:
         """返回当前是否正在捕获。"""
         with self._lock:
             return self._running and self._stream is not None
-
-    def set_device(self, device_name: str | None) -> bool:
-        """动态切换输入设备。设备名未变更时直接返回 ``True``。"""
-        if device_name == self.device_name:
-            return True
-        was_running = self.is_running()
-        self.stop()
-        self.device_name = device_name
-        if was_running:
-            return self.start()
-        return True
 
 
 __all__ = ["AudioCapture", "InputDeviceInfo", "DEFAULT_SAMPLE_RATE", "DEFAULT_BLOCKSIZE"]

@@ -248,17 +248,4 @@ class AudioRouter:
             return self.start(mic_device=mic_device)
         return True
 
-    def set_gains(self, mic: float | None = None, tts: float | None = None) -> None:
-        pass
 
-    def inject_tts(self, data: bytes) -> None:  # noqa: ARG002
-        pass
-
-    def inject_tts_array(self, arr: object) -> None:  # noqa: ARG002
-        pass
-
-    def inject_tts_from_wav(self, pcm_data: bytes, src_rate: int, src_channels: int) -> None:  # noqa: ARG002
-        pass
-
-    def set_on_stats(self, callback: object) -> None:
-        pass

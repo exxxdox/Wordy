@@ -154,21 +154,6 @@ class TestVBCableDriverManager:
             idx = VBCableDriverManager.get_virtual_output_index()
             assert idx is None
 
-    def test_get_virtual_input_index(self):
-        """get_virtual_input_index 返回输入设备索引。"""
-        devices = [
-            {"name": "CABLE Output (VB-Audio)", "max_input_channels": 2, "max_output_channels": 0},
-        ]
-        with patch("wordy.audio.driver.sd.query_devices", return_value=devices):
-            idx = VBCableDriverManager.get_virtual_input_index()
-            assert idx == 0
-
-    def test_get_install_instructions_returns_text(self):
-        """安装指导返回非空文本。"""
-        text = VBCableDriverManager.get_install_instructions()
-        assert isinstance(text, str)
-        assert len(text) > 0
-        assert "VB-CABLE" in text or "VB" in text
 
     def test_constants(self):
         """验证常量值。"""
@@ -176,8 +161,3 @@ class TestVBCableDriverManager:
         assert VB_CABLE_OUTPUT_NAME == "CABLE Input"
         assert "vb-audio.com" in VB_CABLE_DOWNLOAD_URL
 
-    def test_test_signing_enabled_handles_subprocess_error(self):
-        """bcdedit 调用失败时不抛出异常。"""
-        with patch("wordy.audio.driver.subprocess.run", side_effect=FileNotFoundError):
-            result = VBCableDriverManager.test_signing_enabled()
-            assert result is False
