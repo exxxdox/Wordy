@@ -206,7 +206,10 @@ class TTSManager:
         configured = getattr(self._settings, "cartesia_tts_backend", None)
         if configured and configured in TTS_BACKENDS:
             return configured
-        return getattr(self._settings, "tts_backend", None) or DEFAULT_TTS_BACKEND
+        fallback = getattr(self._settings, "tts_backend", None)
+        if fallback and fallback in TTS_BACKENDS:
+            return fallback
+        return DEFAULT_TTS_BACKEND
 
     # ── API Key 更新 ──────────────────────────────────────────────────────
 

@@ -20,6 +20,7 @@ import wordy.secret
 from wordy.secret import KeyringUnavailableError
 from wordy.routing_controller import RoutingController
 from wordy.tts.constants import (
+    DEFAULT_TTS_BACKEND,
     TTS_API_PROVIDER_VOLCENGINE,
     TTS_BACKEND_CARTESIA_BYTES,
     TTS_BACKEND_CARTESIA_REALTIME,
@@ -146,7 +147,11 @@ class WordyApp:
         configured = getattr(self._settings, "cartesia_tts_backend", None)
         if configured and configured in TTS_BACKENDS:
             return configured
-        return getattr(self._settings, "tts_backend", None) or TTS_BACKEND_VOLCENGINE_STREAMING
+        # 兼容旧配置文件中的旧常量值（如 "cartesia-bytes" → "Cartesia Bytes"）
+        fallback = getattr(self._settings, "tts_backend", None)
+        if fallback and fallback in TTS_BACKENDS:
+            return fallback
+        return DEFAULT_TTS_BACKEND
 
     # ── 音频播放器 ────────────────────────────────────────────────────────
 
