@@ -21,12 +21,12 @@ uv run python -m wordy      # 启动应用
 .\dev.ps1                      # 开发模式（设置 EASY_TTS_DEV=1）
 
 # 测试
-uv run pytest tests/ -v        # 全量
-uv run pytest tests/test_app_config.py -v            # 单文件
-uv run pytest tests/test_app_config.py::test_update_volume_clamps -v  # 单用例
+uv run python -m pytest tests/ --tb=no -q  # 全量
+uv run python -m pytest tests/test_app_config.py -v            # 单文件
+uv run python -m pytest tests/test_app_config.py::test_update_volume_clamps -v  # 单用例
 
 # 类型检查
-uv run pyright main.py src/
+uv run python -m pyright src/ tests/
 ```
 
 ## 架构
@@ -81,8 +81,10 @@ driver.py(VBCableDriverManager) → config.py(AppSettings) → main.py(生命周
 
 ## 测试注意事项
 
+- `conftest.py` 提供 session 级 `qapp` fixture（全局唯一 QApplication + offscreen 平台），PySide6 测试通过参数 `qapp` 引用
 - `test_pyside6_*` 需要 display server，CI 环境可能跳过
 - `test_native_hotkey.py` 仅 Windows，部分测试依赖实际 Win32 API
 - 涉及 `USER_CONFIG_FILE` 的测试用 `monkeypatch.setattr(wordy.config, "USER_CONFIG_FILE", tmp_path)` 隔离
 - PySide6 类型桩不完整——`_Widget`/`_SettingsDialog` 协议不兼容警告是已知误报，忽略
-- `conftest.py` 提供共享 fixtures（`tmp_config_file`、`mock_player` 等）
+- `conftest.py` 提供共享 fixtures（`tmp_config_file`、`mock_player`、`qapp` 等）
+- 全量测试必须用 `uv run python -m pytest`（`uv run pytest` 会因 uv trampoline 截断输出）
