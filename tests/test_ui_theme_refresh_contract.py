@@ -109,15 +109,15 @@ def _new_settings_window(monkeypatch: pytest.MonkeyPatch):
         raise
 
     app = QApplication.instance() or QApplication(sys.argv[:1])
+    # AppSettings 负责可持久化字段，SettingsState 仅传运行时状态
+    from wordy.config import AppSettings
+    cfg = AppSettings.load()
+    cfg.hotkey = "f6"
+    cfg.name = "F6"
+    cfg.volume = 1.0
+    cfg.overlay_opacity = 1.0
+    cfg.fixed_center = True
     state = SettingsState(
-        hotkey="f6",
-        hotkey_name="F6",
-        voice_id="voice-a",
-        voice_name="Old Voice",
-        volume=1.0,
-        overlay_opacity=1.0,
-        tts_backend="cartesia-bytes",
-        fixed_center=True,
         voices_cache=[{"id": "voice-a", "name": "Old Voice"}],
         voices_loading=False,
         voice_fetch_error=None,
@@ -129,7 +129,7 @@ def _new_settings_window(monkeypatch: pytest.MonkeyPatch):
             state,
             on_record_hotkey=lambda: None,
             on_refresh_voices=lambda: None,
-            on_apply=lambda _window: None,
+            on_field_changed=lambda _field, _value: None,
             on_close=lambda: None,
         )
     except Exception as exc:  # pragma: no cover - environment-specific Qt failures
@@ -209,7 +209,8 @@ def _install_native_hotkey_stub(monkeypatch: pytest.MonkeyPatch) -> None:
             self.started = False
 
     setattr(module, "NativeHotkeyListener", NativeHotkeyListener)
-    from wordy.hotkey import iter_hotkey_parts, normalize_key_part, split_hotkey
+    from wordy.hotkey import display_hotkey, iter_hotkey_parts, normalize_key_part, split_hotkey
+    setattr(module, "display_hotkey", display_hotkey)
     setattr(module, "iter_hotkey_parts", iter_hotkey_parts)
     setattr(module, "normalize_key_part", normalize_key_part)
     setattr(module, "split_hotkey", split_hotkey)

@@ -54,7 +54,8 @@ def _install_native_hotkey_stub(monkeypatch: pytest.MonkeyPatch) -> None:
             self.started = False
 
     setattr(module, "NativeHotkeyListener", NativeHotkeyListener)
-    from wordy.hotkey import iter_hotkey_parts, normalize_key_part, split_hotkey
+    from wordy.hotkey import display_hotkey, iter_hotkey_parts, normalize_key_part, split_hotkey
+    setattr(module, "display_hotkey", display_hotkey)
     setattr(module, "iter_hotkey_parts", iter_hotkey_parts)
     setattr(module, "normalize_key_part", normalize_key_part)
     setattr(module, "split_hotkey", split_hotkey)

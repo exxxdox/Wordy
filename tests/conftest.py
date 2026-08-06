@@ -128,6 +128,23 @@ def _install_keyring_stub_module() -> None:
 _install_keyring_stub_module()
 
 
+@pytest.fixture(scope="session")
+def qapp():
+    """Session 级 QApplication：整个测试套件只创建一次，避免资源耗尽。
+
+    必须用 offscreen 平台以避免弹出窗口和跨测试 Qt 状态泄漏。
+    """
+    import os
+
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+
+    app = QApplication.instance()
+    if app is None:
+        app = QApplication(["pytest"])
+    yield app
+
+
 @pytest.fixture(autouse=True)
 def cleanup_qt_application() -> "Iterator[None]":
     """Tear down leaked Qt widgets/apps so PySide tests do not crash at exit."""
