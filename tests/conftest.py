@@ -20,6 +20,7 @@ code's ``_keyring_available()`` probe return False.
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 from types import ModuleType
 from typing import TYPE_CHECKING
 
@@ -206,6 +207,21 @@ for _name in _STUBBABLE_MODULES:
         pass
     if _name in sys.modules:
         _REAL_MODULE_SNAPSHOT[_name] = sys.modules[_name]
+
+
+@pytest.fixture(autouse=True)
+def _isolate_config_file(monkeypatch: pytest.MonkeyPatch, tmp_path: "Path") -> "Iterator[None]":
+    """将所有测试的默认配置文件重定向到临时目录。
+
+    防止测试意外读写 ~/.wordy.toml。显式传 config_file= 的测试不受影响。
+    同时清除 load() 缓存，避免跨测试缓存污染。
+    """
+    import wordy.config
+
+    monkeypatch.setattr(wordy.config, "_cached_settings", None, raising=False)
+    monkeypatch.setattr(wordy.config, "_cached_config_file", None, raising=False)
+    monkeypatch.setattr(wordy.config, "USER_CONFIG_FILE", tmp_path / "test_config.toml")
+    yield
 
 
 @pytest.fixture(autouse=True)
