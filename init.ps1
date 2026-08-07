@@ -1,4 +1,4 @@
-# Easy TTS 环境初始化脚本（uv 版）
+# Wordy 环境初始化脚本（uv 版）
 # 用法：.\init.ps1 [-NoPause] [-PythonVersion 3.12]
 
 param(

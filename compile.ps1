@@ -1,4 +1,4 @@
-# Easy TTS 打包脚本（uv 版）
+# Wordy 打包脚本（uv 版）
 # 用法：.\compile.ps1 [-Clean] [-Sync] [-NoPause]
 #
 #   -Clean   清理 PyInstaller 缓存，强制全量重编译

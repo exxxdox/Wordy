@@ -1,8 +1,8 @@
-# Easy TTS 开发启动脚本（显示控制台日志）
+# Wordy 开发启动脚本（显示控制台日志）
 $ErrorActionPreference = 'Stop'
 Set-Location -LiteralPath $PSScriptRoot
 
-Write-Host '[dev] Starting Easy TTS...'
+Write-Host '[dev] Starting Wordy...'
 uv run python -m wordy
 $exitCode = $LASTEXITCODE
 
