@@ -18,7 +18,7 @@ jobs:
         uses: astral-sh/setup-uv@v5
 
       - name: Build
-        run: .\compile.ps1 -Clean -NoPause
+        run: .\wordy.ps1 build -Clean -NoPause
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v2

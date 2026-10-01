@@ -58,6 +58,12 @@ class SidetoneAudioPlayer:
 
     # ── TTSAudioPlayer 协议方法 ──────────────────────────────────────
 
+    def _needs_sidetone(self, device_index: int | None) -> bool:
+        # 主输出已经使用系统默认设备时，再返听会叠加同一段声音，造成爆音和回声。
+        return self._sidetone_enabled and (
+            device_index is not None or self._main.output_device_name is not None
+        )
+
     def play_wav(
         self,
         wav_path: str | BytesIO,
@@ -68,7 +74,7 @@ class SidetoneAudioPlayer:
         BytesIO 在主播放后被消费，seek(0) 重置后传给返听播放器。
         """
         result = self._main.play_wav(wav_path, device_index=device_index)
-        if not result or not self._sidetone_enabled:
+        if not result or not self._needs_sidetone(device_index):
             return result
         try:
             if isinstance(wav_path, BytesIO):
@@ -100,24 +106,33 @@ class SidetoneAudioPlayer:
             return False
 
         self._sidetone_stream_dead = False
-        if not self._sidetone_enabled:
+        if not self._needs_sidetone(device_index):
+            self._sidetone_stream_dead = True
             return True
 
         try:
+            # 主设备可能回退了格式或采样率，返听必须按实际 PCM 配置打开。
+            main_config = self._main.get_stream_config()
             sidetone_ok = self._sidetone.open_stream(
-                audio_format, channels, rate,
+                main_config.get("format") or audio_format, channels,
+                main_config.get("rate") or rate,
                 device_index=None,
                 frames_per_buffer=frames_per_buffer,
             )
             if not sidetone_ok:
                 self._sidetone_stream_dead = True
                 logger.warning("返听设备流打开失败，仅主链路工作")
+            elif self._sidetone.get_stream_config() != main_config:
+                # 不把同一 PCM 当作另一种格式播放；不兼容时保留主输出。
+                self._sidetone_stream_dead = True
+                self._sidetone.close_stream()
+                logger.warning("返听设备实际格式或采样率与主输出不一致，仅主链路工作")
         except Exception:
             self._sidetone_stream_dead = True
             logger.warning("返听设备流打开失败", exc_info=True)
 
-        # 创建新的 executor 用于本次流期间的异步返听写入
-        self._sidetone_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="sidetone-write")
+        if not self._sidetone_stream_dead:
+            self._sidetone_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="sidetone-write")
         return True
 
     def write_stream(self, data: bytes) -> None:
@@ -149,7 +164,8 @@ class SidetoneAudioPlayer:
             executor.shutdown(wait=True)
 
         self._main.close_stream()
-        if self._sidetone_enabled:
+        # 开关可能已关闭，但原先打开的返听流仍须释放。
+        if self._sidetone_enabled or executor is not None:
             try:
                 self._sidetone.close_stream()
             except Exception:

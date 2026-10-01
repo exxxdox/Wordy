@@ -10,7 +10,6 @@ from wordy.ui.theme import (
     ACCENT_PRESSED,
     BUTTON_ACTIVE_BG,
     BUTTON_BG,
-    BUTTON_GHOST_BORDER,
     ELEVATED_BG,
     GREEN_ACCENT,
     UI_FONT,
@@ -26,7 +25,7 @@ from wordy.ui.theme import (
 
 def build_settings_stylesheet() -> str:
     """构建设置窗口的完整 QSS 样式表。"""
-    # 中文正文使用系统 UI 字体和明确焦点反馈，科技感不以牺牲可读性为代价。
+    # 常态用色面和间距形成层次；仅输入焦点使用底部提示线，保留键盘可见反馈。
     return f'''
         QWidget {{
             font-family: {UI_FONT};
@@ -38,7 +37,7 @@ def build_settings_stylesheet() -> str:
         }}
         QFrame#dialogShell {{
             background: {SURFACE_BG};
-            border: 1px solid {BUTTON_GHOST_BORDER};
+            border: none;
             border-radius: 16px;
         }}
         QLabel#dialogTitle {{
@@ -85,15 +84,15 @@ def build_settings_stylesheet() -> str:
             alignment: center;
         }}
         QTabWidget#settingsTabs QTabBar {{
-            background: {WINDOW_BG};
-            border: 1px solid {BUTTON_GHOST_BORDER};
+            background: transparent;
+            border: none;
             border-radius: 10px;
             padding: 3px;
         }}
         QTabWidget#settingsTabs QTabBar::tab {{
             background: transparent;
             color: {TEXT_MUTED};
-            border: 1px solid transparent;
+            border: none;
             border-radius: 7px;
             padding: 9px 14px;
             margin: 0 1px;
@@ -104,26 +103,23 @@ def build_settings_stylesheet() -> str:
         QTabWidget#settingsTabs QTabBar::tab:hover {{
             background: {ELEVATED_BG};
             color: {TEXT_PRIMARY};
-            border-color: {BUTTON_GHOST_BORDER};
         }}
         QTabWidget#settingsTabs QTabBar::tab:pressed {{
             background: {ACCENT_PRESSED};
             color: {TEXT_PRIMARY};
-            border-color: {ACCENT_PRESSED};
         }}
         QTabWidget#settingsTabs QTabBar::tab:selected {{
             background: {BUTTON_ACTIVE_BG};
             color: {GREEN_ACCENT};
-            border-color: {GREEN_ACCENT};
         }}
         QTabWidget#settingsTabs QTabBar::tab:selected:hover {{
             background: {BUTTON_ACTIVE_BG};
-            border-color: {ACCENT_HOVER};
             color: {ACCENT_HOVER};
         }}
         QTabWidget#settingsTabs QTabBar::tab:focus {{
             outline: none;
-            border-color: {ACCENT_HOVER};
+            color: {ACCENT_HOVER};
+            background: {BUTTON_ACTIVE_BG};
         }}
         QScrollBar:vertical {{
             background: transparent;
@@ -153,34 +149,33 @@ def build_settings_stylesheet() -> str:
             border: none;
         }}
         QFrame#ttsProviderContainer {{
-            border: 1px solid {BUTTON_GHOST_BORDER};
-            background: {ELEVATED_BG};
+            border: none;
+            background: transparent;
             border-radius: 8px;
         }}
         QPushButton {{
             background: {BUTTON_BG};
             color: {TEXT_PRIMARY};
-            border: 1px solid {BUTTON_GHOST_BORDER};
+            border: none;
             border-radius: 8px;
             padding: 7px 16px;
             font-weight: 600;
         }}
         QPushButton:hover {{
             background: {BUTTON_ACTIVE_BG};
-            border-color: {ACCENT_HOVER};
             color: {TEXT_PRIMARY};
         }}
         QPushButton:pressed {{
             background: {ELEVATED_BG};
-            border-color: {ACCENT_PRESSED};
         }}
-        QPushButton:focus, QComboBox:focus {{
-            border-color: {GREEN_ACCENT};
+        QPushButton:focus {{
+            background: {BUTTON_ACTIVE_BG};
+            color: {GREEN_ACCENT};
         }}
         QPushButton#dialogCloseButton {{
             background: transparent;
             color: {TEXT_MUTED};
-            border: 1px solid {BUTTON_GHOST_BORDER};
+            border: none;
             border-radius: 9px;
             padding: 0;
             font-size: 23px;
@@ -189,7 +184,6 @@ def build_settings_stylesheet() -> str:
         QPushButton#dialogCloseButton:hover, QPushButton#dialogCloseButton:focus {{
             background: {BUTTON_ACTIVE_BG};
             color: {GREEN_ACCENT};
-            border-color: {GREEN_ACCENT};
         }}
         QPushButton#dialogCloseButton:pressed {{
             background: {ELEVATED_BG};
@@ -197,32 +191,26 @@ def build_settings_stylesheet() -> str:
         QPushButton:disabled {{
             background: {SEPARATOR_COLOR};
             color: {TEXT_MUTED};
-            border-color: {SEPARATOR_COLOR};
         }}
         QPushButton#applyButton {{
             background: {GREEN_ACCENT};
             color: {WINDOW_BG};
-            border-color: {GREEN_ACCENT};
         }}
         QPushButton#applyButton:hover {{
             background: {ACCENT_HOVER};
-            border-color: {ACCENT_HOVER};
             color: {WINDOW_BG};
         }}
         QPushButton#applyButton:pressed {{
             background: {ACCENT_PRESSED};
-            border-color: {ACCENT_PRESSED};
             color: {TEXT_PRIMARY};
         }}
         QPushButton#cancelButton {{
             background: transparent;
             color: {TEXT_MUTED};
-            border-color: {BUTTON_GHOST_BORDER};
         }}
         QPushButton#cancelButton:hover {{
             background: {ELEVATED_BG};
             color: {TEXT_PRIMARY};
-            border-color: {SCROLLBAR_HANDLE_HOVER};
         }}
         QPushButton#cancelButton:pressed {{
             background: {SEPARATOR_COLOR};
@@ -231,13 +219,13 @@ def build_settings_stylesheet() -> str:
         QComboBox {{
             background: {ELEVATED_BG};
             color: {TEXT_PRIMARY};
-            border: 1px solid {BUTTON_GHOST_BORDER};
+            border: none;
             border-radius: 8px;
             padding: 7px 28px 7px 10px;
             selection-background-color: {BUTTON_ACTIVE_BG};
         }}
         QComboBox:hover {{
-            border-color: {ACCENT_HOVER};
+            background: {BUTTON_ACTIVE_BG};
         }}
         QComboBox::drop-down {{
             subcontrol-origin: padding;
@@ -255,7 +243,7 @@ def build_settings_stylesheet() -> str:
         QComboBox QAbstractItemView {{
             background: {ELEVATED_BG};
             color: {TEXT_PRIMARY};
-            border: 1px solid {BUTTON_GHOST_BORDER};
+            border: none;
             border-radius: 8px;
             padding: 4px;
             outline: none;
@@ -265,17 +253,18 @@ def build_settings_stylesheet() -> str:
         QLineEdit {{
             background: {ELEVATED_BG};
             color: {TEXT_PRIMARY};
-            border: 1px solid {BUTTON_GHOST_BORDER};
+            border: none;
             border-radius: 8px;
             padding: 7px 10px;
             selection-background-color: {BUTTON_ACTIVE_BG};
             selection-color: {TEXT_PRIMARY};
         }}
         QLineEdit:hover {{
-            border-color: {ACCENT_HOVER};
+            background: {BUTTON_ACTIVE_BG};
         }}
-        QLineEdit:focus {{
-            border-color: {GREEN_ACCENT};
+        QLineEdit:focus, QComboBox:focus {{
+            background: {BUTTON_ACTIVE_BG};
+            border-bottom: 2px solid {GREEN_ACCENT};
         }}
         QSlider::groove:horizontal {{
             height: 4px;
@@ -292,11 +281,10 @@ def build_settings_stylesheet() -> str:
             margin: -5px 0;
             border-radius: 7px;
             background: {TEXT_PRIMARY};
-            border: 2px solid {GREEN_ACCENT};
+            border: none;
         }}
         QSlider::handle:horizontal:hover {{
             background: {ACCENT_HOVER};
-            border-color: {ACCENT_HOVER};
         }}
         QCheckBox {{
             color: {TEXT_PRIMARY};

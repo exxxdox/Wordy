@@ -181,7 +181,7 @@ def test_stop_invokes_pre_stop_hook_once_before_root_is_destroyed(
     assert len(calls) == 1
 
 
-def test_overlay_submit_normalizes_calls_callback_once_and_hides(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_overlay_return_normalizes_calls_callback_once_and_hides(monkeypatch: pytest.MonkeyPatch) -> None:
     submitted: list[str] = []
     overlay = _new_overlay(monkeypatch, submitted)
     try:
@@ -207,7 +207,7 @@ def test_overlay_whitespace_submit_does_not_call_callback_or_crash(monkeypatch: 
         overlay._on_return()
 
         assert submitted == []
-        assert not overlay.root.isVisible()
+        assert overlay.root.isVisible()
     finally:
         overlay.stop()
 

@@ -20,8 +20,10 @@ class TestSidetoneAudioPlayer:
         main = MagicMock()
         main.output_device_name = "Test Device"
         main.output_device = {"name": "Test Device", "host_api_name": "Windows WASAPI"}
+        main.get_stream_config.return_value = {"format": 8, "rate": 48000}
         sidetone = MagicMock()
         sidetone.output_device_name = None
+        sidetone.get_stream_config.return_value = {"format": 8, "rate": 48000}
         return main, sidetone
 
     # ── 构造与开关 ──────────────────────────────────────────────────
@@ -169,6 +171,7 @@ class TestSidetoneAudioPlayer:
         """open_stream 重置 dead 标记，新流开始时重新尝试返听。"""
         main, sidetone = self._make_players()
         wrapper = SidetoneAudioPlayer(main, sidetone)
+        wrapper.set_sidetone_enabled(True)
         wrapper._sidetone_stream_dead = True
         wrapper.open_stream(8, 1, 48000)  # paInt16
         assert wrapper._sidetone_stream_dead is False
@@ -251,3 +254,49 @@ class TestSidetoneAudioPlayer:
         main.query_output_device_default_rate.return_value = 44100
         wrapper = SidetoneAudioPlayer(main, sidetone)
         assert wrapper.query_output_device_default_rate() == 44100
+
+    def test_default_output_does_not_play_duplicate_sidetone(self):
+        main, sidetone = self._make_players()
+        main.output_device_name = None
+        wrapper = SidetoneAudioPlayer(main, sidetone)
+        wrapper.set_sidetone_enabled(True)
+        assert wrapper.open_stream(8, 1, 48000)
+        wrapper.write_stream(b"\x00\x01")
+        wrapper.close_stream()
+        assert wrapper.play_wav("test.wav")
+        sidetone.open_stream.assert_not_called()
+        sidetone.write_stream.assert_not_called()
+        sidetone.play_wav.assert_not_called()
+
+    def test_sidetone_uses_actual_main_format_and_rate(self):
+        main, sidetone = self._make_players()
+        main.get_stream_config.return_value = {"format": 8, "rate": 44100}
+        sidetone.get_stream_config.return_value = {"format": 8, "rate": 44100}
+        wrapper = SidetoneAudioPlayer(main, sidetone)
+        wrapper.set_sidetone_enabled(True)
+        assert wrapper.open_stream(1, 1, 48000)
+        sidetone.open_stream.assert_called_once_with(
+            8, 1, 44100, device_index=None, frames_per_buffer=1024,
+        )
+        wrapper.close_stream()
+
+    def test_incompatible_sidetone_never_receives_pcm(self):
+        main, sidetone = self._make_players()
+        sidetone.get_stream_config.return_value = {"format": 1, "rate": 44100}
+        wrapper = SidetoneAudioPlayer(main, sidetone)
+        wrapper.set_sidetone_enabled(True)
+        assert wrapper.open_stream(8, 1, 48000)
+        wrapper.write_stream(b"\x00\x01")
+        sidetone.write_stream.assert_not_called()
+        sidetone.close_stream.assert_called_once()
+        main.write_stream.assert_called_once_with(b"\x00\x01")
+        wrapper.close_stream()
+
+    def test_disabling_sidetone_still_closes_open_stream(self):
+        main, sidetone = self._make_players()
+        wrapper = SidetoneAudioPlayer(main, sidetone)
+        wrapper.set_sidetone_enabled(True)
+        assert wrapper.open_stream(8, 1, 48000)
+        wrapper.set_sidetone_enabled(False)
+        wrapper.close_stream()
+        sidetone.close_stream.assert_called_once()

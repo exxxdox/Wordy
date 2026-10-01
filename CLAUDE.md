@@ -10,15 +10,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 + 所有设置页面的内容都要持久化保存
 + pyright和测试错误要清零，不管是否这次引入
 
-## 常用命令
+## 脚本入口
+
+`wordy.ps1` 统一提供 `init`（初始化）、`dev`（启动，默认）和 `build`（打包）。`dev.cmd` 保留为参数转发入口；发布工作流使用 `wordy.ps1 build -Clean -NoPause`。
+
+### 命令示例
 
 ```bash
 # 环境初始化（首次）
-.\init.ps1                     # uv sync，自动下载 Python 3.12 + 依赖
+.\wordy.ps1 init               # uv sync，自动下载 Python 3.12 + 依赖
 
 # 运行
 uv run python -m wordy      # 启动应用
-.\dev.ps1                      # 开发模式（设置 EASY_TTS_DEV=1）
+.\wordy.ps1 dev                # 启动应用，保留控制台日志；dev.cmd 转发参数
+.\wordy.ps1 build -Clean -NoPause  # 打包 dist/Wordy.exe
 
 # 测试
 uv run python -m pytest tests/ --tb=no -q  # 全量

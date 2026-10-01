@@ -408,11 +408,13 @@ class InputOverlay:
                     self._on_focus_out()
         return False
 
-    def _submit_text(self, text: str) -> None:
-        """隐藏窗口并提交非空文本。"""
-        self.hide()
+    def _submit_text(self, text: str, *, hide_after: bool = False) -> None:
+        """提交非空文本；回车收起，朗读按钮保留输入现场。"""
         if text:
             self.on_submit(text)
+            # 区分键盘提交和按钮试听，避免修复回车时改变朗读按钮行为。
+            if hide_after:
+                self.hide()
 
     def _register_hotkey(self) -> None:
         self._unregister_hotkey()
@@ -883,9 +885,20 @@ class InputOverlay:
     def _on_return(self) -> None:
         if self.entry is None:
             return
+        self._submit_text(normalize_input_text(self.entry.text()), hide_after=True)
+
+    def _on_read(self) -> None:
+        if self.entry is None:
+            return
         self._submit_text(normalize_input_text(self.entry.text()))
 
     def _on_focus_out(self) -> None:
         if self._ignore_focus_out or self._settings_window_exists():
+            return
+        # 只在焦点离开整个输入栏时收起；设置图标与输入框之间切换不是外部失焦。
+        focused = QApplication.focusWidget()
+        if self.root is not None and focused is not None and (
+            focused is self.root or self.root.isAncestorOf(focused)
+        ):
             return
         self.hide()

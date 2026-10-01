@@ -8,7 +8,6 @@ from __future__ import annotations
 import ctypes
 import importlib
 import sys
-from ctypes import wintypes
 from typing import Any, Protocol, cast
 
 SW_SHOW = 5
@@ -51,13 +50,16 @@ def _primary_screen() -> _Screen | None:
 
 
 def get_cursor_position() -> tuple[int, int] | None:
-    """获取当前鼠标指针屏幕坐标。"""
+    """获取与 QWidget 几何范围一致的 Qt 全局逻辑坐标。"""
     if not _IS_WINDOWS:
         return None
-    point = wintypes.POINT()
-    if not ctypes.windll.user32.GetCursorPos(ctypes.byref(point)):
+    from PySide6.QtGui import QCursor, QGuiApplication
+
+    if QGuiApplication.instance() is None:
         return None
-    return point.x, point.y
+    # Win32 GetCursorPos 返回物理像素，缩放/多屏下直接比较会把按钮点击误判为外部点击。
+    point = QCursor.pos()
+    return point.x(), point.y()
 
 
 def is_left_button_down() -> bool:

@@ -134,7 +134,7 @@ class _OverlayWidget(QWidget):
         self.submit_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.submit_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.submit_button.setAccessibleName("朗读")
-        self.submit_button.setToolTip("朗读（Enter）")
+        self.submit_button.setToolTip("朗读并保留输入框")
         self.submit_button.setEnabled(False)
         # 用几何播放图标避免符号字体缺失时出现方框；禁用态由 Qt 自动生成。
         play_icon = QPixmap(16, 16)
@@ -147,13 +147,13 @@ class _OverlayWidget(QWidget):
         icon_painter.end()
         self.submit_button.setIcon(QIcon(play_icon))
         self.submit_button.setIconSize(QSize(16, 16))
-        self.submit_button.clicked.connect(owner._on_return)
+        self.submit_button.clicked.connect(owner._on_read)
         self.entry.textChanged.connect(lambda text: self.submit_button.setEnabled(bool(text.strip())))
         self.submit_button.setStyleSheet(f'''
-            QPushButton {{ background: {BUTTON_ACTIVE_BG}; color: {INPUT_TEXT_COLOR};
-                border: 1px solid {INPUT_BORDER_COLOR}; border-radius: 9px;
+            QPushButton {{ background: transparent; color: {INPUT_TEXT_COLOR};
+                border: none; border-radius: 9px;
                 font-size: 22px; padding: 0; }}
-            QPushButton:hover {{ border-color: {ACCENT_HOVER}; background: {BUTTON_ACTIVE_BG}; }}
+            QPushButton:hover {{ background: {BUTTON_ACTIVE_BG}; }}
             QPushButton:pressed {{ background: {INPUT_BACKGROUND_COLOR}; }}
             QPushButton:disabled {{ color: {CONFIG_BUTTON_TEXT_COLOR}; background: transparent; }}
         ''')
@@ -167,7 +167,9 @@ class _OverlayWidget(QWidget):
         self.settings_button.setObjectName("settingsButton")
         self.settings_button.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.settings_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.settings_button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        # 鼠标点击不能先抢走输入焦点，否则 Qt 会在 press 回调前触发失焦收起。
+        # TabFocus 保留键盘导航；鼠标点击继续由已有事件过滤器处理。
+        self.settings_button.setFocusPolicy(Qt.FocusPolicy.TabFocus)
         self.settings_button.setAccessibleName("设置")
         self.settings_button.setToolTip("打开设置")
         self.settings_button.setGeometry(settings_x, settings_y, settings_hit_size, settings_hit_size)
@@ -181,7 +183,7 @@ class _OverlayWidget(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         w, h = self.width(), self.height()
 
-        # 先铺底，再绘制纹理；原来的纹理在背景之前绘制，会被完全盖住。
+        # 使用连续色面与局部光晕表达层次，不绘制环绕输入栏的硬边框。
         bg_color = QColor(INPUT_BACKGROUND_COLOR)
         bg_color.setAlphaF(self._overlay_opacity)
         painter.setPen(Qt.PenStyle.NoPen)
@@ -197,28 +199,20 @@ class _OverlayWidget(QWidget):
         painter.setPen(QPen(dot_color, 1.0))
         for x in range(12, w - 12, 12):
             painter.drawPoint(x, h - 8)
+        # 焦点光融入底部色面，随既有短动画过渡，不添加常态描边。
+        wash = QLinearGradient(0, 0, 0, h)
+        wash.setColorAt(0.0, QColor(Qt.GlobalColor.transparent))
+        light = QColor(ACCENT_SECONDARY)
+        light.setAlphaF((0.04 + 0.08 * self._focus_glow) * self._overlay_opacity)
+        wash.setColorAt(1.0, light)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(wash)
+        painter.drawPath(path)
         painter.restore()
-
-        # 聚焦时增加光边强度，变化对应可输入状态。
-        glow_outer = QColor(INPUT_TEXT_COLOR)
-        glow_outer.setAlphaF((0.12 + 0.24 * self._focus_glow) * self._overlay_opacity)
-        glow_pen = QPen(glow_outer, 2.0)
-        painter.setPen(glow_pen)
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawRoundedRect(2, 2, w - 4, h - 4, WINDOW_RADIUS - 1, WINDOW_RADIUS - 1)
-
-        # 5. 外边框
-        edge = QLinearGradient(0, 0, w, h)
-        for position, color_value in ((0.0, INPUT_TEXT_COLOR), (0.5, INPUT_BORDER_COLOR), (1.0, ACCENT_SECONDARY)):
-            color = QColor(color_value)
-            color.setAlphaF((0.55 + 0.35 * self._focus_glow) * self._overlay_opacity)
-            edge.setColorAt(position, color)
-        painter.setPen(QPen(edge, 1.0))
-        painter.drawRoundedRect(1, 1, w - 2, h - 2, WINDOW_RADIUS, WINDOW_RADIUS)
 
     def animate_focus(self, focused: bool) -> None:
         self._focus_animation.stop()
-        # 使用 Qt 原生动效偏好，关闭系统动画时直接切换焦点光边。
+        # 使用 Qt 原生动效偏好，关闭系统动画时直接切换焦点光晕。
         if not self.style().styleHint(QStyle.StyleHint.SH_Widget_Animate):
             self._set_focus_glow(1.0 if focused else 0.0)
             return

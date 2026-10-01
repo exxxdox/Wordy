@@ -12,13 +12,22 @@
 
 ```powershell
 # 1. 初始化环境（自动安装 Python 3.12 + 依赖）
-.\init.ps1
+.\wordy.ps1 init
 
 # 2. 运行
-uv run python -m wordy
+.\wordy.ps1 dev
 ```
 
-首次运行 `init.ps1` 时，uv 自动下载 Python 3.12、创建 `.venv`、安装全部依赖。之后再次运行只检查依赖是否变更，秒级完成。
+首次运行 `wordy.ps1 init` 时，uv 自动下载 Python 3.12、创建 `.venv`、安装全部依赖。再次运行会同步依赖变更。
+
+`wordy.ps1` 不带参数时默认启动应用。保留的 `dev.cmd` 也可双击启动，或转发参数（例如 `dev.cmd build -Clean -NoPause`）。
+
+```powershell
+# 打包为 dist/Wordy.exe
+.\wordy.ps1 build -Clean -NoPause
+```
+
+`init` 和 `build` 默认结束后等待回车，自动化执行时加 `-NoPause`；`-Clean` 清理 PyInstaller 缓存。初始化时，仅在 `.python-version` 不存在时使用 `-PythonVersion`（默认 `3.12`）固定版本。
 
 ## 安装 uv
 
