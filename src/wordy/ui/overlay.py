@@ -515,7 +515,6 @@ class InputOverlay:
         QTimer.singleShot(SETTINGS_IGNORE_FOCUS_DELAY_MS, self._clear_ignore_focus_out)
 
     def _create_settings_window(self) -> None:
-        audio_output_devices, audio_output_devices_error = self._enumerate_audio_output_devices()
         try:
             cartesia_status = wordy.secret.get_cartesia_api_key_status()
             cartesia_api_key_saved = bool(cartesia_status.get("cartesia_api_key_set", False))
@@ -539,8 +538,8 @@ class InputOverlay:
             voices_cache=self._get_active_voices_cache(),
             voices_loading=self._voices_loading,
             voice_fetch_error=self._voice_fetch_error,
-            audio_output_devices=audio_output_devices,  # type: ignore[arg-type]
-            audio_output_devices_error=audio_output_devices_error,
+            # 先显示保存的选择；硬件扫描延后到用户进入音频页，不阻塞设置打开。
+            audio_output_devices=[dict(self._cfg.audio_output_device)] if self._cfg.audio_output_device else [],
             input_devices=self._enumerate_input_devices(),
             cartesia_api_key_saved=cartesia_api_key_saved,
             volcengine_access_key_saved=volcengine_access_key_saved,
@@ -555,7 +554,16 @@ class InputOverlay:
             on_refresh_voices=self._start_load_voices,
             on_field_changed=self._on_settings_field_changed,
             on_close=self._on_settings_window_closed,
+            on_audio_outputs_needed=self._refresh_settings_audio_outputs,
         )
+
+    def _refresh_settings_audio_outputs(self) -> None:
+        settings = self._active_settings_window()
+        if settings is None:
+            return
+        # PortAudio 初始化/销毁不能并行执行；按需在 GUI 线程枚举，避免扫描线程竞争。
+        devices, error = self._enumerate_audio_output_devices()
+        settings.set_audio_output_devices(cast(list[dict[str, object]] | list[str], devices), error)
 
     def _enumerate_audio_output_devices(self) -> tuple[list[object], Exception | None]:
         """Return (devices, error) preserving structured dicts or bare-name strings."""
@@ -747,6 +755,10 @@ class InputOverlay:
         elif field_name == "overlay_opacity":
             if self.root:
                 self.root.set_overlay_opacity(float(value))  # type: ignore[arg-type]
+
+        elif field_name == "overlay_placeholder":
+            if self.entry is not None:
+                self.entry.setPlaceholderText(str(value))
 
         elif field_name == "fixed_center":
             if bool(value) and self.root:

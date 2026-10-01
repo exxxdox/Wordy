@@ -104,7 +104,7 @@ class _OverlayWidget(QWidget):
         self.entry = QLineEdit(self)
         self.entry.setObjectName("overlayEntry")
         self.entry.setFrame(False)
-        self.entry.setPlaceholderText("输入文字，让它发声…")
+        self.entry.setPlaceholderText(owner._cfg.overlay_placeholder)
         self.entry.setAccessibleName("朗读文本")
         self.entry.setToolTip("Enter 朗读 · Esc 收起")
         self.entry.setGeometry(

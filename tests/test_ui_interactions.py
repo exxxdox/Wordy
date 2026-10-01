@@ -189,3 +189,150 @@ def test_enter_in_credentials_does_not_activate_title_close(qapp, fake_keyring):
     closed.assert_not_called()
     assert settings.window.isVisible()
     settings.close()
+
+
+def test_placeholder_updates_live_and_persists_on_close(qapp, monkeypatch):
+    import wordy.config as config
+
+    monkeypatch.setattr(InputOverlay, "_start_load_voices", lambda *args, **kwargs: None)
+    overlay = InputOverlay(lambda text: None)
+    overlay._ensure_ui()
+    settings = SettingsWindow(overlay.root, SettingsState(), lambda: None, lambda: None,
+                              overlay._on_settings_field_changed, lambda: None)
+    assert overlay.entry.placeholderText() == "Hello World~"
+    settings.placeholder_input.setText("写下你想说的话")
+    assert overlay.entry.placeholderText() == "写下你想说的话"
+    settings.close()
+    # 清除单例后读取磁盘，证明重启也会保留用户提示文字。
+    monkeypatch.setattr(config, "_cached_settings", None)
+    assert config.AppSettings.load().overlay_placeholder == "写下你想说的话"
+    settings = SettingsWindow(overlay.root, SettingsState(), lambda: None, lambda: None,
+                              overlay._on_settings_field_changed, lambda: None)
+    settings.placeholder_input.clear()
+    assert overlay.entry.placeholderText() == ""
+    settings.close()
+    monkeypatch.setattr(config, "_cached_settings", None)
+    assert config.AppSettings.load().overlay_placeholder == ""
+    overlay.stop()
+
+
+def test_settings_open_has_no_output_side_effect_and_close_flushes_once(qapp, monkeypatch):
+    from wordy.config import AppSettings
+
+    changed = Mock()
+    settings = SettingsWindow(None, SettingsState(), lambda: None, lambda: None,
+                              changed, lambda: None)
+    changed.assert_not_called()
+    assert settings.window is not None
+    visible_during_flush = []
+    flush = Mock(side_effect=lambda: visible_during_flush.append(settings.window.isVisible()))
+    monkeypatch.setattr(AppSettings.load(), "flush", flush)
+    settings.close()
+    flush.assert_called_once()
+    assert visible_during_flush == [False]
+
+
+def test_output_scan_only_runs_on_first_audio_tab_visit(qapp, monkeypatch):
+    from PySide6.QtWidgets import QTabWidget
+    monkeypatch.setattr(InputOverlay, "_start_load_voices", lambda *args, **kwargs: None)
+    overlay = InputOverlay(lambda text: None)
+    overlay._ensure_ui()
+    scan = Mock(return_value=(["测试输出"], None))
+    monkeypatch.setattr(overlay, "_enumerate_audio_output_devices", scan)
+    monkeypatch.setattr(overlay, "_enumerate_input_devices", lambda: [])
+    driver = overlay._create_settings_window.__globals__["VBCableDriverManager"]
+    monkeypatch.setattr(driver, "is_installed", lambda: False)
+    try:
+        overlay._open_settings()
+        settings = overlay._settings_window
+        assert settings is not None and settings.window.isVisible()
+        scan.assert_not_called()
+        tabs = settings.window.findChild(QTabWidget, "settingsTabs")
+        tabs.setCurrentIndex(1)
+        scan.assert_called_once()
+        assert settings.audio_output_combo.findText("测试输出") >= 0
+        tabs.setCurrentIndex(0)
+        tabs.setCurrentIndex(1)
+        scan.assert_called_once()
+        settings.close()
+    finally:
+        overlay.stop()
+
+
+def test_settings_click_keeps_windows_visible_without_native_focus_reentry(qapp, monkeypatch):
+    from PySide6.QtCore import QEvent, QObject
+
+    monkeypatch.setattr(InputOverlay, "_start_load_voices", lambda *args, **kwargs: None)
+    overlay = InputOverlay(lambda text: None)
+    overlay._ensure_ui()
+    monkeypatch.setattr(overlay, "_enumerate_input_devices", lambda: [])
+    driver = overlay._create_settings_window.__globals__["VBCableDriverManager"]
+    monkeypatch.setattr(driver, "is_installed", lambda: False)
+    native_focus = Mock()
+    monkeypatch.setitem(SettingsWindow.lift_and_focus.__globals__, "activate_window", native_focus)
+    transitions = []
+    real_disable = SettingsWindow.__init__.__globals__["disable_window_transitions"]
+
+    def disable_before_show(window):
+        result = real_disable(window)
+        transitions.append((window.isVisible(), result))
+        return result
+
+    monkeypatch.setitem(SettingsWindow.__init__.__globals__, "disable_window_transitions", disable_before_show)
+    hidden = []
+
+    class Watch(QObject):
+        def eventFilter(self, watched, event):
+            if event.type() == QEvent.Type.Hide:
+                hidden.append(watched)
+            return False
+
+    watcher = Watch()
+    root = overlay.root
+    root.show()
+    root.activateWindow()
+    qapp.processEvents()
+    root.installEventFilter(watcher)
+    try:
+        QTest.mouseClick(root.settings_button, Qt.MouseButton.LeftButton)
+        settings = overlay._settings_window
+        assert settings is not None
+        # 设置外层必须有首帧底色，不能依赖透明合成等到子面板首次绘制。
+        assert not settings.window.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        assert not settings.window.testAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
+        from PySide6.QtGui import QPalette
+        assert settings.window.palette().color(QPalette.ColorRole.Window).alpha() == 255
+        initial_geometry = settings.window.geometry()
+        settings.window.installEventFilter(watcher)
+        qapp.processEvents()
+        assert settings.window.geometry() == initial_geometry
+        assert root.isVisible() and settings.window.isVisible()
+        if qapp.platformName() == "windows":
+            assert settings.window.isActiveWindow()
+            assert transitions == [(False, True)]
+        settings.lift_and_focus()
+        qapp.processEvents()
+        assert hidden == []
+        native_focus.assert_not_called()
+    finally:
+        root.removeEventFilter(watcher)
+        if overlay._settings_window is not None:
+            overlay._settings_window.window.removeEventFilter(watcher)
+        overlay.stop()
+
+
+def test_settings_opens_immediately_at_full_opacity(qapp):
+    settings = SettingsWindow(None, SettingsState(), lambda: None, lambda: None,
+                              lambda *args: None, lambda: None)
+    window = settings.window
+    geometry = window.geometry()
+    try:
+        assert window.isVisible()
+        assert window.windowOpacity() == 1.0
+        settings.lift_and_focus()
+        qapp.processEvents()
+        assert window.geometry() == geometry
+        settings.close()
+        assert not window.isVisible()
+    finally:
+        settings.close()

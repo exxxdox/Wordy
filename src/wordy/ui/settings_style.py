@@ -32,7 +32,7 @@ def build_settings_stylesheet() -> str:
             font-size: 13px;
         }}
         QDialog {{
-            background: transparent;
+            background: {SURFACE_BG};
             color: {TEXT_PRIMARY};
         }}
         QFrame#dialogShell {{
@@ -81,7 +81,8 @@ def build_settings_stylesheet() -> str:
             margin-top: 10px;
         }}
         QTabWidget#settingsTabs::tab-bar {{
-            alignment: center;
+            alignment: left;
+            left: 20px;
         }}
         QTabWidget#settingsTabs QTabBar {{
             background: transparent;
@@ -154,6 +155,7 @@ def build_settings_stylesheet() -> str:
             border-radius: 8px;
         }}
         QPushButton {{
+            min-height: 20px;
             background: {BUTTON_BG};
             color: {TEXT_PRIMARY};
             border: none;
@@ -217,6 +219,7 @@ def build_settings_stylesheet() -> str:
             color: {TEXT_PRIMARY};
         }}
         QComboBox {{
+            min-height: 20px;
             background: {ELEVATED_BG};
             color: {TEXT_PRIMARY};
             border: none;
@@ -251,6 +254,7 @@ def build_settings_stylesheet() -> str:
             selection-color: {TEXT_PRIMARY};
         }}
         QLineEdit {{
+            min-height: 20px;
             background: {ELEVATED_BG};
             color: {TEXT_PRIMARY};
             border: none;

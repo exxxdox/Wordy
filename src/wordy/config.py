@@ -74,6 +74,7 @@ class AppSettings:
     name: str = "F6"  # TOML 持久化 key 为 "name"（非 hotkey_name）
     volume: float = 1.0
     overlay_opacity: float = 1.0
+    overlay_placeholder: str = "Hello World~"
     fixed_center: bool = True
     log_level: str = "INFO"
     window_position: dict[str, int] | None = None
@@ -107,7 +108,8 @@ class AppSettings:
     _save_lock: ClassVar[threading.Lock] = threading.Lock()
 
     # 滑块类字段用 debounce，其他字段立即写入
-    _DEBOUNCED_FIELDS: ClassVar[set[str]] = {"volume", "overlay_opacity"}
+    # 提示文字逐字编辑时也合并保存，避免每次按键都在 UI 线程写磁盘。
+    _DEBOUNCED_FIELDS: ClassVar[set[str]] = {"volume", "overlay_opacity", "overlay_placeholder"}
 
     _CLAMP_RANGES: ClassVar[dict[str, tuple[float, float]]] = {
         "volume": (MIN_VOLUME, MAX_VOLUME),
@@ -241,6 +243,8 @@ class AppSettings:
         # 逐字段解析
         _apply_if_present(raw, "volume", settings, _clamp, (MIN_VOLUME, MAX_VOLUME))
         _apply_if_present(raw, "overlay_opacity", settings, _clamp, (MIN_OVERLAY_OPACITY, MAX_OVERLAY_OPACITY))
+        # 空字符串表示不显示提示；旧配置缺少字段时保留默认文字。
+        _apply_if_present(raw, "overlay_placeholder", settings, lambda v: v if isinstance(v, str) else None)
         _apply_if_present(raw, "fixed_center", settings, lambda v: v if isinstance(v, bool) else None)
 
         # 结构化 tts_providers

@@ -91,6 +91,21 @@ def is_point_in_widget(widget: Any, x: int, y: int) -> bool:
     return geometry.left() <= x <= geometry.right() and geometry.top() <= y <= geometry.bottom()
 
 
+def disable_window_transitions(widget: Any) -> bool:
+    """只禁用指定窗口的 DWM 过渡动画；不支持时保持正常显示。"""
+    if not _IS_WINDOWS:
+        return False
+    try:
+        setter = ctypes.windll.dwmapi.DwmSetWindowAttribute
+        # HWND 在 64 位 Windows 上不能按 ctypes 默认的 32 位 int 传递。
+        setter.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_uint32]
+        setter.restype = ctypes.c_long
+        disabled = ctypes.c_int(1)  # BOOL；DWMWA_TRANSITIONS_FORCEDISABLED = 3。
+        return setter(int(widget.winId()), 3, ctypes.byref(disabled), ctypes.sizeof(disabled)) == 0
+    except (AttributeError, OSError, RuntimeError):
+        return False
+
+
 def activate_window(widget: Any) -> None:
     """尽量将 QWidget 对应的 Win32 窗口激活到前台。"""
     if not _IS_WINDOWS:

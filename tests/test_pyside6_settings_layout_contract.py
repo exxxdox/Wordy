@@ -374,8 +374,8 @@ def test_settings_dialog_static_window_flags_include_frameless_and_topmost() -> 
         _fail("SettingsWindow 必须保留 Qt.WindowType.WindowStaysOnTopHint")
 
 
-def test_settings_dialog_static_uses_translucent_background_attribute() -> None:
-    """圆角无边框设置窗口必须启用 WA_TranslucentBackground，避免圆角外出现方形底色。"""
+def test_settings_dialog_static_does_not_enable_translucent_background() -> None:
+    """设置窗口不使用透明合成，避免首帧无底色。"""
     tree = _load_tree()
     matching_calls = 0
     for call in _iter_calls(tree):
@@ -392,19 +392,19 @@ def test_settings_dialog_static_uses_translucent_background_attribute() -> None:
             and call.args[1].value is True
         ):
             matching_calls += 1
-    if matching_calls != 1:
-        _fail("必须调用 self.window.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True) 且仅一次")
+    if matching_calls != 0:
+        _fail("设置窗口不能启用 WA_TranslucentBackground")
 
 
-def test_settings_dialog_qss_background_is_transparent() -> None:
-    """QDialog 自身背景必须透明，由 QFrame#dialogShell 提供可见圆角背景。"""
+def test_settings_dialog_qss_background_is_opaque() -> None:
+    """QDialog 自身使用深色底，不等待子面板首次绘制才填充。"""
     stylesheet = _find_stylesheet_string(_load_tree())
     match = re.search(r"QDialog\s*\{(?P<body>.*?)\}", stylesheet, flags=re.DOTALL)
     if not match:
         _fail("样式表必须包含 QDialog 规则")
     body = match.group("body")
-    if not re.search(r"background(?:-color)?\s*:\s*transparent\s*;", body, flags=re.IGNORECASE):
-        _fail("QDialog QSS 必须设置 background/background-color: transparent;")
+    if "transparent" in body or not re.search(r"background(?:-color)?\s*:", body):
+        _fail("QDialog QSS 必须设置不透明背景")
 
 
 def test_settings_hint_label_stylesheet_uses_12px_font_size() -> None:

@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Callable
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QIcon
+from PySide6.QtGui import QColor, QIcon, QPalette
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QScrollArea, QSlider, QStyle, QTabWidget, QVBoxLayout, QWidget,
@@ -26,7 +26,7 @@ from wordy.tts.constants import (
 from wordy.identity import normalize_identity
 from wordy.tts.labels import VoiceLabelMaps, build_voice_label_maps
 from wordy.ui.theme import (
-    GREEN_ACCENT, TEXT_ERROR, TEXT_MUTED, TEXT_PRIMARY, TEXT_WARNING,
+    GREEN_ACCENT, SURFACE_BG, TEXT_ERROR, TEXT_MUTED, TEXT_PRIMARY, TEXT_WARNING,
 )
 from wordy.ui.tts_panels import PROVIDER_PANELS
 from wordy.ui.settings_state import (
@@ -36,7 +36,7 @@ from wordy.ui.settings_widgets import (
     CheckmarkCheckBox, NoWheelComboBox, NoWheelSlider, _SettingsDialog,
 )
 from wordy.ui.settings_style import build_settings_stylesheet
-from wordy.ui.window import activate_window, center_window
+from wordy.ui.window import center_window, disable_window_transitions
 
 INPUT_TEXT_COLOR = GREEN_ACCENT
 SYSTEM_DEFAULT_AUDIO_OUTPUT_LABEL = "系统默认"
@@ -57,8 +57,11 @@ class SettingsWindow:
     def __init__(self, root, state: SettingsState, on_record_hotkey: Callable[[], None],
                  on_refresh_voices: Callable[[], None],
                  on_field_changed: Callable[[str, object], None],
-                 on_close: Callable[[], None]):
+                 on_close: Callable[[], None],
+                 on_audio_outputs_needed: Callable[[], None] | None = None):
         self.root = root
+        self._on_audio_outputs_needed = on_audio_outputs_needed
+        self._audio_outputs_requested = False
         self.on_record_hotkey = on_record_hotkey
         self.on_refresh_voices = on_refresh_voices
         self.on_field_changed = on_field_changed
@@ -76,7 +79,6 @@ class SettingsWindow:
         self._local_audio_output_label: str | None = None
         self._closed = False
         self._closing = False
-        self.current_label: QLabel = QLabel()
         self.pending_label: QLabel = QLabel()
         self.record_status_label: QLabel = QLabel()
         self.record_button: QPushButton = QPushButton()
@@ -106,17 +108,31 @@ class SettingsWindow:
         app_style = QApplication.style()
         settings_icon = app_style.standardIcon(QStyle.StandardPixmap.SP_ComputerIcon) if app_style is not None else QIcon()
         self.window.setWindowIcon(settings_icon)
-        self.window.setWindowFlag(Qt.WindowType.FramelessWindowHint, True)
-        self.window.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+        # 在显示前一次性设置窗口样式，避免逐个改 flag 重建原生窗口。
+        self.window.setWindowFlags(
+            self.window.windowFlags() | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
+        )
         self.window.setModal(False)
         self.window.setMinimumSize(DIALOG_MIN_WIDTH, DIALOG_MIN_HEIGHT)
         self.window.resize(DIALOG_WIDTH, DIALOG_HEIGHT)
         self.window.setSizeGripEnabled(True)
-        self.window.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        # 设置页无需桌面透底；透明窗口首次 expose 没有系统底色，可能短暂闪白。
+        # 使用深色不透明底，原生窗口创建到 Qt 首次绘制期间也保持相同背景。
+        palette = self.window.palette()
+        palette.setColor(QPalette.ColorRole.Window, QColor(SURFACE_BG))
+        self.window.setPalette(palette)
+        self.window.setAutoFillBackground(True)
         self.window.setStyleSheet(build_settings_stylesheet())
         window = self.window
-        center_window(window, DIALOG_WIDTH, DIALOG_HEIGHT, parent)
         self._build(state)
+        # 深色样式和布局在隐藏时完成，按最终尺寸居中，避免首帧白底或显示后跳位。
+        window.ensurePolished()
+        layout = window.layout()
+        if layout is not None:
+            layout.activate()
+        center_window(window, window.width(), window.height(), parent)
+        # Qt 尺寸已稳定，但 Windows 打开动画仍会视觉缩放；必须在 show 前禁用。
+        disable_window_transitions(window)
         window.show()
         self.lift_and_focus()
 
@@ -142,11 +158,10 @@ class SettingsWindow:
         window.raise_()
         window.activateWindow()
         window.setFocus(Qt.FocusReason.ActiveWindowFocusReason)
-        activate_window(window)
+        # 设置由前台应用内打开，Qt 已完成激活；不再重复 ShowWindow/附加前台线程抢焦点。
 
     def close(self) -> None:
         """关闭设置窗口并 flush pending 写入。"""
-        self._settings.flush()  # 确保 slider debounce 写入完成
         if self.exists() and self.window is not None:
             self.window.close()
 
@@ -211,6 +226,9 @@ class SettingsWindow:
         try:
             if not self._closed:
                 try:
+                    # 先收起窗口，再由唯一关闭路径保存；避免双重 fsync 延迟关闭反馈。
+                    if self.window is not None:
+                        self.window.hide()
                     self._settings.flush()  # 确保 debounce 写入完成
                     self.on_close()
                 finally:
@@ -265,6 +283,8 @@ class SettingsWindow:
         local_layout = self._create_tab_page(tab_widget, "本地设置")
         self._build_hotkey_section(local_layout, s)
         self._add_inner_gap(local_layout)
+        self._build_placeholder_section(local_layout, s)
+        self._add_inner_gap(local_layout)
         self._build_volume_section(local_layout, s)
         self._add_inner_gap(local_layout)
         self._build_opacity_section(local_layout, s)
@@ -288,7 +308,8 @@ class SettingsWindow:
         self._tts_provider_container = QFrame()
         self._tts_provider_container.setObjectName("ttsProviderContainer")
         container_layout = QVBoxLayout(self._tts_provider_container)
-        container_layout.setContentsMargins(16, 12, 16, 4)
+        # 服务商与生成模式沿用同一条左对齐线，不额外缩进内层表单。
+        container_layout.setContentsMargins(0, 12, 0, 4)
         container_layout.setSpacing(0)
 
         # 生成模式
@@ -321,19 +342,42 @@ class SettingsWindow:
         footer_layout.setSpacing(0)
         self._build_buttons(footer_layout)
         shell_layout.addWidget(footer, 0)
+        # 初始本地页不扫描硬件；只在首次查看音频页时读取最新设备。
+        tab_widget.currentChanged.connect(self._on_settings_tab_changed)
+
+    def _on_settings_tab_changed(self, index: int) -> None:
+        if index == 1 and not self._audio_outputs_requested and self._on_audio_outputs_needed is not None:
+            self._audio_outputs_requested = True
+            self._on_audio_outputs_needed()
+
+    def _build_placeholder_section(self, parent_layout: QVBoxLayout, s: AppSettings) -> None:
+        section = self._create_section(parent_layout)
+        section.addWidget(self._section_title("输入框提示文字"))
+        self.placeholder_input = QLineEdit(s.overlay_placeholder)
+        self.placeholder_input.setAccessibleName("输入框提示文字")
+        self.placeholder_input.setPlaceholderText("留空则不显示提示")
+        section.addWidget(self.placeholder_input)
+        # 初始赋值完成后再连接，打开设置不会把默认值误写入配置。
+        self.placeholder_input.textChanged.connect(self._on_placeholder_changed)
+
+    def _on_placeholder_changed(self, text: str) -> None:
+        self._settings.overlay_placeholder = text
+        self.on_field_changed("overlay_placeholder", text)
 
     def _build_hotkey_section(self, parent_layout: QVBoxLayout, s: AppSettings) -> None:
         section = self._create_section(parent_layout)
-        section.addWidget(self._section_title("全局快捷键"))
-        self.current_label = self._body_label(f"当前快捷键：{s.name}", TEXT_MUTED)
-        section.addWidget(self.current_label)
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        header.addWidget(self._section_title("全局快捷键"), 1)
+        # 当前值只显示一次，避免重复信息挤占表单空间。
         self.pending_label = self._body_label(f"当前：{s.name}", INPUT_TEXT_COLOR, True)
-        section.addWidget(self.pending_label)
         self.record_status_label = self._hint_label("点击录制后按下新的快捷键组合", TEXT_MUTED)
-        section.addWidget(self.record_status_label)
         self.record_button = QPushButton("录制快捷键")
         self.record_button.clicked.connect(lambda _checked=False: self.on_record_hotkey())
-        section.addWidget(self.record_button, 0, Qt.AlignmentFlag.AlignLeft)
+        header.addWidget(self.record_button)
+        section.addLayout(header)
+        section.addWidget(self.pending_label)
+        section.addWidget(self.record_status_label)
 
     def _build_backend_section(self, parent_layout: QVBoxLayout, s: AppSettings) -> None:
         section = self._create_section(parent_layout)
@@ -388,6 +432,16 @@ class SettingsWindow:
         self._local_audio_output_label = self.audio_output_combo.currentText()
         self._sync_audio_output_control(s)
         section.addWidget(self.audio_output_status_label)
+
+    def set_audio_output_devices(self, devices: list[AudioOutputDevice] | list[str], error: Exception | None) -> None:
+        # 按需扫描完成后仅刷新控件，保留当前配置且不重建音频流。
+        s = self._settings
+        self._apply_audio_output_devices(
+            devices, dict(s.audio_output_device) if s.audio_output_device else None,
+            s.audio_output_device_name, error,
+        )
+        self._local_audio_output_label = self.audio_output_combo.currentText()
+        self._sync_audio_output_control(s)
 
     def _build_volume_section(self, parent_layout: QVBoxLayout, s: AppSettings) -> None:
         section = self._create_section(parent_layout)
@@ -556,8 +610,7 @@ class SettingsWindow:
                     TEXT_MUTED,
                 )
         combo.blockSignals(False)
-        if not s.audio_routing_enabled:
-            self._on_audio_output_selected(combo.currentText())
+        # 同步显示不能触发设备切换；否则打开设置也会写配置并重建 TTS 音频流。
 
     MIC_NONE_LABEL = "无（不侦听麦克风）"
 

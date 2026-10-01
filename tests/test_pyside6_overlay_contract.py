@@ -294,7 +294,7 @@ def _new_overlay_with_audio_player(
 def test_overlay_settings_state_seeds_output_devices_from_list_helper(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """InputOverlay must call audio_player.list_output_devices() and seed SettingsState."""
+    """Output devices load only when the audio page requests them."""
     audio_player = _FakeAudioPlayer(["Speakers (Realtek)", "VB-Audio Virtual Cable"])
     overlay = _new_overlay_with_audio_player(
         monkeypatch,
@@ -306,6 +306,11 @@ def test_overlay_settings_state_seeds_output_devices_from_list_helper(
     class _FakeSettingsWindow:
         def __init__(self, _root: object, state: object, **_kwargs: object) -> None:
             captured_states.append(state)
+            self.request_audio = _kwargs["on_audio_outputs_needed"]
+
+        def set_audio_output_devices(self, devices: object, error: object) -> None:
+            captured_states[-1].audio_output_devices = devices
+            captured_states[-1].audio_output_devices_error = error
 
         def exists(self) -> bool:
             return True
@@ -321,9 +326,9 @@ def test_overlay_settings_state_seeds_output_devices_from_list_helper(
     try:
         overlay._open_settings()
 
-        assert audio_player.calls >= 1, (
-            "InputOverlay must call audio_player.list_output_devices() when opening settings"
-        )
+        assert audio_player.calls == 0, "Opening the local page must not scan output hardware"
+        overlay._settings_window.request_audio()
+        assert audio_player.calls == 1
         assert captured_states, "SettingsState must be constructed when opening settings"
         state = captured_states[-1]
         assert state.audio_output_devices == [

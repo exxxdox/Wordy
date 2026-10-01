@@ -462,13 +462,14 @@ def test_settings_window_frameless_chrome_keeps_visible_internal_title(monkeypat
         window.close()
 
 
-def test_settings_window_uses_translucent_background_for_rounded_corners(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Frameless rounded settings dialog must not paint an opaque square behind rounded corners."""
+def test_settings_window_has_opaque_background_for_first_frame(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Settings must have a first-frame background rather than transparent composition."""
     _app, window = _new_settings_window(monkeypatch)
     try:
         from PySide6.QtCore import Qt
 
-        assert window.window.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground) is True
+        assert window.window.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground) is False
+        assert window.window.testAttribute(Qt.WidgetAttribute.WA_NoSystemBackground) is False
     finally:
         window.close()
 
@@ -835,7 +836,10 @@ def test_settings_window_output_device_combo_falls_back_to_default_when_stored_i
         assert combo.currentText() == SYSTEM_DEFAULT_LABEL, (
             "missing stored identity must fall back to 系统默认 selection"
         )
-        assert window._settings.audio_output_device is None
+        # 显示回退不等于用户主动切换设备；暂时断开也不能覆盖保存的选择。
+        assert window._settings.audio_output_device == {
+            "name": "Headphones (Disconnected)", "host_api_name": "Windows WASAPI",
+        }
         window.on_field_changed.assert_not_called()
     finally:
         window.close()

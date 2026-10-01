@@ -17,11 +17,29 @@ These tests focus on two things:
 from __future__ import annotations
 
 import sys
+import ctypes
+from types import SimpleNamespace
+from unittest.mock import Mock
 from typing import cast
 
 import pytest
 
 import wordy.ui.window
+
+
+def test_disable_window_transitions_uses_pointer_sized_handle_and_bool(monkeypatch):
+    setter = Mock(return_value=0)
+    monkeypatch.setattr(wordy.ui.window, "_IS_WINDOWS", True)
+    monkeypatch.setattr(ctypes, "windll", SimpleNamespace(dwmapi=SimpleNamespace(DwmSetWindowAttribute=setter)))
+    widget = SimpleNamespace(winId=lambda: 0x123456789)
+    assert wordy.ui.window.disable_window_transitions(widget)
+    hwnd, attribute, value, size = setter.call_args.args
+    assert hwnd == 0x123456789 and attribute == 3
+    assert ctypes.cast(value, ctypes.POINTER(ctypes.c_int)).contents.value == 1
+    assert size == 4
+    assert setter.argtypes[0] is ctypes.c_void_p
+    setter.return_value = -1
+    assert not wordy.ui.window.disable_window_transitions(widget)
 
 
 # ---------------------------------------------------------------------------
