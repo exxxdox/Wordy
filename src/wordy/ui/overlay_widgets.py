@@ -8,15 +8,17 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from PySide6.QtCore import QEvent, QObject, Qt, Signal
+from PySide6.QtCore import QEvent, QObject, QPointF, QSize, Qt, Signal, QVariantAnimation, QEasingCurve
 from PySide6.QtGui import (
-    QColor, QKeyEvent, QMouseEvent, QPainter, QPainterPath, QPaintEvent, QPen, QPixmap,
+    QColor, QIcon, QKeyEvent, QLinearGradient, QMouseEvent, QPainter, QPainterPath,
+    QPaintEvent, QPen, QPixmap, QPolygonF,
 )
 from PySide6.QtSvg import QSvgRenderer
-from PySide6.QtWidgets import QLabel, QLineEdit, QWidget
+from PySide6.QtWidgets import QLabel, QLineEdit, QPushButton, QStyle, QWidget
 
 from wordy.ui.theme import (
-    ACCENT_HOVER, CONFIG_BUTTON_IDLE, GREEN_ACCENT, INPUT_BACKGROUND, INPUT_BORDER, MONO_FONT,
+    ACCENT_HOVER, ACCENT_SECONDARY, CONFIG_BUTTON_IDLE, GREEN_ACCENT,
+    INPUT_BACKGROUND, INPUT_BORDER, MONO_FONT, UI_FONT, TEXT_PRIMARY, BUTTON_ACTIVE_BG,
 )
 
 # Material Symbols 设置图标 SVG 路径
@@ -35,7 +37,7 @@ INPUT_TEXT_COLOR = GREEN_ACCENT
 CONFIG_BUTTON_TEXT_COLOR = CONFIG_BUTTON_IDLE
 CONFIG_BUTTON_HOVER_TEXT_COLOR = ACCENT_HOVER
 SETTINGS_BUTTON_CENTER_X_OFFSET = 34
-SETTINGS_BUTTON_ENTRY_RIGHT_PADDING = 92
+SETTINGS_BUTTON_ENTRY_RIGHT_PADDING = 144
 # 终端风格：左侧 prompt + 缩进
 PROMPT_LEFT = 10
 ENTRY_LEFT_PADDING = 32
@@ -67,6 +69,12 @@ class _OverlayWidget(QWidget):
         super().__init__()
         self._owner = owner
         self._overlay_opacity: float = 1.0
+        self._focus_glow = 0.0
+        # 焦点变化只播放一次短动画，不用常驻计时器驱动装饰性闪烁。
+        self._focus_animation = QVariantAnimation(self)
+        self._focus_animation.setDuration(160)
+        self._focus_animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._focus_animation.valueChanged.connect(self._set_focus_glow)
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
@@ -96,6 +104,9 @@ class _OverlayWidget(QWidget):
         self.entry = QLineEdit(self)
         self.entry.setObjectName("overlayEntry")
         self.entry.setFrame(False)
+        self.entry.setPlaceholderText("输入文字，让它发声…")
+        self.entry.setAccessibleName("朗读文本")
+        self.entry.setToolTip("Enter 朗读 · Esc 收起")
         self.entry.setGeometry(
             ENTRY_LEFT_PADDING, ENTRY_VERTICAL_PADDING,
             owner.width - SETTINGS_BUTTON_ENTRY_RIGHT_PADDING,
@@ -106,25 +117,59 @@ class _OverlayWidget(QWidget):
         self.entry.setStyleSheet(f'''
             QLineEdit#overlayEntry {{
                 background: transparent;
-                color: {INPUT_TEXT_COLOR};
+                color: {TEXT_PRIMARY};
                 selection-background-color: {CONFIG_BUTTON_HOVER_TEXT_COLOR};
                 selection-color: {INPUT_BACKGROUND_COLOR};
                 border: none;
-                font-family: {MONO_FONT};
+                font-family: {UI_FONT};
                 font-size: 24px;
                 padding: 0;
             }}
         ''')
 
+        # 显式入口让鼠标用户也能朗读；不抢输入焦点，避免点击时触发失焦收起。
+        self.submit_button = QPushButton(self)
+        self.submit_button.setObjectName("overlaySubmit")
+        self.submit_button.setGeometry(owner.width - 106, 11, 36, owner.height - 22)
+        self.submit_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.submit_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.submit_button.setAccessibleName("朗读")
+        self.submit_button.setToolTip("朗读（Enter）")
+        self.submit_button.setEnabled(False)
+        # 用几何播放图标避免符号字体缺失时出现方框；禁用态由 Qt 自动生成。
+        play_icon = QPixmap(16, 16)
+        play_icon.fill(Qt.GlobalColor.transparent)
+        icon_painter = QPainter(play_icon)
+        icon_painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        icon_painter.setPen(Qt.PenStyle.NoPen)
+        icon_painter.setBrush(QColor(INPUT_TEXT_COLOR))
+        icon_painter.drawPolygon(QPolygonF([QPointF(4, 2), QPointF(14, 8), QPointF(4, 14)]))
+        icon_painter.end()
+        self.submit_button.setIcon(QIcon(play_icon))
+        self.submit_button.setIconSize(QSize(16, 16))
+        self.submit_button.clicked.connect(owner._on_return)
+        self.entry.textChanged.connect(lambda text: self.submit_button.setEnabled(bool(text.strip())))
+        self.submit_button.setStyleSheet(f'''
+            QPushButton {{ background: {BUTTON_ACTIVE_BG}; color: {INPUT_TEXT_COLOR};
+                border: 1px solid {INPUT_BORDER_COLOR}; border-radius: 9px;
+                font-size: 22px; padding: 0; }}
+            QPushButton:hover {{ border-color: {ACCENT_HOVER}; background: {BUTTON_ACTIVE_BG}; }}
+            QPushButton:pressed {{ background: {INPUT_BACKGROUND_COLOR}; }}
+            QPushButton:disabled {{ color: {CONFIG_BUTTON_TEXT_COLOR}; background: transparent; }}
+        ''')
+
         # Material Symbols SVG 设置图标（透明背景）
         icon_size = 24
-        settings_hit_size = icon_size + 4  # 28px 点击区域
+        settings_hit_size = 36  # 扩大命中区域，图标大小不变。
         settings_x = owner.width - SETTINGS_BUTTON_CENTER_X_OFFSET - settings_hit_size // 2
         settings_y = (owner.height - settings_hit_size) // 2
         self.settings_button = QLabel(self)
         self.settings_button.setObjectName("settingsButton")
         self.settings_button.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.settings_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.settings_button.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.settings_button.setAccessibleName("设置")
+        self.settings_button.setToolTip("打开设置")
         self.settings_button.setGeometry(settings_x, settings_y, settings_hit_size, settings_hit_size)
         self.settings_button.setPixmap(self._make_settings_icon(icon_size, CONFIG_BUTTON_TEXT_COLOR))
         self.settings_button.installEventFilter(signals)
@@ -136,16 +181,7 @@ class _OverlayWidget(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         w, h = self.width(), self.height()
 
-        # 1. 点阵背景纹理 —— 终端屏幕质感
-        dot_color = QColor(INPUT_TEXT_COLOR)
-        dot_color.setAlphaF(0.025 * self._overlay_opacity)
-        dot_pen = QPen(dot_color, 1.0)
-        dot_pen.setDashPattern([1, 5])
-        painter.setPen(dot_pen)
-        for y in range(2, h - 2, 6):
-            painter.drawLine(2, y, w - 2, y)
-
-        # 2. 胶囊背景
+        # 先铺底，再绘制纹理；原来的纹理在背景之前绘制，会被完全盖住。
         bg_color = QColor(INPUT_BACKGROUND_COLOR)
         bg_color.setAlphaF(self._overlay_opacity)
         painter.setPen(Qt.PenStyle.NoPen)
@@ -154,19 +190,45 @@ class _OverlayWidget(QWidget):
         path.addRoundedRect(1, 1, w - 2, h - 2, WINDOW_RADIUS, WINDOW_RADIUS)
         painter.drawPath(path)
 
-        # 3. 内发光边框 —— 绿色微光
+        painter.save()
+        painter.setClipPath(path)
+        dot_color = QColor(INPUT_TEXT_COLOR)
+        dot_color.setAlphaF(0.05 * self._overlay_opacity)
+        painter.setPen(QPen(dot_color, 1.0))
+        for x in range(12, w - 12, 12):
+            painter.drawPoint(x, h - 8)
+        painter.restore()
+
+        # 聚焦时增加光边强度，变化对应可输入状态。
         glow_outer = QColor(INPUT_TEXT_COLOR)
-        glow_outer.setAlphaF(0.12 * self._overlay_opacity)
+        glow_outer.setAlphaF((0.12 + 0.24 * self._focus_glow) * self._overlay_opacity)
         glow_pen = QPen(glow_outer, 2.0)
         painter.setPen(glow_pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawRoundedRect(2, 2, w - 4, h - 4, WINDOW_RADIUS - 1, WINDOW_RADIUS - 1)
 
         # 5. 外边框
-        border_color = QColor(INPUT_BORDER_COLOR)
-        border_color.setAlphaF(self._overlay_opacity)
-        painter.setPen(QPen(border_color, 1.0))
+        edge = QLinearGradient(0, 0, w, h)
+        for position, color_value in ((0.0, INPUT_TEXT_COLOR), (0.5, INPUT_BORDER_COLOR), (1.0, ACCENT_SECONDARY)):
+            color = QColor(color_value)
+            color.setAlphaF((0.55 + 0.35 * self._focus_glow) * self._overlay_opacity)
+            edge.setColorAt(position, color)
+        painter.setPen(QPen(edge, 1.0))
         painter.drawRoundedRect(1, 1, w - 2, h - 2, WINDOW_RADIUS, WINDOW_RADIUS)
+
+    def animate_focus(self, focused: bool) -> None:
+        self._focus_animation.stop()
+        # 使用 Qt 原生动效偏好，关闭系统动画时直接切换焦点光边。
+        if not self.style().styleHint(QStyle.StyleHint.SH_Widget_Animate):
+            self._set_focus_glow(1.0 if focused else 0.0)
+            return
+        self._focus_animation.setStartValue(self._focus_glow)
+        self._focus_animation.setEndValue(1.0 if focused else 0.0)
+        self._focus_animation.start()
+
+    def _set_focus_glow(self, value: Any) -> None:
+        self._focus_glow = float(value)
+        self.update()
 
     @staticmethod
     def _make_settings_icon(size: int, color: str) -> QPixmap:
@@ -227,4 +289,8 @@ class _OverlayWidget(QWidget):
         color = CONFIG_BUTTON_HOVER_TEXT_COLOR if hovered else CONFIG_BUTTON_TEXT_COLOR
         self.settings_button.setPixmap(
             self._make_settings_icon(self._settings_icon_size, color)
+        )
+        # 图标背景也反馈命中区域，键盘聚焦与鼠标悬停使用同一视觉状态。
+        self.settings_button.setStyleSheet(
+            f"background: {BUTTON_ACTIVE_BG if hovered else 'transparent'}; border-radius: 9px;"
         )

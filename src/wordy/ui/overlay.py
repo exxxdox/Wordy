@@ -371,6 +371,18 @@ class InputOverlay:
             return False
         event_type = event.type()
         if watched is self.root.settings_button:
+            if event_type in (QEvent.Type.FocusIn, QEvent.Type.FocusOut):
+                self.root.set_settings_hover(event_type == QEvent.Type.FocusIn)
+                # 设置入口现在可聚焦；切到其他窗口时也必须执行原有收起逻辑。
+                if event_type == QEvent.Type.FocusOut and event.reason() not in (
+                    Qt.FocusReason.TabFocusReason, Qt.FocusReason.BacktabFocusReason,
+                ):
+                    self._on_focus_out()
+                return False
+            if event_type == QEvent.Type.KeyPress and event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Space):
+                self._on_settings_button_press()
+                self._on_settings_button_release()
+                return True
             if event_type == QEvent.Type.Enter:
                 self.root.set_settings_hover(True)
                 return False
@@ -384,11 +396,16 @@ class InputOverlay:
                 self._on_settings_button_release()
                 return True
         if watched is self.root.entry:
+            if event_type == QEvent.Type.FocusIn:
+                self.root.animate_focus(True)
             if event_type == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Escape:
                 self.hide()
                 return True
             if event_type == QEvent.Type.FocusOut:
-                self._on_focus_out()
+                self.root.animate_focus(False)
+                # Tab 导航到设置入口时保持输入栏打开，外部失焦仍按原逻辑收起。
+                if event.reason() not in (Qt.FocusReason.TabFocusReason, Qt.FocusReason.BacktabFocusReason):
+                    self._on_focus_out()
         return False
 
     def _submit_text(self, text: str) -> None:

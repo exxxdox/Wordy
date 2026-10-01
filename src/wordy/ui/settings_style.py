@@ -13,7 +13,7 @@ from wordy.ui.theme import (
     BUTTON_GHOST_BORDER,
     ELEVATED_BG,
     GREEN_ACCENT,
-    MONO_FONT,
+    UI_FONT,
     SCROLLBAR_HANDLE,
     SCROLLBAR_HANDLE_HOVER,
     SEPARATOR_COLOR,
@@ -26,7 +26,12 @@ from wordy.ui.theme import (
 
 def build_settings_stylesheet() -> str:
     """构建设置窗口的完整 QSS 样式表。"""
+    # 中文正文使用系统 UI 字体和明确焦点反馈，科技感不以牺牲可读性为代价。
     return f'''
+        QWidget {{
+            font-family: {UI_FONT};
+            font-size: 13px;
+        }}
         QDialog {{
             background: transparent;
             color: {TEXT_PRIMARY};
@@ -34,34 +39,29 @@ def build_settings_stylesheet() -> str:
         QFrame#dialogShell {{
             background: {SURFACE_BG};
             border: 1px solid {BUTTON_GHOST_BORDER};
-            border-radius: 14px;
+            border-radius: 16px;
         }}
         QLabel#dialogTitle {{
             color: {TEXT_PRIMARY};
-            font-size: 15px;
+            font-size: 18px;
             font-weight: 700;
-            padding: 16px 0 10px 0;
+            padding: 0;
             border: none;
-            font-family: {MONO_FONT};
-            letter-spacing: 2px;
         }}
         QLabel#sectionTitle {{
             color: {TEXT_PRIMARY};
-            font-size: 11px;
+            font-size: 14px;
             font-weight: 700;
             border: none;
-            font-family: {MONO_FONT};
-            text-transform: uppercase;
-            letter-spacing: 1px;
+            padding: 0 0 3px 0;
         }}
         QLabel#bodyLabel, QLabel#bodyLabelEmphasis {{
-            font-size: 10px;
+            font-size: 13px;
             border: none;
         }}
         QLabel#bodyLabelEmphasis {{
-            font-size: 11px;
+            font-size: 13px;
             font-weight: 600;
-            font-family: {MONO_FONT};
         }}
         QLabel#hintLabel {{
             font-size: 12px;
@@ -95,12 +95,11 @@ def build_settings_stylesheet() -> str:
             color: {TEXT_MUTED};
             border: 1px solid transparent;
             border-radius: 7px;
-            padding: 7px 12px;
+            padding: 9px 14px;
             margin: 0 1px;
             min-width: 90px;
             font-weight: 600;
-            font-family: {MONO_FONT};
-            font-size: 11px;
+            font-size: 13px;
         }}
         QTabWidget#settingsTabs QTabBar::tab:hover {{
             background: {ELEVATED_BG};
@@ -174,6 +173,26 @@ def build_settings_stylesheet() -> str:
         QPushButton:pressed {{
             background: {ELEVATED_BG};
             border-color: {ACCENT_PRESSED};
+        }}
+        QPushButton:focus, QComboBox:focus {{
+            border-color: {GREEN_ACCENT};
+        }}
+        QPushButton#dialogCloseButton {{
+            background: transparent;
+            color: {TEXT_MUTED};
+            border: 1px solid {BUTTON_GHOST_BORDER};
+            border-radius: 9px;
+            padding: 0;
+            font-size: 23px;
+            font-weight: 400;
+        }}
+        QPushButton#dialogCloseButton:hover, QPushButton#dialogCloseButton:focus {{
+            background: {BUTTON_ACTIVE_BG};
+            color: {GREEN_ACCENT};
+            border-color: {GREEN_ACCENT};
+        }}
+        QPushButton#dialogCloseButton:pressed {{
+            background: {ELEVATED_BG};
         }}
         QPushButton:disabled {{
             background: {SEPARATOR_COLOR};
