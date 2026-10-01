@@ -195,7 +195,6 @@ class NativeHotkeyListener:
         self._thread: threading.Thread | None = None
         self._thread_id = 0
         self._ready = threading.Event()
-        self._stopped = threading.Event()
         self._start_error: Exception | None = None
 
     def start(self) -> None:
@@ -208,7 +207,6 @@ class NativeHotkeyListener:
             return
 
         self._ready.clear()
-        self._stopped.clear()
         self._start_error = None
         self._thread = threading.Thread(target=self._run, name="NativeHotkeyListener", daemon=True)
         self._thread.start()
@@ -222,6 +220,7 @@ class NativeHotkeyListener:
 
     def stop(self) -> None:
         """停止热键消息线程。"""
+        # 退出由 WM_QUIT 和 join 确认，无读取方的额外停止 Event 不承担同步。
         if self._thread_id and _is_windows():
             try:
                 _get_user32().PostThreadMessageW(self._thread_id, WM_QUIT, 0, 0)
@@ -238,7 +237,6 @@ class NativeHotkeyListener:
                 )
         self._thread = None
         self._thread_id = 0
-        self._stopped.set()
 
     def _raise_last_error(self, prefix: str) -> None:
         error_code = ctypes.get_last_error()

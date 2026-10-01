@@ -265,3 +265,64 @@ class TestRoutingControllerProperties:
         ctrl = RoutingController(mock_settings, mock_player, on_output_device_changed=callback)
         ctrl.on_output_device_change({"name": "Speakers", "host_api_name": "MME"})
         callback.assert_called_once()
+
+
+def test_stop_keeps_router_for_restore_retry_and_restores_local_output_once(mock_player, mock_settings):
+    from wordy.audio.router import AudioRouter
+    from wordy.audio.listen_policy import ListenPolicyState
+
+    ctrl = RoutingController(mock_settings, mock_player)
+    router = AudioRouter(virtual_output="CABLE Input")
+    router._active = True
+    router._mic_device = "Mic"
+    router._listen_configured = True
+    router._listen_original_state = ListenPolicyState(enabled=False, output_id="old-output")
+    router._listen_original_device = "Mic"
+    ctrl._router = router
+    local_output = {"name": "Speakers", "host_api_name": "Windows WASAPI"}
+    ctrl._saved_output_device = local_output
+    with patch("wordy.audio.listen_policy.restore_listen_policy", side_effect=[False, True]) as restore:
+        assert ctrl.stop() is False
+        assert ctrl._router is router
+        assert ctrl.is_running is False
+        mock_player.set_output_device.assert_called_once_with(local_output)
+        assert ctrl.stop() is True
+    assert restore.call_count == 2
+    assert ctrl._router is None
+    mock_player.set_output_device.assert_called_once_with(local_output)
+
+
+def test_enable_does_not_replace_router_with_pending_restore(mock_player, mock_settings):
+    ctrl = RoutingController(mock_settings, mock_player)
+    router = MagicMock()
+    router.is_running.return_value = False
+    router.stop.return_value = False
+    ctrl._router = router
+    with patch("wordy.routing_controller.AudioRouter") as create:
+        ctrl.apply_config({"audio_routing_enabled": True, "mic_input_device": "New Mic"})
+    assert ctrl._router is router
+    router.stop.assert_called_once()
+    router.set_mic_device.assert_not_called()
+    create.assert_not_called()
+
+
+def test_virtual_output_change_restore_failure_returns_to_local_output(mock_player, mock_settings):
+    from wordy.audio.router import AudioRouter
+    from wordy.audio.listen_policy import ListenPolicyState
+
+    ctrl = RoutingController(mock_settings, mock_player)
+    router = AudioRouter(virtual_output="CABLE Input")
+    router._active = True
+    router._mic_device = "Mic"
+    router._listen_configured = True
+    router._listen_original_state = ListenPolicyState(enabled=False, output_id="old-output")
+    router._listen_original_device = "Mic"
+    ctrl._router = router
+    local_output = {"name": "Speakers", "host_api_name": "Windows WASAPI"}
+    ctrl._saved_output_device = local_output
+    with patch("wordy.audio.listen_policy.restore_listen_policy", return_value=False):
+        ctrl.apply_config({"virtual_output_device": "New Output"})
+    assert ctrl._router is router
+    assert router.virtual_output == "CABLE Input"
+    assert ctrl.is_running is False
+    mock_player.set_output_device.assert_called_once_with(local_output)

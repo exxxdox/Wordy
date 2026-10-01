@@ -212,3 +212,50 @@ class TestAudioRouter:
         router = AudioRouter()
         router.set_mic_device("test")
         assert router._mic_device == "test"
+
+
+def test_stop_keeps_original_state_until_restore_retry_succeeds():
+    from wordy.audio.listen_policy import ListenPolicyState
+
+    router = AudioRouter(virtual_output="CABLE Input")
+    original = ListenPolicyState(enabled=False, output_id="original-output")
+    router._active = True
+    router._mic_device = "Mic"
+    router._listen_configured = True
+    router._listen_original_state = original
+    router._listen_original_device = "Mic"
+    with patch("wordy.audio.listen_policy.restore_listen_policy", side_effect=[False, True]) as restore:
+        assert router.stop() is False
+        assert router.is_running() is False
+        assert router._listen_original_state is original
+        assert router.stop() is True
+    assert restore.call_count == 2
+    assert router._listen_original_state is None
+
+
+@pytest.mark.parametrize("operation", ["start", "set_virtual_output", "set_mic_device"])
+def test_pending_restore_cannot_be_overwritten_by_new_configuration(operation):
+    from wordy.audio.listen_policy import ListenPolicyState
+
+    router = AudioRouter(virtual_output="CABLE Input")
+    original = ListenPolicyState(enabled=True, output_id="original-output")
+    router._mic_device = "Old Mic"
+    router._listen_configured = True
+    router._listen_original_state = original
+    router._listen_original_device = "Old Mic"
+    with (
+        patch("wordy.audio.listen_policy.restore_listen_policy", return_value=False),
+        patch.object(router, "_resolve_output_device", return_value=99),
+        patch.object(router, "_enable_mic_listen") as enable,
+    ):
+        if operation == "start":
+            result = router.start(mic_device="New Mic")
+        elif operation == "set_virtual_output":
+            result = router.set_virtual_output("New Output")
+        else:
+            result = router.set_mic_device("New Mic")
+    assert result is False
+    assert router._mic_device == "Old Mic"
+    assert router.virtual_output == "CABLE Input"
+    assert router._listen_original_state is original
+    enable.assert_not_called()

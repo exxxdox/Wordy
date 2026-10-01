@@ -284,32 +284,5 @@ class TrayApp:
         self._log_attached = False
 
 
-class TrayController:
-    """Lifecycle wrapper around :class:`TrayApp`.
-
-    Accepts the underlying tray app plus an optional overlay reference so
-    higher-level wiring can delegate disposal without owning Qt internals.
-    ``dispose()`` is idempotent and forwards exactly once to the tray app.
-    """
-
-    def __init__(self, tray: TrayApp, overlay: object | None = None) -> None:
-        self._tray_app: TrayApp = tray
-        self._overlay: object | None = overlay
-        self._disposed: bool = False
-
-    @property
-    def tray_app(self) -> TrayApp:
-        return self._tray_app
-
-    @property
-    def overlay(self) -> object | None:
-        return self._overlay
-
-    def dispose(self) -> None:
-        if self._disposed:
-            return
-        self._disposed = True
-        self._tray_app.dispose()
-
-
-__all__ = ["TrayApp", "TrayController"]
+# TrayApp 自身负责幂等清理，无需额外生命周期代理。
+__all__ = ["TrayApp"]

@@ -636,76 +636,67 @@ class SettingsWindow:
         provider = self._settings.active_tts_provider.lower()
         self.on_field_changed(f"{provider}_tts_backend", backend)
 
-    # provider panel delegation properties（与 active provider 联动）
+    # 控件由活跃面板持有；只读委托避免误赋值被空 setter 静默丢弃。
     @property
     def api_key_input(self):
         p = PROVIDER_PANELS.get(self._settings.active_tts_provider)
         return getattr(p, "api_key_input", None) if p is not None else None
-    @api_key_input.setter
-    def api_key_input(self, v): pass
 
     @property
     def voice_combo(self):
         p = PROVIDER_PANELS.get(self._settings.active_tts_provider)
         return getattr(p, "voice_combo", None) if p is not None else None
-    @voice_combo.setter
-    def voice_combo(self, v): pass
 
     @property
     def refresh_voices_button(self):
         p = PROVIDER_PANELS.get(self._settings.active_tts_provider)
         return getattr(p, "refresh_btn", None) if p is not None else None
-    @refresh_voices_button.setter
-    def refresh_voices_button(self, v): pass
 
     @property
     def voice_status_label(self):
         p = PROVIDER_PANELS.get(self._settings.active_tts_provider)
         return getattr(p, "voice_status", None) if p is not None else None
-    @voice_status_label.setter
-    def voice_status_label(self, v): pass
 
     @property
     def voice_label_to_id(self) -> dict[str, str]:
         p = PROVIDER_PANELS.get(self._settings.active_tts_provider)
         return getattr(p, "voice_label_to_id", {}) if p is not None else {}
-    @voice_label_to_id.setter
-    def voice_label_to_id(self, v): pass
 
     @property
     def voice_label_to_name(self) -> dict[str, str]:
         p = PROVIDER_PANELS.get(self._settings.active_tts_provider)
         return getattr(p, "voice_label_to_name", {}) if p is not None else {}
-    @voice_label_to_name.setter
-    def voice_label_to_name(self, v): pass
 
     @property
     def clear_api_key_button(self):
         p = PROVIDER_PANELS.get(self._settings.active_tts_provider)
         return getattr(p, "clear_key_btn", None) if p is not None else None
-    @clear_api_key_button.setter
-    def clear_api_key_button(self, v): pass
 
     @property
     def api_key_status_label(self):
         p = PROVIDER_PANELS.get(self._settings.active_tts_provider)
         return getattr(p, "api_status", None) if p is not None else None
-    @api_key_status_label.setter
-    def api_key_status_label(self, v): pass
 
     def _on_tts_api_selected(self, provider: str) -> None:
         """TTS 服务商切换：切换面板可见性 + 刷新生成模式下拉。"""
         s = self._settings
         if provider == s.active_tts_provider:
             return
-        s.active_tts_provider = provider  # auto-save
+        previous = s.active_tts_provider
+        s.active_tts_provider = provider  # 回调需要读取目标服务商配置。
+        try:
+            self.on_field_changed("active_tts_provider", provider)
+        except Exception:
+            # 引擎切换失败时恢复持久配置与下拉框；面板尚未变更，无需重建。
+            s.active_tts_provider = previous
+            self.tts_api_combo.blockSignals(True)
+            self.tts_api_combo.setCurrentText(previous)
+            self.tts_api_combo.blockSignals(False)
+            self.set_status("服务商切换失败，请重试", TEXT_ERROR)
+            return
         self._populate_backend_combo_for_provider(provider, s.tts_backend)
         for name, widget in self._provider_panel_widgets.items():
             widget.setVisible(name == provider)
-        panel = PROVIDER_PANELS.get(provider)
-        if panel is not None:
-            panel.on_selected()
-        self.on_field_changed("active_tts_provider", provider)
 
     def _on_fixed_center_changed(self, state: int) -> None:
         checked = state == Qt.CheckState.Checked.value

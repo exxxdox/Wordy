@@ -108,7 +108,8 @@ class DummySlot:
 
 def _apply_pyside6_qtcore_patches() -> None:
     qtcore = sys.modules.get("PySide6.QtCore")
-    if qtcore is not None:
+    # Only patch our dummy module; mutating real Qt leaks into later GUI tests.
+    if isinstance(qtcore, DummyModule):
         setattr(qtcore, "Signal", DummySignal)
         setattr(qtcore, "Slot", DummySlot)
 

@@ -63,6 +63,9 @@ class AudioRouter:
         mic_device 为 None 时不配置侦听——用户需手动选择麦克风。"""
         if self._active:
             return True
+        # 恢复失败后的快照必须先还原，不能被重新启动的设备状态覆盖。
+        if self._listen_configured and not self.stop():
+            return False
         if self._resolve_output_device() is None:
             logger.error("无法找到 VB-CABLE 输出设备")
             return False
@@ -76,8 +79,8 @@ class AudioRouter:
         logger.info("TTS 音频侦听已启用（TTS → CABLE Input）")
         return True
 
-    def stop(self) -> None:
-        """停用路由；只有本次成功启用过侦听时才执行清理。"""
+    def stop(self) -> bool:
+        """停用路由；返回原侦听状态是否恢复成功，失败可重试。"""
         restored = True
         if self._listen_configured and self._mic_device is not None:
             restored = self._disable_mic_listen(self._mic_device)
@@ -87,12 +90,16 @@ class AudioRouter:
         self._listen_configured = self._listen_configured and not restored
         self._active = False
         logger.info("音频侦听已停用")
+        return restored
 
     def set_mic_device(self, device_name: str | None) -> bool:
         """切换麦克风时先清理旧设备，再启用新设备。返回是否成功。
 
         device_name 为 None 时停用侦听。新设备启用失败不回滚旧侦听，
         仅记录错误——用户可手动重试或切回旧设备。"""
+        # 已停用但尚未恢复时，先完成旧快照恢复再允许修改麦克风。
+        if not self._active and self._listen_configured and not self.stop():
+            return False
         old = self._mic_device
         if old == device_name:
             return True
@@ -241,7 +248,9 @@ class AudioRouter:
     def set_virtual_output(self, device_name: str | None) -> bool:
         was_running = self._active
         mic_device = self._mic_device
-        self.stop()
+        # 恢复失败时保留原设备和快照，不能继续重启覆盖恢复依据。
+        if not self.stop():
+            return False
         self.virtual_output = device_name
         if was_running:
             # 重启路由时保留当前麦克风，避免更新输出设备后静默丢失侦听。

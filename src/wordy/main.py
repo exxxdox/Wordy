@@ -9,7 +9,6 @@
 import logging
 import os
 import sys
-import threading
 from typing import cast
 
 from wordy.audio.player import AudioPlayer, OutputDeviceSelection
@@ -28,10 +27,10 @@ from wordy.tts.constants import (
     TTS_BACKENDS,
 )
 from wordy.tts.engine import TTSAudioPlayer
-from wordy.tts.registry import resolve_tts_backend, create_tts_engine  # noqa: F401 — re-export
-from wordy.tts_manager import TTSManager, _RetiredWorker, _janitor_loop_inner  # noqa: F401 — test imports
+from wordy.tts.registry import resolve_tts_backend
+from wordy.tts_manager import TTSManager
 from wordy.ui.overlay import InputOverlay
-from wordy.ui.tray import TrayApp, TrayController
+from wordy.ui.tray import TrayApp
 
 
 logger = logging.getLogger(__name__)
@@ -102,7 +101,8 @@ class WordyApp:
             on_voice_change=self._on_voice_change,
             on_volume_change=self.tts_manager.set_volume,
             on_tts_backend_change=self._on_tts_backend_change,
-            on_fetch_voices=self.tts_manager.fetch_voices,
+            # 绑定具体引擎，后台请求延迟启动时也不会跨服务商读取。
+            on_fetch_voices=self.tts_manager.engine.fetch_voices,
             on_audio_output_change=self.routing.on_output_device_change,
             on_cartesia_api_key_change=self._on_cartesia_api_key_change,
             on_tts_api_provider_change=self._on_tts_api_provider_change,
@@ -161,40 +161,6 @@ class WordyApp:
             output_device=cast(OutputDeviceSelection, s.audio_output_device) if s.audio_output_device is not None else None,
         )
 
-    # ── 测试兼容属性（委托到 tts_manager）─────────────────────────────────
-
-    @property
-    def tts_engine(self):
-        return self.tts_manager.engine
-
-    @tts_engine.setter
-    def tts_engine(self, engine):
-        self.tts_manager.engine = engine
-
-    @property
-    def _tts_executor(self):
-        return self.tts_manager.executor
-
-    @_tts_executor.setter
-    def _tts_executor(self, executor):
-        self.tts_manager._executor = executor
-
-    @property
-    def _janitor_queue(self):
-        return self.tts_manager._janitor_queue
-
-    @_janitor_queue.setter
-    def _janitor_queue(self, q):
-        self.tts_manager._janitor_queue = q
-
-    @property
-    def _janitor_thread(self):
-        return self.tts_manager._janitor_thread
-
-    @_janitor_thread.setter
-    def _janitor_thread(self, t):
-        self.tts_manager._janitor_thread = t
-
     # ── UI 回调 ───────────────────────────────────────────────────────────
 
     def _on_submit(self, text: str) -> None:
@@ -209,6 +175,7 @@ class WordyApp:
         """TTS 后端切换。"""
         self.tts_manager.switch_backend(tts_backend)
         self.tts_backend = self.tts_manager.tts_backend
+        self.overlay.on_fetch_voices = self.tts_manager.engine.fetch_voices
 
     def _on_cartesia_api_key_change(self, api_key: str | None = None) -> None:
         """Cartesia API key 变更。"""
@@ -219,6 +186,7 @@ class WordyApp:
         self.cartesia_api_key = new_key
         try:
             self.tts_manager.update_cartesia_key(new_key)
+            self.overlay.on_fetch_voices = self.tts_manager.engine.fetch_voices
         except Exception:
             self.cartesia_api_key = previous
             raise
@@ -227,8 +195,11 @@ class WordyApp:
         """TTS 服务商切换。"""
         if provider == self.tts_api_provider:
             return
-        self.tts_api_provider = provider
+        # 引擎创建成功才提交主应用状态，失败仍可重试同一服务商。
         self.tts_manager.switch_provider(provider)
+        self.tts_api_provider = self.tts_manager.tts_api_provider
+        self.tts_backend = self.tts_manager.tts_backend
+        self.overlay.on_fetch_voices = self.tts_manager.engine.fetch_voices
         # 触发后台加载音色列表（含 loading 指示器）
         self.overlay._start_load_voices(show_status=True)
 
@@ -245,6 +216,7 @@ class WordyApp:
         self.volcengine_access_key = new_key
         try:
             self.tts_manager.update_volcengine_credentials(new_key)
+            self.overlay.on_fetch_voices = self.tts_manager.engine.fetch_voices
         except Exception:
             self.volcengine_access_key = previous
             raise
@@ -298,13 +270,10 @@ class WordyApp:
         try:
             self.overlay.prepare_ui()
             if self._should_prewarm():
-                threading.Thread(
-                    target=self.tts_manager.connect_async,
-                    daemon=True,
-                    name="tts-connect",
-                ).start()
+                # manager 已把连接提交到串行 worker，无需额外线程绕过生命周期队列。
+                self.tts_manager.connect_async()
+            # TrayApp 已负责托盘生命周期，无需再创建仅保存引用的控制器。
             tray_app = TrayApp(self.overlay)
-            _ = TrayController(tray_app, self.overlay)
 
             def _pre_stop() -> None:
                 dispose_tray_once()

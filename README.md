@@ -64,14 +64,14 @@ uv add --dev <dev-package>
 
 | 文件 | 说明 |
 |------|------|
-| `main.py` | 应用入口，生命周期管理 |
-| `audio_router.py` | 音频侦听引擎（混音、TTS 注入） |
-| `audio_capture.py` | 麦克风/音频输入捕获（sounddevice） |
-| `audio_player.py` | WAV 播放器（pyaudio） |
-| `driver_manager.py` | VB-CABLE 驱动检测 |
-| `input_overlay.py` | 热键输入悬浮窗 |
-| `settings_window.py` | 设置界面（PySide6） |
-| `app_config.py` | 配置持久化 |
+| `src/wordy/main.py` | 应用入口，生命周期管理 |
+| `src/wordy/audio/router.py` | Windows 原生音频侦听管理 |
+| `src/wordy/audio/capture.py` | 麦克风输入设备枚举（sounddevice） |
+| `src/wordy/audio/player.py` | WAV/PCM 播放器（pyaudio） |
+| `src/wordy/audio/driver.py` | VB-CABLE 驱动检测 |
+| `src/wordy/ui/overlay.py` | 热键输入悬浮窗 |
+| `src/wordy/ui/settings.py` | 设置界面（PySide6） |
+| `src/wordy/config.py` | 配置持久化 |
 | `pyproject.toml` | 项目元数据与依赖声明 |
 
 ## 技术栈

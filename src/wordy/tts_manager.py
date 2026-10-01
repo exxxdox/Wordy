@@ -33,19 +33,14 @@ _JANITOR_JOIN_TIMEOUT_SECONDS = 30.0
 
 
 @dataclass
-class _RetiredWorker:
-    """已退役的 TTS worker 包，等待 janitor 线程异步清理。"""
-
-    executor: ThreadPoolExecutor
-    engine: BackendTTSEngine
-
-
-@dataclass
 class _TTSWorker:
-    """当前活跃的 TTS 引擎及其串行执行器。"""
+    """TTS 引擎及其串行执行器；退役状态由清理队列表示，复用同一包。"""
 
     executor: ThreadPoolExecutor
     engine: BackendTTSEngine
+    # 新旧引擎共用播放器；旧 worker 清理完后才允许后继打开音频流。
+    ready: threading.Event | None = None
+    next_ready: threading.Event | None = None
 
 
 def _janitor_loop_inner(janitor_queue: SimpleQueue) -> None:
@@ -59,6 +54,8 @@ def _janitor_loop_inner(janitor_queue: SimpleQueue) -> None:
             return
         executor = item.executor
         engine = item.engine
+        if item.ready is not None:
+            item.ready.wait()
         try:
             executor.shutdown(wait=True)
         except Exception as e:
@@ -67,12 +64,16 @@ def _janitor_loop_inner(janitor_queue: SimpleQueue) -> None:
             engine.close()
         except Exception as e:
             logger.exception("TTS 清理：引擎关闭失败: %s", e)
+        finally:
+            if item.next_ready is not None:
+                item.next_ready.set()
 
 
 class TTSManager:
     """TTS worker 生命周期管理器。
 
-    对外暴露 engine/executor 属性，WordyApp 通过回调委托到此实例。
+    对外暴露 engine/executor 属性，WordyApp 通过 GUI 线程回调提交操作。
+    预热与播放由 worker executor 执行，切换状态只在 GUI 线程更新。
     """
 
     def __init__(
@@ -90,6 +91,7 @@ class TTSManager:
         self.volcengine_access_key = volcengine_access_key
         self.tts_api_provider = tts_api_provider
         self.tts_backend = tts_backend
+        self._worker_ready: threading.Event | None = None
 
         worker = self._create_worker()
         self.engine = worker.engine
@@ -130,20 +132,24 @@ class TTSManager:
         )
 
     def _create_worker(self) -> _TTSWorker:
+        # 引擎构建失败时不提前分配一个无人关闭的 executor。
+        engine = self._create_engine()
         return _TTSWorker(
             executor=self._create_executor(),
-            engine=self._create_engine(),
+            engine=engine,
         )
 
     def _install_worker(self, worker: _TTSWorker) -> None:
         self.engine = worker.engine
         self._executor = worker.executor
+        self._worker_ready = worker.ready
 
     # ── 退役/Janitor ──────────────────────────────────────────────────────
 
-    def _enqueue_retire_current(self) -> None:
+    def _enqueue_retire_current(self, next_ready: threading.Event | None = None) -> None:
         self._janitor_queue.put(
-            _RetiredWorker(executor=self._executor, engine=self.engine)
+            _TTSWorker(executor=self._executor, engine=self.engine,
+                       ready=self._worker_ready, next_ready=next_ready)
         )
 
     def _janitor_loop(self) -> None:
@@ -158,7 +164,8 @@ class TTSManager:
         except Exception:
             rollback(*rollback_args)
             raise
-        self._enqueue_retire_current()
+        new_worker.ready = threading.Event()
+        self._enqueue_retire_current(next_ready=new_worker.ready)
         self._install_worker(new_worker)
         logger.info("%s，TTS 引擎已重建。", label)
 
@@ -260,6 +267,9 @@ class TTSManager:
 
     def reset_audio_output(self) -> None:
         """强制 TTS 实时引擎重建音频流（输出设备变更后调用）。"""
+        # 交接期间新引擎尚未打开音频流，无需触碰旧 worker 正在使用的播放器。
+        if self._worker_ready is not None and not self._worker_ready.is_set():
+            return
         self.engine.reset_audio_output()
 
     # ── 播放/音色列表 ─────────────────────────────────────────────────────
@@ -272,14 +282,19 @@ class TTSManager:
         if not self._get_active_voice_id():
             logger.error("缺少音色配置，请先打开设置，刷新音色列表并选择一个音色。")
             return
-        self._executor.submit(self._generate_and_play, text)
+        # 提交时绑定引擎，防止排队文本在服务商切换后串到新的 worker。
+        self._executor.submit(self._generate_and_play, text, engine=self.engine,
+                              ready=self._worker_ready, backend=self.tts_backend)
 
-    def _generate_and_play(self, text: str) -> None:
+    def _generate_and_play(self, text: str, *, engine: BackendTTSEngine,
+                           ready: threading.Event | None, backend: str) -> None:
         """在后台 worker 中生成 TTS 并播放（由 executor 执行）。"""
         try:
-            self.engine.speak(text)
+            if ready is not None:
+                ready.wait()
+            engine.speak(text)
         except Exception as e:
-            logger.error("%s 播放失败: %s", self.tts_backend, e)
+            logger.error("%s 播放失败: %s", backend, e)
 
     def fetch_voices(self) -> list[dict[str, object]]:
         """获取当前引擎的可用音色列表。"""
@@ -287,8 +302,17 @@ class TTSManager:
 
     def connect_async(self) -> None:
         """后台预热 TTS 连接；失败记日志，首次播放时懒连接自动重试。"""
+        # 预热与播放共用 worker 队列，防止退役关闭后后台线程再次打开旧音频流。
         try:
-            self.engine.connect()
+            self._executor.submit(self._connect_engine, self.engine, self._worker_ready)
+        except RuntimeError as e:
+            logger.warning("TTS 预热提交失败: %s", e)
+
+    def _connect_engine(self, engine: BackendTTSEngine, ready: threading.Event | None) -> None:
+        try:
+            if ready is not None:
+                ready.wait()
+            engine.connect()
         except Exception as e:
             logger.warning(
                 "TTS 后台预热连接失败: %s（首次播放时会自动重试）", e

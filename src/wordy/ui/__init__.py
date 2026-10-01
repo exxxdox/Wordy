@@ -5,11 +5,10 @@
 
 from wordy.ui.overlay import InputOverlay
 from wordy.ui.settings import SettingsWindow
-from wordy.ui.tray import TrayApp, TrayController
+from wordy.ui.tray import TrayApp
 
 __all__ = [
     "InputOverlay",
     "SettingsWindow",
     "TrayApp",
-    "TrayController",
 ]

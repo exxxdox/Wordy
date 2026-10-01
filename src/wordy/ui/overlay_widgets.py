@@ -48,8 +48,9 @@ class _OverlaySignals(QObject):
 
     hotkey_triggered = Signal()
     record_finished = Signal(object, object)
-    voices_loaded = Signal(object)
-    voices_error = Signal(object)
+    # 请求序号和服务商随结果返回，GUI 线程可拒绝延迟到达的旧结果。
+    voices_loaded = Signal(int, str, object)
+    voices_error = Signal(int, str, object)
 
     def __init__(self, owner: "InputOverlay") -> None:
         super().__init__()

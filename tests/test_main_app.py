@@ -8,7 +8,8 @@ from __future__ import annotations
 import queue
 import sys
 import threading
-import time
+from concurrent.futures import ThreadPoolExecutor
+from types import SimpleNamespace
 from typing import Any, Callable
 from unittest.mock import MagicMock
 
@@ -20,6 +21,8 @@ sys.path.insert(0, str(__file__).replace("/tests/test_main_app.py", ""))
 from wordy.config import AppSettings
 from wordy.tts.constants import TTS_BACKEND_CARTESIA_BYTES, TTS_BACKEND_CARTESIA_REALTIME
 from wordy.tts.engine import BackendTTSEngine
+# 直接测试生命周期所属对象，不要求主应用保留测试专用转发属性。
+from wordy.tts_manager import _TTSWorker
 
 
 # ---------------------------------------------------------------------------
@@ -115,10 +118,7 @@ class FakeJanitorThread:
     def start(self) -> None:
         self.started = True
         self._alive = True
-        # janitor 线程由各测试自行替换实例控制行为，不执行 target；
-        # 其他线程（如 tts-connect）直接同步执行 target。
-        if self.name != "WordyTTSJanitor":
-            self.target()
+        # janitor 由各测试自行控制，不执行真实清理循环。
 
     def is_alive(self) -> bool:
         return self._alive
@@ -147,7 +147,10 @@ def _patch_dependencies(monkeypatch):
     monkeypatch.setattr(AppSettings, "load", lambda **kw: _default_settings)
     # Patch InputOverlay to the fake.
     monkeypatch.setattr("wordy.main.InputOverlay", FakeInputOverlay)
-    monkeypatch.setattr("wordy.main.threading.Thread", FakeJanitorThread)
+    # 只替换 manager 的 janitor 工厂，保留 stdlib 线程供异步预热验证使用。
+    monkeypatch.setattr("wordy.tts_manager.threading", SimpleNamespace(
+        Thread=FakeJanitorThread, Event=threading.Event,
+    ))
     # Reset shared executor instance tracking for each test.
     FakeExecutor.instances.clear()
     # Replace executor factory in TTSManager (not WordyApp)
@@ -355,7 +358,7 @@ def test_configure_logging_installs_log_stream_pipeline(monkeypatch):
 
 
 def test_run_prepares_overlay_tray_hook_and_disposes_tray_before_overlay_run(app, monkeypatch):
-    """run() must prepare overlay UI, wire TrayApp/TrayController, hook tray disposal, then enter overlay.run()."""
+    """run() must prepare overlay UI, wire TrayApp, hook tray disposal, then enter overlay.run()."""
     import wordy.main as main_mod
 
     events: list[str] = []
@@ -375,8 +378,7 @@ def test_run_prepares_overlay_tray_hook_and_disposes_tray_before_overlay_run(app
         def run(self) -> None:
             events.append("overlay.run")
             assert events.index("overlay.prepare_ui") < events.index("tray.app.__init__")
-            assert events.index("tray.app.__init__") < events.index("tray.controller.__init__")
-            assert events.index("tray.controller.__init__") < events.index("overlay.set_pre_stop_hook")
+            assert events.index("tray.app.__init__") < events.index("overlay.set_pre_stop_hook")
             assert events.index("overlay.set_pre_stop_hook") < events.index("overlay.run")
             assert self.pre_stop_hook is not None
             self.pre_stop_hook()
@@ -390,22 +392,14 @@ def test_run_prepares_overlay_tray_hook_and_disposes_tray_before_overlay_run(app
         def dispose(self) -> None:
             events.append("tray.app.dispose")
 
-    class RecordingTrayController:
-        def __init__(self, tray_app: RecordingTrayApp, overlay: RecordingOverlay) -> None:
-            events.append("tray.controller.__init__")
-            self.tray_app = tray_app
-            self.overlay = overlay
-
     monkeypatch.setattr(main_mod, "InputOverlay", RecordingOverlay)
     assert hasattr(main_mod, "TrayApp"), "main must import TrayApp for tray lifecycle wiring"
-    assert hasattr(main_mod, "TrayController"), "main must import TrayController for tray lifecycle wiring"
     monkeypatch.setattr(main_mod, "TrayApp", RecordingTrayApp)
-    monkeypatch.setattr(main_mod, "TrayController", RecordingTrayController)
 
     instance = main_mod.WordyApp()
-    instance.tts_engine = app.tts_manager.engine
-    instance._tts_executor = app._tts_executor
-    instance._janitor_queue = queue.Queue()
+    instance.tts_manager.engine = app.tts_manager.engine
+    instance.tts_manager._executor = app.tts_manager._executor
+    instance.tts_manager._janitor_queue = queue.Queue()
 
     class FakeJanitorThread:
         def is_alive(self) -> bool:
@@ -414,7 +408,7 @@ def test_run_prepares_overlay_tray_hook_and_disposes_tray_before_overlay_run(app
         def join(self, timeout: float | None = None) -> None:
             events.append("janitor.join")
 
-    instance._janitor_thread = FakeJanitorThread()  # type: ignore[assignment]
+    instance.tts_manager._janitor_thread = FakeJanitorThread()  # type: ignore[assignment]
 
     instance.run()
 
@@ -451,22 +445,14 @@ def test_run_disposes_tray_in_finally_when_overlay_run_raises(app, monkeypatch):
         def dispose(self) -> None:
             events.append("tray.app.dispose")
 
-    class RecordingTrayController:
-        def __init__(self, tray_app: RecordingTrayApp, overlay: RaisingOverlay) -> None:
-            events.append("tray.controller.__init__")
-            self.tray_app = tray_app
-            self.overlay = overlay
-
     monkeypatch.setattr(main_mod, "InputOverlay", RaisingOverlay)
     assert hasattr(main_mod, "TrayApp"), "main must import TrayApp for tray lifecycle wiring"
-    assert hasattr(main_mod, "TrayController"), "main must import TrayController for tray lifecycle wiring"
     monkeypatch.setattr(main_mod, "TrayApp", RecordingTrayApp)
-    monkeypatch.setattr(main_mod, "TrayController", RecordingTrayController)
 
     instance = main_mod.WordyApp()
-    instance.tts_engine = app.tts_manager.engine
-    instance._tts_executor = app._tts_executor
-    instance._janitor_queue = queue.Queue()
+    instance.tts_manager.engine = app.tts_manager.engine
+    instance.tts_manager._executor = app.tts_manager._executor
+    instance.tts_manager._janitor_queue = queue.Queue()
 
     class FakeJanitorThread:
         def is_alive(self) -> bool:
@@ -475,7 +461,7 @@ def test_run_disposes_tray_in_finally_when_overlay_run_raises(app, monkeypatch):
         def join(self, timeout: float | None = None) -> None:
             events.append("janitor.join")
 
-    instance._janitor_thread = FakeJanitorThread()  # type: ignore[assignment]
+    instance.tts_manager._janitor_thread = FakeJanitorThread()  # type: ignore[assignment]
 
     with pytest.raises(RuntimeError, match="overlay boom"):
         instance.run()
@@ -489,8 +475,8 @@ def test_run_disposes_tray_in_finally_when_overlay_run_raises(app, monkeypatch):
 
 def test_app_uses_fake_executor_not_raw_thread(app):
     """WordyApp must hold a FakeExecutor (i.e. went through factory), not a raw threading object."""
-    assert isinstance(app._tts_executor, FakeExecutor)
-    assert not isinstance(app._tts_executor, threading.Thread)
+    assert isinstance(app.tts_manager._executor, FakeExecutor)
+    assert not isinstance(app.tts_manager._executor, threading.Thread)
 
 
 def test_on_submit_without_voice_does_not_submit_or_speak(app):
@@ -498,28 +484,28 @@ def test_on_submit_without_voice_does_not_submit_or_speak(app):
     # 清除 cartesia_voice_id 使语音检查失败（替换已移除的 app.voice_id）
     app._settings.cartesia_voice_id = None
     app.tts_manager.engine.speak_calls.clear()
-    app._tts_executor.submissions.clear()
+    app.tts_manager._executor.submissions.clear()
 
     app._on_submit("hello")
 
     assert app.tts_manager.engine.speak_calls == []
-    assert app._tts_executor.submissions == []
+    assert app.tts_manager._executor.submissions == []
 
 
 def test_on_submit_with_voice_queues_through_executor(app):
     """When voice_id is set, _on_submit must submit _generate_and_play through the executor."""
     # cartesia_voice_id 已在 fixture 中设为 "fake-voice"
     app.tts_manager.engine.speak_calls.clear()
-    app._tts_executor.submissions.clear()
+    app.tts_manager._executor.submissions.clear()
 
     app._on_submit("hello world")
 
     # Exactly one submission, target is tts_manager._generate_and_play.
-    assert len(app._tts_executor.submissions) == 1
-    fn, args, kwargs = app._tts_executor.submissions[0]
+    assert len(app.tts_manager._executor.submissions) == 1
+    fn, args, kwargs = app.tts_manager._executor.submissions[0]
     assert fn == app.tts_manager._generate_and_play
     assert args == ("hello world",)
-    assert kwargs == {}
+    assert kwargs == {"engine": app.tts_manager.engine, "ready": app.tts_manager._worker_ready, "backend": app.tts_manager.tts_backend}
     # FakeExecutor runs synchronously, so speak was invoked.
     assert app.tts_manager.engine.speak_calls == ["hello world"]
 
@@ -540,7 +526,7 @@ def test_backend_switch_enqueues_old_worker_without_inline_cleanup(app, monkeypa
     import wordy.main as main_mod
 
     old_engine = app.tts_manager.engine
-    old_executor = app._tts_executor
+    old_executor = app.tts_manager._executor
     new_engine = FakeTTSEngine(voice_id="fake-voice")
 
     inline_calls: list[str] = []
@@ -564,10 +550,10 @@ def test_backend_switch_enqueues_old_worker_without_inline_cleanup(app, monkeypa
     monkeypatch.setattr("wordy.tts_manager.create_tts_engine", lambda *a, **kw: new_engine)
 
     observed_queue: queue.Queue = queue.Queue()
-    assert hasattr(app, "_janitor_queue"), (
-        "WordyApp must expose a _janitor_queue attribute for deferred TTS cleanup"
+    assert hasattr(app.tts_manager, "_janitor_queue"), (
+        "TTSManager must expose a _janitor_queue attribute for deferred TTS cleanup"
     )
-    app._janitor_queue = observed_queue
+    app.tts_manager._janitor_queue = observed_queue
 
     app._on_tts_backend_change(TTS_BACKEND_CARTESIA_REALTIME)
 
@@ -591,8 +577,8 @@ def test_backend_switch_enqueues_old_worker_without_inline_cleanup(app, monkeypa
         f"backend switch must enqueue exactly one retired worker, got {enqueued!r}"
     )
     retired = enqueued[0]
-    assert isinstance(retired, main_mod._RetiredWorker), (
-        f"enqueued item must be a _RetiredWorker, got {type(retired).__name__}"
+    assert isinstance(retired, _TTSWorker), (
+        f"enqueued item must be a _TTSWorker, got {type(retired).__name__}"
     )
     assert retired.executor is old_executor
     assert retired.engine is old_engine
@@ -600,8 +586,8 @@ def test_backend_switch_enqueues_old_worker_without_inline_cleanup(app, monkeypa
     assert app.tts_backend == TTS_BACKEND_CARTESIA_REALTIME
     assert app.tts_manager.engine is new_engine
     assert new_engine.connect_calls == 0
-    assert app._tts_executor is not old_executor
-    assert isinstance(app._tts_executor, FakeExecutor)
+    assert app.tts_manager._executor is not old_executor
+    assert isinstance(app.tts_manager._executor, FakeExecutor)
 
 
 def test_backend_switch_submit_after_switch_uses_new_engine_and_executor(app, monkeypatch):
@@ -610,15 +596,17 @@ def test_backend_switch_submit_after_switch_uses_new_engine_and_executor(app, mo
     monkeypatch.setattr("wordy.tts_manager.resolve_tts_backend", lambda name: TTS_BACKEND_CARTESIA_REALTIME)
     monkeypatch.setattr("wordy.tts_manager.create_tts_engine", lambda *a, **kw: new_engine)
 
-    app._janitor_queue = queue.Queue()
+    app.tts_manager._janitor_queue = queue.Queue()
 
     app._on_tts_backend_change(TTS_BACKEND_CARTESIA_REALTIME)
 
-    new_executor = app._tts_executor
+    new_executor = app.tts_manager._executor
     assert isinstance(new_executor, FakeExecutor)
     new_executor.submissions.clear()
     new_engine.speak_calls.clear()
 
+    # Fake janitor 不执行清理，显式模拟旧 worker 已释放播放器。
+    app.tts_manager._worker_ready.set()
     # cartesia_voice_id 已在 fixture 中设为 "fake-voice"
     app._on_submit("after-switch")
 
@@ -626,46 +614,57 @@ def test_backend_switch_submit_after_switch_uses_new_engine_and_executor(app, mo
     fn, args, kwargs = new_executor.submissions[0]
     assert fn == app.tts_manager._generate_and_play
     assert args == ("after-switch",)
-    assert kwargs == {}
+    assert kwargs == {"engine": app.tts_manager.engine, "ready": app.tts_manager._worker_ready, "backend": app.tts_manager.tts_backend}
     assert new_engine.speak_calls == ["after-switch"]
 
 
 def test_backend_switch_no_op_when_same_backend(app, monkeypatch):
     """Switching to the same backend should be a no-op and not touch the executor or janitor queue."""
     old_engine = app.tts_manager.engine
-    old_executor = app._tts_executor
+    old_executor = app.tts_manager._executor
     monkeypatch.setattr("wordy.tts_manager.resolve_tts_backend", lambda name: TTS_BACKEND_CARTESIA_BYTES)
 
     observed_queue: queue.Queue = queue.Queue()
-    assert hasattr(app, "_janitor_queue"), (
-        "WordyApp must expose a _janitor_queue attribute for deferred TTS cleanup"
+    assert hasattr(app.tts_manager, "_janitor_queue"), (
+        "TTSManager must expose a _janitor_queue attribute for deferred TTS cleanup"
     )
-    app._janitor_queue = observed_queue
+    app.tts_manager._janitor_queue = observed_queue
 
     app._on_tts_backend_change(TTS_BACKEND_CARTESIA_BYTES)
 
     assert old_engine.close_calls == 0
     assert app.tts_manager.engine is old_engine
-    assert app._tts_executor is old_executor
+    assert app.tts_manager._executor is old_executor
     assert old_executor.shutdown_calls == []
     assert observed_queue.empty(), (
         "same-backend switch must not enqueue any retired worker"
     )
 
 
-def test_run_enqueues_current_worker_and_sentinel_then_joins_janitor(app, monkeypatch):
+def test_run_enqueues_current_worker_and_sentinel_then_joins_janitor(app, monkeypatch, request):
     """run()'s finally must enqueue the current worker + sentinel into the janitor queue and join the janitor thread.
 
     No inline executor.shutdown / engine.close calls are allowed during run cleanup.
     """
     import wordy.main as main_mod
 
-    executor = app._tts_executor
+    # FakeExecutor 同步执行，异步预热必须用真实串行 worker 验证。
+    executor = ThreadPoolExecutor(max_workers=1)
+    app.tts_manager._executor = executor
     engine = app.tts_manager.engine
+    connected = threading.Event()
+    connect_threads = []
+    original_connect = engine.connect
+    def tracked_connect():
+        connect_threads.append(threading.get_ident())
+        original_connect()
+        connected.set()
+    engine.connect = tracked_connect
 
     inline_calls: list[str] = []
 
     original_shutdown = executor.shutdown
+    request.addfinalizer(lambda: original_shutdown(wait=True))
 
     def tracked_shutdown(*a, **kw):
         inline_calls.append("executor.shutdown")
@@ -681,10 +680,10 @@ def test_run_enqueues_current_worker_and_sentinel_then_joins_janitor(app, monkey
     engine.close = tracked_close  # type: ignore[assignment]
 
     observed_queue: queue.Queue = queue.Queue()
-    assert hasattr(app, "_janitor_queue"), (
-        "WordyApp must expose a _janitor_queue attribute for deferred TTS cleanup"
+    assert hasattr(app.tts_manager, "_janitor_queue"), (
+        "TTSManager must expose a _janitor_queue attribute for deferred TTS cleanup"
     )
-    app._janitor_queue = observed_queue
+    app.tts_manager._janitor_queue = observed_queue
 
     join_calls: list[float | None] = []
 
@@ -700,17 +699,16 @@ def test_run_enqueues_current_worker_and_sentinel_then_joins_janitor(app, monkey
             self._alive = False
 
     fake_janitor = FakeJanitorThread()
-    assert hasattr(app, "_janitor_thread"), (
-        "WordyApp must expose a _janitor_thread attribute for deferred TTS cleanup"
+    assert hasattr(app.tts_manager, "_janitor_thread"), (
+        "TTSManager must expose a _janitor_thread attribute for deferred TTS cleanup"
     )
-    app._janitor_thread = fake_janitor  # type: ignore[assignment]
+    app.tts_manager._janitor_thread = fake_janitor  # type: ignore[assignment]
 
     app.run()
 
-    # connect() 改为后台线程执行，等待 daemon 线程完成
-    deadline = time.monotonic() + 1.0
-    while engine.connect_calls < 1 and time.monotonic() < deadline:
-        time.sleep(0.01)
+    assert connected.wait(timeout=1)
+    assert len(connect_threads) == 1
+    assert connect_threads[0] != threading.get_ident()
 
     assert inline_calls == [], (
         f"run cleanup must defer worker shutdown/close to janitor; got inline calls {inline_calls!r}"
@@ -727,9 +725,9 @@ def test_run_enqueues_current_worker_and_sentinel_then_joins_janitor(app, monkey
     assert len(drained) >= 2, (
         f"run cleanup must enqueue at least the current worker and a shutdown sentinel, got {drained!r}"
     )
-    retired_items = [item for item in drained if isinstance(item, main_mod._RetiredWorker)]
+    retired_items = [item for item in drained if isinstance(item, _TTSWorker)]
     assert len(retired_items) == 1, (
-        f"run cleanup must enqueue exactly one _RetiredWorker for the current worker, got {drained!r}"
+        f"run cleanup must enqueue exactly one _TTSWorker for the current worker, got {drained!r}"
     )
     retired = retired_items[0]
     assert retired.executor is executor
@@ -753,7 +751,7 @@ def test_run_without_cartesia_api_key_does_not_eager_connect(monkeypatch):
     run_calls: list[None] = []
     instance.overlay.run = lambda: run_calls.append(None)
     observed_queue: queue.Queue = queue.Queue()
-    instance._janitor_queue = observed_queue
+    instance.tts_manager._janitor_queue = observed_queue
 
     class FakeJanitorThread:
         def __init__(self) -> None:
@@ -765,7 +763,7 @@ def test_run_without_cartesia_api_key_does_not_eager_connect(monkeypatch):
         def join(self, timeout: float | None = None) -> None:
             self._alive = False
 
-    instance._janitor_thread = FakeJanitorThread()  # type: ignore[assignment]
+    instance.tts_manager._janitor_thread = FakeJanitorThread()  # type: ignore[assignment]
 
     instance.run()
 
@@ -840,9 +838,9 @@ def test_cartesia_api_key_change_rebuilds_tts_engine_without_leaking_key(monkeyp
     monkeypatch.setattr("wordy.tts_manager.create_tts_engine", factory)
 
     instance = main_mod.WordyApp()
-    old_engine = instance.tts_engine
-    old_executor = instance._tts_executor
-    instance._janitor_queue = queue.Queue()
+    old_engine = instance.tts_manager.engine
+    old_executor = instance.tts_manager._executor
+    instance.tts_manager._janitor_queue = queue.Queue()
 
     callback = getattr(instance, "_on_cartesia_api_key_change", None)
     if not callable(callback):
@@ -856,14 +854,14 @@ def test_cartesia_api_key_change_rebuilds_tts_engine_without_leaking_key(monkeyp
     callback(CARTESIA_KEY_SENTINEL)
 
     assert instance.cartesia_api_key == CARTESIA_KEY_SENTINEL
-    assert instance.tts_engine is not old_engine
-    assert instance._tts_executor is not old_executor
+    assert instance.tts_manager.engine is not old_engine
+    assert instance.tts_manager._executor is not old_executor
     assert engine_calls[-1]["kwargs"].get("api_key") == CARTESIA_KEY_SENTINEL
 
     enqueued: list[Any] = []
     while True:
         try:
-            enqueued.append(instance._janitor_queue.get_nowait())
+            enqueued.append(instance.tts_manager._janitor_queue.get_nowait())
         except queue.Empty:
             break
     assert any(getattr(item, "engine", None) is old_engine for item in enqueued), (
@@ -880,10 +878,10 @@ def test_on_cartesia_api_key_change_engine_build_failure_does_not_corrupt_state(
     monkeypatch.setattr("wordy.tts_manager.create_tts_engine", lambda *a, **kw: initial_engine)
 
     instance = main_mod.WordyApp()
-    old_engine = instance.tts_engine
-    old_executor = instance._tts_executor
+    old_engine = instance.tts_manager.engine
+    old_executor = instance.tts_manager._executor
     observed_queue: queue.Queue = queue.Queue()
-    instance._janitor_queue = observed_queue
+    instance.tts_manager._janitor_queue = observed_queue
 
     def failing_factory(*args: Any, **kwargs: Any) -> FakeTTSEngine:
         raise RuntimeError("build failed")
@@ -894,8 +892,8 @@ def test_on_cartesia_api_key_change_engine_build_failure_does_not_corrupt_state(
         instance._on_cartesia_api_key_change("sk_NEW_FAILURE")
 
     assert instance.cartesia_api_key == "sk_OLD_STABLE"
-    assert instance.tts_engine is old_engine
-    assert instance._tts_executor is old_executor
+    assert instance.tts_manager.engine is old_engine
+    assert instance.tts_manager._executor is old_executor
 
     enqueued: list[Any] = []
     while True:
@@ -903,7 +901,7 @@ def test_on_cartesia_api_key_change_engine_build_failure_does_not_corrupt_state(
             enqueued.append(observed_queue.get_nowait())
         except queue.Empty:
             break
-    assert not any(isinstance(item, main_mod._RetiredWorker) for item in enqueued), (
+    assert not any(isinstance(item, _TTSWorker) for item in enqueued), (
         f"failed API key rebuild must not enqueue retired workers, got {enqueued!r}"
     )
 
@@ -1471,182 +1469,6 @@ def test_on_audio_output_change_with_none_clears_via_set_output_device(monkeypat
     )
 
 
-# ---------------------------------------------------------------------------
-# RED contract tests for the deferred janitor loop (TTS lifecycle cleanup).
-# ---------------------------------------------------------------------------
-
-
-class _FakeJanitorEngine:
-    """Minimal stand-in for a TTS engine used by janitor loop tests."""
-
-    def __init__(self, name: str, log: list[str], raise_on_close: bool = False) -> None:
-        self.name = name
-        self._log = log
-        self._raise_on_close = raise_on_close
-        self.close_calls = 0
-
-    def close(self) -> None:
-        self.close_calls += 1
-        self._log.append(f"{self.name}.engine.close")
-        if self._raise_on_close:
-            raise RuntimeError(f"{self.name} engine close boom")
-
-
-class _FakeJanitorExecutor:
-    """Minimal stand-in for an executor used by janitor loop tests."""
-
-    def __init__(self, name: str, log: list[str], raise_on_shutdown: bool = False) -> None:
-        self.name = name
-        self._log = log
-        self._raise_on_shutdown = raise_on_shutdown
-        self.shutdown_calls: list[dict[str, Any]] = []
-
-    def shutdown(self, wait: bool = True, *, cancel_futures: bool = False) -> None:
-        self.shutdown_calls.append({"wait": wait, "cancel_futures": cancel_futures})
-        self._log.append(f"{self.name}.executor.shutdown")
-        if self._raise_on_shutdown:
-            raise RuntimeError(f"{self.name} executor shutdown boom")
-
-
-def test_janitor_loop_drains_workers_in_shutdown_then_close_order():
-    """_janitor_loop_inner must drain queued workers and call shutdown BEFORE close for each."""
-    import wordy.main as main_mod
-
-    log: list[str] = []
-    q: queue.Queue = queue.Queue()
-
-    worker_a = main_mod._RetiredWorker(
-        executor=_FakeJanitorExecutor("A", log),
-        engine=_FakeJanitorEngine("A", log),
-    )
-    worker_b = main_mod._RetiredWorker(
-        executor=_FakeJanitorExecutor("B", log),
-        engine=_FakeJanitorEngine("B", log),
-    )
-
-    q.put(worker_a)
-    q.put(worker_b)
-    q.put(None)
-
-    main_mod._janitor_loop_inner(q)
-
-    assert log == [
-        "A.executor.shutdown",
-        "A.engine.close",
-        "B.executor.shutdown",
-        "B.engine.close",
-    ], f"janitor must process workers FIFO and shutdown-before-close, got {log!r}"
-
-    assert worker_a.executor.shutdown_calls and worker_a.executor.shutdown_calls[0]["wait"] is True
-    assert worker_b.executor.shutdown_calls and worker_b.executor.shutdown_calls[0]["wait"] is True
-    assert worker_a.engine.close_calls == 1
-    assert worker_b.engine.close_calls == 1
-
-
-def test_janitor_loop_continues_after_executor_shutdown_exception():
-    """If executor.shutdown raises, the janitor must still call engine.close AND process subsequent workers."""
-    import wordy.main as main_mod
-
-    log: list[str] = []
-    q: queue.Queue = queue.Queue()
-
-    bad_executor = _FakeJanitorExecutor("bad", log, raise_on_shutdown=True)
-    bad_engine = _FakeJanitorEngine("bad", log)
-    good_executor = _FakeJanitorExecutor("good", log)
-    good_engine = _FakeJanitorEngine("good", log)
-
-    q.put(main_mod._RetiredWorker(executor=bad_executor, engine=bad_engine))
-    q.put(main_mod._RetiredWorker(executor=good_executor, engine=good_engine))
-    q.put(None)
-
-    main_mod._janitor_loop_inner(q)
-
-    assert "bad.executor.shutdown" in log
-    assert "bad.engine.close" in log, (
-        f"engine.close must run even after executor.shutdown raised, got {log!r}"
-    )
-    assert "good.executor.shutdown" in log
-    assert "good.engine.close" in log, (
-        f"janitor must keep processing further workers after an exception, got {log!r}"
-    )
-    assert bad_engine.close_calls == 1
-    assert good_engine.close_calls == 1
-    assert log.index("bad.executor.shutdown") < log.index("bad.engine.close")
-    assert log.index("bad.engine.close") < log.index("good.executor.shutdown")
-
-
-def test_janitor_loop_continues_after_engine_close_exception():
-    """If engine.close raises, the janitor must still process subsequent workers."""
-    import wordy.main as main_mod
-
-    log: list[str] = []
-    q: queue.Queue = queue.Queue()
-
-    bad_executor = _FakeJanitorExecutor("bad", log)
-    bad_engine = _FakeJanitorEngine("bad", log, raise_on_close=True)
-    good_executor = _FakeJanitorExecutor("good", log)
-    good_engine = _FakeJanitorEngine("good", log)
-
-    q.put(main_mod._RetiredWorker(executor=bad_executor, engine=bad_engine))
-    q.put(main_mod._RetiredWorker(executor=good_executor, engine=good_engine))
-    q.put(None)
-
-    main_mod._janitor_loop_inner(q)
-
-    assert log == [
-        "bad.executor.shutdown",
-        "bad.engine.close",
-        "good.executor.shutdown",
-        "good.engine.close",
-    ], f"janitor must continue past engine.close exceptions in FIFO order, got {log!r}"
-    assert bad_engine.close_calls == 1
-    assert good_engine.close_calls == 1
-
-
-def test_janitor_loop_stops_on_sentinel_without_processing_later_items():
-    """A None sentinel must terminate the loop; any items enqueued after it must be ignored."""
-    import wordy.main as main_mod
-
-    log: list[str] = []
-    q: queue.Queue = queue.Queue()
-
-    early_worker = main_mod._RetiredWorker(
-        executor=_FakeJanitorExecutor("early", log),
-        engine=_FakeJanitorEngine("early", log),
-    )
-    late_worker = main_mod._RetiredWorker(
-        executor=_FakeJanitorExecutor("late", log),
-        engine=_FakeJanitorEngine("late", log),
-    )
-
-    q.put(early_worker)
-    q.put(None)
-    q.put(late_worker)
-
-    main_mod._janitor_loop_inner(q)
-
-    assert log == [
-        "early.executor.shutdown",
-        "early.engine.close",
-    ], f"janitor must stop at the None sentinel and ignore later items, got {log!r}"
-    assert late_worker.executor.shutdown_calls == []
-    assert late_worker.engine.close_calls == 0
-
-
-def test_retired_worker_holds_executor_and_engine_references():
-    """_RetiredWorker must expose .executor and .engine attributes matching constructor args."""
-    import wordy.main as main_mod
-
-    executor = _FakeJanitorExecutor("x", [])
-    engine = _FakeJanitorEngine("x", [])
-
-    retired = main_mod._RetiredWorker(executor=executor, engine=engine)
-
-    assert retired.executor is executor
-    assert retired.engine is engine
-
-
-
 def test_on_submit_rejects_blank_text(app, caplog):
     """RED characterization: _on_submit must NOT submit blank/whitespace-only text.
 
@@ -1655,13 +1477,13 @@ def test_on_submit_rejects_blank_text(app, caplog):
     import logging
     app.voice_id = "fake-voice"
     app.tts_manager.engine.speak_calls.clear()
-    app._tts_executor.submissions.clear()
+    app.tts_manager._executor.submissions.clear()
 
     with caplog.at_level(logging.WARNING):
         app._on_submit("")
 
-    assert app._tts_executor.submissions == [], (
-        f"_on_submit(\"\") must not submit work, got {app._tts_executor.submissions!r}"
+    assert app.tts_manager._executor.submissions == [], (
+        f"_on_submit(\"\") must not submit work, got {app.tts_manager._executor.submissions!r}"
     )
     assert app.tts_manager.engine.speak_calls == []
 
@@ -1671,19 +1493,19 @@ def test_on_submit_rejects_whitespace_only_text(app, caplog):
     import logging
     app.voice_id = "fake-voice"
     app.tts_manager.engine.speak_calls.clear()
-    app._tts_executor.submissions.clear()
+    app.tts_manager._executor.submissions.clear()
 
     with caplog.at_level(logging.WARNING):
         app._on_submit("   \t\n")
 
-    assert app._tts_executor.submissions == []
+    assert app.tts_manager._executor.submissions == []
     assert app.tts_manager.engine.speak_calls == []
 
 
 def test_backend_switch_engine_build_failure_does_not_double_retire(app, monkeypatch):
     """RED characterization: when _create_tts_worker raises during backend switch,
     the OLD worker must NOT be enqueued for retirement, because production still
-    holds it as the active engine (self.tts_engine / self._tts_executor).
+    holds it as the active engine (tts_manager.engine / tts_manager._executor).
 
     Compare _on_cartesia_api_key_change which builds the new worker FIRST and
     only retires on success. _on_tts_backend_change retires UNCONDITIONALLY
@@ -1692,10 +1514,10 @@ def test_backend_switch_engine_build_failure_does_not_double_retire(app, monkeyp
     """
     import queue as _queue
     old_engine = app.tts_manager.engine
-    old_executor = app._tts_executor
+    old_executor = app.tts_manager._executor
 
     observed_queue: _queue.Queue = _queue.Queue()
-    app._janitor_queue = observed_queue
+    app.tts_manager._janitor_queue = observed_queue
 
     def failing_create_worker():
         raise RuntimeError("worker build failed")
@@ -1714,7 +1536,7 @@ def test_backend_switch_engine_build_failure_does_not_double_retire(app, monkeyp
             break
 
     assert app.tts_manager.engine is old_engine
-    assert app._tts_executor is old_executor
+    assert app.tts_manager._executor is old_executor
 
     leaked = [
         item for item in drained
@@ -1725,3 +1547,34 @@ def test_backend_switch_engine_build_failure_does_not_double_retire(app, monkeyp
         f"backend-switch build failure must not enqueue the still-active worker; "
         f"got {leaked!r}"
     )
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_provider_switch_commits_app_state_only_after_manager_success(app, monkeypatch, fail):
+    old_provider, old_backend = app.tts_api_provider, app.tts_backend
+    refresh = MagicMock()
+    app.overlay._start_load_voices = refresh
+    def switch(provider):
+        if fail:
+            raise RuntimeError("engine build failed")
+        app.tts_manager.tts_api_provider = provider
+        app.tts_manager.tts_backend = "Volcengine Streaming"
+    monkeypatch.setattr(app.tts_manager, "switch_provider", switch)
+    if fail:
+        with pytest.raises(RuntimeError, match="engine build failed"):
+            app._on_tts_api_provider_change("Volcengine")
+        assert (app.tts_api_provider, app.tts_backend) == (old_provider, old_backend)
+        refresh.assert_not_called()
+    else:
+        app._on_tts_api_provider_change("Volcengine")
+        assert (app.tts_api_provider, app.tts_backend) == ("Volcengine", "Volcengine Streaming")
+        assert app.overlay.on_fetch_voices == app.tts_manager.engine.fetch_voices
+        refresh.assert_called_once_with(show_status=True)
+
+
+def test_voice_fetch_callback_captures_engine_instead_of_following_manager(app):
+    fetch = app.overlay._callbacks["on_fetch_voices"]
+    original = app.tts_manager.engine
+    app.tts_manager.engine = FakeTTSEngine(voice_id="other")
+    app.tts_manager.engine.fetch_voices_result = [{"id": "other", "name": "Other"}]
+    assert fetch() == original.fetch_voices_result

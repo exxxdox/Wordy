@@ -429,3 +429,125 @@ def test_apply_volume_change_dispatches_callback(monkeypatch: pytest.MonkeyPatch
     overlay._on_settings_field_changed("volume", 0.75)
 
     assert volume_calls == [0.75]
+
+
+@pytest.mark.parametrize("old_error", [False, True])
+def test_voice_requests_capture_provider_and_fetcher_and_ignore_old_results(monkeypatch, old_error):
+    from unittest.mock import MagicMock
+    module = import_input_overlay_with_stubs(monkeypatch)
+    overlay = module.InputOverlay(on_submit=lambda text: None)
+    overlay._cfg.active_tts_provider = "Cartesia"
+    overlay._active_settings_window = lambda: None
+    overlay._signals = MagicMock()
+    overlay._signals.voices_loaded.emit.side_effect = overlay._finish_load_voices
+    overlay._signals.voices_error.emit.side_effect = overlay._finish_load_voices_error
+    pending = []
+    class PendingThread:
+        def __init__(self, target, daemon, args=()):
+            pending.append(lambda: target(*args))
+        def start(self):
+            pass
+    monkeypatch.setattr(module.threading, "Thread", PendingThread)
+    calls = []
+    def fetch_old():
+        calls.append("Cartesia")
+        if old_error:
+            raise RuntimeError("old request failed")
+        return [{"id": "old", "name": "Old"}]
+    overlay.on_fetch_voices = fetch_old
+    overlay._start_load_voices()
+    overlay._cfg.active_tts_provider = "Volcengine"
+    overlay.on_fetch_voices = lambda: calls.append("Volcengine") or [{"id": "new", "name": "New"}]
+    overlay._start_load_voices()
+    assert len(pending) == 2
+    # Even a delayed thread must use its captured fetcher, never the newly selected engine.
+    pending[0]()
+    assert overlay._voices_loading is True
+    assert overlay._cartesia_voices_cache == []
+    assert overlay._volcengine_voices_cache == []
+    assert overlay._voice_fetch_error is None
+    pending[1]()
+    assert calls == ["Cartesia", "Volcengine"]
+    assert overlay._volcengine_voices_cache == [{"id": "new", "name": "New"}]
+    assert overlay._cartesia_voices_cache == []
+    assert overlay._voices_loading is False
+
+
+@pytest.mark.parametrize("fail", [False, True])
+def test_voice_worker_does_not_emit_after_overlay_closes(monkeypatch, fail):
+    from unittest.mock import MagicMock
+    module = import_input_overlay_with_stubs(monkeypatch)
+    overlay = module.InputOverlay(on_submit=lambda text: None)
+    overlay._active_settings_window = lambda: None
+    overlay._signals = MagicMock()
+    pending = []
+    class PendingThread:
+        def __init__(self, target, daemon, args=()):
+            pending.append(lambda: target(*args))
+        def start(self):
+            pass
+    monkeypatch.setattr(module.threading, "Thread", PendingThread)
+    def fetch():
+        overlay._closed = True
+        if fail:
+            raise RuntimeError("fetch failed during shutdown")
+        return []
+    overlay.on_fetch_voices = fetch
+    overlay._start_load_voices()
+    pending[0]()
+    overlay._signals.voices_loaded.emit.assert_not_called()
+    overlay._signals.voices_error.emit.assert_not_called()
+
+
+@pytest.mark.parametrize("generation, provider", [(1, "Cartesia"), (2, "Volcengine")])
+def test_queued_voice_results_cannot_update_new_request(monkeypatch, generation, provider):
+    module = import_input_overlay_with_stubs(monkeypatch)
+    overlay = module.InputOverlay(on_submit=lambda text: None)
+    overlay._cfg.active_tts_provider = "Cartesia"
+    overlay._voices_generation = 2
+    overlay._voices_loading = True
+    overlay._active_settings_window = lambda: None
+    overlay._finish_load_voices(generation, provider, [{"id": "stale", "name": "Stale"}])
+    overlay._finish_load_voices_error(generation, provider, RuntimeError("stale error"))
+    assert overlay._cartesia_voices_cache == []
+    assert overlay._voices_loading is True
+    assert overlay._voice_fetch_error is None
+    overlay._finish_load_voices(2, "Cartesia", [{"id": "latest", "name": "Latest"}])
+    assert overlay._cartesia_voices_cache == [{"id": "latest", "name": "Latest"}]
+    assert overlay._voices_loading is False
+
+
+def test_voice_worker_tolerates_already_deleted_signal_object(monkeypatch, qapp):
+    import shiboken6
+    from wordy.ui.overlay_widgets import _OverlaySignals
+    module = import_input_overlay_with_stubs(monkeypatch)
+    overlay = module.InputOverlay(on_submit=lambda text: None)
+    signals = _OverlaySignals(overlay)
+    overlay._signals = signals
+    shiboken6.delete(signals)
+    # QObject may disappear between the worker's shutdown check and its emit.
+    overlay._load_voices_worker(1, "Cartesia", lambda: [])
+
+
+
+def test_voice_worker_delivers_tokened_results_through_real_qt_signal(monkeypatch, qapp):
+    import threading
+    from wordy.ui.overlay_widgets import _OverlaySignals
+    module = import_input_overlay_with_stubs(monkeypatch)
+    overlay = module.InputOverlay(on_submit=lambda text: None)
+    overlay._cfg.active_tts_provider = "Cartesia"
+    overlay._voices_generation = 1
+    overlay._voices_loading = True
+    overlay._active_settings_window = lambda: None
+    overlay._signals = _OverlaySignals(overlay)
+    overlay._signals.voices_loaded.connect(overlay._finish_load_voices)
+    overlay._signals.voices_error.connect(overlay._finish_load_voices_error)
+    voices = [{"id": "qt", "name": "Qt Voice"}]
+    worker = threading.Thread(target=overlay._load_voices_worker, args=(1, "Cartesia", lambda: voices))
+    worker.start()
+    worker.join(timeout=2)
+    assert not worker.is_alive()
+    qapp.processEvents()
+    assert overlay._cartesia_voices_cache == voices
+    assert overlay._voices_loading is False
+    overlay._signals.deleteLater()

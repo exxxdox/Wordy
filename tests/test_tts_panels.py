@@ -13,6 +13,38 @@ from wordy.ui.tts_panels import (
     _BasePanel,
 )
 from wordy.tts.constants import TTS_API_PROVIDER_CARTESIA, TTS_API_PROVIDER_VOLCENGINE
+from wordy.ui.settings import SettingsWindow
+
+
+@pytest.mark.parametrize("attribute", [
+    "api_key_input", "voice_combo", "refresh_voices_button", "voice_status_label",
+    "voice_label_to_id", "voice_label_to_name", "clear_api_key_button", "api_key_status_label",
+])
+def test_panel_delegation_rejects_assignment(attribute):
+    # 面板持有控件，窗口属性不应静默吞掉误赋值。
+    window = SettingsWindow.__new__(SettingsWindow)
+    with pytest.raises(AttributeError):
+        setattr(window, attribute, object())
+
+
+def test_provider_switch_only_updates_visible_panel_and_notifies(monkeypatch):
+    window = SettingsWindow.__new__(SettingsWindow)
+    window._settings = MagicMock(active_tts_provider=TTS_API_PROVIDER_CARTESIA)
+    window._populate_backend_combo_for_provider = MagicMock()
+    window.on_field_changed = MagicMock()
+    window._provider_panel_widgets = {
+        TTS_API_PROVIDER_CARTESIA: MagicMock(),
+        TTS_API_PROVIDER_VOLCENGINE: MagicMock(),
+    }
+    # 服务商切换只依赖真实行为，不要求每个面板实现空钩子。
+    monkeypatch.setattr("wordy.ui.settings.PROVIDER_PANELS", {
+        TTS_API_PROVIDER_CARTESIA: object(), TTS_API_PROVIDER_VOLCENGINE: object(),
+    })
+    window._on_tts_api_selected(TTS_API_PROVIDER_VOLCENGINE)
+    assert window._settings.active_tts_provider == TTS_API_PROVIDER_VOLCENGINE
+    window._provider_panel_widgets[TTS_API_PROVIDER_CARTESIA].setVisible.assert_called_once_with(False)
+    window._provider_panel_widgets[TTS_API_PROVIDER_VOLCENGINE].setVisible.assert_called_once_with(True)
+    window.on_field_changed.assert_called_once_with("active_tts_provider", TTS_API_PROVIDER_VOLCENGINE)
 
 
 @pytest.fixture
@@ -166,3 +198,31 @@ class TestVolcenginePanelApiKey:
         with patch("wordy.ui.tts_panels.wordy.secret.save_volcengine_access_key") as save:
             panel._on_save_key()
         save.assert_not_called()
+
+
+
+def test_provider_switch_failure_restores_config_and_controls(qapp, tmp_path):
+    from wordy.config import AppSettings
+    from PySide6.QtWidgets import QComboBox
+    settings = AppSettings()
+    settings.active_tts_provider = TTS_API_PROVIDER_CARTESIA
+    settings._config_file = tmp_path / "provider.toml"
+    settings._loaded = True
+    window = SettingsWindow.__new__(SettingsWindow)
+    window._settings = settings
+    window.tts_api_combo = QComboBox()
+    window.tts_api_combo.addItems([TTS_API_PROVIDER_CARTESIA, TTS_API_PROVIDER_VOLCENGINE])
+    window.tts_api_combo.setCurrentText(TTS_API_PROVIDER_VOLCENGINE)
+    window._populate_backend_combo_for_provider = MagicMock()
+    window._provider_panel_widgets = {TTS_API_PROVIDER_CARTESIA: MagicMock(), TTS_API_PROVIDER_VOLCENGINE: MagicMock()}
+    window.on_field_changed = MagicMock(side_effect=RuntimeError("engine build failed"))
+    window.set_status = MagicMock()
+    window._on_tts_api_selected(TTS_API_PROVIDER_VOLCENGINE)
+    assert settings.active_tts_provider == TTS_API_PROVIDER_CARTESIA
+    assert window.tts_api_combo.currentText() == TTS_API_PROVIDER_CARTESIA
+    window._populate_backend_combo_for_provider.assert_not_called()
+    for panel in window._provider_panel_widgets.values():
+        panel.setVisible.assert_not_called()
+    assert "切换失败" in window.set_status.call_args.args[0]
+    settings.save()
+    assert AppSettings.load(config_file=settings._config_file).active_tts_provider == TTS_API_PROVIDER_CARTESIA

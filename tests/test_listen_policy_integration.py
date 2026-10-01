@@ -9,7 +9,7 @@ import os
 
 import pytest
 
-from wordy.audio.capture import AudioCapture
+from wordy.audio.capture import list_input_devices
 from wordy.audio.driver import VBCableDriverManager
 from wordy.audio.listen_policy import (
     get_listen_policy,
@@ -32,7 +32,7 @@ def test_listen_policy_round_trip_restores_original_state() -> None:
     if not mic:
         pytest.skip("设置 EASY_TTS_INTEGRATION_MIC 为要测试的 WASAPI 输入设备名")
 
-    input_names = {device["name"] for device in AudioCapture.list_input_devices()}
+    input_names = {device["name"] for device in list_input_devices()}
     if mic not in input_names:
         pytest.skip(f"指定设备不是活动的 Windows WASAPI 输入端点: {mic}")
 

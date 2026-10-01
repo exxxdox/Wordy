@@ -48,20 +48,6 @@ class TestSidetoneAudioPlayer:
         wrapper = SidetoneAudioPlayer(main, sidetone)
         assert wrapper.output_device_name == "Speakers"
 
-    def test_output_device_delegates_to_main(self):
-        main, sidetone = self._make_players()
-        dev = {"name": "Test", "host_api_name": "WASAPI"}
-        main.output_device = dev
-        wrapper = SidetoneAudioPlayer(main, sidetone)
-        assert wrapper.output_device is dev
-
-    def test_output_device_setter_delegates_to_main(self):
-        main, sidetone = self._make_players()
-        wrapper = SidetoneAudioPlayer(main, sidetone)
-        dev = {"name": "New", "host_api_name": "WASAPI"}
-        wrapper.output_device = dev  # type: ignore[assignment]
-        assert main.output_device == dev
-
     # ── open_stream ─────────────────────────────────────────────────
 
     def test_open_stream_disabled_opens_main_only(self):
@@ -265,10 +251,3 @@ class TestSidetoneAudioPlayer:
         main.query_output_device_default_rate.return_value = 44100
         wrapper = SidetoneAudioPlayer(main, sidetone)
         assert wrapper.query_output_device_default_rate() == 44100
-
-    def test_set_output_device_affects_main_only(self):
-        main, sidetone = self._make_players()
-        wrapper = SidetoneAudioPlayer(main, sidetone)
-        wrapper.set_output_device({"name": "CABLE Input", "host_api_name": "WASAPI"})
-        main.set_output_device.assert_called_once_with(
-            {"name": "CABLE Input", "host_api_name": "WASAPI"})

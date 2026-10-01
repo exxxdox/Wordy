@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import tomllib
@@ -83,8 +84,8 @@ def _toml_value(value: object) -> str:
     if isinstance(value, float):
         return str(value)
     if isinstance(value, str):
-        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
-        return f'"{escaped}"'
+        # JSON 的基本字符串转义适用于 TOML；额外转义 TOML 禁止的 DEL，保留非 BMP Unicode。
+        return json.dumps(value, ensure_ascii=False).replace("\x7f", "\\u007f")
     if isinstance(value, dict):
         items = ", ".join(
             f"{k} = {_toml_value(v)}" for k, v in value.items() if v is not None
@@ -92,4 +93,4 @@ def _toml_value(value: object) -> str:
         return "{" + items + "}"
     if value is None:
         return '""'
-    return f'"{value}"'
+    return _toml_value(str(value))

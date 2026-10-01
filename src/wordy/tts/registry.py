@@ -41,12 +41,11 @@ def create_tts_engine(
     backend = resolve_tts_backend(backend)
     engine_cls = TTS_ENGINE_REGISTRY[backend]
 
-    # Volcengine：用 volcengine_access_key 作为主 api_key（X-Api-Key 鉴权）
+    # Volcengine 只用 api_key 鉴权，工厂在此选好凭据，不再传入未读取的别名。
     if backend == TTS_BACKEND_VOLCENGINE_STREAMING:
         return engine_cls(
             audio_player,
             api_key=volcengine_access_key or api_key,
-            access_key=volcengine_access_key,
             voice_id=voice_id,
             volume=volume,
         )

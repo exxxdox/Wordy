@@ -130,6 +130,12 @@ class TestTomlValue:
     def test_string(self):
         assert _toml_value("hello") == '"hello"'
 
+    @pytest.mark.parametrize("value", ["first\nsecond", "\r\t\b\f", "\x00\x1f\x7f", "中文😀"])
+    def test_string_round_trip_preserves_controls(self, value):
+        # 外部音色名可能包含控制字符，保存后的 TOML 必须仍可读取。
+        import tomllib
+        assert tomllib.loads(to_toml({"voice_name": value}))["voice_name"] == value
+
     def test_string_with_quotes_escaped(self):
         result = _toml_value('say "hi"')
         assert result == '"say \\"hi\\""'

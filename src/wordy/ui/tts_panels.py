@@ -132,9 +132,6 @@ class CartesiaPanel(_BasePanel):
             self.refresh_btn.setEnabled(False)
             self.refresh_btn.setText("加载中...")
 
-    def on_selected(self) -> None:
-        pass
-
     # ── voice helpers ────────────────────────────────────────────────
 
     NONE_VOICE_LABEL = "无（不启用 TTS 音色）"
@@ -236,9 +233,6 @@ class CartesiaPanel(_BasePanel):
 class VolcenginePanel(_BasePanel):
     """Volcengine TTS 设置面板：API Key + Speaker ID 文本框。"""
 
-    def __init__(self) -> None:
-        pass
-
     # ── build ────────────────────────────────────────────────────────
 
     def build(self, parent: QVBoxLayout, state, on_refresh_voices, on_field_changed=None) -> None:
@@ -282,9 +276,6 @@ class VolcenginePanel(_BasePanel):
             self.speaker_input.setText(vid)
         self.speaker_input.textChanged.connect(self._on_speaker_changed)
         sec2.addWidget(self.speaker_input)
-
-    def on_selected(self) -> None:
-        pass
 
     # ── handlers ─────────────────────────────────────────────────────
 

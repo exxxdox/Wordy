@@ -91,7 +91,6 @@ class VolcengineStreamingTTS(BackendTTSEngine):
         self,
         audio_player: TTSAudioPlayer,
         api_key: str | None = None,
-        access_key: str | None = None,
         voice_id: str | None = None,
         resource_id: str = DEFAULT_RESOURCE_ID,
         sample_rate: int = DEFAULT_SAMPLE_RATE,
@@ -99,7 +98,6 @@ class VolcengineStreamingTTS(BackendTTSEngine):
     ):
         super().__init__(audio_player=audio_player, voice_id=voice_id, volume=volume)
         self.api_key = api_key
-        self.access_key = access_key
         self.resource_id = resource_id
         self.sample_rate = sample_rate
         self._stream_lock = threading.RLock()
@@ -148,14 +146,9 @@ class VolcengineStreamingTTS(BackendTTSEngine):
             logger.debug("Volcengine 流式音频输出已打开 (paInt16, %s Hz)", actual_rate)
             return
 
-        # int16 失败 → 尝试 float32 兜底（此时 PCM 会被错当 float 播，但至少不崩溃）
-        logger.warning("paInt16 流打开失败，尝试 paFloat32 兜底")
-        if self.audio_player.open_stream(
-            audio_format=pyaudio.paFloat32, channels=1, rate=stream_rate, frames_per_buffer=buffer_size
-        ):
-            return
-
-        raise RuntimeError("无法打开 PyAudio 流式输出")
+        # 服务端固定返回 int16 PCM；float32 流会误解字节并产生失真，必须明确失败。
+        # AudioPlayer 已负责兼容的 int16、输出设备和采样率回退。
+        raise RuntimeError("无法打开 int16 PCM 音频输出")
 
     def _parse_sse_line(self, line: str) -> tuple[bytes | None, bool]:
         """解析单行 SSE 数据。返回 (pcm_bytes | None, is_done)。"""

@@ -39,7 +39,7 @@ uv run python -m pyright src/ tests/
 
 | 包 | 职责 |
 |----|------|
-| `audio/` | 音频捕获(sounddevice)、播放(pyaudio)、路由(VB-CABLE)、Windows 侦听策略(COM/WASAPI) |
+| `audio/` | 输入设备枚举(sounddevice)、播放(pyaudio)、路由(VB-CABLE)、Windows 侦听策略(COM/WASAPI) |
 | `tts/` | TTS 引擎抽象(`BackendTTSEngine`)、Cartesia bytes/realtime 后端、注册表、语音标签 |
 | `ui/` | PySide6 悬浮输入框、设置窗口、系统托盘、终端风格主题常量 |
 | `hotkey/` | `keyboard` 库快捷键解析 + Win32 原生全局热键监听(`NativeHotkeyListener`) |
@@ -54,7 +54,7 @@ driver.py(VBCableDriverManager) → config.py(AppSettings) → main.py(生命周
   → router.py(AudioRouter: 路由引擎，无软件混音)
     → listen_policy.py(Windows "侦听此设备" COM/WASAPI 策略管理)
   → player.py(AudioPlayer: TTS 播放到 CABLE Input)
-  → capture.py(AudioCapture: sounddevice RawInputStream 输入枚举)
+  → capture.py(list_input_devices: sounddevice 输入设备枚举)
   → ui/settings.py(音频侦听设置页签)
 ```
 
@@ -71,9 +71,13 @@ driver.py(VBCableDriverManager) → config.py(AppSettings) → main.py(生命周
 
 `pre_stop_hook` → `_stop_background_threads()`(停止路由器 + janitor) → `shutdown_log_stream()` → `app.quit()`。后台线程必须在 Qt 事件循环退出前停止，否则 QThreadStorage 警告。
 
+## 音频设备枚举
+
+`audio/capture.py` 只提供 `list_input_devices()`，供设置页面枚举输入设备。麦克风侦听由 Windows 原生策略管理，不维护软件录音流。
+
 ## TTS Worker 生命周期
 
-`WordyApp` 持有 `_TTSWorker`（单线程 `ThreadPoolExecutor` + `BackendTTSEngine`）。切换后端/API key 时旧 worker 入队 `_RetiredWorker` 到 janitor 线程异步关闭（先 `executor.shutdown` 再 `engine.close`），避免阻塞 UI。新 worker 立即可用。
+`WordyApp` 在 GUI 线程委托 `TTSManager` 提交操作。任务绑定提交时的引擎；预热和播放共用 worker executor。切换后端/API key 时，janitor 先等待旧任务完成，再关闭旧引擎并释放后继事件。新 worker 可立即接收任务，播放/预热等待旧 worker 清理后才使用共享播放器，避免阻塞 UI 和跨引擎关闭音频流。测试直接访问 `tts_manager`。
 
 ## 新增 TTS 引擎注意事项
 

@@ -24,7 +24,7 @@ from wordy.tts.constants import (
     TTS_BACKEND_VOLCENGINE_STREAMING,
     TTS_BACKENDS_BY_PROVIDER,
 )
-from wordy.audio.capture import AudioCapture
+from wordy.audio.capture import list_input_devices
 from wordy.identity import normalize_identity
 from wordy.audio.driver import VBCableDriverManager
 from wordy.ui.settings_state import SettingsState
@@ -105,6 +105,7 @@ class InputOverlay:
         self._cartesia_voices_cache: list[VoiceInfo] = []
         self._volcengine_voices_cache: list[VoiceInfo] = []
         self._voices_loading = False
+        self._voices_generation = 0
         self._voice_fetch_error: Exception | None = None
         self._voices_started = False
         self._outside_click_watcher_running = False
@@ -584,7 +585,7 @@ class InputOverlay:
     def _enumerate_input_devices(self) -> list[dict[str, object]]:
         """枚举系统输入设备，返回结构化的设备列表。"""
         try:
-            devices = AudioCapture.list_input_devices()
+            devices = list_input_devices()
             return [dict(dev) for dev in devices]
         except Exception as e:  # pragma: no cover - defensive
             logger.warning("枚举输入设备失败: %s", e)
@@ -648,31 +649,46 @@ class InputOverlay:
         settings.set_record_result(hotkey, display_hotkey(hotkey))
 
     def _start_load_voices(self, show_status: bool = True) -> None:
-        """后台加载音色列表。"""
-        if self._voices_loading:
+        """后台加载音色列表，每次请求捕获自己的服务商和引擎。"""
+        if self._closed:
             return
+        # 切换服务商或更新凭据不等待旧请求；只有最新请求能更新 UI 与缓存。
+        self._voices_generation += 1
+        generation = self._voices_generation
+        provider = self._cfg.active_tts_provider
+        fetch_voices = self.on_fetch_voices
         self._voices_loading = True
+        self._voice_fetch_error = None
         settings = self._active_settings_window()
         if show_status and settings is not None:
             settings.set_voices_loading()
-        threading.Thread(target=self._load_voices_worker, daemon=True).start()
+        threading.Thread(
+            target=self._load_voices_worker,
+            args=(generation, provider, fetch_voices), daemon=True,
+        ).start()
 
-    def _load_voices_worker(self) -> None:
+    def _load_voices_worker(
+        self, generation: int, provider: str,
+        fetch_voices: Callable[[], list[VoiceInfo]] | None,
+    ) -> None:
         try:
-            fetch_voices = self.on_fetch_voices
             if fetch_voices is None:
                 raise RuntimeError("当前 TTS 后端未提供音色列表获取方法")
             voices = fetch_voices()
-        except Exception as e:
+        except Exception as error:
             signals = self._signals
-            if signals is not None:
-                signals.voices_error.emit(e)
+            if not self._closed and signals is not None:
+                # Qt 对象可能在检查后被 GUI 线程释放，复用既有安全调用兜底。
+                safe_qt_call(lambda: signals.voices_error.emit(generation, provider, error))
             return
         signals = self._signals
-        if signals is not None:
-            signals.voices_loaded.emit(voices)
+        if not self._closed and signals is not None:
+            safe_qt_call(lambda: signals.voices_loaded.emit(generation, provider, voices))
 
-    def _finish_load_voices(self, voices: object) -> None:
+    def _finish_load_voices(self, generation: int, provider: str, voices: object) -> None:
+        # 已排队的信号也可能在切换或退出后才送达，必须在消费结果时再次校验。
+        if self._closed or generation != self._voices_generation or provider != self._cfg.active_tts_provider:
+            return
         self._voices_loading = False
         if isinstance(voices, list) and all(isinstance(voice, dict) for voice in voices):
             self._set_active_voices_cache([dict(voice) for voice in voices])
@@ -684,7 +700,9 @@ class InputOverlay:
             active_cache = self._get_active_voices_cache()
             settings.set_voices_loaded(active_cache, self._get_active_voice_id())
 
-    def _finish_load_voices_error(self, error: object) -> None:
+    def _finish_load_voices_error(self, generation: int, provider: str, error: object) -> None:
+        if self._closed or generation != self._voices_generation or provider != self._cfg.active_tts_provider:
+            return
         self._voices_loading = False
         self._voice_fetch_error = error if isinstance(error, Exception) else RuntimeError(str(error))
         settings = self._active_settings_window()

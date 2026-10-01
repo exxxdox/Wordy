@@ -14,7 +14,7 @@ from io import BytesIO
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from wordy.audio.player import AudioPlayer, OutputDeviceSelection
+    from wordy.audio.player import AudioPlayer
 
 logger = logging.getLogger(__name__)
 
@@ -49,19 +49,12 @@ class SidetoneAudioPlayer:
     def sidetone_enabled(self) -> bool:
         return self._sidetone_enabled
 
+    # 输出设备选择由 RoutingController 直接设置主播放器，包装器只代理 TTS 所需能力。
     # ── 属性代理（主播放器） ──────────────────────────────────────────
 
     @property
     def output_device_name(self) -> str | None:
         return self._main.output_device_name
-
-    @property
-    def output_device(self) -> OutputDeviceSelection | None:
-        return self._main.output_device
-
-    @output_device.setter
-    def output_device(self, value: OutputDeviceSelection | None) -> None:
-        self._main.output_device = value
 
     # ── TTSAudioPlayer 协议方法 ──────────────────────────────────────
 
@@ -169,9 +162,3 @@ class SidetoneAudioPlayer:
     def query_output_device_default_rate(self) -> int | None:
         """查询主设备默认采样率。"""
         return self._main.query_output_device_default_rate()
-
-    def set_output_device(self, output_device: OutputDeviceSelection | None) -> None:
-        """设置主设备输出目标（不影响返听设备）。"""
-        self._main.set_output_device(output_device)
-
-

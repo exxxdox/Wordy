@@ -25,7 +25,7 @@ from wordy.tts.engine import BackendTTSEngine, TTSAudioPlayer
 
 class FakeFakeEngine(BackendTTSEngine):
     """Fake TTS engine for testing."""
-    def __init__(self, audio_player, api_key=None, voice_id=None, volume=1.0, access_key=None):
+    def __init__(self, audio_player, api_key=None, voice_id=None, volume=1.0):
         self.audio_player = audio_player
         self.api_key = api_key
         self.voice_id = voice_id
@@ -96,7 +96,8 @@ def test_create_tts_engine_creates_correct_instance(monkeypatch):
     assert engine.volume == 0.8
 
 
-def test_create_tts_engine_resolves_default(monkeypatch):
+@pytest.mark.parametrize("api_key, provider_key, expected_key", [(None, None, None), ("fallback", None, "fallback"), ("fallback", "provider", "provider")])
+def test_create_tts_engine_resolves_default(monkeypatch, api_key, provider_key, expected_key):
     """Test that None backend resolves to default before creation."""
     fake_audio_player = Mock(spec=TTSAudioPlayer)
     
@@ -109,5 +110,7 @@ def test_create_tts_engine_resolves_default(monkeypatch):
     )
     
     # Should resolve default backend
-    engine = create_tts_engine(None, fake_audio_player, None)
+    # The provider credential must still win after removing the unused constructor alias.
+    engine = create_tts_engine(None, fake_audio_player, api_key, volcengine_access_key=provider_key)
     assert isinstance(engine, FakeFakeEngine)
+    assert engine.api_key == expected_key

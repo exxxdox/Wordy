@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 import threading
 from collections import deque
-from typing import Protocol, override
+from typing import Protocol, cast, override
 
 from wordy.qt_lifecycle import safe_qt_call
 
@@ -169,32 +169,6 @@ class RingBufferQtHandler(logging.Handler):
             self.handleError(record)
 
 
-def _resolve_qt_signal_and_qobject() -> tuple[type, type]:
-    """Return real PySide6 ``QObject`` and ``Signal`` types.
-
-    Some test harnesses monkey-patch ``PySide6.QtCore.Signal`` to a stub that
-    lacks ``connect`` and breaks signal-based broadcasting. Detect such a
-    replacement and recover the real C-extension types by popping the cached
-    module entry and re-importing — PySide6.QtCore re-initializes its native
-    bindings and restores ``Signal`` to the genuine ``MetaSignal``-instance
-    class.
-    """
-
-    import sys
-
-    from PySide6.QtCore import QObject, Signal
-
-    signal_is_intact = isinstance(Signal, type) and Signal.__module__ == "PySide6.QtCore"
-    if signal_is_intact:
-        return QObject, Signal
-
-    for cached_name in ("PySide6.QtCore",):
-        sys.modules.pop(cached_name, None)
-    from PySide6.QtCore import QObject as RealQObject, Signal as RealSignal
-
-    return RealQObject, RealSignal
-
-
 def _build_broadcaster() -> LogBroadcasterProtocol:
     """Construct a ``QObject`` exposing ``message_emitted = Signal(str)``.
 
@@ -203,7 +177,8 @@ def _build_broadcaster() -> LogBroadcasterProtocol:
     buffer).
     """
 
-    QObject, Signal = _resolve_qt_signal_and_qobject()
+    # Test stubs now isolate their Qt replacements, so real Qt needs no repair.
+    from PySide6.QtCore import QObject, Signal
 
     class LogBroadcaster(QObject):
         message_emitted = Signal(str)
@@ -211,7 +186,8 @@ def _build_broadcaster() -> LogBroadcasterProtocol:
         def __init__(self) -> None:
             super().__init__()
 
-    return LogBroadcaster()
+    # PySide's descriptor becomes a bound SignalInstance at runtime.
+    return cast(LogBroadcasterProtocol, LogBroadcaster())
 
 
 def install_log_stream(

@@ -4,8 +4,68 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from wordy.tts_manager import TTSManager, _janitor_loop_inner
-from queue import SimpleQueue
+from wordy.tts_manager import TTSManager, _TTSWorker, _janitor_loop_inner
+import queue
+import threading
+from typing import Any
+
+
+def test_queued_text_keeps_engine_selected_at_submission():
+    manager = TTSManager.__new__(TTSManager)
+    manager._settings = MagicMock(volcengine_voice_id="speaker")
+    manager.tts_api_provider = "Volcengine"
+    manager.tts_backend = "Volcengine Streaming"
+    manager._worker_ready = None
+    manager._executor = MagicMock()
+    old, new = MagicMock(), MagicMock()
+    manager.engine = old
+    manager.speak("queued text")
+    operation, *args = manager._executor.submit.call_args.args
+    kwargs = manager._executor.submit.call_args.kwargs
+    manager.engine = new
+    operation(*args, **kwargs)
+    old.speak.assert_called_once_with("queued text")
+    new.speak.assert_not_called()
+
+
+def test_new_worker_waits_for_retired_engine_close(manager, mock_engine, monkeypatch):
+    closing, release, playback = threading.Event(), threading.Event(), threading.Event()
+    def close_old():
+        closing.set()
+        assert release.wait(2)
+    mock_engine.close.side_effect = close_old
+    new_engine, executor = MagicMock(), MagicMock()
+    new_engine.speak.side_effect = lambda _text: playback.set()
+    monkeypatch.setattr(manager, "_create_worker", lambda: _TTSWorker(executor, new_engine))
+    manager._rebuild_worker("test switch", lambda: None)
+    assert closing.wait(2)
+    manager.speak("new text")
+    operation, *args = executor.submit.call_args.args
+    kwargs = executor.submit.call_args.kwargs
+    started = threading.Event()
+    def run():
+        started.set()
+        operation(*args, **kwargs)
+    thread = threading.Thread(target=run)
+    thread.start()
+    try:
+        assert started.wait(2)
+        assert not playback.wait(0.1), "new playback must wait until old shared stream is closed"
+    finally:
+        release.set()
+        thread.join(2)
+        manager.shutdown()
+    assert not thread.is_alive()
+    assert playback.is_set()
+
+
+def test_prewarm_runs_on_worker_executor(manager, mock_engine):
+    # 预热也必须入队，退役时 executor.shutdown 才能等待它结束。
+    manager.connect_async()
+    operation, engine, ready = manager.executor.submit.call_args.args
+    mock_engine.connect.assert_not_called()
+    operation(engine, ready)
+    mock_engine.connect.assert_called_once()
 
 
 @pytest.fixture
@@ -52,48 +112,171 @@ def manager(mock_settings, mock_player, mock_engine) -> TTSManager:
         return mgr
 
 
-class TestJanitorLoopInner:
-    """_janitor_loop_inner 底层清理循环。"""
+# 清理测试归属 manager；保留更强的 FIFO、异常后继续与哨兵检查，删除重复覆盖。
+# ---------------------------------------------------------------------------
+# Deferred janitor loop contract tests (TTS lifecycle cleanup).
+# ---------------------------------------------------------------------------
 
-    def test_none_sentinel_exits(self):
-        q: SimpleQueue = SimpleQueue()
-        q.put(None)
-        _janitor_loop_inner(q)
 
-    def test_cleans_up_retired_worker(self):
-        q: SimpleQueue = SimpleQueue()
-        executor = MagicMock()
-        engine = MagicMock()
-        from wordy.tts_manager import _RetiredWorker
-        q.put(_RetiredWorker(executor=executor, engine=engine))
-        q.put(None)
-        _janitor_loop_inner(q)
-        executor.shutdown.assert_called_once_with(wait=True)
-        engine.close.assert_called_once()
+class _FakeJanitorEngine:
+    """Minimal stand-in for a TTS engine used by janitor loop tests."""
 
-    def test_handles_executor_shutdown_error(self):
-        """executor.shutdown 异常时仍继续清理 engine。"""
-        q: SimpleQueue = SimpleQueue()
-        executor = MagicMock()
-        executor.shutdown.side_effect = RuntimeError("shutdown fail")
-        engine = MagicMock()
-        from wordy.tts_manager import _RetiredWorker
-        q.put(_RetiredWorker(executor=executor, engine=engine))
-        q.put(None)
-        _janitor_loop_inner(q)
-        engine.close.assert_called_once()
+    def __init__(self, name: str, log: list[str], raise_on_close: bool = False) -> None:
+        self.name = name
+        self._log = log
+        self._raise_on_close = raise_on_close
+        self.close_calls = 0
 
-    def test_handles_engine_close_error(self):
-        """engine.close 异常时不抛异常并继续处理。"""
-        q: SimpleQueue = SimpleQueue()
-        executor = MagicMock()
-        engine = MagicMock()
-        engine.close.side_effect = RuntimeError("close fail")
-        from wordy.tts_manager import _RetiredWorker
-        q.put(_RetiredWorker(executor=executor, engine=engine))
-        q.put(None)
-        _janitor_loop_inner(q)
-        executor.shutdown.assert_called_once_with(wait=True)
+    def close(self) -> None:
+        self.close_calls += 1
+        self._log.append(f"{self.name}.engine.close")
+        if self._raise_on_close:
+            raise RuntimeError(f"{self.name} engine close boom")
+
+
+class _FakeJanitorExecutor:
+    """Minimal stand-in for an executor used by janitor loop tests."""
+
+    def __init__(self, name: str, log: list[str], raise_on_shutdown: bool = False) -> None:
+        self.name = name
+        self._log = log
+        self._raise_on_shutdown = raise_on_shutdown
+        self.shutdown_calls: list[dict[str, Any]] = []
+
+    def shutdown(self, wait: bool = True, *, cancel_futures: bool = False) -> None:
+        self.shutdown_calls.append({"wait": wait, "cancel_futures": cancel_futures})
+        self._log.append(f"{self.name}.executor.shutdown")
+        if self._raise_on_shutdown:
+            raise RuntimeError(f"{self.name} executor shutdown boom")
+
+
+def test_janitor_loop_drains_workers_in_shutdown_then_close_order():
+    """_janitor_loop_inner must drain queued workers and call shutdown BEFORE close for each."""
+    log: list[str] = []
+    q: queue.Queue = queue.Queue()
+
+    worker_a = _TTSWorker(
+        executor=_FakeJanitorExecutor("A", log),
+        engine=_FakeJanitorEngine("A", log),
+    )
+    worker_b = _TTSWorker(
+        executor=_FakeJanitorExecutor("B", log),
+        engine=_FakeJanitorEngine("B", log),
+    )
+
+    q.put(worker_a)
+    q.put(worker_b)
+    q.put(None)
+
+    _janitor_loop_inner(q)
+
+    assert log == [
+        "A.executor.shutdown",
+        "A.engine.close",
+        "B.executor.shutdown",
+        "B.engine.close",
+    ], f"janitor must process workers FIFO and shutdown-before-close, got {log!r}"
+
+    assert worker_a.executor.shutdown_calls and worker_a.executor.shutdown_calls[0]["wait"] is True
+    assert worker_b.executor.shutdown_calls and worker_b.executor.shutdown_calls[0]["wait"] is True
+    assert worker_a.engine.close_calls == 1
+    assert worker_b.engine.close_calls == 1
+
+
+def test_janitor_loop_continues_after_executor_shutdown_exception():
+    """If executor.shutdown raises, the janitor must still call engine.close AND process subsequent workers."""
+    log: list[str] = []
+    q: queue.Queue = queue.Queue()
+
+    bad_executor = _FakeJanitorExecutor("bad", log, raise_on_shutdown=True)
+    bad_engine = _FakeJanitorEngine("bad", log)
+    good_executor = _FakeJanitorExecutor("good", log)
+    good_engine = _FakeJanitorEngine("good", log)
+
+    q.put(_TTSWorker(executor=bad_executor, engine=bad_engine))
+    q.put(_TTSWorker(executor=good_executor, engine=good_engine))
+    q.put(None)
+
+    _janitor_loop_inner(q)
+
+    assert "bad.executor.shutdown" in log
+    assert "bad.engine.close" in log, (
+        f"engine.close must run even after executor.shutdown raised, got {log!r}"
+    )
+    assert "good.executor.shutdown" in log
+    assert "good.engine.close" in log, (
+        f"janitor must keep processing further workers after an exception, got {log!r}"
+    )
+    assert bad_engine.close_calls == 1
+    assert good_engine.close_calls == 1
+    assert log.index("bad.executor.shutdown") < log.index("bad.engine.close")
+    assert log.index("bad.engine.close") < log.index("good.executor.shutdown")
+
+
+def test_janitor_loop_continues_after_engine_close_exception():
+    """If engine.close raises, the janitor must still process subsequent workers."""
+    log: list[str] = []
+    q: queue.Queue = queue.Queue()
+
+    bad_executor = _FakeJanitorExecutor("bad", log)
+    bad_engine = _FakeJanitorEngine("bad", log, raise_on_close=True)
+    good_executor = _FakeJanitorExecutor("good", log)
+    good_engine = _FakeJanitorEngine("good", log)
+
+    q.put(_TTSWorker(executor=bad_executor, engine=bad_engine))
+    q.put(_TTSWorker(executor=good_executor, engine=good_engine))
+    q.put(None)
+
+    _janitor_loop_inner(q)
+
+    assert log == [
+        "bad.executor.shutdown",
+        "bad.engine.close",
+        "good.executor.shutdown",
+        "good.engine.close",
+    ], f"janitor must continue past engine.close exceptions in FIFO order, got {log!r}"
+    assert bad_engine.close_calls == 1
+    assert good_engine.close_calls == 1
+
+
+def test_janitor_loop_stops_on_sentinel_without_processing_later_items():
+    """A None sentinel must terminate the loop; any items enqueued after it must be ignored."""
+    log: list[str] = []
+    q: queue.Queue = queue.Queue()
+
+    early_worker = _TTSWorker(
+        executor=_FakeJanitorExecutor("early", log),
+        engine=_FakeJanitorEngine("early", log),
+    )
+    late_worker = _TTSWorker(
+        executor=_FakeJanitorExecutor("late", log),
+        engine=_FakeJanitorEngine("late", log),
+    )
+
+    q.put(early_worker)
+    q.put(None)
+    q.put(late_worker)
+
+    _janitor_loop_inner(q)
+
+    assert log == [
+        "early.executor.shutdown",
+        "early.engine.close",
+    ], f"janitor must stop at the None sentinel and ignore later items, got {log!r}"
+    assert late_worker.executor.shutdown_calls == []
+    assert late_worker.engine.close_calls == 0
+
+
+def test_retired_worker_holds_executor_and_engine_references():
+    """_TTSWorker must expose .executor and .engine attributes matching constructor args."""
+    executor = _FakeJanitorExecutor("x", [])
+    engine = _FakeJanitorEngine("x", [])
+
+    retired = _TTSWorker(executor=executor, engine=engine)
+
+    assert retired.executor is executor
+    assert retired.engine is engine
+
 
 
 class TestTTSManagerInit:

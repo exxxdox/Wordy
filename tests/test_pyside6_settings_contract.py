@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""PySide6 contract tests for SettingsWindow pending settings behavior."""
+"""PySide6 contract tests for SettingsWindow immediate settings behavior."""
 
 from __future__ import annotations
 
 import os
-import sys
-from dataclasses import fields, is_dataclass
-from types import ModuleType
+from unittest.mock import Mock
 from typing import Any
 
 import pytest
@@ -17,38 +15,8 @@ _ = os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 _ = pytest.importorskip("PySide6")
 
 
-def _install_native_dependency_stubs(monkeypatch: pytest.MonkeyPatch) -> None:
-    for name in ("pyaudio", "cartesia", "websockets.sync.client"):
-        monkeypatch.setitem(sys.modules, name, ModuleType(name))
-
-    cartesia_module = sys.modules["cartesia"]
-    setattr(cartesia_module, "Cartesia", object)
-
-    websocket_client_module = sys.modules["websockets.sync.client"]
-    setattr(websocket_client_module, "ClientConnection", object)
-
-
-def _settings_state_kwargs(SettingsState: Any, **overrides: Any) -> dict[str, Any]:
-    """Build SettingsState kwargs with safe defaults for newer optional contracts."""
-    values: dict[str, Any] = {
-        "hotkey": "f6",
-        "hotkey_name": "F6",
-        "voice_id": "voice-a",
-        "voice_name": "Old Voice",
-        "volume": 1.0,
-        "overlay_opacity": 1.0,
-        "tts_backend": "cartesia-bytes",
-        "fixed_center": True,
-        "voices_cache": [{"id": "voice-a", "name": "Old Voice"}],
-        "voices_loading": False,
-        "voice_fetch_error": None,
-        "cartesia_api_key_saved": False,
-    }
-    values.update(overrides)
-    if is_dataclass(SettingsState):
-        field_names = {field.name for field in fields(SettingsState)}
-        return {name: value for name, value in values.items() if name in field_names}
-    return values
+# 共享 QApplication；conftest 隔离配置与密钥，真实 API 错误必须失败。
+pytestmark = pytest.mark.usefixtures("qapp", "fake_keyring")
 
 
 def _new_settings_window(
@@ -56,36 +24,28 @@ def _new_settings_window(
     on_close=None,
     **state_overrides: Any,
 ):
-    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
-    _install_native_dependency_stubs(monkeypatch)
+    from PySide6.QtWidgets import QApplication
+    from wordy.config import AppSettings
+    from wordy.ui.settings import SettingsWindow
+    from wordy.ui.settings_state import SettingsState
 
-    _ = pytest.importorskip("PySide6.QtWidgets")
-    try:
-        from PySide6.QtWidgets import QApplication
-    except Exception as exc:  # pragma: no cover - dependency-specific import failures
-        pytest.skip(f"QApplication cannot be imported: {exc}")
-        raise
-    try:
-        from wordy.ui.settings import SettingsState, SettingsWindow
-    except Exception as exc:  # pragma: no cover - dependency-specific import failures
-        pytest.skip(f"SettingsWindow dependencies cannot be imported: {exc}")
-        raise
-
-    app = QApplication.instance() or QApplication(sys.argv[:1])
-    state = SettingsState(**_settings_state_kwargs(SettingsState, **state_overrides))
-    window: Any | None = None
-    try:
-        window = SettingsWindow(
-            None,
-            state,
-            on_record_hotkey=lambda: None,
-            on_refresh_voices=lambda: None,
-            on_apply=lambda _window: None,
-            on_close=on_close or (lambda: None),
-        )
-    except Exception as exc:  # pragma: no cover - environment-specific Qt failures
-        pytest.skip(f"SettingsWindow cannot be instantiated on this platform: {exc}")
-    assert window is not None
+    settings = AppSettings.load()
+    settings.update(hotkey="f6", name="F6", active_tts_provider="Cartesia",
+                    cartesia_voice_id="voice-a", cartesia_voice_name="Old Voice",
+                    cartesia_tts_backend="Cartesia Bytes", audio_routing_enabled=False)
+    # 持久化选择属于 config，运行时枚举属于 SettingsState。
+    selected_identity = state_overrides.pop("audio_output_device_identity", None)
+    selected_name = state_overrides.pop("audio_output_device_name", None)
+    settings.update(audio_output_device=selected_identity, audio_output_device_name=selected_name)
+    state = SettingsState(voices_cache=[{"id": "voice-a", "name": "Old Voice"}], **state_overrides)
+    app = QApplication.instance()
+    assert app is not None
+    window = SettingsWindow(
+        None, state, on_record_hotkey=lambda: None, on_refresh_voices=lambda: None,
+        on_field_changed=Mock(), on_close=on_close or (lambda: None),
+    )
+    # 构建阶段同步音频输出；后续断言只记录受测交互触发的通知。
+    window.on_field_changed.reset_mock()
     return app, window
 
 
@@ -104,55 +64,11 @@ def _new_settings_window_with_audio_output(
     audio_output_device_identity: dict[str, str] | None,
     audio_output_devices_error: Exception | None = None,
 ):
-    """Construct SettingsWindow with Host-API-aware audio output state.
-
-    ``audio_output_devices`` is a list of structured descriptors with ``name``,
-    ``host_api_name`` and ``display_name`` keys. ``audio_output_device_identity``
-    is the persisted structured identity ``{"name": ..., "host_api_name": ...}``
-    (or ``None`` for the 系统默认 fallback).
-
-    Production currently expects ``audio_output_devices: list[str]`` and a flat
-    ``audio_output_device_name: str | None``. Tests using this helper therefore
-    stay RED until production migrates to the Host-API-aware contract.
-    """
-    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
-    _install_native_dependency_stubs(monkeypatch)
-
-    _ = pytest.importorskip("PySide6.QtWidgets")
-    try:
-        from PySide6.QtWidgets import QApplication
-    except Exception as exc:  # pragma: no cover - dependency-specific import failures
-        pytest.skip(f"QApplication cannot be imported: {exc}")
-        raise
-    try:
-        from wordy.ui.settings import SettingsState, SettingsWindow
-    except Exception as exc:  # pragma: no cover - dependency-specific import failures
-        pytest.skip(f"SettingsWindow dependencies cannot be imported: {exc}")
-        raise
-
-    app = QApplication.instance() or QApplication(sys.argv[:1])
-    state = SettingsState(
-        **_settings_state_kwargs(
-            SettingsState,
-            audio_output_devices=audio_output_devices,
-            audio_output_device_identity=audio_output_device_identity,
-            audio_output_devices_error=audio_output_devices_error,
-        )
+    return _new_settings_window(
+        monkeypatch, audio_output_devices=audio_output_devices,
+        audio_output_device_identity=audio_output_device_identity,
+        audio_output_devices_error=audio_output_devices_error,
     )
-    window: Any | None = None
-    try:
-        window = SettingsWindow(
-            None,
-            state,
-            on_record_hotkey=lambda: None,
-            on_refresh_voices=lambda: None,
-            on_apply=lambda _window: None,
-            on_close=lambda: None,
-        )
-    except Exception as exc:  # pragma: no cover - environment-specific Qt failures
-        pytest.skip(f"SettingsWindow cannot be instantiated on this platform: {exc}")
-    assert window is not None
-    return app, window
 
 
 SENTINEL_EXISTING_API_KEY = "sk_existing_DO_NOT_LEAK"
@@ -173,10 +89,11 @@ def _label_texts(window: Any) -> list[str]:
 def test_settings_window_api_key_input_is_masked_and_never_prefills_existing_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    import wordy.secret
+    wordy.secret.save_cartesia_api_key(SENTINEL_EXISTING_API_KEY)
     _app, window = _new_settings_window(
         monkeypatch,
         cartesia_api_key_saved=True,
-        cartesia_api_key_value=SENTINEL_EXISTING_API_KEY,
     )
     try:
         from PySide6.QtWidgets import QLineEdit
@@ -189,7 +106,8 @@ def test_settings_window_api_key_input_is_masked_and_never_prefills_existing_key
 
         placeholder = api_key_input.placeholderText()
         assert placeholder, "api_key_input placeholder must indicate saved/unsaved state"
-        assert "已保存" in placeholder or "saved" in placeholder.lower()
+        assert "新密钥" in placeholder
+        assert "已保存" in "\n".join(_label_texts(window))
 
         visible_text = "\n".join([placeholder, *_line_edit_texts(window), *_label_texts(window)])
         assert SENTINEL_EXISTING_API_KEY not in visible_text
@@ -205,13 +123,14 @@ def test_settings_window_api_key_unsaved_placeholder_has_no_raw_key(monkeypatch:
 
         placeholder = api_key_input.placeholderText()
         assert placeholder, "api_key_input placeholder must tell user no key is saved"
-        assert "未保存" in placeholder or "not saved" in placeholder.lower() or "unsaved" in placeholder.lower()
+        assert "粘贴密钥" in placeholder
+        assert "未保存" in "\n".join(_label_texts(window))
         assert "sk_" not in placeholder
     finally:
         window.close()
 
 
-def test_settings_window_api_key_entry_normalizes_env_assignment_to_pending_set(
+def test_settings_window_api_key_save_normalizes_env_assignment_immediately(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _app, window = _new_settings_window(monkeypatch, cartesia_api_key_saved=False)
@@ -220,49 +139,54 @@ def test_settings_window_api_key_entry_normalizes_env_assignment_to_pending_set(
         assert api_key_input is not None, "SettingsWindow must expose masked api_key_input"
 
         api_key_input.setText("CARTESIA_API_KEY=sk_test_NEW")
-        pending = window.get_pending_settings()
-
-        assert getattr(pending, "cartesia_api_key_action", None) == "set"
-        assert getattr(pending, "cartesia_api_key_value", None) == "sk_test_NEW"
+        from wordy.ui.tts_panels import PROVIDER_PANELS
+        import wordy.secret
+        PROVIDER_PANELS["Cartesia"].save_key_btn.click()
+        assert wordy.secret.load_cartesia_api_key() == "sk_test_NEW"
+        assert api_key_input.text() == ""
+        window.on_field_changed.assert_called_once_with("cartesia_api_key", "sk_test_NEW")
     finally:
         window.close()
 
 
-def test_settings_window_blank_api_key_field_keeps_pending_key_unchanged(
+def test_settings_window_blank_api_key_save_keeps_existing_key_unchanged(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    import wordy.secret
+    wordy.secret.save_cartesia_api_key(SENTINEL_EXISTING_API_KEY)
     _app, window = _new_settings_window(monkeypatch, cartesia_api_key_saved=True)
     try:
         api_key_input = getattr(window, "api_key_input", None)
         assert api_key_input is not None, "SettingsWindow must expose masked api_key_input"
 
         api_key_input.setText("   ")
-        pending = window.get_pending_settings()
-
-        assert getattr(pending, "cartesia_api_key_action", None) == "unchanged"
-        assert getattr(pending, "cartesia_api_key_value", "unexpected") is None
+        from wordy.ui.tts_panels import PROVIDER_PANELS
+        PROVIDER_PANELS["Cartesia"].save_key_btn.click()
+        assert wordy.secret.load_cartesia_api_key() == SENTINEL_EXISTING_API_KEY
+        window.on_field_changed.assert_not_called()
     finally:
         window.close()
 
 
-def test_settings_window_clear_api_key_control_sets_pending_clear_intent(
+def test_settings_window_clear_api_key_control_deletes_key_immediately(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    import wordy.secret
+    wordy.secret.save_cartesia_api_key(SENTINEL_EXISTING_API_KEY)
     _app, window = _new_settings_window(monkeypatch, cartesia_api_key_saved=True)
     try:
         clear_control = getattr(window, "clear_api_key_button", None)
         assert clear_control is not None, "SettingsWindow must expose explicit clear_api_key_button"
 
         clear_control.click()
-        pending = window.get_pending_settings()
-
-        assert getattr(pending, "cartesia_api_key_action", None) == "clear"
-        assert getattr(pending, "cartesia_api_key_value", "unexpected") is None
+        assert wordy.secret.load_cartesia_api_key() is None
+        assert window._settings.cartesia_api_key_set is False
+        window.on_field_changed.assert_called_once_with("cartesia_api_key", None)
     finally:
         window.close()
 
 
-def test_settings_window_pending_settings_and_refreshed_voice_label_sync(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_settings_window_changes_update_live_settings_and_flush_on_close(monkeypatch: pytest.MonkeyPatch) -> None:
     _app, window = _new_settings_window(monkeypatch)
     try:
         labels = window.set_voices_loaded(
@@ -270,25 +194,31 @@ def test_settings_window_pending_settings_and_refreshed_voice_label_sync(monkeyp
                 {"id": "voice-a", "name": "Old Voice"},
                 {"id": "voice-b", "name": "Refreshed Voice"},
             ],
-            "voice-b",
+            "voice-a",
         )
         assert "Refreshed Voice" in labels
-        assert window.voice_combo.currentText() == "Refreshed Voice"
-
-        window._on_voice_selected(window.voice_combo.currentText())
+        window.voice_combo.setCurrentText("Refreshed Voice")
         window.tts_backend_combo.setCurrentText("Cartesia Realtime")
         window.volume_slider.setValue(window._volume_to_slider(1.35))
         window.fixed_center_check.setChecked(False)
 
-        pending = window.get_pending_settings()
-
-        assert pending.hotkey == "f6"
-        assert pending.hotkey_name == "F6"
-        assert pending.voice_id == "voice-b"
-        assert pending.voice_name == "Refreshed Voice"
-        assert pending.volume == 1.35
-        assert pending.tts_backend == "Cartesia Realtime"
-        assert pending.fixed_center is False
+        settings = window._settings
+        assert settings.hotkey == "f6"
+        assert settings.name == "F6"
+        assert settings.cartesia_voice_id == "voice-b"
+        assert settings.cartesia_voice_name == "Refreshed Voice"
+        assert settings.volume == 1.35
+        assert settings.tts_backend == "Cartesia Realtime"
+        assert settings.fixed_center is False
+        window.on_field_changed.assert_any_call("cartesia_voice_id", "voice-b")
+        window.on_field_changed.assert_any_call("volume", 1.35)
+        # 关闭须 flush 滑块 debounce，并保留即时生效的其他设置。
+        window.close()
+        import tomllib
+        from wordy.config import USER_CONFIG_FILE
+        saved = tomllib.loads(USER_CONFIG_FILE.read_text(encoding="utf-8"))
+        assert saved["volume"] == 1.35
+        assert saved["tts_providers"]["Cartesia"]["voice_id"] == "voice-b"
     finally:
         window.close()
 
@@ -353,13 +283,13 @@ def test_settings_window_recording_button_lifecycle(monkeypatch: pytest.MonkeyPa
         assert window.record_button.text() == "录制中..."
 
         window.set_record_result("f7", "F7")
-        pending = window.get_pending_settings()
 
         assert window.record_button.isEnabled() is True
         assert window.record_button.text() == "重新录制"
-        assert pending.hotkey == "f7"
-        assert pending.hotkey_name == "F7"
-        assert window.pending_label.text() == "待应用：F7"
+        assert window._recorded_hotkey == "f7"
+        assert window._recorded_hotkey_name == "F7"
+        window.on_field_changed.assert_called_once_with("hotkey", "f7")
+        assert window.pending_label.text() == "当前：F7"
     finally:
         window.close()
 
@@ -368,12 +298,8 @@ def test_settings_window_escape_during_recording_is_accepted_without_closing(mon
     close_calls = []
     _app, window = _new_settings_window(monkeypatch, on_close=lambda: close_calls.append("closed"))
     try:
-        try:
-            from PySide6.QtCore import QEvent, Qt
-            from PySide6.QtGui import QKeyEvent
-        except Exception as exc:  # pragma: no cover - dependency-specific import failures
-            pytest.skip(f"Qt key event dependencies cannot be imported: {exc}")
-            raise
+        from PySide6.QtCore import QEvent, Qt
+        from PySide6.QtGui import QKeyEvent
 
         window.set_recording_started()
         event = QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Escape, Qt.KeyboardModifier.NoModifier)
@@ -397,12 +323,8 @@ def test_settings_window_space_hotkey_press_during_recording_is_accepted_without
 ) -> None:
     _app, window = _new_settings_window(monkeypatch)
     try:
-        try:
-            from PySide6.QtCore import QEvent, Qt
-            from PySide6.QtGui import QKeyEvent
-        except Exception as exc:  # pragma: no cover - dependency-specific import failures
-            pytest.skip(f"Qt key event dependencies cannot be imported: {exc}")
-            raise
+        from PySide6.QtCore import QEvent, Qt
+        from PySide6.QtGui import QKeyEvent
 
         window.set_recording_started()
         event = QKeyEvent(
@@ -427,13 +349,9 @@ def test_settings_window_space_hotkey_on_focused_button_during_recording_does_no
     close_calls = []
     app, window = _new_settings_window(monkeypatch, on_close=lambda: close_calls.append("closed"))
     try:
-        try:
-            from PySide6.QtCore import QEvent, Qt
-            from PySide6.QtGui import QKeyEvent
-            from PySide6.QtWidgets import QPushButton
-        except Exception as exc:  # pragma: no cover - dependency-specific import failures
-            pytest.skip(f"Qt key event dependencies cannot be imported: {exc}")
-            raise
+        from PySide6.QtCore import QEvent, Qt
+        from PySide6.QtGui import QKeyEvent
+        from PySide6.QtWidgets import QPushButton
 
         cancel_button = window.window.findChild(QPushButton, "cancelButton")
         assert cancel_button is not None
@@ -461,12 +379,8 @@ def test_settings_window_space_hotkey_release_during_recording_is_accepted_witho
 ) -> None:
     _app, window = _new_settings_window(monkeypatch)
     try:
-        try:
-            from PySide6.QtCore import QEvent, Qt
-            from PySide6.QtGui import QKeyEvent
-        except Exception as exc:  # pragma: no cover - dependency-specific import failures
-            pytest.skip(f"Qt key event dependencies cannot be imported: {exc}")
-            raise
+        from PySide6.QtCore import QEvent, Qt
+        from PySide6.QtGui import QKeyEvent
 
         window.set_recording_started()
         event = QKeyEvent(
@@ -504,22 +418,16 @@ def test_settings_window_recording_cancel_and_error_reenable(monkeypatch: pytest
 
 
 
-def test_settings_window_exposes_inline_apply_status_api(monkeypatch: pytest.MonkeyPatch) -> None:
-    """SettingsWindow must provide inline apply status methods for non-modal apply feedback."""
+def test_settings_window_exposes_inline_status_api(monkeypatch: pytest.MonkeyPatch) -> None:
+    """当前状态接口支持非模态反馈与清空。"""
     _app, window = _new_settings_window(monkeypatch)
     try:
-        set_status = getattr(window, "set_apply_status", None)
-        clear_status = getattr(window, "clear_apply_status", None)
-        assert callable(set_status), "SettingsWindow must expose set_apply_status(message)"
-        assert callable(clear_status), "SettingsWindow must expose clear_apply_status()"
-
-        set_status("设置已应用")
-        status_label = getattr(window, "apply_status_label", None)
-        assert status_label is not None, "SettingsWindow must expose apply_status_label"
+        window.set_status("设置已应用")
+        status_label = window.status_label
         assert "设置已应用" in status_label.text()
         assert status_label.isVisible() is True
 
-        clear_status()
+        window.set_status("")
         assert status_label.text() == ""
     finally:
         window.close()
@@ -783,7 +691,7 @@ def test_settings_window_non_title_content_press_does_not_start_drag(monkeypatch
 
 # ---------------------------------------------------------------------------
 
-# RED contract tests for Host-API-aware audio output device wiring (S1).
+# Host-API-aware audio output device contracts.
 # ---------------------------------------------------------------------------
 
 
@@ -824,10 +732,10 @@ def test_settings_window_renders_output_device_combo_with_system_default_first(
         window.close()
 
 
-def test_settings_window_output_device_selection_propagates_structured_identity_to_pending(
+def test_settings_window_output_device_selection_persists_structured_identity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Selecting a display row must update pending settings with structured identity."""
+    """Selecting a display row must update live settings with structured identity."""
     devices = [
         _device_entry("Speakers (Realtek)", "MME"),
         _device_entry("VB-Audio Virtual Cable", "Windows WASAPI"),
@@ -842,19 +750,19 @@ def test_settings_window_output_device_selection_propagates_structured_identity_
         assert combo is not None, "SettingsWindow must expose audio_output_combo"
 
         combo.setCurrentText("VB-Audio Virtual Cable [Windows WASAPI]")
-        pending = window.get_pending_settings()
-        identity = getattr(pending, "audio_output_device_identity", None)
+        identity = window._settings.audio_output_device
         assert identity == {
             "name": "VB-Audio Virtual Cable",
             "host_api_name": "Windows WASAPI",
         }, (
-            "pending.audio_output_device_identity must carry both name and host_api_name, "
+            "audio_output_device must carry both name and host_api_name, "
             f"got {identity!r}"
         )
 
+        window.on_field_changed.assert_called_once_with("audio_output_device", identity)
         combo.setCurrentText(SYSTEM_DEFAULT_LABEL)
-        pending_default = window.get_pending_settings()
-        assert getattr(pending_default, "audio_output_device_identity", "unset") is None, (
+        window.on_field_changed.assert_called_with("audio_output_device", None)
+        assert window._settings.audio_output_device is None, (
             "selecting 系统默认 must clear structured identity to None"
         )
     finally:
@@ -895,13 +803,12 @@ def test_settings_window_output_device_combo_preselects_matching_host_api_for_du
             f"got currentText={combo.currentText()!r}"
         )
 
-        pending = window.get_pending_settings()
-        identity = getattr(pending, "audio_output_device_identity", None)
+        identity = window._settings.audio_output_device
         assert identity == {
             "name": "Speakers",
             "host_api_name": "Windows WASAPI",
         }, (
-            "pending identity must round-trip the preselected duplicate-name variant, "
+            "stored identity must round-trip the preselected duplicate-name variant, "
             f"got {identity!r}"
         )
     finally:
@@ -928,8 +835,8 @@ def test_settings_window_output_device_combo_falls_back_to_default_when_stored_i
         assert combo.currentText() == SYSTEM_DEFAULT_LABEL, (
             "missing stored identity must fall back to 系统默认 selection"
         )
-        pending = window.get_pending_settings()
-        assert getattr(pending, "audio_output_device_identity", "unset") is None
+        assert window._settings.audio_output_device is None
+        window.on_field_changed.assert_not_called()
     finally:
         window.close()
 

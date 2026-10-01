@@ -114,3 +114,19 @@ class TestVolcengineStreamingTTS:
 
     def test_sse_endpoint_url(self) -> None:
         assert TTS_SSE_URL == "https://openspeech.bytedance.com/api/v3/tts/unidirectional/sse"
+
+
+def test_int16_stream_failure_does_not_play_pcm_as_float32():
+    # 其它测试会替换 sys.modules 中的 pyaudio，断言引擎实际持有的依赖常量。
+    from wordy.tts.volcengine import pyaudio
+
+    player = Mock()
+    player.output_device_name = "Speakers"
+    player.open_stream.side_effect = [False, True]
+    engine = VolcengineStreamingTTS(audio_player=player, api_key="key", voice_id="voice")
+    with pytest.raises(RuntimeError, match="int16"):
+        engine._open_audio_stream()
+    player.open_stream.assert_called_once_with(
+        audio_format=pyaudio.paInt16, channels=1, rate=48000, frames_per_buffer=1024,
+    )
+    player.write_stream.assert_not_called()

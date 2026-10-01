@@ -119,6 +119,10 @@ class RoutingController:
         virtual_device = route_config.get("virtual_output_device")
         mic_device = route_config.get("mic_input_device")
 
+        # 停用后的对象可能仍保存恢复失败的快照；恢复成功后才可重新创建。
+        if self._router is not None and not self._router.is_running():
+            if not self.stop():
+                return
         if self._router is None:
             if mic_device is None:
                 mic_device = self._settings.mic_input_device
@@ -134,9 +138,14 @@ class RoutingController:
                 if not ok:
                     logger.error("麦克风侦听切换失败，请检查设备名称是否正确")
             if "virtual_output_device" in route_config:
-                self._router.set_virtual_output(
+                if not self._router.set_virtual_output(
                     virtual_device if isinstance(virtual_device, str) else None
-                )
+                ):
+                    # 输出切换会先停用路由；失败也应恢复本地输出，同时保留恢复快照。
+                    if not self._router.is_running():
+                        self._disable_routing()
+                    logger.error("虚拟输出切换失败，原麦克风状态仍需恢复")
+                    return
                 cable_device = self._router.get_output_device()
                 if cable_device is not None:
                     self._player.set_output_device(
@@ -182,10 +191,18 @@ class RoutingController:
 
     # ── 停止 ───────────────────────────────────────────────────────────────
 
-    def stop(self) -> None:
-        """停止路由引擎并恢复原始输出设备。"""
-        if self._router is not None:
-            self._router.stop()
-            self._router = None
+    def stop(self) -> bool:
+        """停用路由并恢复本地输出；侦听恢复失败时保留对象供重试。"""
+        if self._router is None:
+            return True
+        was_running = self._router.is_running()
+        restored = self._router.stop() is not False
+        # 本地输出只恢复一次；重试系统侦听时不能用已清空的设备快照覆盖它。
+        if was_running:
             self._disable_routing()
+        if restored:
+            self._router = None
             logger.debug("音频侦听已禁用")
+        else:
+            logger.error("麦克风原侦听状态恢复失败，保留路由对象等待重试")
+        return restored
