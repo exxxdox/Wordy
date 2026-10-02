@@ -284,7 +284,7 @@ class _OverlayWidget(QWidget):
         painter = QPainter(play_icon)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(ACCENT_HOVER if hovered else INPUT_TEXT_COLOR))
+        painter.setBrush(QColor(ACCENT_HOVER if hovered else CONFIG_BUTTON_TEXT_COLOR))
         painter.drawPolygon(QPolygonF([QPointF(4, 2), QPointF(14, 8), QPointF(4, 14)]))
         painter.end()
         self.submit_button.setIcon(QIcon(play_icon))
