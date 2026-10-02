@@ -39,6 +39,18 @@ def test_overlay_button_hover_changes_icons_without_background_highlight(qapp, m
             assert button.grab().toImage().pixelColor(1, 1) == background
             qapp.sendEvent(button, QEvent(QEvent.Type.Leave))
             assert icon_image() == normal
+            if button is root.submit_button:
+                # 先悬停再清空输入也必须重置，不等鼠标移开才取消高亮。
+                qapp.sendEvent(button, QEvent(QEvent.Type.Enter))
+                for text in ("", "   "):
+                    root.entry.setText(text)
+                    assert not button.isEnabled()
+                    assert icon_image() == normal
+                    assert button.cursor().shape() == Qt.CursorShape.ArrowCursor
+                    inactive = button.grab().toImage()
+                    qapp.sendEvent(button, QEvent(QEvent.Type.Enter))
+                    assert icon_image() == normal
+                    assert button.grab().toImage() == inactive
     finally:
         overlay.stop()
 

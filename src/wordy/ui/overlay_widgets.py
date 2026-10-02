@@ -132,15 +132,15 @@ class _OverlayWidget(QWidget):
         self.submit_button.setObjectName("overlaySubmit")
         self.submit_button.setGeometry(owner.width - 106, 11, 36, owner.height - 22)
         self.submit_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.submit_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.submit_button.setCursor(Qt.CursorShape.ArrowCursor)
         self.submit_button.setAccessibleName("朗读")
         self.submit_button.setToolTip("朗读并保留输入框")
         self.submit_button.setEnabled(False)
         self.set_submit_hover(False)
         self.submit_button.installEventFilter(signals)
-        self.submit_button.setIconSize(QSize(16, 16))
+        self.submit_button.setIconSize(QSize(20, 20))
         self.submit_button.clicked.connect(owner._on_read)
-        self.entry.textChanged.connect(lambda text: self.submit_button.setEnabled(bool(text.strip())))
+        self.entry.textChanged.connect(self._on_submit_text_changed)
         self.submit_button.setStyleSheet(f'''
             QPushButton {{ background: transparent; color: {INPUT_TEXT_COLOR};
                 border: none; border-radius: 9px;
@@ -277,14 +277,24 @@ class _OverlayWidget(QWidget):
             self._make_settings_icon(self._settings_icon_size, color)
         )
 
+    def _on_submit_text_changed(self, text: str) -> None:
+        # 清空或只剩空格时同步重置图标与光标，避免保留先前的悬停提示。
+        enabled = bool(text.strip())
+        self.submit_button.setEnabled(enabled)
+        self.submit_button.setCursor(Qt.CursorShape.PointingHandCursor if enabled else Qt.CursorShape.ArrowCursor)
+        self.set_submit_hover(self.submit_button.underMouse())
+
     def set_submit_hover(self, hovered: bool) -> None:
+        # 禁用按钮也会收到进入事件，不能仅依赖 Qt 的 disabled 绘制颜色。
+        hovered = hovered and self.submit_button.isEnabled()
         # QSS 的 color 不会给 QIcon 着色，直接重绘几何图标；禁用态仍由 Qt 生成。
-        play_icon = QPixmap(16, 16)
+        # 放大图标画布和箭头轮廓，按钮命中区域保持不变。
+        play_icon = QPixmap(20, 20)
         play_icon.fill(Qt.GlobalColor.transparent)
         painter = QPainter(play_icon)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QColor(ACCENT_HOVER if hovered else CONFIG_BUTTON_TEXT_COLOR))
-        painter.drawPolygon(QPolygonF([QPointF(4, 2), QPointF(14, 8), QPointF(4, 14)]))
+        painter.drawPolygon(QPolygonF([QPointF(5, 2), QPointF(18, 10), QPointF(5, 18)]))
         painter.end()
         self.submit_button.setIcon(QIcon(play_icon))
