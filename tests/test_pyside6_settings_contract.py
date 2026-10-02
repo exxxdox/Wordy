@@ -422,6 +422,7 @@ def test_settings_window_exposes_inline_status_api(monkeypatch: pytest.MonkeyPat
     """当前状态接口支持非模态反馈与清空。"""
     _app, window = _new_settings_window(monkeypatch)
     try:
+        assert window.status_label.isVisible() is False
         window.set_status("设置已应用")
         status_label = window.status_label
         assert "设置已应用" in status_label.text()
@@ -429,6 +430,7 @@ def test_settings_window_exposes_inline_status_api(monkeypatch: pytest.MonkeyPat
 
         window.set_status("")
         assert status_label.text() == ""
+        assert status_label.isVisible() is False
     finally:
         window.close()
 

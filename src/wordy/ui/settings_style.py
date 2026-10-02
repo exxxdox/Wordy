@@ -25,7 +25,9 @@ from wordy.ui.theme import (
 
 def build_settings_stylesheet() -> str:
     """构建设置窗口的完整 QSS 样式表。"""
-    # 常态用色面和间距形成层次；仅输入焦点使用底部提示线，保留键盘可见反馈。
+    # 用同一强调色的低亮底区分导航和数值，不为每个设置项重复堆叠卡片。
+    # 输入框始终预留焦点线厚度，切换焦点时不改变控件的内容高度。
+    accent_rgb = ", ".join(str(int(GREEN_ACCENT[i:i + 2], 16)) for i in (1, 3, 5))
     return f'''
         QWidget {{
             font-family: {UI_FONT};
@@ -39,12 +41,23 @@ def build_settings_stylesheet() -> str:
             background: {SURFACE_BG};
             border: none;
         }}
+        QLabel#pageTitle {{
+            color: {TEXT_PRIMARY};
+            font-size: 18px;
+            font-weight: 600;
+            border: none;
+        }}
+        QLabel#pageDescription {{
+            color: {TEXT_MUTED};
+            font-size: 12px;
+            border: none;
+        }}
         QLabel#sectionTitle {{
             color: {TEXT_PRIMARY};
-            font-size: 14px;
-            font-weight: 700;
+            font-size: 13px;
+            font-weight: 600;
             border: none;
-            padding: 0 0 3px 0;
+            padding: 0 0 2px 0;
         }}
         QLabel#bodyLabel, QLabel#bodyLabelEmphasis {{
             font-size: 13px;
@@ -55,6 +68,24 @@ def build_settings_stylesheet() -> str:
             font-weight: 600;
         }}
         QLabel#hintLabel {{
+            font-size: 12px;
+            border: none;
+        }}
+        QLabel#settingValue {{
+            background: rgba({accent_rgb}, 22);
+            color: {GREEN_ACCENT};
+            font-size: 13px;
+            font-weight: 600;
+            border: none;
+            border-radius: 5px;
+            padding: 2px 8px;
+        }}
+        QWidget#settingsFooter {{
+            background: {WINDOW_BG};
+            border: none;
+        }}
+        QLabel#autoSaveLabel {{
+            color: {TEXT_MUTED};
             font-size: 12px;
             border: none;
         }}
@@ -70,7 +101,7 @@ def build_settings_stylesheet() -> str:
         QTabWidget#settingsTabs::pane {{
             background: transparent;
             border: none;
-            margin-top: 10px;
+            margin-top: 0;
         }}
         QTabWidget#settingsTabs::tab-bar {{
             alignment: left;
@@ -79,16 +110,15 @@ def build_settings_stylesheet() -> str:
         QTabWidget#settingsTabs QTabBar {{
             background: transparent;
             border: none;
-            border-radius: 10px;
-            padding: 3px;
+            padding: 0;
         }}
         QTabWidget#settingsTabs QTabBar::tab {{
             background: transparent;
             color: {TEXT_MUTED};
             border: none;
-            border-radius: 7px;
-            padding: 9px 14px;
-            margin: 0 1px;
+            border-radius: 6px;
+            padding: 7px 12px;
+            margin: 0 4px 0 0;
             font-weight: 600;
             font-size: 13px;
         }}
@@ -97,21 +127,21 @@ def build_settings_stylesheet() -> str:
             color: {TEXT_PRIMARY};
         }}
         QTabWidget#settingsTabs QTabBar::tab:pressed {{
-            background: {ACCENT_PRESSED};
-            color: {TEXT_PRIMARY};
+            background: {BUTTON_ACTIVE_BG};
+            color: {ACCENT_HOVER};
         }}
         QTabWidget#settingsTabs QTabBar::tab:selected {{
-            background: {BUTTON_ACTIVE_BG};
+            background: rgba({accent_rgb}, 24);
             color: {GREEN_ACCENT};
         }}
         QTabWidget#settingsTabs QTabBar::tab:selected:hover {{
-            background: {BUTTON_ACTIVE_BG};
+            background: rgba({accent_rgb}, 30);
             color: {ACCENT_HOVER};
         }}
         QTabWidget#settingsTabs QTabBar::tab:focus {{
             outline: none;
             color: {ACCENT_HOVER};
-            background: {BUTTON_ACTIVE_BG};
+            background: rgba({accent_rgb}, 30);
         }}
         QScrollBar:vertical {{
             background: transparent;
@@ -150,8 +180,8 @@ def build_settings_stylesheet() -> str:
             background: {BUTTON_BG};
             color: {TEXT_PRIMARY};
             border: none;
-            border-radius: 8px;
-            padding: 7px 16px;
+            border-radius: 6px;
+            padding: 6px 12px;
             font-weight: 600;
         }}
         QPushButton:hover {{
@@ -189,6 +219,10 @@ def build_settings_stylesheet() -> str:
             background: {ELEVATED_BG};
             color: {TEXT_PRIMARY};
         }}
+        QPushButton#cancelButton:focus {{
+            background: {BUTTON_ACTIVE_BG};
+            color: {GREEN_ACCENT};
+        }}
         QPushButton#cancelButton:pressed {{
             background: {SEPARATOR_COLOR};
             color: {TEXT_PRIMARY};
@@ -198,8 +232,9 @@ def build_settings_stylesheet() -> str:
             background: {ELEVATED_BG};
             color: {TEXT_PRIMARY};
             border: none;
-            border-radius: 8px;
-            padding: 7px 28px 7px 10px;
+            border-bottom: 2px solid transparent;
+            border-radius: 6px;
+            padding: 5px 28px 5px 10px;
             selection-background-color: {BUTTON_ACTIVE_BG};
         }}
         QComboBox:hover {{
@@ -228,13 +263,17 @@ def build_settings_stylesheet() -> str:
             selection-background-color: {BUTTON_ACTIVE_BG};
             selection-color: {TEXT_PRIMARY};
         }}
+        QComboBox QAbstractItemView::item {{
+            padding: 5px 8px;
+        }}
         QLineEdit {{
             min-height: 20px;
             background: {ELEVATED_BG};
             color: {TEXT_PRIMARY};
             border: none;
-            border-radius: 8px;
-            padding: 7px 10px;
+            border-bottom: 2px solid transparent;
+            border-radius: 6px;
+            padding: 5px 10px;
             selection-background-color: {BUTTON_ACTIVE_BG};
             selection-color: {TEXT_PRIMARY};
         }}
@@ -264,6 +303,9 @@ def build_settings_stylesheet() -> str:
         }}
         QSlider::handle:horizontal:hover {{
             background: {ACCENT_HOVER};
+        }}
+        QSlider::handle:horizontal:focus {{
+            background: {GREEN_ACCENT};
         }}
         QCheckBox {{
             color: {TEXT_PRIMARY};

@@ -224,6 +224,8 @@ class SettingsWindow:
     def set_status(self, text: str, color: str = INPUT_TEXT_COLOR) -> None:
         """在底部状态栏显示临时消息。"""
         self._set_label(self.status_label, text, color)
+        # 空状态不占一整行，让常态页脚只显示保存提示与关闭入口。
+        self.status_label.setVisible(bool(text))
 
     def _handle_dialog_close(self) -> None:
         if self._closing:
@@ -253,7 +255,7 @@ class SettingsWindow:
         dialog_shell.setObjectName("dialogShell")
         outer_layout.addWidget(dialog_shell, 1)
         shell_layout = QVBoxLayout(dialog_shell)
-        shell_layout.setContentsMargins(0, 0, 0, 0)
+        shell_layout.setContentsMargins(0, 12, 0, 0)
         shell_layout.setSpacing(0)
         tab_widget = QTabWidget()
         tab_widget.setObjectName("settingsTabs")
@@ -325,8 +327,9 @@ class SettingsWindow:
         log_layout.addStretch(1)
 
         footer = QWidget()
+        footer.setObjectName("settingsFooter")
         footer_layout = QVBoxLayout(footer)
-        footer_layout.setContentsMargins(CONTENT_MARGIN, 0, CONTENT_MARGIN, CONTENT_MARGIN)
+        footer_layout.setContentsMargins(CONTENT_MARGIN, 10, CONTENT_MARGIN, 12)
         footer_layout.setSpacing(0)
         self._build_buttons(footer_layout)
         shell_layout.addWidget(footer, 0)
@@ -435,8 +438,9 @@ class SettingsWindow:
         section = self._create_section(parent_layout)
         header = QHBoxLayout()
         header.setContentsMargins(0, 0, 0, 0)
-        header.addWidget(self._section_title("音量设置"))
+        header.addWidget(self._section_title("朗读音量"))
         self.volume_value_label = self._body_label(f"{s.volume:.2f}x", INPUT_TEXT_COLOR)
+        self.volume_value_label.setObjectName("settingValue")
         header.addWidget(self.volume_value_label, 0, Qt.AlignmentFlag.AlignRight)
         section.addLayout(header)
         self.volume_slider = NoWheelSlider(Qt.Orientation.Horizontal)
@@ -455,6 +459,7 @@ class SettingsWindow:
         # 此值是背景 alpha：百分比越低越透明，明确名称避免把 100% 理解为全透明。
         header.addWidget(self._section_title("输入框背景不透明度"))
         self.opacity_value_label = self._body_label(f"{round(s.overlay_opacity * 100)}%", INPUT_TEXT_COLOR)
+        self.opacity_value_label.setObjectName("settingValue")
         header.addWidget(self.opacity_value_label, 0, Qt.AlignmentFlag.AlignRight)
         section.addLayout(header)
         self.opacity_slider = NoWheelSlider(Qt.Orientation.Horizontal)
@@ -468,7 +473,7 @@ class SettingsWindow:
 
     def _build_position_section(self, parent_layout: QVBoxLayout, s: AppSettings) -> None:
         section = self._create_section(parent_layout)
-        section.addWidget(self._section_title("显示位置"))
+        section.addWidget(self._section_title("输入栏位置"))
         self.fixed_center_check = CheckmarkCheckBox("固定出现在屏幕中心")
         self.fixed_center_check.setChecked(s.fixed_center)
         self.fixed_center_check.stateChanged.connect(self._on_fixed_center_changed)
@@ -504,7 +509,7 @@ class SettingsWindow:
         section.addWidget(self.audio_route_enabled_check)
 
         # 麦克风选择（音频侦听子项）
-        section.addWidget(self._section_title("麦克风被侦听"))
+        section.addWidget(self._section_title("侦听麦克风"))
         self.mic_input_combo = NoWheelComboBox()
         self.mic_input_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContentsOnFirstShow)
         self.mic_input_combo.setMinimumContentsLength(24)
@@ -673,13 +678,17 @@ class SettingsWindow:
     def _build_buttons(self, parent_layout: QVBoxLayout) -> None:
         self.status_label = self._hint_label("", INPUT_TEXT_COLOR)
         self.status_label.setObjectName("applyStatusLabel")
+        self.status_label.hide()
         parent_layout.addWidget(self.status_label)
 
         button_row = QHBoxLayout()
-        button_row.setContentsMargins(0, 14, 0, 0)
+        button_row.setContentsMargins(0, 0, 0, 0)
         button_row.setSpacing(BUTTON_GAP)
+        auto_save_label = self._hint_label("设置自动保存", TEXT_MUTED)
+        auto_save_label.setObjectName("autoSaveLabel")
+        button_row.addWidget(auto_save_label)
         button_row.addStretch(1)
-        exit_button = QPushButton("退出")
+        exit_button = QPushButton("关闭")
         exit_button.setObjectName("cancelButton")
         # 原生标题栏启用后，底部退出仍不能成为表单 Enter 的默认动作。
         exit_button.setAutoDefault(False)
@@ -884,8 +893,24 @@ class SettingsWindow:
 
         content = QWidget()
         content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(CONTENT_MARGIN, CONTENT_MARGIN, CONTENT_MARGIN, CONTENT_MARGIN)
+        # 横向仍留足阅读边距，收紧上下留白以容纳页标题而无需初始滚动。
+        content_layout.setContentsMargins(CONTENT_MARGIN, 14, CONTENT_MARGIN, 12)
         content_layout.setSpacing(0)
+        # 页面标题说明当前任务，分组用留白区分，避免窄窗口被边框和卡片切碎。
+        page_titles = {
+            "本地设置": ("输入与显示", "调整快捷键、提示文字和输入栏外观。"),
+            "音频侦听": ("声音与路由", "选择播放设备，控制侦听与返听。"),
+            "TTS 设置": ("语音生成", "选择服务商，配置密钥与音色。"),
+            "日志": ("运行日志", "调整日志详细程度，便于排查问题。"),
+        }
+        heading, description = page_titles[title]
+        heading_label = QLabel(heading)
+        heading_label.setObjectName("pageTitle")
+        content_layout.addWidget(heading_label)
+        description_label = self._hint_label(description, TEXT_MUTED)
+        description_label.setObjectName("pageDescription")
+        content_layout.addWidget(description_label)
+        content_layout.addSpacing(14)
         scroll_area.setWidget(content)
         tab_widget.addTab(scroll_area, title)
         return content_layout
