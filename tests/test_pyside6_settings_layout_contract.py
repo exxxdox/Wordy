@@ -29,7 +29,7 @@ _SETTINGS_PACKAGE_PATHS = (
 )
 
 # ----- 期望阈值 -----
-MIN_DIALOG_WIDTH = 560
+MIN_DIALOG_WIDTH = 480
 MIN_DIALOG_HEIGHT = 580  # 标签页布局下，默认打开高度只需容纳当前分类内容与底部按钮
 MAX_CONTENT_MARGIN = 20
 MAX_SECTION_GAP = 12
@@ -173,7 +173,7 @@ def test_settings_dialog_static_width_budget_invariants() -> None:
     gap = consts["SECTION_GAP"]
 
     if width < MIN_DIALOG_WIDTH:
-        _fail(f"DIALOG_WIDTH={width} 必须 >= {MIN_DIALOG_WIDTH}（更宽以容纳音色/设备名）")
+        _fail(f"DIALOG_WIDTH={width} 必须 >= {MIN_DIALOG_WIDTH}（容纳紧凑表单与同行按钮）")
     if height < MIN_DIALOG_HEIGHT:
         _fail(f"DIALOG_HEIGHT={height} 必须 >= {MIN_DIALOG_HEIGHT}（默认打开需显示全部配置项）")
     if margin > MAX_CONTENT_MARGIN:
@@ -283,10 +283,10 @@ def test_settings_dialog_is_resizable_with_min_size() -> None:
             continue
         if _call_receiver_text(call) != "self.window":
             continue
-        if len(call.args) >= 1 and isinstance(call.args[0], ast.Constant) and call.args[0].value is True:
+        if len(call.args) >= 1 and isinstance(call.args[0], ast.Constant) and call.args[0].value is False:
             grip_calls += 1
     if grip_calls != 1:
-        _fail(f"self.window.setSizeGripEnabled(True) 调用数 {grip_calls} != 1")
+        _fail(f"原生缩放不需要额外尺寸手柄：setSizeGripEnabled(False) 调用数 {grip_calls} != 1")
 
 
 def test_settings_dialog_does_not_lock_size() -> None:
@@ -365,13 +365,18 @@ def test_settings_buttons_row_is_right_aligned() -> None:
         _fail("_build_buttons 不应包含取消按钮（已改为退出按钮）")
 
 
-def test_settings_dialog_static_window_flags_include_frameless_and_topmost() -> None:
-    """设置窗口必须声明无边框，同时保留置顶窗口标志。"""
+def test_settings_dialog_static_window_flags_include_native_controls_and_topmost() -> None:
+    """系统标题栏提供原生窗口控制，同时保留置顶窗口标志。"""
     source = _load_source()
-    if "Qt.WindowType.FramelessWindowHint" not in source:
-        _fail("SettingsWindow 必须使用 Qt.WindowType.FramelessWindowHint")
-    if "Qt.WindowType.WindowStaysOnTopHint" not in source:
-        _fail("SettingsWindow 必须保留 Qt.WindowType.WindowStaysOnTopHint")
+    required = (
+        "Qt.WindowType.Window", "Qt.WindowType.WindowMinMaxButtonsHint",
+        "Qt.WindowType.WindowCloseButtonHint", "Qt.WindowType.WindowStaysOnTopHint",
+    )
+    for flag in required:
+        if flag not in source:
+            _fail(f"SettingsWindow 必须使用 {flag}")
+    if "Qt.WindowType.FramelessWindowHint" in source:
+        _fail("原生标题栏不能使用 FramelessWindowHint")
 
 
 def test_settings_dialog_static_does_not_enable_translucent_background() -> None:
@@ -429,31 +434,30 @@ def test_settings_audio_output_status_label_uses_hint_label_object_name() -> Non
         _fail('audio_output_status_label 必须调用 setObjectName("hintLabel")')
 
 
-def test_settings_dialog_static_title_area_supports_drag_event_filter() -> None:
-    """无边框设置窗口必须在内部标题区域安装 eventFilter 以支持拖动。"""
+def test_settings_dialog_static_native_title_replaces_custom_chrome() -> None:
+    """系统标题栏负责标题、关闭和拖动，内容区不再构建重复入口。"""
     source = _load_source()
-    if "def eventFilter" not in source:
-        _fail("_SettingsDialog 必须实现 eventFilter(...) 处理标题栏拖动")
-    if "installEventFilter(self.window)" not in source:
-        _fail("dialogTitle 对应 title_label 必须调用 title_label.installEventFilter(self.window)")
-    if "setCursor(Qt.CursorShape.OpenHandCursor)" not in source:
-        _fail("dialogTitle 对应 title_label 必须调用 title_label.setCursor(Qt.CursorShape.OpenHandCursor)")
+    if 'setWindowTitle("设置")' not in source:
+        _fail("SettingsWindow 必须保留原生窗口标题")
+    for token in ('setObjectName("dialogTitle")', 'setObjectName("dialogCloseButton")', "installEventFilter(self.window)"):
+        if token in source:
+            _fail(f"原生窗口不应保留自绘标题栏实现: {token}")
 
 
-def test_settings_dialog_static_drag_state_fields_exist() -> None:
-    """拖动实现必须显式维护按下状态和偏移量，释放后可清理状态。"""
+def test_settings_dialog_static_custom_drag_state_is_removed() -> None:
+    """原生窗口拖动交由系统，不维护旧自绘拖动状态。"""
     source = _load_source()
-    required_tokens = (
+    forbidden_tokens = (
         "_drag_active",
         "_drag_position",
     )
-    missing = [token for token in required_tokens if token not in source]
-    if missing:
-        _fail(f"_SettingsDialog 缺少拖动状态字段: {missing}")
+    found = [token for token in forbidden_tokens if token in source]
+    if found:
+        _fail(f"_SettingsDialog 仍保留自绘拖动状态: {found}")
 
 
 def test_settings_dialog_static_drag_position_is_not_persisted() -> None:
-    """标题拖动只移动当前无边框窗口，不得引入位置持久化/配置保存。"""
+    """系统标题栏拖动仍不引入位置持久化/配置保存。"""
     source = _load_source()
     forbidden = (
         "save_app_config",
@@ -500,26 +504,26 @@ def main() -> int:
         ("test_settings_sliders_use_no_wheel_subclass", test_settings_sliders_use_no_wheel_subclass),
         ("test_settings_buttons_row_is_right_aligned", test_settings_buttons_row_is_right_aligned),
         (
-            "test_settings_dialog_static_window_flags_include_frameless_and_topmost",
-            test_settings_dialog_static_window_flags_include_frameless_and_topmost,
+            "test_settings_dialog_static_window_flags_include_native_controls_and_topmost",
+            test_settings_dialog_static_window_flags_include_native_controls_and_topmost,
         ),
         (
-            "test_settings_dialog_static_uses_translucent_background_attribute",
-            test_settings_dialog_static_uses_translucent_background_attribute,
+            "test_settings_dialog_static_does_not_enable_translucent_background",
+            test_settings_dialog_static_does_not_enable_translucent_background,
         ),
-        ("test_settings_dialog_qss_background_is_transparent", test_settings_dialog_qss_background_is_transparent),
+        ("test_settings_dialog_qss_background_is_opaque", test_settings_dialog_qss_background_is_opaque),
         ("test_settings_hint_label_stylesheet_uses_12px_font_size", test_settings_hint_label_stylesheet_uses_12px_font_size),
         (
             "test_settings_audio_output_status_label_uses_hint_label_object_name",
             test_settings_audio_output_status_label_uses_hint_label_object_name,
         ),
         (
-            "test_settings_dialog_static_title_area_supports_drag_event_filter",
-            test_settings_dialog_static_title_area_supports_drag_event_filter,
+            "test_settings_dialog_static_native_title_replaces_custom_chrome",
+            test_settings_dialog_static_native_title_replaces_custom_chrome,
         ),
         (
-            "test_settings_dialog_static_drag_state_fields_exist",
-            test_settings_dialog_static_drag_state_fields_exist,
+            "test_settings_dialog_static_custom_drag_state_is_removed",
+            test_settings_dialog_static_custom_drag_state_is_removed,
         ),
         (
             "test_settings_dialog_static_drag_position_is_not_persisted",

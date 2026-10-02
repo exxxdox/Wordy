@@ -433,31 +433,33 @@ def test_settings_window_exposes_inline_status_api(monkeypatch: pytest.MonkeyPat
         window.close()
 
 
-def test_settings_window_uses_frameless_flag_and_preserves_topmost(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Settings dialog chrome must be frameless while staying above the main overlay."""
+def test_settings_window_uses_native_controls_and_preserves_topmost(monkeypatch: pytest.MonkeyPatch) -> None:
+    """原生窗口提供最小化、最大化和关闭，同时保留置顶行为。"""
     _app, window = _new_settings_window(monkeypatch)
     try:
         from PySide6.QtCore import Qt
 
         flags = window.window.windowFlags()
-        assert flags & Qt.WindowType.FramelessWindowHint, "settings window must use FramelessWindowHint"
+        assert window.window.windowType() == Qt.WindowType.Window
+        assert not flags & Qt.WindowType.FramelessWindowHint
+        controls = Qt.WindowType.WindowMinMaxButtonsHint | Qt.WindowType.WindowCloseButtonHint
+        assert flags & controls == controls
         assert flags & Qt.WindowType.WindowStaysOnTopHint, "settings window must preserve WindowStaysOnTopHint"
     finally:
         window.close()
 
 
-def test_settings_window_frameless_chrome_keeps_visible_internal_title(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Frameless settings window must still expose its own visible in-dialog title."""
+def test_settings_window_native_title_replaces_internal_chrome(monkeypatch: pytest.MonkeyPatch) -> None:
+    """标题和关闭由系统提供，内容区不重复绘制标题栏。"""
     _app, window = _new_settings_window(monkeypatch)
     try:
-        from PySide6.QtWidgets import QLabel
+        from PySide6.QtWidgets import QLabel, QPushButton
 
         window.window.show()
         _app.processEvents()
-        title_label = window.window.findChild(QLabel, "dialogTitle")
-        assert title_label is not None, "frameless dialog must contain an internal dialogTitle widget"
-        assert title_label.isVisible() is True
-        assert title_label.text() == "设置"
+        assert window.window.windowTitle() == "设置"
+        assert window.window.findChild(QLabel, "dialogTitle") is None
+        assert window.window.findChild(QPushButton, "dialogCloseButton") is None
     finally:
         window.close()
 
@@ -474,24 +476,22 @@ def test_settings_window_has_opaque_background_for_first_frame(monkeypatch: pyte
         window.close()
 
 
-def test_settings_window_translucent_background_preserves_size_grip(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Transparent dialog background must not disable or hide the resize grip."""
+def test_settings_window_native_resize_needs_no_size_grip(monkeypatch: pytest.MonkeyPatch) -> None:
+    """原生边框承担缩放，内容区不再放置重复的尺寸手柄。"""
     _app, window = _new_settings_window(monkeypatch)
     try:
         from PySide6.QtWidgets import QSizeGrip
 
         window.window.show()
         _app.processEvents()
-        grip = window.window.findChild(QSizeGrip)
-        assert window.window.isSizeGripEnabled() is True
-        assert grip is not None, "settings dialog must keep a QSizeGrip child"
-        assert grip.isVisible() is True
+        assert window.window.isSizeGripEnabled() is False
+        assert window.window.findChild(QSizeGrip) is None
     finally:
         window.close()
 
 
-def test_settings_window_translucent_background_preserves_dialog_shell(monkeypatch: pytest.MonkeyPatch) -> None:
-    """QDialog may be transparent, but QFrame#dialogShell must remain the visible rounded shell."""
+def test_settings_window_native_chrome_preserves_dialog_content(monkeypatch: pytest.MonkeyPatch) -> None:
+    """原生标题栏替换不影响深色内容面板。"""
     _app, window = _new_settings_window(monkeypatch)
     try:
         from PySide6.QtWidgets import QFrame
@@ -503,6 +503,37 @@ def test_settings_window_translucent_background_preserves_dialog_shell(monkeypat
         assert shell.isVisible() is True
     finally:
         window.close()
+
+
+def test_settings_compact_width_keeps_navigation_and_forms_visible(monkeypatch: pytest.MonkeyPatch) -> None:
+    """收窄窗口后，两种服务商与所有标签页都不应产生横向裁切。"""
+    app, settings = _new_settings_window(monkeypatch)
+    try:
+        from PySide6.QtWidgets import QScrollArea, QTabWidget
+
+        dialog = settings.window
+        assert dialog.width() == 480
+        tabs = dialog.findChild(QTabWidget, "settingsTabs")
+        assert tabs is not None
+        bar = tabs.tabBar()
+        assert not bar.expanding()
+        assert bar.tabRect(3).width() < bar.tabRect(0).width()
+        dialog.resize(dialog.minimumWidth(), dialog.height())
+        # 加载长音色名也不应撑宽表单或把同一行的刷新按钮挤出窗口。
+        settings.set_voices_loaded([{"id": "long-voice", "name": "Long Voice Name " * 12}], "long-voice")
+        for provider in ("Cartesia", "Volcengine"):
+            settings.tts_api_combo.setCurrentText(provider)
+            for index in range(tabs.count()):
+                tabs.setCurrentIndex(index)
+                app.processEvents()
+                bar = tabs.tabBar()
+                assert bar.rect().contains(bar.tabRect(index))
+                page = tabs.widget(index)
+                assert isinstance(page, QScrollArea)
+                assert page.horizontalScrollBar().maximum() == 0
+                assert page.widget().minimumSizeHint().width() <= page.viewport().width()
+    finally:
+        settings.close()
 
 
 def test_settings_window_default_height_fits_all_sections_without_initial_scroll(
@@ -541,14 +572,19 @@ def test_settings_window_default_height_fits_all_sections_without_initial_scroll
         window.close()
 
 
-def test_settings_window_close_path_invokes_on_close_once(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Closing the frameless settings dialog must still route through on_close exactly once."""
+@pytest.mark.parametrize("close_path", ["owner", "native"])
+def test_settings_window_close_path_invokes_on_close_once(monkeypatch: pytest.MonkeyPatch, close_path: str) -> None:
+    """系统关闭事件和应用关闭入口均只 flush、通知一次。"""
     close_calls: list[str] = []
     _app, window = _new_settings_window(monkeypatch, on_close=lambda: close_calls.append("closed"))
 
-    window.close()
-    window.close()
+    flush = Mock()
+    monkeypatch.setattr(window._settings, "flush", flush)
+    close = window.close if close_path == "owner" else window.window.close
+    close()
+    close()
 
+    flush.assert_called_once()
     assert close_calls == ["closed"]
 
 
@@ -625,55 +661,45 @@ def _mouse_event(event_type: Any, local_x: int, local_y: int, global_x: int, glo
     )
 
 
-def test_settings_window_title_area_drag_moves_frameless_dialog(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Mouse drag on dialogTitle must move the frameless settings dialog."""
+def test_settings_window_native_minimize_and_restore_preserves_content(monkeypatch: pytest.MonkeyPatch) -> None:
+    """原生最小化和恢复只改变窗口状态，不触发关闭或丢失输入。"""
     _app, window = _new_settings_window(monkeypatch)
     try:
-        from PySide6.QtCore import QEvent, QPoint
-        from PySide6.QtWidgets import QLabel
-
         dialog = window.window
-        title_label = dialog.findChild(QLabel, "dialogTitle")
-        assert title_label is not None, "frameless dialog must expose QLabel#dialogTitle as the drag handle"
-        assert hasattr(dialog, "eventFilter"), "_SettingsDialog must implement eventFilter for title dragging"
-
-        dialog.move(QPoint(80, 90))
-        start_pos = dialog.pos()
-
-        assert dialog.eventFilter(title_label, _mouse_event(QEvent.Type.MouseButtonPress, 8, 8, 200, 220)) is True
-        assert dialog.eventFilter(title_label, _mouse_event(QEvent.Type.MouseMove, 28, 30, 240, 260)) is True
-
-        assert dialog.pos() != start_pos
+        window.placeholder_input.setText("继续编辑")
+        dialog.showMinimized()
+        _app.processEvents()
+        assert dialog.isMinimized()
+        assert window.exists()
+        dialog.showNormal()
+        _app.processEvents()
+        assert not dialog.isMinimized()
+        assert dialog.isVisible()
+        assert window.placeholder_input.text() == "继续编辑"
     finally:
         window.close()
 
 
-def test_settings_window_title_drag_stops_on_mouse_release(monkeypatch: pytest.MonkeyPatch) -> None:
-    """After mouse release, later title-area move events must not continue dragging."""
+def test_settings_window_native_maximize_and_restore_keeps_window_alive(monkeypatch: pytest.MonkeyPatch) -> None:
+    """原生最大化和恢复保留设置窗口实例与可见内容。"""
     _app, window = _new_settings_window(monkeypatch)
     try:
-        from PySide6.QtCore import QEvent, QPoint
-        from PySide6.QtWidgets import QLabel
-
         dialog = window.window
-        title_label = dialog.findChild(QLabel, "dialogTitle")
-        assert title_label is not None, "frameless dialog must expose QLabel#dialogTitle as the drag handle"
-
-        dialog.move(QPoint(100, 110))
-        assert dialog.eventFilter(title_label, _mouse_event(QEvent.Type.MouseButtonPress, 10, 10, 250, 260)) is True
-        assert dialog.eventFilter(title_label, _mouse_event(QEvent.Type.MouseMove, 20, 20, 280, 300)) is True
-        moved_pos = dialog.pos()
-
-        assert dialog.eventFilter(title_label, _mouse_event(QEvent.Type.MouseButtonRelease, 20, 20, 280, 300)) is True
-        assert getattr(dialog, "_drag_active", None) is False
-        assert dialog.eventFilter(title_label, _mouse_event(QEvent.Type.MouseMove, 40, 40, 340, 360)) is False
-        assert dialog.pos() == moved_pos
+        dialog.showMaximized()
+        _app.processEvents()
+        assert dialog.isMaximized()
+        assert window.exists()
+        dialog.showNormal()
+        _app.processEvents()
+        assert not dialog.isMaximized()
+        assert dialog.isVisible()
+        assert window.window is dialog
     finally:
         window.close()
 
 
-def test_settings_window_non_title_content_press_does_not_start_drag(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Mouse press on non-title content must not activate window dragging."""
+def test_settings_window_content_press_does_not_start_custom_drag(monkeypatch: pytest.MonkeyPatch) -> None:
+    """内容区事件不会启动已移除的自绘窗口拖动。"""
     _app, window = _new_settings_window(monkeypatch)
     try:
         from PySide6.QtCore import QEvent, QPoint
@@ -683,7 +709,8 @@ def test_settings_window_non_title_content_press_does_not_start_drag(monkeypatch
         start_pos = dialog.pos()
 
         assert dialog.eventFilter(window.voice_combo, _mouse_event(QEvent.Type.MouseButtonPress, 10, 10, 300, 320)) is False
-        assert getattr(dialog, "_drag_active", None) is False
+        assert not hasattr(dialog, "_drag_active")
+        assert not hasattr(dialog, "_drag_position")
         assert dialog.eventFilter(window.voice_combo, _mouse_event(QEvent.Type.MouseMove, 30, 30, 360, 380)) is False
         assert dialog.pos() == start_pos
     finally:

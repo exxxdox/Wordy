@@ -38,14 +38,6 @@ def build_settings_stylesheet() -> str:
         QFrame#dialogShell {{
             background: {SURFACE_BG};
             border: none;
-            border-radius: 16px;
-        }}
-        QLabel#dialogTitle {{
-            color: {TEXT_PRIMARY};
-            font-size: 18px;
-            font-weight: 700;
-            padding: 0;
-            border: none;
         }}
         QLabel#sectionTitle {{
             color: {TEXT_PRIMARY};
@@ -97,7 +89,6 @@ def build_settings_stylesheet() -> str:
             border-radius: 7px;
             padding: 9px 14px;
             margin: 0 1px;
-            min-width: 90px;
             font-weight: 600;
             font-size: 13px;
         }}
@@ -173,22 +164,6 @@ def build_settings_stylesheet() -> str:
         QPushButton:focus {{
             background: {BUTTON_ACTIVE_BG};
             color: {GREEN_ACCENT};
-        }}
-        QPushButton#dialogCloseButton {{
-            background: transparent;
-            color: {TEXT_MUTED};
-            border: none;
-            border-radius: 9px;
-            padding: 0;
-            font-size: 23px;
-            font-weight: 400;
-        }}
-        QPushButton#dialogCloseButton:hover, QPushButton#dialogCloseButton:focus {{
-            background: {BUTTON_ACTIVE_BG};
-            color: {GREEN_ACCENT};
-        }}
-        QPushButton#dialogCloseButton:pressed {{
-            background: {ELEVATED_BG};
         }}
         QPushButton:disabled {{
             background: {SEPARATOR_COLOR};

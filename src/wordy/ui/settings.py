@@ -40,9 +40,10 @@ from wordy.ui.window import center_window, disable_window_transitions
 
 INPUT_TEXT_COLOR = GREEN_ACCENT
 SYSTEM_DEFAULT_AUDIO_OUTPUT_LABEL = "系统默认"
-DIALOG_WIDTH = 720
+# 单列表单无需宽屏留白；保留导航和密钥操作行所需宽度，仍允许原生缩放。
+DIALOG_WIDTH = 480
 DIALOG_HEIGHT = 580
-DIALOG_MIN_WIDTH = 680
+DIALOG_MIN_WIDTH = 480
 DIALOG_MIN_HEIGHT = 580
 CONTENT_MARGIN = 20
 SECTION_GAP = 12
@@ -108,14 +109,16 @@ class SettingsWindow:
         app_style = QApplication.style()
         settings_icon = app_style.standardIcon(QStyle.StandardPixmap.SP_ComputerIcon) if app_style is not None else QIcon()
         self.window.setWindowIcon(settings_icon)
-        # 在显示前一次性设置窗口样式，避免逐个改 flag 重建原生窗口。
+        # 标题栏、拖动、缩放与三个窗口按钮统一交给 Windows 原生窗口管理。
         self.window.setWindowFlags(
-            self.window.windowFlags() | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
+            Qt.WindowType.Window | Qt.WindowType.WindowTitleHint | Qt.WindowType.WindowSystemMenuHint
+            | Qt.WindowType.WindowMinMaxButtonsHint | Qt.WindowType.WindowCloseButtonHint
+            | Qt.WindowType.WindowStaysOnTopHint
         )
         self.window.setModal(False)
         self.window.setMinimumSize(DIALOG_MIN_WIDTH, DIALOG_MIN_HEIGHT)
         self.window.resize(DIALOG_WIDTH, DIALOG_HEIGHT)
-        self.window.setSizeGripEnabled(True)
+        self.window.setSizeGripEnabled(False)  # 原生边框已提供缩放，不再叠加自绘尺寸手柄。
         # 设置页无需桌面透底；透明窗口首次 expose 没有系统底色，可能短暂闪白。
         # 使用深色不透明底，原生窗口创建到 Qt 首次绘制期间也保持相同背景。
         palette = self.window.palette()
@@ -155,6 +158,9 @@ class SettingsWindow:
         window = self.window
         if window is None:
             return
+        # 点击设置图标时恢复已最小化的窗口，同时保留原来的最大化状态。
+        if window.isMinimized():
+            window.setWindowState(window.windowState() & ~Qt.WindowState.WindowMinimized)
         window.raise_()
         window.activateWindow()
         window.setFocus(Qt.FocusReason.ActiveWindowFocusReason)
@@ -249,32 +255,13 @@ class SettingsWindow:
         shell_layout = QVBoxLayout(dialog_shell)
         shell_layout.setContentsMargins(0, 0, 0, 0)
         shell_layout.setSpacing(0)
-        # 标题保留拖动命中区；关闭入口独立，避免无边框窗口只能从底部退出。
-        header = QWidget()
-        header_layout = QHBoxLayout(header)
-        header_layout.setContentsMargins(CONTENT_MARGIN, 14, CONTENT_MARGIN, 12)
-        header_layout.setSpacing(12)
-        title_label = QLabel("设置")
-        title_label.setObjectName("dialogTitle")
-        title_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        title_label.setCursor(Qt.CursorShape.OpenHandCursor)
-        title_label.installEventFilter(self.window)
-        header_layout.addWidget(title_label, 1)
-        close_button = QPushButton("×")
-        close_button.setObjectName("dialogCloseButton")
-        # 关闭不是表单提交，不能让凭据输入框的 Enter 误触此按钮。
-        close_button.setAutoDefault(False)
-        close_button.setFixedSize(34, 34)
-        close_button.setToolTip("关闭设置")
-        close_button.setAccessibleName("关闭设置")
-        close_button.clicked.connect(lambda _checked=False: self.close())
-        header_layout.addWidget(close_button)
-        shell_layout.addWidget(header)
         tab_widget = QTabWidget()
         tab_widget.setObjectName("settingsTabs")
         tab_widget.setDocumentMode(True)
         # 隐藏原生 tab 基线，避免系统亮色边线穿过深色导航区域。
         tab_widget.tabBar().setDrawBase(False)
+        # 标签按文字与内边距取宽，不均分或拉伸占满导航栏。
+        tab_widget.tabBar().setExpanding(False)
         tab_widget.setUsesScrollButtons(False)
         tab_widget.setElideMode(Qt.TextElideMode.ElideNone)
         shell_layout.addWidget(tab_widget, 1)
@@ -318,7 +305,8 @@ class SettingsWindow:
         # 各 provider 面板
         self._provider_panel_widgets: dict[str, QFrame] = {}
         for name, panel in PROVIDER_PANELS.items():
-            wrapper = QFrame()
+            # 必须先归属设置页再切换可见性；无父级时 setVisible(True) 会短暂弹出独立窗口。
+            wrapper = QFrame(self._tts_provider_container)
             layout = QVBoxLayout(wrapper)
             layout.setContentsMargins(0, 12, 0, 0)
             layout.setSpacing(0)
@@ -464,7 +452,8 @@ class SettingsWindow:
         section = self._create_section(parent_layout)
         header = QHBoxLayout()
         header.setContentsMargins(0, 0, 0, 0)
-        header.addWidget(self._section_title("输入框透明度"))
+        # 此值是背景 alpha：百分比越低越透明，明确名称避免把 100% 理解为全透明。
+        header.addWidget(self._section_title("输入框背景不透明度"))
         self.opacity_value_label = self._body_label(f"{round(s.overlay_opacity * 100)}%", INPUT_TEXT_COLOR)
         header.addWidget(self.opacity_value_label, 0, Qt.AlignmentFlag.AlignRight)
         section.addLayout(header)
@@ -475,7 +464,7 @@ class SettingsWindow:
         self.opacity_slider.setValue(self._opacity_to_slider(s.overlay_opacity))
         self.opacity_slider.valueChanged.connect(self._on_opacity_changed)
         section.addWidget(self.opacity_slider)
-        section.addWidget(self._hint_label("范围 30% - 100%，默认 100%", TEXT_MUTED))
+        section.addWidget(self._hint_label("30% 更透明，100% 完全不透明；文字保持清晰。", TEXT_MUTED))
 
     def _build_position_section(self, parent_layout: QVBoxLayout, s: AppSettings) -> None:
         section = self._create_section(parent_layout)
@@ -692,6 +681,8 @@ class SettingsWindow:
         button_row.addStretch(1)
         exit_button = QPushButton("退出")
         exit_button.setObjectName("cancelButton")
+        # 原生标题栏启用后，底部退出仍不能成为表单 Enter 的默认动作。
+        exit_button.setAutoDefault(False)
         exit_button.setMinimumWidth(BUTTON_MIN_WIDTH)
         exit_button.clicked.connect(lambda _checked=False: self.close())
         button_row.addWidget(exit_button)

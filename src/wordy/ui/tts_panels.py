@@ -120,7 +120,9 @@ class CartesiaPanel(_BasePanel):
         voice_row.setContentsMargins(0, 0, 0, 0)
         voice_row.setSpacing(INLINE_GAP)
         self.voice_combo = NoWheelComboBox()
-        self.voice_combo.setMinimumContentsLength(24)
+        # 音色与刷新按钮同行；按有限字符宽度布局，长名称留在下拉列表中完整查看。
+        self.voice_combo.setSizeAdjustPolicy(NoWheelComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.voice_combo.setMinimumContentsLength(16)
         self.voice_combo.currentTextChanged.connect(self._on_voice_selected)
         voice_row.addWidget(self.voice_combo, 1)
         self.refresh_btn = QPushButton("刷新音色列表")

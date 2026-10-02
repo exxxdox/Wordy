@@ -370,6 +370,9 @@ class InputOverlay:
         if self.root is None:
             return False
         event_type = event.type()
+        if watched is self.root.submit_button and event_type in (QEvent.Type.Enter, QEvent.Type.Leave):
+            self.root.set_submit_hover(event_type == QEvent.Type.Enter)
+            return False
         if watched is self.root.settings_button:
             if event_type in (QEvent.Type.FocusIn, QEvent.Type.FocusOut):
                 self.root.set_settings_hover(event_type == QEvent.Type.FocusIn)

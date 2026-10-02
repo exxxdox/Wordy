@@ -3,7 +3,7 @@
 
 """设置窗口专用 Qt 控件。
 
-- ``_SettingsDialog``：带标题栏拖拽的自定义 QDialog
+- ``_SettingsDialog``：处理原生关闭与快捷键录制事件的 QDialog
 - ``NoWheelComboBox``：忽略滚轮的 QComboBox
 - ``NoWheelSlider``：忽略滚轮的 QSlider
 - ``CheckmarkCheckBox``：自绘勾选标记的 QCheckBox
@@ -13,8 +13,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, QSize, Qt
-from PySide6.QtGui import QColor, QCloseEvent, QKeyEvent, QMouseEvent, QPainter, QPainterPath, QPaintEvent, QPen
+from PySide6.QtCore import QEvent, QPointF, QRect, QSize, Qt
+from PySide6.QtGui import QColor, QCloseEvent, QKeyEvent, QPainter, QPainterPath, QPaintEvent, QPen
 from PySide6.QtWidgets import QApplication, QCheckBox, QComboBox, QDialog, QSlider, QWidget
 
 if TYPE_CHECKING:
@@ -26,13 +26,11 @@ INPUT_TEXT_COLOR = GREEN_ACCENT
 
 
 class _SettingsDialog(QDialog):
-    """将 Qt 原生关闭事件转发给 SettingsWindow，支持标题栏拖拽移动。"""
+    """将原生关闭事件转发给 SettingsWindow，并保护快捷键录制。"""
 
     def __init__(self, owner: "SettingsWindow", parent: QWidget | None) -> None:
         super().__init__(parent)
         self._owner = owner
-        self._drag_active = False
-        self._drag_position = QPoint()
         self._application_event_filter_installed = False
         app = QApplication.instance()
         if app is not None:
@@ -42,36 +40,6 @@ class _SettingsDialog(QDialog):
     def eventFilter(self, watched: object, event: QEvent) -> bool:  # type: ignore[override]
         if self._should_swallow_recording_key_event(watched, event):
             event.accept()
-            return True
-
-        object_name = getattr(watched, "objectName", None)
-        set_cursor = getattr(watched, "setCursor", None)
-        if not callable(object_name) or object_name() != "dialogTitle" or not isinstance(event, QMouseEvent):
-            return False
-
-        if event.type() == QEvent.Type.MouseButtonPress:
-            if event.button() != Qt.MouseButton.LeftButton:
-                return False
-            global_pos = event.globalPosition().toPoint()
-            self._drag_active = True
-            self._drag_position = global_pos - self.frameGeometry().topLeft()
-            if callable(set_cursor):
-                set_cursor(Qt.CursorShape.ClosedHandCursor)
-            return True
-
-        if event.type() == QEvent.Type.MouseMove:
-            if not self._drag_active or not event.buttons() & Qt.MouseButton.LeftButton:
-                return False
-            global_pos = event.globalPosition().toPoint()
-            self.move(global_pos - self._drag_position)
-            return True
-
-        if event.type() == QEvent.Type.MouseButtonRelease:
-            if not self._drag_active or event.button() != Qt.MouseButton.LeftButton:
-                return False
-            self._drag_active = False
-            if callable(set_cursor):
-                set_cursor(Qt.CursorShape.OpenHandCursor)
             return True
 
         return False

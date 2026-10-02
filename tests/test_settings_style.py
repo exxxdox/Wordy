@@ -52,9 +52,10 @@ class TestBuildSettingsStylesheet:
         css = build_settings_stylesheet()
         assert "QCheckBox" in css
 
-    def test_contains_dialog_title_selector(self):
+    def test_native_title_does_not_keep_custom_chrome_selectors(self):
         css = build_settings_stylesheet()
-        assert "QLabel#dialogTitle" in css
+        assert "QLabel#dialogTitle" not in css
+        assert "QPushButton#dialogCloseButton" not in css
 
     def test_contains_section_title_selector(self):
         css = build_settings_stylesheet()

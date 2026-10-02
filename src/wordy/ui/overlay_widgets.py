@@ -18,7 +18,7 @@ from PySide6.QtWidgets import QLabel, QLineEdit, QPushButton, QStyle, QWidget
 
 from wordy.ui.theme import (
     ACCENT_HOVER, ACCENT_SECONDARY, CONFIG_BUTTON_IDLE, GREEN_ACCENT,
-    INPUT_BACKGROUND, INPUT_BORDER, MONO_FONT, UI_FONT, TEXT_PRIMARY, BUTTON_ACTIVE_BG,
+    INPUT_BACKGROUND, INPUT_BORDER, MONO_FONT, UI_FONT, TEXT_PRIMARY,
 )
 
 # Material Symbols 设置图标 SVG 路径
@@ -136,16 +136,8 @@ class _OverlayWidget(QWidget):
         self.submit_button.setAccessibleName("朗读")
         self.submit_button.setToolTip("朗读并保留输入框")
         self.submit_button.setEnabled(False)
-        # 用几何播放图标避免符号字体缺失时出现方框；禁用态由 Qt 自动生成。
-        play_icon = QPixmap(16, 16)
-        play_icon.fill(Qt.GlobalColor.transparent)
-        icon_painter = QPainter(play_icon)
-        icon_painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        icon_painter.setPen(Qt.PenStyle.NoPen)
-        icon_painter.setBrush(QColor(INPUT_TEXT_COLOR))
-        icon_painter.drawPolygon(QPolygonF([QPointF(4, 2), QPointF(14, 8), QPointF(4, 14)]))
-        icon_painter.end()
-        self.submit_button.setIcon(QIcon(play_icon))
+        self.set_submit_hover(False)
+        self.submit_button.installEventFilter(signals)
         self.submit_button.setIconSize(QSize(16, 16))
         self.submit_button.clicked.connect(owner._on_read)
         self.entry.textChanged.connect(lambda text: self.submit_button.setEnabled(bool(text.strip())))
@@ -153,8 +145,6 @@ class _OverlayWidget(QWidget):
             QPushButton {{ background: transparent; color: {INPUT_TEXT_COLOR};
                 border: none; border-radius: 9px;
                 font-size: 22px; padding: 0; }}
-            QPushButton:hover {{ background: {BUTTON_ACTIVE_BG}; }}
-            QPushButton:pressed {{ background: {INPUT_BACKGROUND_COLOR}; }}
             QPushButton:disabled {{ color: {CONFIG_BUTTON_TEXT_COLOR}; background: transparent; }}
         ''')
 
@@ -174,6 +164,7 @@ class _OverlayWidget(QWidget):
         self.settings_button.setToolTip("打开设置")
         self.settings_button.setGeometry(settings_x, settings_y, settings_hit_size, settings_hit_size)
         self.settings_button.setPixmap(self._make_settings_icon(icon_size, CONFIG_BUTTON_TEXT_COLOR))
+        self.settings_button.setStyleSheet("background: transparent;")
         self.settings_button.installEventFilter(signals)
         self._settings_icon_size = icon_size
         self.set_settings_hover(False)
@@ -280,11 +271,20 @@ class _OverlayWidget(QWidget):
         super().focusOutEvent(event)
 
     def set_settings_hover(self, hovered: bool) -> None:
+        # 悬停与键盘聚焦只改变图标颜色，背景持续融入输入栏。
         color = CONFIG_BUTTON_HOVER_TEXT_COLOR if hovered else CONFIG_BUTTON_TEXT_COLOR
         self.settings_button.setPixmap(
             self._make_settings_icon(self._settings_icon_size, color)
         )
-        # 图标背景也反馈命中区域，键盘聚焦与鼠标悬停使用同一视觉状态。
-        self.settings_button.setStyleSheet(
-            f"background: {BUTTON_ACTIVE_BG if hovered else 'transparent'}; border-radius: 9px;"
-        )
+
+    def set_submit_hover(self, hovered: bool) -> None:
+        # QSS 的 color 不会给 QIcon 着色，直接重绘几何图标；禁用态仍由 Qt 生成。
+        play_icon = QPixmap(16, 16)
+        play_icon.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(play_icon)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(ACCENT_HOVER if hovered else INPUT_TEXT_COLOR))
+        painter.drawPolygon(QPolygonF([QPointF(4, 2), QPointF(14, 8), QPointF(4, 14)]))
+        painter.end()
+        self.submit_button.setIcon(QIcon(play_icon))
