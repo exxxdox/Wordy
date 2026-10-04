@@ -300,3 +300,20 @@ class TestSidetoneAudioPlayer:
         wrapper.set_sidetone_enabled(False)
         wrapper.close_stream()
         sidetone.close_stream.assert_called_once()
+def test_cancelled_main_playback_does_not_start_sidetone():
+    from threading import Event
+
+    main, sidetone = MagicMock(), MagicMock()
+    main.output_device_name = "CABLE Input"
+    cancelled = Event()
+
+    def play_then_cancel(*args, **kwargs):
+        cancelled.set()
+        return True
+
+    main.play_wav.side_effect = play_then_cancel
+    wrapper = SidetoneAudioPlayer(main, sidetone)
+    wrapper.set_sidetone_enabled(True)
+    assert wrapper.play_wav("test.wav", cancel_event=cancelled) is False
+    main.play_wav.assert_called_once_with("test.wav", device_index=None, cancel_event=cancelled)
+    sidetone.play_wav.assert_not_called()

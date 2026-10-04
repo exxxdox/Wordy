@@ -152,8 +152,12 @@ class TestTomlValue:
         assert result == "{x = 1, y = 2}"
 
     def test_unknown_type_falls_back_to_string(self):
-        result = _toml_value([1, 2, 3])
-        assert result == '"[1, 2, 3]"'
+        # 数组现在是轮盘配置的正式类型，未知类型回退由 tuple 验证。
+        result = _toml_value((1, 2, 3))
+        assert result == '"(1, 2, 3)"'
+
+    def test_list_serializes_as_toml_array(self):
+        assert _toml_value(["hello", "", "world"]) == '["hello", "", "world"]'
 
 
 class TestWriteTomlAtomic:

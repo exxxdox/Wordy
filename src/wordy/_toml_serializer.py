@@ -86,6 +86,9 @@ def _toml_value(value: object) -> str:
     if isinstance(value, str):
         # JSON 的基本字符串转义适用于 TOML；额外转义 TOML 禁止的 DEL，保留非 BMP Unicode。
         return json.dumps(value, ensure_ascii=False).replace("\x7f", "\\u007f")
+    if isinstance(value, list):
+        # 轮盘八槽必须写成 TOML 数组，不能退化成 Python 列表的字符串。
+        return "[" + ", ".join(_toml_value(item) for item in value) + "]"
     if isinstance(value, dict):
         items = ", ".join(
             f"{k} = {_toml_value(v)}" for k, v in value.items() if v is not None

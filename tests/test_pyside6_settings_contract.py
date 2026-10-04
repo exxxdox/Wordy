@@ -519,7 +519,9 @@ def test_settings_compact_width_keeps_navigation_and_forms_visible(monkeypatch: 
         assert tabs is not None
         bar = tabs.tabBar()
         assert not bar.expanding()
-        assert bar.tabRect(3).width() < bar.tabRect(0).width()
+        # 新增轮盘页后日志索引会变化，按标题验证短标签而非绑定固定索引。
+        log_index = next(i for i in range(tabs.count()) if tabs.tabText(i) == "日志")
+        assert bar.tabRect(log_index).width() < bar.tabRect(0).width()
         dialog.resize(dialog.minimumWidth(), dialog.height())
         # 加载长音色名也不应撑宽表单或把同一行的刷新按钮挤出窗口。
         settings.set_voices_loaded([{"id": "long-voice", "name": "Long Voice Name " * 12}], "long-voice")

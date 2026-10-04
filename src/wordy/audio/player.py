@@ -5,6 +5,7 @@
 
 import logging
 import wave
+from threading import Event
 from collections.abc import Mapping
 from io import BytesIO
 from typing import TypedDict, cast
@@ -574,8 +575,11 @@ class AudioPlayer:
         self,
         wav_path: str | BytesIO,
         device_index: int | None = None,
+        cancel_event: Event | None = None,
     ) -> bool:
         """播放 WAV 文件到指定或匹配到的输出设备。"""
+        if cancel_event is not None and cancel_event.is_set():
+            return False
         try:
             wf = wave.open(wav_path, "rb")
         except FileNotFoundError:
@@ -621,6 +625,9 @@ class AudioPlayer:
 
             data = wf.readframes(1024)
             while data:
+                # 退出时在当前小块写入结束后停止，避免等待整个长音频播放完。
+                if cancel_event is not None and cancel_event.is_set():
+                    return False
                 if self._last_mono_upmix:
                     data = _duplicate_mono_to_stereo(data, sample_width)
                 stream.write(data)  # type: ignore[union-attr]
@@ -639,4 +646,4 @@ class AudioPlayer:
                 logger.warning("wave 文件关闭失败: %s", e)
             self._terminate_pyaudio(p)
 
-        return True
+        return cancel_event is None or not cancel_event.is_set()

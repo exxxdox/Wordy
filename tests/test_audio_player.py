@@ -876,3 +876,26 @@ def test_list_output_devices_skips_malformed_records_without_dropping_valid_devi
     names = [device["name"] for device in devices]
     assert names == ["Fake Default Device", "Good WASAPI Device"]
     assert pa.terminate_calls == 1
+def test_play_wav_cancellation_closes_output_after_current_chunk(tmp_path, _patch_pyaudio):
+    from threading import Event
+    import wave
+
+    source = tmp_path / "long.wav"
+    with wave.open(str(source), "wb") as audio:
+        audio.setnchannels(1)
+        audio.setsampwidth(2)
+        audio.setframerate(48000)
+        audio.writeframes(b"\x01\x00" * 4096)
+    cancelled = Event()
+    stream = _patch_pyaudio._stream
+    original_write = stream.write
+
+    def write_then_cancel(data):
+        original_write(data)
+        cancelled.set()
+
+    stream.write = write_then_cancel
+    assert AudioPlayer().play_wav(str(source), cancel_event=cancelled) is False
+    assert len(stream.write_calls) == 1
+    assert stream.close_calls == 1
+    assert _patch_pyaudio.terminate_calls == 1

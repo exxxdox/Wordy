@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import logging
+from threading import Event
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 from typing import TYPE_CHECKING
@@ -68,21 +69,31 @@ class SidetoneAudioPlayer:
         self,
         wav_path: str | BytesIO,
         device_index: int | None = None,
+        cancel_event: Event | None = None,
     ) -> bool:
         """播放 WAV：主设备 → 返听设备（如启用）。
 
         BytesIO 在主播放后被消费，seek(0) 重置后传给返听播放器。
         """
-        result = self._main.play_wav(wav_path, device_index=device_index)
+        # 保持普通TTS的调用契约，只有本地文件播放传递可取消信号。
+        if cancel_event is None:
+            result = self._main.play_wav(wav_path, device_index=device_index)
+        else:
+            result = self._main.play_wav(wav_path, device_index=device_index, cancel_event=cancel_event)
+            if cancel_event.is_set():
+                return False
         if not result or not self._needs_sidetone(device_index):
             return result
         try:
             if isinstance(wav_path, BytesIO):
                 wav_path.seek(0)
-            self._sidetone.play_wav(wav_path, device_index=None)
+            if cancel_event is None:
+                self._sidetone.play_wav(wav_path, device_index=None)
+            else:
+                self._sidetone.play_wav(wav_path, device_index=None, cancel_event=cancel_event)
         except Exception:
             logger.warning("返听 WAV 播放失败", exc_info=True)
-        return result
+        return result and (cancel_event is None or not cancel_event.is_set())
 
     def open_stream(
         self,

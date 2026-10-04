@@ -37,6 +37,7 @@ from wordy.ui.settings_widgets import (
 )
 from wordy.ui.settings_style import build_settings_stylesheet
 from wordy.ui.window import center_window, disable_window_transitions
+from wordy.ui.chat_wheel_settings import ChatWheelSettings
 
 INPUT_TEXT_COLOR = GREEN_ACCENT
 SYSTEM_DEFAULT_AUDIO_OUTPUT_LABEL = "系统默认"
@@ -322,6 +323,12 @@ class SettingsWindow:
         tts_layout.addStretch(1)
 
         # 4. 日志
+        # 独立页保留八槽完整编辑空间，不挤占原有音频路由设置。
+        wheel_layout = self._create_tab_page(tab_widget, "聊天轮盘")
+        self.chat_wheel_panel = ChatWheelSettings(s, self.on_field_changed)
+        wheel_layout.addWidget(self.chat_wheel_panel)
+        wheel_layout.addStretch(1)
+
         log_layout = self._create_tab_page(tab_widget, "日志")
         self._build_log_level_section(log_layout, s)
         log_layout.addStretch(1)
@@ -901,6 +908,7 @@ class SettingsWindow:
             "本地设置": ("输入与显示", "调整快捷键、提示文字和输入栏外观。"),
             "音频侦听": ("声音与路由", "选择播放设备，控制侦听与返听。"),
             "TTS 设置": ("语音生成", "选择服务商，配置密钥与音色。"),
+            "聊天轮盘": ("音频轮盘", "选择八个音频，用全局快捷键随时播放。"),
             "日志": ("运行日志", "调整日志详细程度，便于排查问题。"),
         }
         heading, description = page_titles[title]

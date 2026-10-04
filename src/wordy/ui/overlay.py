@@ -75,12 +75,14 @@ class InputOverlay:
         width: int = 540,
         height: int = 58,
         poll_interval_ms: int = 30,
+        on_chat_wheel_change: Callable[[str, object], None] | None = None,
     ):
         if sys.platform != "win32":
             raise RuntimeError("InputOverlay 仅支持 Windows")
 
         self._cfg = AppSettings.load()  # 单例——唯一数据源，不镜像副本
         self.on_submit = on_submit
+        self.on_chat_wheel_change = on_chat_wheel_change
         self.on_voice_change = on_voice_change
         self.on_volume_change = on_volume_change
         self.on_tts_backend_change = on_tts_backend_change
@@ -741,7 +743,10 @@ class InputOverlay:
 
     def _on_settings_field_changed(self, field_name: str, value: object) -> None:
         """设置变更副作用——持久化已由 AppSettings.__setattr__ 完成，self._cfg 即该单例。"""
-        if field_name == "hotkey":
+        if field_name.startswith("chat_wheel_"):
+            if self.on_chat_wheel_change is not None:
+                self.on_chat_wheel_change(field_name, value)
+        elif field_name == "hotkey":
             settings = self._active_settings_window()
             if settings is not None and settings._recorded_hotkey and settings._recorded_hotkey_name:
                 hotkey = settings._recorded_hotkey

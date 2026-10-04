@@ -31,6 +31,7 @@ from wordy.tts.registry import resolve_tts_backend
 from wordy.tts_manager import TTSManager
 from wordy.ui.overlay import InputOverlay
 from wordy.ui.tray import TrayApp
+from wordy.chat_wheel_controller import ChatWheelController
 
 
 logger = logging.getLogger(__name__)
@@ -96,6 +97,7 @@ class WordyApp:
         )
 
         # ── UI ─────────────────────────────────────────────────────────
+        self._chat_wheel_controller: ChatWheelController | None = None
         self.overlay = InputOverlay(
             on_submit=self._on_submit,
             on_voice_change=self._on_voice_change,
@@ -111,9 +113,36 @@ class WordyApp:
             on_sidetone_change=self._on_sidetone_change,
             on_query_mic_listen_status=lambda: self.routing.is_mic_listen_configured,
             audio_player=self.player,
+            on_chat_wheel_change=self._on_chat_wheel_change,
         )
 
     # ── 凭据加载 ───────────────────────────────────────────────────────────
+
+    def _on_chat_wheel_change(self, field: str, value: object) -> None:
+        controller = self._chat_wheel_controller
+        if controller is None:
+            return
+        if field == "chat_wheel_preview" and isinstance(value, int):
+            controller.play_slot(value)
+        elif field == "chat_wheel_hotkey":
+            error = None
+            try:
+                controller.set_hotkey(str(value))
+            except (ValueError, RuntimeError, OSError) as exc:
+                error = str(exc)
+            settings = self.overlay._active_settings_window()
+            if settings is not None:
+                settings.chat_wheel_panel.set_hotkey_result(error)
+
+    def _on_chat_wheel_error(self, message: str) -> None:
+        logger.warning(message)
+        # 运行错误在设置中可见，不从播放 worker 操作 Qt 控件。
+        settings = self.overlay._active_settings_window()
+        if settings is None:
+            self.overlay._open_settings()
+            settings = self.overlay._active_settings_window()
+        if settings is not None:
+            settings.set_status(message)
 
     @staticmethod
     def _load_cartesia_api_key() -> str | None:
@@ -264,11 +293,20 @@ class WordyApp:
             if background_stopped:
                 return
             background_stopped = True
+            if self._chat_wheel_controller is not None:
+                self._chat_wheel_controller.stop()
             self.routing.stop()
             self.tts_manager.shutdown()
 
         try:
             self.overlay.prepare_ui()
+            # QApplication 已创建后才分配轮盘；退出先注销热键，阻止延迟事件重开。
+            self._chat_wheel_controller = ChatWheelController(
+                self._settings, self.tts_manager.play_audio_file, self._on_chat_wheel_error)
+            try:
+                self._chat_wheel_controller.start()
+            except (ValueError, RuntimeError, OSError) as error:
+                self._on_chat_wheel_error(f"聊天轮盘快捷键未启用：{error}")
             if self._should_prewarm():
                 # manager 已把连接提交到串行 worker，无需额外线程绕过生命周期队列。
                 self.tts_manager.connect_async()

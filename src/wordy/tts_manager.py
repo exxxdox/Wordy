@@ -12,10 +12,13 @@ from __future__ import annotations
 import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from collections.abc import Callable
+from pathlib import Path
 from dataclasses import dataclass
 from queue import SimpleQueue
 
 from wordy.config import AppSettings
+from wordy.audio.clips import decoded_audio_clip
 from wordy.tts.constants import (
     DEFAULT_TTS_BACKEND,
     TTS_API_PROVIDER_VOLCENGINE,
@@ -92,6 +95,8 @@ class TTSManager:
         self.tts_api_provider = tts_api_provider
         self.tts_backend = tts_backend
         self._worker_ready: threading.Event | None = None
+        # 本地文件可能很长；退出必须停止文件任务，不能等待整段音频播完。
+        self._audio_files_stopped = threading.Event()
 
         worker = self._create_worker()
         self.engine = worker.engine
@@ -300,6 +305,32 @@ class TTSManager:
         """获取当前引擎的可用音色列表。"""
         return self.engine.fetch_voices()
 
+    def play_audio_file(self, path: Path, on_error: Callable[[str], None] | None = None) -> None:
+        """本地文件与 TTS 共用串行 worker，不要求密钥或音色。"""
+        if not self._audio_files_stopped.is_set():
+            self._executor.submit(self._play_audio_file, path, self.engine, self._worker_ready, on_error)
+
+    def _play_audio_file(self, path: Path, engine: BackendTTSEngine,
+                         ready: threading.Event | None, on_error: Callable[[str], None] | None) -> None:
+        try:
+            if ready is not None:
+                ready.wait()
+            if self._audio_files_stopped.is_set():
+                return
+            # reset 会立即重开实时流；关闭引擎才真正释放设备，下次 speak 自动连接。
+            engine.close()
+            with decoded_audio_clip(path, self._audio_files_stopped) as wav_path:
+                if not self._audio_player.play_wav(str(wav_path), cancel_event=self._audio_files_stopped):
+                    if self._audio_files_stopped.is_set():
+                        return
+                    raise RuntimeError("无法打开音频输出设备")
+        except InterruptedError:
+            return
+        except Exception as error:
+            logger.error("音频文件播放失败: %s", error)
+            if on_error is not None:
+                on_error(f"音频播放失败：{error}")
+
     def connect_async(self) -> None:
         """后台预热 TTS 连接；失败记日志，首次播放时懒连接自动重试。"""
         # 预热与播放共用 worker 队列，防止退役关闭后后台线程再次打开旧音频流。
@@ -325,6 +356,7 @@ class TTSManager:
 
         返回 True 表示 janitor 正常退出，False 表示超时。
         """
+        self._audio_files_stopped.set()
         self._enqueue_retire_current()
         self._janitor_queue.put(None)
         self._janitor_thread.join(timeout=_JANITOR_JOIN_TIMEOUT_SECONDS)

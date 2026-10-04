@@ -5,6 +5,7 @@
 
 from abc import ABC, abstractmethod
 from io import BytesIO
+from threading import Event
 from typing import Protocol
 
 VoiceInfo = dict[str, object]
@@ -15,7 +16,8 @@ class TTSAudioPlayer(Protocol):
 
     output_device_name: str | None
 
-    def play_wav(self, wav_path: str | BytesIO, device_index: int | None = None) -> bool:
+    def play_wav(self, wav_path: str | BytesIO, device_index: int | None = None,
+                 cancel_event: Event | None = None) -> bool:
         """播放 WAV 音频。"""
         ...
 

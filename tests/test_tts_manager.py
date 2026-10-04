@@ -8,6 +8,71 @@ from wordy.tts_manager import TTSManager, _TTSWorker, _janitor_loop_inner
 import queue
 import threading
 from typing import Any
+from pathlib import Path
+
+
+def test_audio_file_waits_for_worker_handoff_without_voice(manager, mock_player, monkeypatch, tmp_path):
+    from contextlib import contextmanager
+    ready = threading.Event()
+    manager._worker_ready = ready
+    manager._settings.volcengine_voice_id = None
+    @contextmanager
+    def decoded(path, cancel_event):
+        yield path
+    monkeypatch.setattr("wordy.tts_manager.decoded_audio_clip", decoded)
+    file = tmp_path / "clip.wav"
+    manager.play_audio_file(file)
+    operation, *args = manager.executor.submit.call_args.args
+    thread = threading.Thread(target=operation, args=args)
+    thread.start()
+    try:
+        mock_player.play_wav.assert_not_called()
+    finally:
+        ready.set()
+        thread.join(2)
+    assert not thread.is_alive()
+    mock_player.play_wav.assert_called_once_with(str(file), cancel_event=manager._audio_files_stopped)
+    manager.shutdown()
+
+
+def test_audio_file_reports_failed_output(manager, mock_player, monkeypatch):
+    from contextlib import contextmanager
+    @contextmanager
+    def decoded(path, cancel_event):
+        yield path
+    monkeypatch.setattr("wordy.tts_manager.decoded_audio_clip", decoded)
+    mock_player.play_wav.return_value = False
+    error = MagicMock()
+    manager.play_audio_file(Path("clip.wav"), error)
+    operation, *args = manager.executor.submit.call_args.args
+    operation(*args)
+    error.assert_called_once()
+    manager.shutdown()
+
+
+def test_shutdown_discards_queued_audio_files(manager, mock_player):
+    manager.play_audio_file(Path("clip.wav"))
+    operation, *args = manager.executor.submit.call_args.args
+    manager.shutdown()
+    operation(*args)
+    mock_player.play_wav.assert_not_called()
+
+
+def test_audio_file_closes_realtime_engine_before_file_stream(manager, mock_player, mock_engine, monkeypatch):
+    from contextlib import contextmanager
+    order = []
+    mock_engine.close.side_effect = lambda: order.append("close")
+    mock_player.play_wav.side_effect = lambda *_args, **_kwargs: order.append("play") or True
+    @contextmanager
+    def decoded(path, cancel_event):
+        yield path
+    monkeypatch.setattr("wordy.tts_manager.decoded_audio_clip", decoded)
+    manager.play_audio_file(Path("clip.wav"))
+    operation, *args = manager.executor.submit.call_args.args
+    operation(*args)
+    assert order == ["close", "play"]
+    mock_engine.reset_audio_output.assert_not_called()
+    manager.shutdown()
 
 
 def test_queued_text_keeps_engine_selected_at_submission():
