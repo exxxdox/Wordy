@@ -13,10 +13,10 @@ from typing import TYPE_CHECKING, Any, TypeAlias, cast
 
 from PySide6.QtCore import QEvent, QObject, QTimer, Qt
 from PySide6.QtGui import QMouseEvent
-from PySide6.QtWidgets import QApplication, QLabel, QLineEdit, QMessageBox
+from PySide6.QtWidgets import QApplication, QLabel, QLineEdit
 
 import wordy.secret
-from wordy.config import AppSettings, get_active_config_file
+from wordy.config import AppSettings
 from wordy.hotkey import display_hotkey
 from wordy.tts.constants import (
     TTS_API_PROVIDER_CARTESIA,
@@ -117,7 +117,6 @@ class InputOverlay:
         self._drag_start_window_x = 0
         self._drag_start_window_y = 0
         self._is_dragging_window = False
-        self._last_saved_config_file = get_active_config_file()
         self._app: QApplication | None = None
         self._owns_app = False
         self._signals: _OverlaySignals | None = None
@@ -505,8 +504,7 @@ class InputOverlay:
         self._is_dragging_window = False
         x, y = self._clamp_window_position(self.root.x(), self.root.y())
         self._cfg.window_position = {"x": x, "y": y}
-        config_file = AppSettings.load().update(window_position=self._cfg.window_position)
-        self._last_saved_config_file = config_file
+        AppSettings.load().update(window_position=self._cfg.window_position)
         QTimer.singleShot(100, self._clear_ignore_focus_out)
 
     def _open_settings(self) -> None:
@@ -542,7 +540,6 @@ class InputOverlay:
         state = SettingsState(
             voices_cache=self._get_active_voices_cache(),
             voices_loading=self._voices_loading,
-            voice_fetch_error=self._voice_fetch_error,
             # 先显示保存的选择；硬件扫描延后到用户进入音频页，不阻塞设置打开。
             audio_output_devices=[dict(self._cfg.audio_output_device)] if self._cfg.audio_output_device else [],
             input_devices=self._enumerate_input_devices(),

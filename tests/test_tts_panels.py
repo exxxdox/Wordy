@@ -17,8 +17,7 @@ from wordy.ui.settings import SettingsWindow
 
 
 @pytest.mark.parametrize("attribute", [
-    "api_key_input", "voice_combo", "refresh_voices_button", "voice_status_label",
-    "voice_label_to_id", "voice_label_to_name", "clear_api_key_button", "api_key_status_label",
+    "api_key_input", "voice_combo", "voice_label_to_id", "voice_label_to_name",
 ])
 def test_panel_delegation_rejects_assignment(attribute):
     # 面板持有控件，窗口属性不应静默吞掉误赋值。
@@ -54,7 +53,6 @@ def mock_state() -> MagicMock:
     s.volcengine_access_key_saved = False
     s.voices_cache = []
     s.voices_loading = False
-    s.voice_fetch_error = None
     return s
 
 

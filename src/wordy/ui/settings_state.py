@@ -28,7 +28,6 @@ class SettingsState:
     # 音色缓存（从 TTS API 拉取，非持久化）
     voices_cache: list[VoiceRecord] = field(default_factory=list)
     voices_loading: bool = False
-    voice_fetch_error: Exception | None = None
 
     # 密钥存储状态（从 keyring 探测，非持久化）
     cartesia_api_key_saved: bool = False

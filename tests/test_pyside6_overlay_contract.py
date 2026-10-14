@@ -392,7 +392,6 @@ def test_overlay_apply_persists_audio_output_device_name_and_invokes_callback(
             self.closed = True
 
     fake_window = _FakeSettingsWindow()
-    monkeypatch.setattr("wordy.ui.overlay.QMessageBox", MagicMock())
 
     try:
         overlay._apply_pending_settings(fake_window)
@@ -460,7 +459,6 @@ def test_overlay_apply_clears_audio_output_device_name_to_none(
             self.closed = True
 
     fake_window = _FakeSettingsWindow()
-    monkeypatch.setattr("wordy.ui.overlay.QMessageBox", MagicMock())
 
     try:
         overlay._apply_pending_settings(fake_window)
@@ -500,8 +498,6 @@ def test_overlay_apply_success_uses_inline_status_without_information_popup(
         return Path("/tmp/wavtrans-test-config.json")
 
     monkeypatch.setattr(wordy.config.AppSettings, "update", fake_update)
-    message_box = MagicMock()
-    monkeypatch.setattr("wordy.ui.overlay.QMessageBox", message_box)
 
     class _FakePending:
         hotkey = overlay._cfg.hotkey
@@ -540,7 +536,6 @@ def test_overlay_apply_success_uses_inline_status_without_information_popup(
         overlay._apply_pending_settings(fake_window)
 
         assert saved_updates, "successful apply must still persist changed settings"
-        message_box.information.assert_not_called()
         assert fake_window.status_calls, (
             "successful apply must report completion through SettingsWindow.set_apply_status"
         )
@@ -672,7 +667,6 @@ def test_overlay_apply_persists_structured_audio_output_device_and_invokes_callb
             self.closed = True
 
     fake_window = _FakeSettingsWindow()
-    monkeypatch.setattr("wordy.ui.overlay.QMessageBox", MagicMock())
 
     try:
         overlay._apply_pending_settings(fake_window)
@@ -770,7 +764,6 @@ def test_overlay_apply_clears_structured_audio_output_device_to_none(
             self.closed = True
 
     fake_window = _FakeSettingsWindow()
-    monkeypatch.setattr("wordy.ui.overlay.QMessageBox", MagicMock())
 
     try:
         overlay._apply_pending_settings(fake_window)
@@ -874,7 +867,6 @@ def test_overlay_apply_saves_cartesia_api_key_when_action_set(
             self.closed = True
 
     fake_window = _FakeSettingsWindow()
-    monkeypatch.setattr("wordy.ui.overlay.QMessageBox", MagicMock())
 
     try:
         overlay._apply_pending_settings(fake_window)
@@ -990,7 +982,6 @@ def test_overlay_apply_does_not_touch_secret_store_when_action_unchanged(
             self.closed = True
 
     fake_window = _FakeSettingsWindow()
-    monkeypatch.setattr("wordy.ui.overlay.QMessageBox", MagicMock())
 
     try:
         overlay._apply_pending_settings(fake_window)
@@ -1071,7 +1062,6 @@ def test_overlay_apply_clears_cartesia_api_key_when_action_clear(
             self.closed = True
 
     fake_window = _FakeSettingsWindow()
-    monkeypatch.setattr("wordy.ui.overlay.QMessageBox", MagicMock())
 
     try:
         overlay._apply_pending_settings(fake_window)
@@ -1166,7 +1156,6 @@ def test_overlay_apply_cartesia_plaintext_fallback_shows_warning(
             self.closed = True
 
     fake_window = _FakeSettingsWindow()
-    monkeypatch.setattr("wordy.ui.overlay.QMessageBox", MagicMock())
 
     try:
         overlay._apply_pending_settings(fake_window)
@@ -1269,7 +1258,6 @@ def test_overlay_apply_cartesia_set_reports_rebuild_callback_failure_inline(
             self.closed = True
 
     fake_window = _FakeSettingsWindow()
-    monkeypatch.setattr("wordy.ui.overlay.QMessageBox", MagicMock())
 
     try:
         overlay._apply_pending_settings(fake_window)
@@ -1371,7 +1359,6 @@ def test_overlay_apply_cartesia_clear_reports_rebuild_callback_failure_inline(
             self.closed = True
 
     fake_window = _FakeSettingsWindow()
-    monkeypatch.setattr("wordy.ui.overlay.QMessageBox", MagicMock())
 
     try:
         overlay._apply_pending_settings(fake_window)

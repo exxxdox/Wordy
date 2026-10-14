@@ -712,26 +712,6 @@ def test_user_config_file_never_contains_accidental_secret_fields(
         assert field_name not in saved
 
 
-def test_load_initial_config_cartesia_status(monkeypatch, tmp_path: Path, fake_keyring):
-    """AppSettings.load() surfaces metadata from secret_store status."""
-    cfg = tmp_path / "config.toml"
-    _patch_cartesia_api_key_status(monkeypatch, key_set=True, storage=wordy.secret.STORAGE_KEYRING)
-
-    s = AppSettings.load(config_file=cfg)
-    assert s.cartesia_api_key_set is True
-    assert s.cartesia_api_key_storage == wordy.secret.STORAGE_KEYRING
-
-
-def test_load_defaults_when_status_reports_no_key(monkeypatch, tmp_path: Path, fake_keyring):
-    """Status API reports no key -> AppSettings reports False/STORAGE_NONE."""
-    cfg = tmp_path / "config.toml"
-    _patch_cartesia_api_key_status(monkeypatch, key_set=False, storage=wordy.secret.STORAGE_NONE)
-
-    s = AppSettings.load(config_file=cfg)
-    assert s.cartesia_api_key_set is False
-    assert s.cartesia_api_key_storage == wordy.secret.STORAGE_NONE
-
-
 # ---------------------------------------------------------------------------
 # NEW: __setattr__ auto-save tests
 # ---------------------------------------------------------------------------

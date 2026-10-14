@@ -120,7 +120,6 @@ def _new_settings_window(monkeypatch: pytest.MonkeyPatch):
     state = SettingsState(
         voices_cache=[{"id": "voice-a", "name": "Old Voice"}],
         voices_loading=False,
-        voice_fetch_error=None,
     )
     window: Any | None = None
     try:

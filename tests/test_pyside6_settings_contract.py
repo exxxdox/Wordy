@@ -175,8 +175,9 @@ def test_settings_window_clear_api_key_control_deletes_key_immediately(
     wordy.secret.save_cartesia_api_key(SENTINEL_EXISTING_API_KEY)
     _app, window = _new_settings_window(monkeypatch, cartesia_api_key_saved=True)
     try:
-        clear_control = getattr(window, "clear_api_key_button", None)
-        assert clear_control is not None, "SettingsWindow must expose explicit clear_api_key_button"
+        from wordy.ui.tts_panels import PROVIDER_PANELS
+
+        clear_control = PROVIDER_PANELS[window._settings.active_tts_provider].clear_key_btn
 
         clear_control.click()
         assert wordy.secret.load_cartesia_api_key() is None

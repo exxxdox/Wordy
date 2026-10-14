@@ -111,6 +111,34 @@ class TestRoutingControllerStop:
         last_call_args = mock_player.set_output_device.call_args_list[-1]
         assert last_call_args[0][0] == {"name": "Speakers", "host_api_name": "MME"}
 
+    def test_stop_can_restore_output_without_reopening_tts_stream(self, mock_player, mock_settings):
+        """应用退出时仍恢复本地输出，但不能通知即将关闭的 TTS 引擎重开流。"""
+        mock_settings.audio_routing_enabled = True
+        callback = MagicMock()
+        with (
+            patch("wordy.routing_controller.VBCableDriverManager.is_installed", return_value=True),
+            patch("wordy.routing_controller.AudioRouter") as MockRouter,
+        ):
+            router = MockRouter.return_value
+            router.start.return_value = True
+            router.is_running.return_value = True
+            router.get_output_device.return_value = {
+                "name": "CABLE Input",
+                "host_api_name": "Windows WASAPI",
+            }
+            router.get_stats.return_value.listen_configured = False
+            ctrl = RoutingController(
+                mock_settings,
+                mock_player,
+                on_output_device_changed=callback,
+            )
+            callback.reset_mock()
+
+            ctrl.stop(notify_output_change=False)
+
+        callback.assert_not_called()
+        assert mock_player.set_output_device.call_args_list[-1].args[0] is None
+
     def test_stop_idempotent(self, mock_player, mock_settings):
         """重复 stop 不抛异常。"""
         ctrl = RoutingController(mock_settings, mock_player)

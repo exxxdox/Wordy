@@ -60,9 +60,10 @@ class DummyModule(ModuleType):
 
     @override
     def __getattr__(self, name: str) -> type[object]:
-        # When importing from a dummy module,
-        # give out a dummy class that can be inherited.
-        return DummyClassMeta(name, (object,), {})
+        # 依赖常量会被实现和断言分别读取；缓存可保持同一对象身份。
+        value = DummyClassMeta(name, (object,), {})
+        setattr(self, name, value)
+        return value
 
     def __call__(self, *args: object, **kwargs: object) -> "DummyModule":
         # When called as a function/constructor, return a new dummy instance.

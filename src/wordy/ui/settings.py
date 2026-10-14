@@ -84,12 +84,11 @@ class SettingsWindow:
         self.pending_label: QLabel = QLabel()
         self.record_status_label: QLabel = QLabel()
         self.record_button: QPushButton = QPushButton()
-        # voice_combo / refresh_voices_button / voice_status_label 由 property 委托给 panel
+        # 音色控件由活跃 provider panel 持有。
         self.tts_backend_combo: QComboBox = NoWheelComboBox()
         self.tts_api_combo: QComboBox = NoWheelComboBox()
         self.audio_output_combo: QComboBox = NoWheelComboBox()
         self.audio_output_status_label: QLabel = QLabel()
-        # api_key_input / clear_api_key_button / api_key_status_label 由 property 委托给 panel
         self.log_level_combo: QComboBox = NoWheelComboBox()
         self.status_label: QLabel = QLabel()
         self.volume_value_label: QLabel = QLabel()
@@ -725,16 +724,6 @@ class SettingsWindow:
         return getattr(p, "voice_combo", None) if p is not None else None
 
     @property
-    def refresh_voices_button(self):
-        p = PROVIDER_PANELS.get(self._settings.active_tts_provider)
-        return getattr(p, "refresh_btn", None) if p is not None else None
-
-    @property
-    def voice_status_label(self):
-        p = PROVIDER_PANELS.get(self._settings.active_tts_provider)
-        return getattr(p, "voice_status", None) if p is not None else None
-
-    @property
     def voice_label_to_id(self) -> dict[str, str]:
         p = PROVIDER_PANELS.get(self._settings.active_tts_provider)
         return getattr(p, "voice_label_to_id", {}) if p is not None else {}
@@ -743,16 +732,6 @@ class SettingsWindow:
     def voice_label_to_name(self) -> dict[str, str]:
         p = PROVIDER_PANELS.get(self._settings.active_tts_provider)
         return getattr(p, "voice_label_to_name", {}) if p is not None else {}
-
-    @property
-    def clear_api_key_button(self):
-        p = PROVIDER_PANELS.get(self._settings.active_tts_provider)
-        return getattr(p, "clear_key_btn", None) if p is not None else None
-
-    @property
-    def api_key_status_label(self):
-        p = PROVIDER_PANELS.get(self._settings.active_tts_provider)
-        return getattr(p, "api_status", None) if p is not None else None
 
     def _on_tts_api_selected(self, provider: str) -> None:
         """TTS 服务商切换：切换面板可见性 + 刷新生成模式下拉。"""

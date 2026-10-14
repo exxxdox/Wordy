@@ -295,7 +295,8 @@ class WordyApp:
             background_stopped = True
             if self._chat_wheel_controller is not None:
                 self._chat_wheel_controller.stop()
-            self.routing.stop()
+            # 退出后不会继续播放，避免先重开音频流再由 shutdown 立即关闭。
+            self.routing.stop(notify_output_change=False)
             self.tts_manager.shutdown()
 
         try:

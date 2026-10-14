@@ -92,12 +92,13 @@ class RoutingController:
                 "麦克风侦听未自动生效，请在 Windows 声音设置中手动配置到 CABLE Input"
             )
 
-    def _disable_routing(self) -> None:
+    def _disable_routing(self, *, notify_output_change: bool = True) -> None:
         """停用路由：恢复路由启用前保存的本地输出设备。"""
         saved_device = self._saved_output_device
         self._saved_output_device = None
         self._player.set_output_device(saved_device)
-        self._notify_output_device_changed()
+        if notify_output_change:
+            self._notify_output_device_changed()
 
     def _notify_output_device_changed(self) -> None:
         if callable(self._on_output_device_changed):
@@ -191,7 +192,7 @@ class RoutingController:
 
     # ── 停止 ───────────────────────────────────────────────────────────────
 
-    def stop(self) -> bool:
+    def stop(self, *, notify_output_change: bool = True) -> bool:
         """停用路由并恢复本地输出；侦听恢复失败时保留对象供重试。"""
         if self._router is None:
             return True
@@ -199,7 +200,7 @@ class RoutingController:
         restored = self._router.stop() is not False
         # 本地输出只恢复一次；重试系统侦听时不能用已清空的设备快照覆盖它。
         if was_running:
-            self._disable_routing()
+            self._disable_routing(notify_output_change=notify_output_change)
         if restored:
             self._router = None
             logger.debug("音频侦听已禁用")
