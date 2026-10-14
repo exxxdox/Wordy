@@ -4,6 +4,8 @@ from pathlib import Path
 import threading
 from unittest.mock import Mock
 import pytest
+from PySide6.QtCore import QPoint, Qt
+from PySide6.QtTest import QTest
 
 from wordy.config import AppSettings
 from wordy.ui.chat_wheel_settings import ChatWheelSettings
@@ -36,8 +38,52 @@ def test_import_updates_file_and_label_together(qapp):
     changed.assert_not_called()
     assert settings.chat_wheel_slots[2] == "managed.wav"
     assert settings.chat_wheel_labels[2] == "胜利"
-    assert panel.label_inputs[2].text() == "胜利"
-    assert panel.preview_buttons[2].isEnabled()
+    panel.slot_buttons[2].click()
+    assert panel.label_input.text() == "胜利"
+    assert panel.preview_button.isEnabled()
+
+
+def test_wheel_selects_slot_and_shows_only_its_editor(qapp):
+    settings = AppSettings(chat_wheel_slots=["up.wav", "right-up.wav"] + [""] * 6,
+                           chat_wheel_labels=["上方", "右上方"] + [""] * 6)
+    changed = Mock()
+    panel = ChatWheelSettings(settings, changed)
+
+    assert len(panel.slot_buttons) == 8
+    assert panel.selected_index == 0
+    panel.slot_buttons[1].click()
+
+    assert panel.selected_index == 1
+    assert panel.editor_title.text() == "右上音频"
+    assert panel.label_input.text() == "右上方"
+    assert panel.slot_buttons[1].property("selected") is True
+    assert panel.slot_buttons[1].isChecked()
+    assert panel.slot_buttons[0].property("selected") is False
+    panel.preview_button.click()
+    changed.assert_called_once_with("chat_wheel_preview", 1)
+
+
+def test_wheel_sector_hit_test_matches_runtime_directions(qapp):
+    panel = ChatWheelSettings(AppSettings(), Mock())
+
+    assert panel.wheel_picker._slot_at(QPoint(170, 20)) == 0
+    assert panel.wheel_picker._slot_at(QPoint(270, 120)) == 2
+    assert panel.wheel_picker._slot_at(QPoint(170, 220)) == 4
+    assert panel.wheel_picker._slot_at(QPoint(70, 120)) == 6
+    assert panel.wheel_picker._slot_at(QPoint(170, 120)) is None
+
+
+def test_selected_sector_survives_mouse_leaving(qapp):
+    panel = ChatWheelSettings(AppSettings(), Mock())
+    panel.show()
+    qapp.processEvents()
+
+    QTest.mouseClick(panel.wheel_picker, Qt.MouseButton.LeftButton, pos=QPoint(270, 120))
+    QTest.mouseMove(panel.label_input, QPoint(4, 4))
+    qapp.processEvents()
+
+    assert panel.selected_index == 2
+    assert panel.slot_buttons[2].isChecked()
 
 
 def test_failed_import_preserves_existing_clip(qapp):
@@ -47,8 +93,8 @@ def test_failed_import_preserves_existing_clip(qapp):
     panel = ChatWheelSettings(settings, changed)
     panel._finish_import(0, "", "新音频", "音频无法读取")
     changed.assert_not_called()
-    assert panel.label_inputs[0].text() == "旧音频"
-    assert panel.preview_buttons[0].isEnabled()
+    assert panel.label_input.text() == "旧音频"
+    assert panel.preview_button.isEnabled()
     assert "无法读取" in panel.status_label.text()
 
 
@@ -57,13 +103,13 @@ def test_clear_and_preview_target_only_chosen_slot(qapp):
                            chat_wheel_labels=["旧音频"] + [""] * 7)
     changed = Mock()
     panel = ChatWheelSettings(settings, changed)
-    panel.preview_buttons[0].click()
+    panel.preview_button.click()
     changed.assert_called_with("chat_wheel_preview", 0)
-    panel.clear_buttons[0].click()
+    panel.clear_button.click()
     assert settings.chat_wheel_slots[0] == ""
     assert settings.chat_wheel_labels[0] == ""
-    assert not panel.preview_buttons[0].isEnabled()
-    assert panel.label_inputs[0].text() == ""
+    assert not panel.preview_button.isEnabled()
+    assert panel.label_input.text() == ""
 
 
 def test_label_edit_preserves_other_labels(qapp):
@@ -71,8 +117,8 @@ def test_label_edit_preserves_other_labels(qapp):
                            chat_wheel_labels=["旧音频", "第二项"] + [""] * 6)
     changed = Mock()
     panel = ChatWheelSettings(settings, changed)
-    panel.label_inputs[0].setText("新名称")
-    panel.label_inputs[0].editingFinished.emit()
+    panel.label_input.setText("新名称")
+    panel.label_input.editingFinished.emit()
     changed.assert_not_called()
     assert settings.chat_wheel_labels == ["新名称", "第二项"] + [""] * 6
 
@@ -84,7 +130,7 @@ def test_background_import_keeps_source_stem(qapp, monkeypatch, tmp_path):
     worker = Mock()
     monkeypatch.setattr("wordy.ui.chat_wheel_settings.threading.Thread", worker)
     panel.import_file(4, Path("测试音频.wav"))
-    assert not panel.choose_buttons[4].isEnabled()
+    assert not panel.slot_buttons[4].isEnabled()
     worker.return_value.start.assert_called_once()
 
 
@@ -98,7 +144,7 @@ def test_save_failure_restores_slot_and_discards_new_copy(qapp, monkeypatch):
     panel._finish_import(0, "new.wav", "新音频", "")
     assert settings.chat_wheel_slots[0] == "old.wav"
     assert settings.chat_wheel_labels[0] == "旧音频"
-    assert panel.label_inputs[0].text() == "旧音频"
+    assert panel.label_input.text() == "旧音频"
     cleanup.assert_called_once_with("new.wav", None)
 
 
@@ -107,10 +153,10 @@ def test_label_save_failure_restores_visible_and_stored_label(qapp, monkeypatch)
                            chat_wheel_labels=["旧音频"] + [""] * 7)
     panel = ChatWheelSettings(settings, Mock())
     monkeypatch.setattr(AppSettings, "save", Mock(side_effect=OSError("磁盘已满")))
-    panel.label_inputs[0].setText("新名称")
-    panel.label_inputs[0].editingFinished.emit()
+    panel.label_input.setText("新名称")
+    panel.label_input.editingFinished.emit()
     assert settings.chat_wheel_labels[0] == "旧音频"
-    assert panel.label_inputs[0].text() == "旧音频"
+    assert panel.label_input.text() == "旧音频"
 
 
 def test_qt_page_key_name_is_converted_for_native_listener(qapp):
@@ -138,13 +184,14 @@ def test_real_settings_window_wheel_fits_default_width(qapp, fake_keyring):
         tabs.setCurrentIndex(3)
         qapp.processEvents()
         panel = window.chat_wheel_panel
-        assert len(panel.label_inputs) == 8
+        assert len(panel.slot_buttons) == 8
         assert panel.isVisible()
-        panel.label_inputs[-1].setText("这是一个比较长的音频标题")
+        panel.slot_buttons[-1].click()
+        panel.label_input.setText("这是一个比较长的音频标题")
         scroll = tabs.widget(3)
         assert isinstance(scroll, QScrollArea)
         assert scroll.horizontalScrollBar().maximum() == 0
-        assert panel.clear_buttons[-1].geometry().right() < panel.width()
+        assert panel.clear_button.geometry().right() < panel.width()
         assert scroll.verticalScrollBar().maximum() == 0
     finally:
         window.close()
