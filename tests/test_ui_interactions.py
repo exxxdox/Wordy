@@ -319,6 +319,8 @@ def test_output_scan_only_runs_on_first_audio_tab_visit(qapp, monkeypatch):
         scan.assert_not_called()
         tabs = settings.window.findChild(QTabWidget, "settingsTabs")
         tabs.setCurrentIndex(1)
+        # 设备枚举延后到页签动效后，避免阻塞切换首帧。
+        QTest.qWait(settings.TAB_TRANSITION_MS + 20)
         scan.assert_called_once()
         assert settings.audio_output_combo.findText("测试输出") >= 0
         tabs.setCurrentIndex(0)
@@ -327,6 +329,36 @@ def test_output_scan_only_runs_on_first_audio_tab_visit(qapp, monkeypatch):
         settings.close()
     finally:
         overlay.stop()
+
+
+def test_settings_tab_switch_uses_short_fade_and_defers_audio_scan(qapp, fake_keyring):
+    """页签先完成轻量淡入，再执行可能阻塞 GUI 的设备枚举。"""
+    scan = Mock()
+    settings = SettingsWindow(
+        None,
+        SettingsState(),
+        lambda: None,
+        lambda: None,
+        lambda field, value: None,
+        lambda: None,
+        on_audio_outputs_needed=scan,
+    )
+    try:
+        from PySide6.QtCore import QAbstractAnimation
+        from PySide6.QtWidgets import QTabWidget
+
+        tabs = settings.window.findChild(QTabWidget, "settingsTabs")
+        assert tabs is not None
+        tabs.setCurrentIndex(1)
+
+        assert settings._tab_transition.duration() == settings.TAB_TRANSITION_MS
+        assert settings._tab_transition.state() == QAbstractAnimation.State.Running
+        scan.assert_not_called()
+
+        QTest.qWait(settings.TAB_TRANSITION_MS + 20)
+        scan.assert_called_once()
+    finally:
+        settings.close()
 
 
 @pytest.mark.parametrize("provider", ["Cartesia", "Volcengine"])

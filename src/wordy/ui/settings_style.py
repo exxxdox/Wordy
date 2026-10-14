@@ -10,6 +10,7 @@ from wordy.ui.theme import (
     ACCENT_PRESSED,
     BUTTON_ACTIVE_BG,
     BUTTON_BG,
+    BUTTON_GHOST_BORDER,
     ELEVATED_BG,
     GREEN_ACCENT,
     UI_FONT,
@@ -57,7 +58,6 @@ def build_settings_stylesheet() -> str:
             font-size: 13px;
             font-weight: 600;
             border: none;
-            padding: 0 0 2px 0;
         }}
         QLabel#bodyLabel, QLabel#bodyLabelEmphasis {{
             font-size: 13px;
@@ -83,6 +83,7 @@ def build_settings_stylesheet() -> str:
         QWidget#settingsFooter {{
             background: {WINDOW_BG};
             border: none;
+            border-top: 1px solid {SEPARATOR_COLOR};
         }}
         QLabel#autoSaveLabel {{
             color: {TEXT_MUTED};
@@ -116,8 +117,8 @@ def build_settings_stylesheet() -> str:
             background: transparent;
             color: {TEXT_MUTED};
             border: none;
-            border-radius: 6px;
-            padding: 7px 12px;
+            border-bottom: 2px solid transparent;
+            padding: 6px 12px 7px 12px;
             margin: 0 4px 0 0;
             font-weight: 600;
             font-size: 13px;
@@ -131,8 +132,9 @@ def build_settings_stylesheet() -> str:
             color: {ACCENT_HOVER};
         }}
         QTabWidget#settingsTabs QTabBar::tab:selected {{
-            background: rgba({accent_rgb}, 24);
+            background: transparent;
             color: {GREEN_ACCENT};
+            border-bottom: 2px solid {GREEN_ACCENT};
         }}
         QTabWidget#settingsTabs QTabBar::tab:selected:hover {{
             background: rgba({accent_rgb}, 30);
@@ -179,8 +181,8 @@ def build_settings_stylesheet() -> str:
             min-height: 20px;
             background: {BUTTON_BG};
             color: {TEXT_PRIMARY};
-            border: none;
-            border-radius: 6px;
+            border: 1px solid {BUTTON_GHOST_BORDER};
+            border-radius: 7px;
             padding: 6px 12px;
             font-weight: 600;
         }}
@@ -231,9 +233,9 @@ def build_settings_stylesheet() -> str:
             min-height: 20px;
             background: {ELEVATED_BG};
             color: {TEXT_PRIMARY};
-            border: none;
-            border-bottom: 2px solid transparent;
-            border-radius: 6px;
+            border: 1px solid {BUTTON_GHOST_BORDER};
+            border-bottom: 2px solid {BUTTON_GHOST_BORDER};
+            border-radius: 7px;
             padding: 5px 28px 5px 10px;
             selection-background-color: {BUTTON_ACTIVE_BG};
         }}
@@ -270,9 +272,9 @@ def build_settings_stylesheet() -> str:
             min-height: 20px;
             background: {ELEVATED_BG};
             color: {TEXT_PRIMARY};
-            border: none;
-            border-bottom: 2px solid transparent;
-            border-radius: 6px;
+            border: 1px solid {BUTTON_GHOST_BORDER};
+            border-bottom: 2px solid {BUTTON_GHOST_BORDER};
+            border-radius: 7px;
             padding: 5px 10px;
             selection-background-color: {BUTTON_ACTIVE_BG};
             selection-color: {TEXT_PRIMARY};

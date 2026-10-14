@@ -5,13 +5,14 @@
 
 from __future__ import annotations
 
-from typing import Callable
+from typing import Any, Callable
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QEasingCurve, Qt, QTimer, QVariantAnimation
 from PySide6.QtGui import QColor, QIcon, QPalette
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit,
-    QPushButton, QScrollArea, QSlider, QStyle, QTabWidget, QVBoxLayout, QWidget,
+    QGraphicsOpacityEffect, QPushButton, QScrollArea, QSlider, QStyle,
+    QTabWidget, QVBoxLayout, QWidget,
 )
 
 from wordy.config import AppSettings
@@ -56,6 +57,8 @@ BUTTON_MIN_WIDTH = 88
 class SettingsWindow:
     """应用设置窗口。控件变更直接写入 AppSettings 并即时持久化。"""
 
+    TAB_TRANSITION_MS = 150
+
     def __init__(self, root, state: SettingsState, on_record_hotkey: Callable[[], None],
                  on_refresh_voices: Callable[[], None],
                  on_field_changed: Callable[[str, object], None],
@@ -64,6 +67,8 @@ class SettingsWindow:
         self.root = root
         self._on_audio_outputs_needed = on_audio_outputs_needed
         self._audio_outputs_requested = False
+        self._tab_transition_page: QWidget | None = None
+        self._tab_opacity_effect: QGraphicsOpacityEffect | None = None
         self.on_record_hotkey = on_record_hotkey
         self.on_refresh_voices = on_refresh_voices
         self.on_field_changed = on_field_changed
@@ -126,6 +131,11 @@ class SettingsWindow:
         self.window.setPalette(palette)
         self.window.setAutoFillBackground(True)
         self.window.setStyleSheet(build_settings_stylesheet())
+        self._tab_transition = QVariantAnimation(self.window)
+        self._tab_transition.setDuration(self.TAB_TRANSITION_MS)
+        self._tab_transition.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._tab_transition.valueChanged.connect(self._set_tab_opacity)
+        self._tab_transition.finished.connect(self._finish_tab_transition)
         window = self.window
         self._build(state)
         # 深色样式和布局在隐藏时完成，按最终尺寸居中，避免首帧白底或显示后跳位。
@@ -343,8 +353,45 @@ class SettingsWindow:
         tab_widget.currentChanged.connect(self._on_settings_tab_changed)
 
     def _on_settings_tab_changed(self, index: int) -> None:
+        self._start_tab_transition(index)
         if index == 1 and not self._audio_outputs_requested and self._on_audio_outputs_needed is not None:
             self._audio_outputs_requested = True
+            # 先让新页面完成首帧，再执行可能阻塞 GUI 的 PortAudio 枚举。
+            QTimer.singleShot(self.TAB_TRANSITION_MS, self._load_audio_outputs)
+
+    def _start_tab_transition(self, index: int) -> None:
+        window = self.window
+        if window is None:
+            return
+        tabs = window.findChild(QTabWidget, "settingsTabs")
+        page = tabs.widget(index) if tabs is not None else None
+        if page is None or not window.style().styleHint(QStyle.StyleHint.SH_Widget_Animate):
+            return
+        self._tab_transition.stop()
+        self._finish_tab_transition()
+        effect = QGraphicsOpacityEffect(page)
+        effect.setOpacity(0.72)
+        page.setGraphicsEffect(effect)
+        self._tab_transition_page = page
+        self._tab_opacity_effect = effect
+        self._tab_transition.setStartValue(0.72)
+        self._tab_transition.setEndValue(1.0)
+        self._tab_transition.start()
+
+    def _set_tab_opacity(self, value: Any) -> None:
+        if self._tab_opacity_effect is not None:
+            self._tab_opacity_effect.setOpacity(float(value))
+
+    def _finish_tab_transition(self) -> None:
+        page = self._tab_transition_page
+        if page is not None and self._tab_opacity_effect is not None:
+            self._tab_opacity_effect.setOpacity(1.0)
+            self._tab_opacity_effect.setEnabled(False)
+        self._tab_transition_page = None
+        self._tab_opacity_effect = None
+
+    def _load_audio_outputs(self) -> None:
+        if self.exists() and self._on_audio_outputs_needed is not None:
             self._on_audio_outputs_needed()
 
     def _build_placeholder_section(self, parent_layout: QVBoxLayout, s: AppSettings) -> None:

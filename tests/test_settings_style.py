@@ -1,6 +1,7 @@
 """设置窗口 QSS 样式表测试。"""
 
 from wordy.ui.settings_style import build_settings_stylesheet
+from wordy.ui.theme import BUTTON_GHOST_BORDER
 
 
 class TestBuildSettingsStylesheet:
@@ -18,6 +19,16 @@ class TestBuildSettingsStylesheet:
     def test_contains_tab_widget_selector(self):
         css = build_settings_stylesheet()
         assert "QTabWidget#settingsTabs" in css
+        assert "border-bottom: 2px solid" in css
+
+    def test_modern_controls_keep_visible_boundaries(self):
+        css = build_settings_stylesheet()
+        assert "border: 1px solid" in css
+        assert "border-radius: 7px" in css
+        combo_css = css.split("QComboBox {", 1)[1].split("}", 1)[0]
+        line_edit_css = css.split("QLineEdit {", 1)[1].split("}", 1)[0]
+        assert f"border-bottom: 2px solid {BUTTON_GHOST_BORDER}" in combo_css
+        assert f"border-bottom: 2px solid {BUTTON_GHOST_BORDER}" in line_edit_css
 
     def test_contains_scrollbar_selectors(self):
         css = build_settings_stylesheet()
@@ -60,6 +71,8 @@ class TestBuildSettingsStylesheet:
     def test_contains_section_title_selector(self):
         css = build_settings_stylesheet()
         assert "QLabel#sectionTitle" in css
+        section_title_css = css.split("QLabel#sectionTitle", 1)[1].split("}", 1)[0]
+        assert "padding:" not in section_title_css
 
     def test_contains_separator_selector(self):
         css = build_settings_stylesheet()

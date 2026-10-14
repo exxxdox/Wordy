@@ -577,6 +577,22 @@ def test_settings_window_default_height_fits_all_sections_without_initial_scroll
         window.close()
 
 
+def test_local_setting_headers_share_the_same_right_edge(monkeypatch: pytest.MonkeyPatch) -> None:
+    """标题行操作和值统一右对齐，避免相邻设置行视觉参差。"""
+    app, window = _new_settings_window(monkeypatch)
+    try:
+        window.window.show()
+        app.processEvents()
+        right_edges = {
+            window.record_button.geometry().right(),
+            window.volume_value_label.geometry().right(),
+            window.opacity_value_label.geometry().right(),
+        }
+        assert len(right_edges) == 1
+    finally:
+        window.close()
+
+
 @pytest.mark.parametrize("close_path", ["owner", "native"])
 def test_settings_window_close_path_invokes_on_close_once(monkeypatch: pytest.MonkeyPatch, close_path: str) -> None:
     """系统关闭事件和应用关闭入口均只 flush、通知一次。"""
