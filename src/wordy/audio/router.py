@@ -66,8 +66,12 @@ class AudioRouter:
         # 恢复失败后的快照必须先还原，不能被重新启动的设备状态覆盖。
         if self._listen_configured and not self.stop():
             return False
+        # Windows 侦听策略与播放器都依赖 WASAPI 端点，不能用其他 Host API 假启动。
+        if self.get_output_device() is None:
+            logger.error("无法找到 Windows WASAPI 的 VB-CABLE 输出设备")
+            return False
         if self._resolve_output_device() is None:
-            logger.error("无法找到 VB-CABLE 输出设备")
+            logger.error("无法解析 VB-CABLE 输出设备")
             return False
 
         self._active = True

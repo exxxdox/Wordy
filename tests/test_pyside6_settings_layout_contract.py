@@ -365,22 +365,16 @@ def test_settings_buttons_row_is_right_aligned() -> None:
         _fail("_build_buttons 不应包含取消按钮（已改为退出按钮）")
 
 
-def test_settings_dialog_static_window_flags_include_native_controls_and_topmost() -> None:
-    """系统标题栏提供原生窗口控制，同时保留置顶窗口标志。"""
+def test_settings_dialog_static_uses_frameless_glass_window() -> None:
+    """自绘玻璃窗口去掉原生边框，同时保留置顶标志。"""
     source = _load_source()
-    required = (
-        "Qt.WindowType.Window", "Qt.WindowType.WindowMinMaxButtonsHint",
-        "Qt.WindowType.WindowCloseButtonHint", "Qt.WindowType.WindowStaysOnTopHint",
-    )
-    for flag in required:
+    for flag in ("Qt.WindowType.FramelessWindowHint", "Qt.WindowType.WindowStaysOnTopHint"):
         if flag not in source:
             _fail(f"SettingsWindow 必须使用 {flag}")
-    if "Qt.WindowType.FramelessWindowHint" in source:
-        _fail("原生标题栏不能使用 FramelessWindowHint")
 
 
-def test_settings_dialog_static_does_not_enable_translucent_background() -> None:
-    """设置窗口不使用透明合成，避免首帧无底色。"""
+def test_settings_dialog_static_enables_translucent_background() -> None:
+    """玻璃底由窗口自绘，必须启用透明合成才透得出背后。"""
     tree = _load_tree()
     matching_calls = 0
     for call in _iter_calls(tree):
@@ -397,19 +391,19 @@ def test_settings_dialog_static_does_not_enable_translucent_background() -> None
             and call.args[1].value is True
         ):
             matching_calls += 1
-    if matching_calls != 0:
-        _fail("设置窗口不能启用 WA_TranslucentBackground")
+    if matching_calls == 0:
+        _fail("设置窗口必须启用 WA_TranslucentBackground")
 
 
-def test_settings_dialog_qss_background_is_opaque() -> None:
-    """QDialog 自身使用深色底，不等待子面板首次绘制才填充。"""
+def test_settings_dialog_qss_background_is_transparent() -> None:
+    """QDialog 不画底色：玻璃底由 paintEvent 负责，不透明块会盖住玻璃。"""
     stylesheet = _find_stylesheet_string(_load_tree())
     match = re.search(r"QDialog\s*\{(?P<body>.*?)\}", stylesheet, flags=re.DOTALL)
     if not match:
         _fail("样式表必须包含 QDialog 规则")
     body = match.group("body")
-    if "transparent" in body or not re.search(r"background(?:-color)?\s*:", body):
-        _fail("QDialog QSS 必须设置不透明背景")
+    if "transparent" not in body:
+        _fail("QDialog QSS 必须设为 transparent，颜色交给自绘玻璃底")
 
 
 def test_settings_hint_label_stylesheet_uses_12px_font_size() -> None:
@@ -434,14 +428,23 @@ def test_settings_audio_output_status_label_uses_hint_label_object_name() -> Non
         _fail('audio_output_status_label 必须调用 setObjectName("hintLabel")')
 
 
-def test_settings_dialog_static_native_title_replaces_custom_chrome() -> None:
-    """系统标题栏负责标题、关闭和拖动，内容区不再构建重复入口。"""
+def test_settings_dialog_static_draws_custom_title_bar() -> None:
+    """无边框窗口自带标题与三个窗口控制按钮，拖动手势也由它承担。"""
     source = _load_source()
     if 'setWindowTitle("设置")' not in source:
-        _fail("SettingsWindow 必须保留原生窗口标题")
-    for token in ('setObjectName("dialogTitle")', 'setObjectName("dialogCloseButton")', "installEventFilter(self.window)"):
-        if token in source:
-            _fail(f"原生窗口不应保留自绘标题栏实现: {token}")
+        _fail("SettingsWindow 必须保留窗口标题")
+    # 按钮的 objectName 由 _add_button 的参数传入，这里只守住四个名字仍在使用；
+    # 控件是否真的装上了由 test_pyside6_settings_contract 的运行时用例验证。
+    for token in (
+        '"dialogTitle"',
+        '"dialogMinimizeButton"',
+        '"dialogMaximizeButton"',
+        '"dialogCloseButton"',
+    ):
+        if token not in source:
+            _fail(f"自绘标题栏缺少: {token}")
+    if "startSystemMove" not in source:
+        _fail("自绘标题栏必须用 startSystemMove 拖动窗口")
 
 
 def test_settings_dialog_static_custom_drag_state_is_removed() -> None:
@@ -503,23 +506,17 @@ def main() -> int:
         ("test_settings_combos_use_no_wheel_subclass", test_settings_combos_use_no_wheel_subclass),
         ("test_settings_sliders_use_no_wheel_subclass", test_settings_sliders_use_no_wheel_subclass),
         ("test_settings_buttons_row_is_right_aligned", test_settings_buttons_row_is_right_aligned),
-        (
-            "test_settings_dialog_static_window_flags_include_native_controls_and_topmost",
-            test_settings_dialog_static_window_flags_include_native_controls_and_topmost,
-        ),
-        (
-            "test_settings_dialog_static_does_not_enable_translucent_background",
-            test_settings_dialog_static_does_not_enable_translucent_background,
-        ),
-        ("test_settings_dialog_qss_background_is_opaque", test_settings_dialog_qss_background_is_opaque),
+        ("test_settings_dialog_static_uses_frameless_glass_window", test_settings_dialog_static_uses_frameless_glass_window),
+        ("test_settings_dialog_static_enables_translucent_background", test_settings_dialog_static_enables_translucent_background),
+        ("test_settings_dialog_qss_background_is_transparent", test_settings_dialog_qss_background_is_transparent),
         ("test_settings_hint_label_stylesheet_uses_12px_font_size", test_settings_hint_label_stylesheet_uses_12px_font_size),
         (
             "test_settings_audio_output_status_label_uses_hint_label_object_name",
             test_settings_audio_output_status_label_uses_hint_label_object_name,
         ),
         (
-            "test_settings_dialog_static_native_title_replaces_custom_chrome",
-            test_settings_dialog_static_native_title_replaces_custom_chrome,
+            "test_settings_dialog_static_draws_custom_title_bar",
+            test_settings_dialog_static_draws_custom_title_bar,
         ),
         (
             "test_settings_dialog_static_custom_drag_state_is_removed",

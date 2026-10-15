@@ -1,6 +1,7 @@
 """设置窗口 QSS 样式表测试。"""
 
 from wordy.ui.settings_style import build_settings_stylesheet
+from wordy.ui.theme import GLASS_FILL, GLASS_HAIRLINE, RADIUS_CONTROL
 
 
 class TestBuildSettingsStylesheet:
@@ -18,6 +19,19 @@ class TestBuildSettingsStylesheet:
     def test_contains_tab_widget_selector(self):
         css = build_settings_stylesheet()
         assert "QTabWidget#settingsTabs" in css
+        # 玻璃主题用分段控件（圆角胶囊 + 选中底色）代替底边加粗指示器。
+        assert "QTabWidget#settingsTabs QTabBar::tab:selected" in css
+        assert GLASS_FILL in css
+
+    def test_modern_controls_keep_visible_boundaries(self):
+        css = build_settings_stylesheet()
+        assert "border: 1px solid" in css
+        assert f"border-radius: {RADIUS_CONTROL}px" in css
+        combo_css = css.split("QComboBox {", 1)[1].split("}", 1)[0]
+        line_edit_css = css.split("QLineEdit {", 1)[1].split("}", 1)[0]
+        # 输入控件靠 1px 细高光描边分层，不再用底边加粗模拟焦点。
+        assert f"border: 1px solid {GLASS_HAIRLINE}" in combo_css
+        assert f"border: 1px solid {GLASS_HAIRLINE}" in line_edit_css
 
     def test_contains_scrollbar_selectors(self):
         css = build_settings_stylesheet()
@@ -27,9 +41,10 @@ class TestBuildSettingsStylesheet:
         css = build_settings_stylesheet()
         assert "QPushButton" in css
 
-    def test_contains_apply_button_selector(self):
+    def test_apply_button_style_is_removed(self):
+        """底部只有退出按钮，样式表不应保留无人使用的应用按钮规则。"""
         css = build_settings_stylesheet()
-        assert "QPushButton#applyButton" in css
+        assert "QPushButton#applyButton" not in css
 
     def test_contains_cancel_button_selector(self):
         css = build_settings_stylesheet()
@@ -52,14 +67,18 @@ class TestBuildSettingsStylesheet:
         css = build_settings_stylesheet()
         assert "QCheckBox" in css
 
-    def test_native_title_does_not_keep_custom_chrome_selectors(self):
+    def test_frameless_window_keeps_custom_chrome_selectors(self):
+        """无边框窗口的标题与关闭按钮由自绘标题栏提供，样式必须存在。"""
         css = build_settings_stylesheet()
-        assert "QLabel#dialogTitle" not in css
-        assert "QPushButton#dialogCloseButton" not in css
+        assert "QWidget#settingsTitleBar" in css
+        assert "QLabel#dialogTitle" in css
+        assert "QPushButton#dialogCloseButton" in css
 
     def test_contains_section_title_selector(self):
         css = build_settings_stylesheet()
         assert "QLabel#sectionTitle" in css
+        section_title_css = css.split("QLabel#sectionTitle", 1)[1].split("}", 1)[0]
+        assert "padding:" not in section_title_css
 
     def test_contains_separator_selector(self):
         css = build_settings_stylesheet()

@@ -13,19 +13,15 @@ from typing import TYPE_CHECKING, Any, TypeAlias, cast
 
 from PySide6.QtCore import QEvent, QObject, QTimer, Qt
 from PySide6.QtGui import QMouseEvent
-from PySide6.QtWidgets import QApplication, QLabel, QLineEdit, QMessageBox
+from PySide6.QtWidgets import QApplication, QLabel, QLineEdit
 
 import wordy.secret
-from wordy.config import AppSettings, get_active_config_file
+from wordy.config import AppSettings
 from wordy.hotkey import display_hotkey
 from wordy.tts.constants import (
-    TTS_API_PROVIDER_CARTESIA,
     TTS_API_PROVIDER_VOLCENGINE,
-    TTS_BACKEND_VOLCENGINE_STREAMING,
-    TTS_BACKENDS_BY_PROVIDER,
 )
 from wordy.audio.capture import list_input_devices
-from wordy.identity import normalize_identity
 from wordy.audio.driver import VBCableDriverManager
 from wordy.ui.settings_state import SettingsState
 from wordy.ui.settings import SettingsWindow
@@ -75,12 +71,14 @@ class InputOverlay:
         width: int = 540,
         height: int = 58,
         poll_interval_ms: int = 30,
+        on_chat_wheel_change: Callable[[str, object], None] | None = None,
     ):
         if sys.platform != "win32":
             raise RuntimeError("InputOverlay 仅支持 Windows")
 
         self._cfg = AppSettings.load()  # 单例——唯一数据源，不镜像副本
         self.on_submit = on_submit
+        self.on_chat_wheel_change = on_chat_wheel_change
         self.on_voice_change = on_voice_change
         self.on_volume_change = on_volume_change
         self.on_tts_backend_change = on_tts_backend_change
@@ -115,7 +113,6 @@ class InputOverlay:
         self._drag_start_window_x = 0
         self._drag_start_window_y = 0
         self._is_dragging_window = False
-        self._last_saved_config_file = get_active_config_file()
         self._app: QApplication | None = None
         self._owns_app = False
         self._signals: _OverlaySignals | None = None
@@ -270,6 +267,8 @@ class InputOverlay:
         """隐藏输入框。"""
         self._stop_outside_click_watcher()
         if self.root is not None:
+            # 隐藏期间不会再有 Leave，留着高亮下次显示还是亮的。
+            self.root.set_settings_hover(False)
             self.root.hide()
 
     def toggle(self) -> None:
@@ -387,7 +386,11 @@ class InputOverlay:
                 self._on_settings_button_release()
                 return True
             if event_type == QEvent.Type.Enter:
-                self.root.set_settings_hover(True)
+                # 设置窗口开着时输入框不再是交互面：层叠顺序变化会让 Qt 补发
+                # 没有配对的 Enter，照单全收会把图标一直点亮。设置窗口没开时
+                # Enter/Leave 就是悬停的真实来源，不要再去猜光标位置。
+                if not self._settings_window_exists():
+                    self.root.set_settings_hover(True)
                 return False
             if event_type == QEvent.Type.Leave:
                 self.root.set_settings_hover(False)
@@ -503,11 +506,14 @@ class InputOverlay:
         self._is_dragging_window = False
         x, y = self._clamp_window_position(self.root.x(), self.root.y())
         self._cfg.window_position = {"x": x, "y": y}
-        config_file = AppSettings.load().update(window_position=self._cfg.window_position)
-        self._last_saved_config_file = config_file
+        AppSettings.load().update(window_position=self._cfg.window_position)
         QTimer.singleShot(100, self._clear_ignore_focus_out)
 
     def _open_settings(self) -> None:
+        # 进入设置后输入框不再是交互面，主动收掉设置入口的高亮：
+        # 鼠标若仍停在齿轮上，Leave 不会来，高亮会一直留着。
+        if self.root is not None:
+            self.root.set_settings_hover(False)
         self._ignore_focus_out = True
         settings = self._active_settings_window()
         if settings is not None:
@@ -540,7 +546,6 @@ class InputOverlay:
         state = SettingsState(
             voices_cache=self._get_active_voices_cache(),
             voices_loading=self._voices_loading,
-            voice_fetch_error=self._voice_fetch_error,
             # 先显示保存的选择；硬件扫描延后到用户进入音频页，不阻塞设置打开。
             audio_output_devices=[dict(self._cfg.audio_output_device)] if self._cfg.audio_output_device else [],
             input_devices=self._enumerate_input_devices(),
@@ -706,6 +711,9 @@ class InputOverlay:
                 raise RuntimeError("当前 TTS 后端未提供音色列表获取方法")
             voices = fetch_voices()
         except Exception as error:
+            # error 只在 except 块内绑定，出块即被 Python 隐式删除；下面把它关进 lambda 安全，
+            # 只因 safe_qt_call 是同步执行。若改成延迟调用，闭包求值时 error 已不存在，会变成
+            # NameError —— 届时需先把 error 存成独立局部变量。（ruff 的 F841 在此是误报，勿删 as error）
             signals = self._signals
             if not self._closed and signals is not None:
                 # Qt 对象可能在检查后被 GUI 线程释放，复用既有安全调用兜底。
@@ -741,7 +749,10 @@ class InputOverlay:
 
     def _on_settings_field_changed(self, field_name: str, value: object) -> None:
         """设置变更副作用——持久化已由 AppSettings.__setattr__ 完成，self._cfg 即该单例。"""
-        if field_name == "hotkey":
+        if field_name.startswith("chat_wheel_"):
+            if self.on_chat_wheel_change is not None:
+                self.on_chat_wheel_change(field_name, value)
+        elif field_name == "hotkey":
             settings = self._active_settings_window()
             if settings is not None and settings._recorded_hotkey and settings._recorded_hotkey_name:
                 hotkey = settings._recorded_hotkey

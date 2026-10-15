@@ -48,11 +48,6 @@ _cached_config_file: Path | None = None
 # 工具函数
 # ---------------------------------------------------------------------------
 
-def get_active_config_file() -> Path:
-    """返回用户级配置文件路径。"""
-    return _USER_CONFIG_FILE
-
-
 def _clamp(value: float, lo: float, hi: float) -> float:
     return min(max(float(value), lo), hi)
 
@@ -72,6 +67,10 @@ class AppSettings:
     # ---- 快捷键与界面 ----
     hotkey: str = "f6"
     name: str = "F6"  # TOML 持久化 key 为 "name"（非 hotkey_name）
+    # 固定八槽与显示名称分开，托管文件改名不影响用户轮盘标签。
+    chat_wheel_hotkey: str = "f8"
+    chat_wheel_slots: list[str] = field(default_factory=lambda: [""] * 8)
+    chat_wheel_labels: list[str] = field(default_factory=lambda: [""] * 8)
     volume: float = 1.0
     overlay_opacity: float = 1.0
     overlay_placeholder: str = "Hello World~"
@@ -246,6 +245,22 @@ class AppSettings:
         # 空字符串表示不显示提示；旧配置缺少字段时保留默认文字。
         _apply_if_present(raw, "overlay_placeholder", settings, lambda v: v if isinstance(v, str) else None)
         _apply_if_present(raw, "fixed_center", settings, lambda v: v if isinstance(v, bool) else None)
+        from wordy.hotkey.native import parse_hotkey
+        wheel_hotkey = raw.get("chat_wheel_hotkey")
+        if isinstance(wheel_hotkey, str):
+            try:
+                parse_hotkey(wheel_hotkey)
+                settings.chat_wheel_hotkey = wheel_hotkey
+            except ValueError:
+                pass
+        for key in ("chat_wheel_slots", "chat_wheel_labels"):
+            values = raw.get(key)
+            if isinstance(values, list):
+                # 文件名只允许目录内单个文件，拒绝配置中的绝对路径和目录穿越。
+                clean = [v if isinstance(v, str) and (key != "chat_wheel_slots" or
+                         ("/" not in v and "\\" not in v and ":" not in v and v not in (".", "..")))
+                         else "" for v in values[:8]]
+                setattr(settings, key, clean + [""] * (8 - len(clean)))
 
         # 结构化 tts_providers
         raw_providers = raw.get("tts_providers")

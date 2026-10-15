@@ -6,7 +6,7 @@ from __future__ import annotations
 import importlib
 from typing import Protocol
 
-from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
+from PySide6.QtCore import QRectF, Qt, QTimer
 from PySide6.QtGui import (
     QAction,
     QBrush,
@@ -29,6 +29,15 @@ from PySide6.QtWidgets import (
 )
 
 from wordy.qt_lifecycle import safe_qt_call
+from wordy.ui.theme import (
+    GLASS_FILL, GLASS_FILL_STRONG, GLASS_HAIRLINE, SCROLLBAR_HANDLE,
+    SCROLLBAR_HANDLE_HOVER, SEPARATOR_COLOR, TEXT_MUTED, TEXT_PRIMARY, UI_FONT, WINDOW_BG,
+)
+
+# 应用图标是品牌标识，配色与打包用的 wavtrans.ico 保持一致，
+# 不参与界面主题换色——否则托盘里的标识会和 exe 图标对不上。
+ICON_BACKGROUND = "#0b1220"
+ICON_ACCENT = "#22d3a0"
 
 
 
@@ -51,11 +60,11 @@ def _create_tts_tray_icon() -> QIcon:
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
-    # 深色圆角方形背景
+    # 应用标识：配色与打包用的 wavtrans.ico 一致，故意不跟随界面主题换色。
     bg = QPainterPath()
     bg.addRoundedRect(QRectF(4, 4, 56, 56), 12, 12)
-    painter.fillPath(bg, QBrush(QColor("#0b1220")))
-    painter.setPen(QPen(QColor("#22d3a0"), 1.5))
+    painter.fillPath(bg, QBrush(QColor(ICON_BACKGROUND)))
+    painter.setPen(QPen(QColor(ICON_ACCENT), 1.5))
     painter.drawPath(bg)
 
     # 几何波形：五条等宽竖线，对称高度
@@ -66,7 +75,7 @@ def _create_tts_tray_icon() -> QIcon:
     x_start = 16.0
 
     painter.setPen(Qt.PenStyle.NoPen)
-    painter.setBrush(QBrush(QColor("#22d3a0")))
+    painter.setBrush(QBrush(QColor(ICON_ACCENT)))
     for i, h in enumerate(heights):
         rx = x_start + i * (bar_w + bar_gap)
         ry = base_y - h
@@ -74,6 +83,24 @@ def _create_tts_tray_icon() -> QIcon:
 
     painter.end()
     return QIcon(pixmap)
+
+
+def _menu_stylesheet() -> str:
+    """托盘菜单的玻璃样式。
+
+    Windows 上部分原生菜单会忽略 QSS；忽略时退回系统外观，不会报错。
+    """
+    return (
+        f"QMenu {{"
+        f" background: {GLASS_FILL}; color: {TEXT_PRIMARY};"
+        f" border: 1px solid {GLASS_HAIRLINE}; border-radius: 10px; padding: 6px;"
+        f" font-family: {UI_FONT}; font-size: 13px;"
+        f"}}"
+        f"QMenu::item {{ padding: 7px 22px 7px 14px; border-radius: 6px; }}"
+        f"QMenu::item:selected {{ background: {GLASS_FILL_STRONG}; color: {TEXT_PRIMARY}; }}"
+        f"QMenu::item:disabled {{ color: {TEXT_MUTED}; }}"
+        f"QMenu::separator {{ height: 1px; background: {SEPARATOR_COLOR}; margin: 6px 8px; }}"
+    )
 
 
 class _LogWindow(QWidget):
@@ -87,16 +114,25 @@ class _LogWindow(QWidget):
         self._text_edit.setMaximumBlockCount(5000)
 
         palette = self._text_edit.palette()
-        palette.setColor(QPalette.ColorRole.Base, QColor(Qt.GlobalColor.black))
-        palette.setColor(QPalette.ColorRole.Text, QColor(Qt.GlobalColor.white))
+        palette.setColor(QPalette.ColorRole.Base, QColor(WINDOW_BG))
+        palette.setColor(QPalette.ColorRole.Text, QColor(TEXT_PRIMARY))
         self._text_edit.setPalette(palette)
         self._text_edit.setStyleSheet(
-            "QPlainTextEdit { background-color: #000000; color: #ffffff; }"
+            f"QPlainTextEdit {{ background-color: {WINDOW_BG}; color: {TEXT_PRIMARY};"
+            f" border: none; padding: 8px;"
+            f" selection-background-color: {GLASS_FILL_STRONG}; }}"
+            f"QScrollBar:vertical {{ background: transparent; width: 10px; margin: 0; border: none; }}"
+            f"QScrollBar::handle:vertical {{ background: {SCROLLBAR_HANDLE}; border-radius: 5px; }}"
+            f"QScrollBar::handle:vertical:hover {{ background: {SCROLLBAR_HANDLE_HOVER}; }}"
+            f"QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; border: none; }}"
+            f"QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: transparent; border: none; }}"
         )
 
+        # 日志是数据不是界面文字，保留等宽字体，只把字号对齐主题。
         mono = QFont("Consolas")
         mono.setStyleHint(QFont.StyleHint.Monospace)
         mono.setFixedPitch(True)
+        mono.setPointSize(10)
         self._text_edit.setFont(mono)
 
         layout = QVBoxLayout(self)
@@ -155,6 +191,7 @@ class TrayApp:
             return
 
         menu = QMenu()
+        menu.setStyleSheet(_menu_stylesheet())
         self.menu = menu
 
         settings_action = QAction("打开设置", menu)

@@ -235,14 +235,10 @@ class TestRaiseForStatus:
 
 
 class TestLoggingTextRedactionExposure:
-    """
-    Test cases that currently FAIL to demonstrate that full user text
-    is exposed in debug logs and needs redaction. This tests document the
-    expected behavior that after redaction should NOT contain raw text.
-    """
+    """Debug 日志行只带长度元信息与 context_id，绝不带用户原文。"""
 
     def test_bytes_tts_debug_log_redacts_raw_text(self, caplog, monkeypatch):
-        """Test that debug logs do NOT contain full user text, only length metadata."""
+        """驱动真实 generate()：原文必须进请求体，但绝不能进日志。"""
         from wordy.tts.cartesia import CartesiaBytesTTS
         from wordy.tts.engine import TTSAudioPlayer
 
@@ -254,59 +250,74 @@ class TestLoggingTextRedactionExposure:
         )
 
         secret_text = "This is a private user message that should not be in logs"
-        
-        # Capture debug logs
         caplog.set_level(logging.DEBUG, logger=cartesia_logger.name)
-        
-        # Monkey patch requests.post to avoid network call
-        with monkeypatch.context() as m:
-            mock_resp = Mock()
-            mock_resp.content = b""
-            mock_resp.raise_for_status = lambda: None
-            m.setattr("requests.post", lambda *args, **kwargs: mock_resp)
-            
-            try:
-                tts.generate(secret_text)
-            except Exception:
-                pass  # We don't care about actual generation, just logs
-        
-        # Check that raw text is NOT in logs after redaction
-        assert not any(secret_text in record.message for record in caplog.records), \
-            "FAIL: Full user text should NOT be exposed in debug logs after redaction fix"
-        
-        # Check that length metadata is present in logs
-        assert any(str(len(secret_text)) in record.message for record in caplog.records), \
-            "FAIL: Text length metadata should be present in debug logs"
 
-    def test_realtime_tts_debug_log_redacts_raw_text(self, caplog):
-        """Test that debug logs do NOT contain full user text, only length and context_id metadata."""
-        from wordy.tts.cartesia import CartesiaRealtimeTTS
-        from wordy.tts.engine import TTSAudioPlayer
-
-        mock_player = Mock(spec=TTSAudioPlayer)
-        tts = CartesiaRealtimeTTS(
-            audio_player=mock_player,
-            api_key="fake-key",
-            voice_id="fake-id",
+        mock_resp = Mock()
+        mock_resp.content = b""
+        mock_resp.raise_for_status = lambda: None
+        sent: list[dict] = []
+        monkeypatch.setattr(
+            "requests.post",
+            lambda *args, **kwargs: (sent.append(kwargs["json"]) or mock_resp),
         )
 
+        tts.generate(secret_text)
+
+        # 前提断言：生产路径确实跑过（原文进了请求体）。少掉它，「日志里没有原文」
+        # 会因为压根没跑到而假绿 —— 原来的 try/except: pass 正是这么吞掉的。
+        assert sent and sent[0]["transcript"] == secret_text, "生产路径未被驱动，日志断言会假绿"
+
+        messages = [record.message for record in caplog.records]
+        assert not any(secret_text in message for message in messages), (
+            f"bytes 日志泄露了用户原文: {messages!r}"
+        )
+        assert any(str(len(secret_text)) in message for message in messages), (
+            f"bytes 日志缺少长度元信息: {messages!r}"
+        )
+
+    def test_realtime_tts_debug_log_redacts_raw_text(self, caplog):
+        """驱动真实 _send_and_play_once：原文必须送达 context，但绝不能进日志。"""
+        tts, _ = _make_realtime_tts()
+
+        pushed: list[str] = []
+        captured_kwargs: dict = {}
+
+        class _RecordingCtx:
+            def push(self, text):
+                pushed.append(text)
+
+            def no_more_inputs(self):
+                pass
+
+            def receive(self):
+                class _Done:
+                    type = "done"
+
+                yield _Done()
+
+        fake_conn = _FakeConnection()
+        fake_conn.context = lambda **kwargs: (captured_kwargs.update(kwargs) or _RecordingCtx())
+        tts._connection = fake_conn
+
         secret_text = "Another secret text that should be redacted from debug logs"
-        test_context_id = "test-id"
-        
         caplog.set_level(logging.DEBUG, logger=cartesia_logger.name)
-        
-        # We just test the debug logging format matches the updated redaction pattern
-        # Directly trigger the same logger line format that exists in _send_and_play_once
-        cartesia_logger.debug("发送 Cartesia realtime 文本，长度: %d 字符 (context_id=%s)", len(secret_text), test_context_id)
-        
-        assert not any(secret_text in record.message for record in caplog.records), \
-            "FAIL: Full user text should NOT be exposed in debug logs after redaction fix"
-        
-        # Check that length metadata and context_id are present
-        assert any(str(len(secret_text)) in record.message for record in caplog.records), \
-            "FAIL: Text length metadata should be present in debug logs"
-        assert any(test_context_id in record.message for record in caplog.records), \
-            "FAIL: context_id should still be present in debug logs for tracing"
+
+        tts._send_and_play_once(secret_text)
+
+        # 前提断言：生产代码确实走完了那行日志（原文送达 context）。少掉它，
+        # 下面的「日志里没有原文」会因为压根没跑到而假绿 —— 正是这个类原先的病。
+        assert pushed == [secret_text], "生产路径未被驱动，日志断言会假绿"
+
+        messages = [record.message for record in caplog.records]
+        assert not any(secret_text in message for message in messages), (
+            f"realtime 日志泄露了用户原文: {messages!r}"
+        )
+        assert any(str(len(secret_text)) in message for message in messages), (
+            f"realtime 日志缺少长度元信息: {messages!r}"
+        )
+        assert any(captured_kwargs["context_id"] in message for message in messages), (
+            f"realtime 日志缺少 context_id: {messages!r}"
+        )
 
 
 class _FakeConnection:

@@ -8,17 +8,18 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from PySide6.QtCore import QEvent, QObject, QPointF, QSize, Qt, Signal, QVariantAnimation, QEasingCurve
+from PySide6.QtCore import QObject, QPointF, QRectF, QSize, Qt, Signal, QVariantAnimation, QEasingCurve
 from PySide6.QtGui import (
-    QColor, QIcon, QKeyEvent, QLinearGradient, QMouseEvent, QPainter, QPainterPath,
-    QPaintEvent, QPen, QPixmap, QPolygonF,
+    QBrush, QColor, QIcon, QKeyEvent, QLinearGradient, QMouseEvent, QPainter,
+    QPainterPath, QPaintEvent, QPixmap, QPolygonF,
 )
 from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import QLabel, QLineEdit, QPushButton, QStyle, QWidget
 
+from wordy.ui import glass
 from wordy.ui.theme import (
     ACCENT_HOVER, ACCENT_SECONDARY, CONFIG_BUTTON_IDLE, GREEN_ACCENT,
-    INPUT_BACKGROUND, INPUT_BORDER, MONO_FONT, UI_FONT, TEXT_PRIMARY,
+    INPUT_BACKGROUND, RADIUS_WINDOW, UI_FONT, TEXT_PRIMARY,
 )
 
 # Material Symbols 设置图标 SVG 路径
@@ -32,17 +33,16 @@ if TYPE_CHECKING:
 
 # 控件尺寸/颜色常量
 INPUT_BACKGROUND_COLOR = INPUT_BACKGROUND
-INPUT_BORDER_COLOR = INPUT_BORDER
 INPUT_TEXT_COLOR = GREEN_ACCENT
 CONFIG_BUTTON_TEXT_COLOR = CONFIG_BUTTON_IDLE
 CONFIG_BUTTON_HOVER_TEXT_COLOR = ACCENT_HOVER
 SETTINGS_BUTTON_CENTER_X_OFFSET = 34
 SETTINGS_BUTTON_ENTRY_RIGHT_PADDING = 144
-# 终端风格：左侧 prompt + 缩进
+# 左侧提示符 + 缩进
 PROMPT_LEFT = 10
 ENTRY_LEFT_PADDING = 32
 ENTRY_VERTICAL_PADDING = 9
-WINDOW_RADIUS = 14
+WINDOW_RADIUS = RADIUS_WINDOW
 
 
 class _OverlaySignals(QObject):
@@ -84,8 +84,8 @@ class _OverlayWidget(QWidget):
         self.setFixedSize(owner.width, owner.height)
         self.setMouseTracking(True)
 
-        # 终端风格 `>` 提示符
-        prompt_font_size = 22
+        # 左侧提示符：用系统 UI 字体读作玻璃面板上的一个符号，而不是终端光标。
+        prompt_font_size = 20
         self.prompt_label = QLabel(">", self)
         self.prompt_label.setObjectName("overlayPrompt")
         self.prompt_label.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
@@ -95,9 +95,9 @@ class _OverlayWidget(QWidget):
             QLabel#overlayPrompt {{
                 color: {CONFIG_BUTTON_TEXT_COLOR};
                 background: transparent;
-                font-family: {MONO_FONT};
+                font-family: {UI_FONT};
                 font-size: {prompt_font_size}px;
-                font-weight: bold;
+                font-weight: 500;
             }}
         ''')
 
@@ -173,33 +173,49 @@ class _OverlayWidget(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         w, h = self.width(), self.height()
+        opacity = self._overlay_opacity
+        bounds = QRectF(1, 1, w - 2, h - 2)
 
-        # 使用连续色面与局部光晕表达层次，不绘制环绕输入栏的硬边框。
+        path = QPainterPath()
+        path.addRoundedRect(bounds, WINDOW_RADIUS, WINDOW_RADIUS)
+
+        # 玻璃底：本体色打底，再叠一层自上而下衰减的白色光泽。
         bg_color = QColor(INPUT_BACKGROUND_COLOR)
-        bg_color.setAlphaF(self._overlay_opacity)
+        bg_color.setAlphaF(opacity)
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(bg_color)
-        path = QPainterPath()
-        path.addRoundedRect(1, 1, w - 2, h - 2, WINDOW_RADIUS, WINDOW_RADIUS)
         painter.drawPath(path)
 
         painter.save()
         painter.setClipPath(path)
-        dot_color = QColor(INPUT_TEXT_COLOR)
-        dot_color.setAlphaF(0.05 * self._overlay_opacity)
-        painter.setPen(QPen(dot_color, 1.0))
-        for x in range(12, w - 12, 12):
-            painter.drawPoint(x, h - 8)
-        # 焦点光融入底部色面，随既有短动画过渡，不添加常态描边。
-        wash = QLinearGradient(0, 0, 0, h)
-        wash.setColorAt(0.0, QColor(Qt.GlobalColor.transparent))
-        light = QColor(ACCENT_SECONDARY)
-        light.setAlphaF((0.04 + 0.08 * self._focus_glow) * self._overlay_opacity)
-        wash.setColorAt(1.0, light)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(wash)
+        sheen = QLinearGradient(0, 0, 0, h)
+        sheen.setColorAt(0.0, QColor(255, 255, 255, round(26 * opacity)))
+        sheen.setColorAt(1.0, QColor(255, 255, 255, round(8 * opacity)))
+        painter.setBrush(sheen)
         painter.drawPath(path)
+
+        # 焦点时底部浮起强调色微光，沿用既有短动画，不做常驻闪烁。
+        if self._focus_glow > 0.0:
+            glow = QLinearGradient(0, 0, 0, h)
+            glow.setColorAt(0.0, QColor(Qt.GlobalColor.transparent))
+            light = QColor(ACCENT_SECONDARY)
+            light.setAlphaF(0.10 * self._focus_glow * opacity)
+            glow.setColorAt(1.0, light)
+            painter.setBrush(glow)
+            painter.drawPath(path)
         painter.restore()
+
+        # 噪点：打破纯色填充，玻璃才有材质而不只是一块半透明色。
+        glass.paint_noise(painter, path)
+
+        # 玻璃边缘：外侧光晕 + 内侧暗过渡 + 上缘最亮的受光棱。
+        # 亮棱用相对亮度（alpha 不再乘窗口不透明度），整体透明度由 rim 统一施加。
+        edge = QLinearGradient(0, 0, 0, h)
+        edge.setColorAt(0.0, QColor(255, 255, 255, 255))
+        edge.setColorAt(0.35, QColor(255, 255, 255, 118))
+        edge.setColorAt(1.0, QColor(255, 255, 255, 88))
+        glass.paint_glass_rim(painter, bounds, WINDOW_RADIUS, QBrush(edge), opacity=opacity)
+        painter.end()
 
     def animate_focus(self, focused: bool) -> None:
         self._focus_animation.stop()

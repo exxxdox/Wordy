@@ -3,11 +3,11 @@
 
 """audio_router 模块单元测试。"""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
-from wordy.audio.router import AudioRouter, RouterStats
+from wordy.audio.router import AudioRouter
 
 
 class TestAudioRouter:
@@ -17,9 +17,14 @@ class TestAudioRouter:
         router = AudioRouter(virtual_output="CABLE Input")
         assert router.is_running() is False
 
+    @patch.object(AudioRouter, "get_output_device")
     @patch("wordy.audio.router.VBCableDriverManager.get_virtual_output_index")
-    def test_start_stop(self, mock_vb_idx):
+    def test_start_stop(self, mock_vb_idx, mock_output_device):
         mock_vb_idx.return_value = 99
+        mock_output_device.return_value = {
+            "name": "CABLE Input",
+            "host_api_name": "Windows WASAPI",
+        }
         router = AudioRouter(virtual_output="CABLE Input")
         result = router.start()
         assert result is True
@@ -158,6 +163,20 @@ class TestAudioRouter:
         assert result is False
         assert router.is_running() is False
 
+    def test_start_requires_wasapi_output_before_enabling_mic_listen(self):
+        router = AudioRouter(virtual_output="CABLE Input")
+
+        with (
+            patch.object(router, "get_output_device", return_value=None),
+            patch.object(router, "_resolve_output_device", return_value=99),
+            patch.object(router, "_enable_mic_listen") as enable,
+        ):
+            result = router.start(mic_device="Mic")
+
+        assert result is False
+        assert router.is_running() is False
+        enable.assert_not_called()
+
     def test_stats(self):
         router = AudioRouter()
         stats = router.get_stats()
@@ -174,10 +193,15 @@ class TestAudioRouter:
             assert "host_api_name" in dev
             assert "CABLE" in dev["name"]
 
+    @patch.object(AudioRouter, "get_output_device")
     @patch("wordy.audio.router.VBCableDriverManager.get_virtual_output_index")
-    def test_start_without_mic_skips_listen(self, mock_vb_idx):
+    def test_start_without_mic_skips_listen(self, mock_vb_idx, mock_output_device):
         """mic_device=None 时 start 不配置侦听——用户需手动选择麦克风。"""
         mock_vb_idx.return_value = 99
+        mock_output_device.return_value = {
+            "name": "CABLE Input",
+            "host_api_name": "Windows WASAPI",
+        }
         router = AudioRouter(virtual_output="CABLE Input")
 
         with patch.object(router, "_enable_mic_listen") as enable:

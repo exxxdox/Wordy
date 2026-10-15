@@ -175,8 +175,9 @@ def test_settings_window_clear_api_key_control_deletes_key_immediately(
     wordy.secret.save_cartesia_api_key(SENTINEL_EXISTING_API_KEY)
     _app, window = _new_settings_window(monkeypatch, cartesia_api_key_saved=True)
     try:
-        clear_control = getattr(window, "clear_api_key_button", None)
-        assert clear_control is not None, "SettingsWindow must expose explicit clear_api_key_button"
+        from wordy.ui.tts_panels import PROVIDER_PANELS
+
+        clear_control = PROVIDER_PANELS[window._settings.active_tts_provider].clear_key_btn
 
         clear_control.click()
         assert wordy.secret.load_cartesia_api_key() is None
@@ -418,41 +419,46 @@ def test_settings_window_recording_cancel_and_error_reenable(monkeypatch: pytest
 
 
 
-def test_settings_window_exposes_inline_status_api(monkeypatch: pytest.MonkeyPatch) -> None:
-    """当前状态接口支持非模态反馈与清空。"""
+def test_settings_window_exposes_transient_status_queue(monkeypatch: pytest.MonkeyPatch) -> None:
+    """临时反馈走浮动弹窗队列：入队后可见，空文本立刻收起。"""
+    from PySide6.QtWidgets import QLabel
+
     _app, window = _new_settings_window(monkeypatch)
     try:
-        assert window.status_label.isVisible() is False
+        toasts = window.status_toasts
+        assert toasts is not None, "SettingsWindow 必须提供浮动反馈队列"
+        # 反馈不再占据页脚布局位置。
+        assert window.window.findChild(QLabel, "applyStatusLabel") is None
+
         window.set_status("设置已应用")
-        status_label = window.status_label
-        assert "设置已应用" in status_label.text()
-        assert status_label.isVisible() is True
+        assert toasts.texts() == ["设置已应用"]
+        assert toasts.cards()[0].isVisible() is True
+
+        window.set_status("快捷键未启用：注册失败")
+        assert toasts.texts() == ["设置已应用", "快捷键未启用：注册失败"], "多条反馈上下并列"
 
         window.set_status("")
-        assert status_label.text() == ""
-        assert status_label.isVisible() is False
+        assert toasts.texts() == []
     finally:
         window.close()
 
 
-def test_settings_window_uses_native_controls_and_preserves_topmost(monkeypatch: pytest.MonkeyPatch) -> None:
-    """原生窗口提供最小化、最大化和关闭，同时保留置顶行为。"""
+def test_settings_window_is_frameless_and_preserves_topmost(monkeypatch: pytest.MonkeyPatch) -> None:
+    """自绘玻璃窗口去掉原生边框；最小化、最大化和关闭改由内部标题栏提供。"""
     _app, window = _new_settings_window(monkeypatch)
     try:
         from PySide6.QtCore import Qt
 
         flags = window.window.windowFlags()
         assert window.window.windowType() == Qt.WindowType.Window
-        assert not flags & Qt.WindowType.FramelessWindowHint
-        controls = Qt.WindowType.WindowMinMaxButtonsHint | Qt.WindowType.WindowCloseButtonHint
-        assert flags & controls == controls
+        assert flags & Qt.WindowType.FramelessWindowHint, "玻璃窗口必须去掉原生边框"
         assert flags & Qt.WindowType.WindowStaysOnTopHint, "settings window must preserve WindowStaysOnTopHint"
     finally:
         window.close()
 
 
-def test_settings_window_native_title_replaces_internal_chrome(monkeypatch: pytest.MonkeyPatch) -> None:
-    """标题和关闭由系统提供，内容区不重复绘制标题栏。"""
+def test_settings_window_draws_its_own_title_bar(monkeypatch: pytest.MonkeyPatch) -> None:
+    """无边框窗口必须自带标题与三个窗口控制按钮。"""
     _app, window = _new_settings_window(monkeypatch)
     try:
         from PySide6.QtWidgets import QLabel, QPushButton
@@ -460,20 +466,25 @@ def test_settings_window_native_title_replaces_internal_chrome(monkeypatch: pyte
         window.window.show()
         _app.processEvents()
         assert window.window.windowTitle() == "设置"
-        assert window.window.findChild(QLabel, "dialogTitle") is None
-        assert window.window.findChild(QPushButton, "dialogCloseButton") is None
+        assert window.window.findChild(QLabel, "dialogTitle") is not None
+        for name in ("dialogMinimizeButton", "dialogMaximizeButton", "dialogCloseButton"):
+            assert window.window.findChild(QPushButton, name) is not None, f"缺少自绘窗口控制按钮: {name}"
     finally:
         window.close()
 
 
-def test_settings_window_has_opaque_background_for_first_frame(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Settings must have a first-frame background rather than transparent composition."""
+def test_settings_window_uses_translucent_glass_background(monkeypatch: pytest.MonkeyPatch) -> None:
+    """玻璃底由窗口自绘，因此必须启用透明合成。
+
+    但用户可见时不允许半透明：窗口不能在首帧还没画出来时透出桌面。
+    这条守住的是"看得见的时候已经是不透明的"，不是"必须用不透明底"。
+    """
     _app, window = _new_settings_window(monkeypatch)
     try:
         from PySide6.QtCore import Qt
 
-        assert window.window.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground) is False
-        assert window.window.testAttribute(Qt.WidgetAttribute.WA_NoSystemBackground) is False
+        assert window.window.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground) is True
+        assert window.window.windowOpacity() == 1.0
     finally:
         window.close()
 
@@ -512,14 +523,17 @@ def test_settings_compact_width_keeps_navigation_and_forms_visible(monkeypatch: 
     app, settings = _new_settings_window(monkeypatch)
     try:
         from PySide6.QtWidgets import QScrollArea, QTabWidget
+        from wordy.ui.settings import DIALOG_WIDTH
 
         dialog = settings.window
-        assert dialog.width() == 480
+        assert dialog.width() == DIALOG_WIDTH
         tabs = dialog.findChild(QTabWidget, "settingsTabs")
         assert tabs is not None
         bar = tabs.tabBar()
         assert not bar.expanding()
-        assert bar.tabRect(3).width() < bar.tabRect(0).width()
+        # 新增轮盘页后日志索引会变化，按标题验证短标签而非绑定固定索引。
+        log_index = next(i for i in range(tabs.count()) if tabs.tabText(i) == "日志")
+        assert bar.tabRect(log_index).width() < bar.tabRect(0).width()
         dialog.resize(dialog.minimumWidth(), dialog.height())
         # 加载长音色名也不应撑宽表单或把同一行的刷新按钮挤出窗口。
         settings.set_voices_loaded([{"id": "long-voice", "name": "Long Voice Name " * 12}], "long-voice")
@@ -570,6 +584,22 @@ def test_settings_window_default_height_fits_all_sections_without_initial_scroll
             f"content_height={content_height}, content_size_hint_height={content_size_hint_height}, "
             f"scrollbar_maximum={scrollbar_maximum}"
         )
+    finally:
+        window.close()
+
+
+def test_local_setting_headers_share_the_same_right_edge(monkeypatch: pytest.MonkeyPatch) -> None:
+    """标题行操作和值统一右对齐，避免相邻设置行视觉参差。"""
+    app, window = _new_settings_window(monkeypatch)
+    try:
+        window.window.show()
+        app.processEvents()
+        right_edges = {
+            window.record_button.geometry().right(),
+            window.volume_value_label.geometry().right(),
+            window.opacity_value_label.geometry().right(),
+        }
+        assert len(right_edges) == 1
     finally:
         window.close()
 

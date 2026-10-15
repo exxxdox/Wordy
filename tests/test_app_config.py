@@ -310,8 +310,6 @@ def test_atomic_write_preserves_original_on_failure(tmp_path, monkeypatch):
     s.update(hotkey="f8", volume=1.5, fixed_center=True, config_file=cfg)
     original_content = cfg.read_bytes()
 
-    original_replace = os.replace
-
     def failing_replace(src, dst):
         raise OSError("Simulated write failure")
 
@@ -712,26 +710,6 @@ def test_user_config_file_never_contains_accidental_secret_fields(
         assert field_name not in saved
 
 
-def test_load_initial_config_cartesia_status(monkeypatch, tmp_path: Path, fake_keyring):
-    """AppSettings.load() surfaces metadata from secret_store status."""
-    cfg = tmp_path / "config.toml"
-    _patch_cartesia_api_key_status(monkeypatch, key_set=True, storage=wordy.secret.STORAGE_KEYRING)
-
-    s = AppSettings.load(config_file=cfg)
-    assert s.cartesia_api_key_set is True
-    assert s.cartesia_api_key_storage == wordy.secret.STORAGE_KEYRING
-
-
-def test_load_defaults_when_status_reports_no_key(monkeypatch, tmp_path: Path, fake_keyring):
-    """Status API reports no key -> AppSettings reports False/STORAGE_NONE."""
-    cfg = tmp_path / "config.toml"
-    _patch_cartesia_api_key_status(monkeypatch, key_set=False, storage=wordy.secret.STORAGE_NONE)
-
-    s = AppSettings.load(config_file=cfg)
-    assert s.cartesia_api_key_set is False
-    assert s.cartesia_api_key_storage == wordy.secret.STORAGE_NONE
-
-
 # ---------------------------------------------------------------------------
 # NEW: __setattr__ auto-save tests
 # ---------------------------------------------------------------------------
@@ -762,13 +740,16 @@ def test_setattr_private_fields_dont_save(tmp_path: Path):
     s = AppSettings.load(config_file=cfg)
     s.volume = 1.0
     s.flush()
-    mtime_before = cfg.stat().st_mtime
+    # 用文件字节而非 mtime 比对：Windows 的 mtime 精度可能让原子写落在同一刻度，断言会假绿。
+    before = cfg.read_bytes()
 
     s._loaded = False  # 内部字段，不触发 save
     s._loaded = True
     # 未设置任何公共字段，文件不应改变
     # 注：_loaded 来回切换不会触发保存
     s.flush()
+
+    assert cfg.read_bytes() == before, "_ 前缀字段赋值不应触发保存"
 
 
 def test_toml_round_trip(tmp_path: Path):

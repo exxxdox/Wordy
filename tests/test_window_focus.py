@@ -42,6 +42,60 @@ def test_disable_window_transitions_uses_pointer_sized_handle_and_bool(monkeypat
     assert not wordy.ui.window.disable_window_transitions(widget)
 
 
+def test_enable_system_resize_adds_thick_frame_and_disables_dwm_rounding(monkeypatch):
+    """无边框窗口是 WS_POPUP，补上 WS_THICKFRAME 系统才肯进入缩放循环。"""
+    style_writes: list[tuple[int, int, int]] = []
+
+    def set_style(hwnd: int, index: int, value: int) -> int:
+        style_writes.append((hwnd, index, value))
+        return 0x96000000
+
+    user32 = SimpleNamespace(
+        GetWindowLongPtrW=Mock(return_value=0x96000000),  # WS_POPUP，没有 WS_THICKFRAME
+        SetWindowLongPtrW=Mock(side_effect=set_style),
+        SetWindowPos=Mock(return_value=1),
+    )
+    dwm_setter = Mock(return_value=0)
+    monkeypatch.setattr(wordy.ui.window, "_IS_WINDOWS", True)
+    monkeypatch.setattr(
+        ctypes, "windll",
+        SimpleNamespace(user32=user32, dwmapi=SimpleNamespace(DwmSetWindowAttribute=dwm_setter)),
+    )
+
+    assert wordy.ui.window.enable_system_resize(SimpleNamespace(winId=lambda: 0x1234))
+
+    hwnd, index, value = style_writes[0]
+    assert hwnd == 0x1234 and index == -16
+    assert value & 0x00040000, "必须补上 WS_THICKFRAME，否则系统不进入缩放循环"
+    assert user32.SetWindowPos.call_args.args[6] & 0x0020, "改样式后要 SWP_FRAMECHANGED 重算非客户区"
+    # 补边框后 DWM 会自己加系统圆角，和自绘圆角叠成两层，必须压掉。
+    _, attribute, raw, _ = dwm_setter.call_args.args
+    assert attribute == 33
+    assert ctypes.cast(raw, ctypes.POINTER(ctypes.c_int)).contents.value == 1
+
+
+def test_enable_system_resize_skips_rewrite_when_frame_already_present(monkeypatch):
+    """已经有 WS_THICKFRAME 时不再改样式，避免多余的非客户区重算。"""
+    user32 = SimpleNamespace(
+        GetWindowLongPtrW=Mock(return_value=0x96040000),
+        SetWindowLongPtrW=Mock(),
+        SetWindowPos=Mock(),
+    )
+    monkeypatch.setattr(wordy.ui.window, "_IS_WINDOWS", True)
+    monkeypatch.setattr(
+        ctypes, "windll",
+        SimpleNamespace(user32=user32, dwmapi=SimpleNamespace(DwmSetWindowAttribute=Mock(return_value=0))),
+    )
+
+    assert wordy.ui.window.enable_system_resize(SimpleNamespace(winId=lambda: 1))
+    user32.SetWindowLongPtrW.assert_not_called()
+
+
+def test_enable_system_resize_is_noop_off_windows(monkeypatch):
+    monkeypatch.setattr(wordy.ui.window, "_IS_WINDOWS", False)
+    assert not wordy.ui.window.enable_system_resize(SimpleNamespace(winId=lambda: 1))
+
+
 # ---------------------------------------------------------------------------
 # Test doubles
 # ---------------------------------------------------------------------------

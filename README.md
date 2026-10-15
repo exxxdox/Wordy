@@ -1,6 +1,6 @@
 # Wordy
 
-常驻热键输入 → TTS 生成 → 播放。支持 VB-CABLE 虚拟音频侦听，将 TTS 音频与麦克风实时混音后输出到虚拟设备。
+常驻热键输入 → TTS 生成 → 播放。支持通过 Windows 原生“侦听此设备”和 VB-CABLE，将 TTS 与麦克风输出到同一虚拟设备。
 
 ## 环境要求
 
@@ -39,7 +39,7 @@ powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
 
 ## 音频侦听（VB-CABLE）
 
-音频侦听功能可将 TTS 输出与麦克风、桥接音源实时混音，输出到虚拟音频设备（其他应用如 Discord/OBS 可捕获）。
+音频侦听将 TTS 直接输出到 CABLE Input，并让 Windows 把选定麦克风侦听到同一端点。其他应用选择 CABLE Output 即可接收两路声音。Wordy 不采集麦克风，也不维护软件混音流。
 
 ### 安装 VB-CABLE
 
@@ -52,8 +52,9 @@ powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
 
 1. 启动应用后打开设置 → **音频侦听** 选项卡
 2. 勾选"启用音频侦听"
-3. 选择麦克风、桥接源设备
-4. 点击"应用"
+3. 选择要侦听的麦克风
+
+设置会立即保存并生效。停用路由或退出应用时，Wordy 会恢复麦克风原有的 Windows 侦听状态。
 
 ## 开发
 
@@ -62,7 +63,7 @@ powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
 uv sync
 
 # 运行测试
-uv run pytest tests/ -v
+uv run python -m pytest tests/ -v
 
 # 添加新依赖
 uv add <package>
@@ -88,6 +89,6 @@ uv add --dev <dev-package>
 - **Python 3.12**（uv 管理，`.python-version` 锁定）
 - **TTS**: Cartesia API
 - **音频**: sounddevice + pyaudio
-- **混音**: numpy 向量化处理
+- **路由**: Windows Core Audio 侦听策略 + VB-CABLE
 - **GUI**: PySide6
 - **包管理**: uv

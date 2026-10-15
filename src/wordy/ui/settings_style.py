@@ -1,45 +1,92 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""设置窗口 QSS 样式表。"""
+"""设置窗口 QSS 样式表。
+
+Apple 式玻璃：层次靠半透明白叠层 + 1px 细高光描边 + 圆角阶梯表达，而不是大面积
+实色卡片和加粗底边。焦点态用描边提亮而不是底边加粗，控件高度因此不会跳变。
+"""
 
 from __future__ import annotations
 
 from wordy.ui.theme import (
     ACCENT_HOVER,
     ACCENT_PRESSED,
-    BUTTON_ACTIVE_BG,
-    BUTTON_BG,
     ELEVATED_BG,
+    GLASS_FILL,
+    GLASS_FILL_STRONG,
+    GLASS_HAIRLINE,
+    GLASS_HAIRLINE_STRONG,
+    GLASS_SHEEN,
     GREEN_ACCENT,
-    UI_FONT,
+    RADIUS_CARD,
+    RADIUS_CHIP,
+    RADIUS_CONTROL,
     SCROLLBAR_HANDLE,
     SCROLLBAR_HANDLE_HOVER,
-    SEPARATOR_COLOR,
-    SURFACE_BG,
+    TEXT_ERROR,
     TEXT_MUTED,
     TEXT_PRIMARY,
-    WINDOW_BG,
+    UI_FONT,
+    rgba,
 )
 
 
 def build_settings_stylesheet() -> str:
     """构建设置窗口的完整 QSS 样式表。"""
-    # 用同一强调色的低亮底区分导航和数值，不为每个设置项重复堆叠卡片。
-    # 输入框始终预留焦点线厚度，切换焦点时不改变控件的内容高度。
-    accent_rgb = ", ".join(str(int(GREEN_ACCENT[i:i + 2], 16)) for i in (1, 3, 5))
+    # 强调色只在少数地方需要半透明版本，先换算一次，省得逐处拼字符串。
+    accent_soft = rgba(GREEN_ACCENT, 40)
+    accent_ring = rgba(GREEN_ACCENT, 150)
     return f'''
         QWidget {{
             font-family: {UI_FONT};
             font-size: 13px;
         }}
         QDialog {{
-            background: {SURFACE_BG};
+            /* 玻璃底、投影与圆角都由 _SettingsDialog.paintEvent 手绘：
+               这里必须透明，否则不透明底会整块盖住玻璃与投影。 */
+            background: transparent;
             color: {TEXT_PRIMARY};
         }}
         QFrame#dialogShell {{
-            background: {SURFACE_BG};
+            background: transparent;
             border: none;
+        }}
+        QWidget#settingsTitleBar {{
+            background: transparent;
+            border: none;
+        }}
+        QLabel#dialogTitle {{
+            color: {TEXT_PRIMARY};
+            font-size: 14px;
+            font-weight: 600;
+            background: transparent;
+            border: none;
+        }}
+        /* 三个窗口按钮默认只画字形，悬停才浮起一层玻璃；关闭键悬停用错误色。 */
+        QPushButton#dialogMinimizeButton,
+        QPushButton#dialogMaximizeButton,
+        QPushButton#dialogCloseButton {{
+            min-width: 0;
+            min-height: 0;
+            padding: 0;
+            background: transparent;
+            border: none;
+            border-radius: {RADIUS_CONTROL}px;
+        }}
+        QPushButton#dialogMinimizeButton:hover,
+        QPushButton#dialogMaximizeButton:hover {{
+            background: {GLASS_FILL_STRONG};
+        }}
+        QPushButton#dialogMinimizeButton:pressed,
+        QPushButton#dialogMaximizeButton:pressed {{
+            background: {GLASS_HAIRLINE};
+        }}
+        QPushButton#dialogCloseButton:hover {{
+            background: {rgba(TEXT_ERROR, 219)};
+        }}
+        QPushButton#dialogCloseButton:pressed {{
+            background: {rgba(TEXT_ERROR, 180)};
         }}
         QLabel#pageTitle {{
             color: {TEXT_PRIMARY};
@@ -57,7 +104,6 @@ def build_settings_stylesheet() -> str:
             font-size: 13px;
             font-weight: 600;
             border: none;
-            padding: 0 0 2px 0;
         }}
         QLabel#bodyLabel, QLabel#bodyLabelEmphasis {{
             font-size: 13px;
@@ -72,17 +118,19 @@ def build_settings_stylesheet() -> str:
             border: none;
         }}
         QLabel#settingValue {{
-            background: rgba({accent_rgb}, 22);
+            background: {accent_soft};
             color: {GREEN_ACCENT};
             font-size: 13px;
             font-weight: 600;
             border: none;
-            border-radius: 5px;
+            border-radius: {RADIUS_CHIP}px;
             padding: 2px 8px;
         }}
         QWidget#settingsFooter {{
-            background: {WINDOW_BG};
+            /* 透明底，只留一条分隔细线，不再整块盖住玻璃。 */
+            background: transparent;
             border: none;
+            border-top: 1px solid {GLASS_HAIRLINE};
         }}
         QLabel#autoSaveLabel {{
             color: {TEXT_MUTED};
@@ -112,36 +160,37 @@ def build_settings_stylesheet() -> str:
             border: none;
             padding: 0;
         }}
+        /* 分段控件：选中态是玻璃胶囊，而不是底边加粗的标签下划线。 */
         QTabWidget#settingsTabs QTabBar::tab {{
             background: transparent;
             color: {TEXT_MUTED};
             border: none;
-            border-radius: 6px;
-            padding: 7px 12px;
-            margin: 0 4px 0 0;
+            border-radius: {RADIUS_CONTROL}px;
+            padding: 6px 14px;
+            margin: 0 6px 0 0;
             font-weight: 600;
             font-size: 13px;
         }}
         QTabWidget#settingsTabs QTabBar::tab:hover {{
-            background: {ELEVATED_BG};
+            background: {GLASS_FILL};
             color: {TEXT_PRIMARY};
         }}
         QTabWidget#settingsTabs QTabBar::tab:pressed {{
-            background: {BUTTON_ACTIVE_BG};
-            color: {ACCENT_HOVER};
+            background: {GLASS_FILL_STRONG};
+            color: {TEXT_PRIMARY};
         }}
         QTabWidget#settingsTabs QTabBar::tab:selected {{
-            background: rgba({accent_rgb}, 24);
-            color: {GREEN_ACCENT};
+            background: {GLASS_FILL_STRONG};
+            color: {TEXT_PRIMARY};
         }}
         QTabWidget#settingsTabs QTabBar::tab:selected:hover {{
-            background: rgba({accent_rgb}, 30);
-            color: {ACCENT_HOVER};
+            background: {GLASS_HAIRLINE};
+            color: {TEXT_PRIMARY};
         }}
         QTabWidget#settingsTabs QTabBar::tab:focus {{
             outline: none;
             color: {ACCENT_HOVER};
-            background: rgba({accent_rgb}, 30);
+            background: {GLASS_FILL_STRONG};
         }}
         QScrollBar:vertical {{
             background: transparent;
@@ -152,7 +201,7 @@ def build_settings_stylesheet() -> str:
         QScrollBar::handle:vertical {{
             background: {SCROLLBAR_HANDLE};
             min-height: 30px;
-            border-radius: 3px;
+            border-radius: 4px;
         }}
         QScrollBar::handle:vertical:hover {{
             background: {SCROLLBAR_HANDLE_HOVER};
@@ -167,78 +216,74 @@ def build_settings_stylesheet() -> str:
             border: none;
         }}
         QFrame#separator {{
-            background: {SEPARATOR_COLOR};
+            background: {GLASS_HAIRLINE};
             border: none;
         }}
         QFrame#ttsProviderContainer {{
-            border: none;
-            background: transparent;
-            border-radius: 8px;
+            background: {GLASS_SHEEN};
+            border: 1px solid {GLASS_HAIRLINE};
+            border-radius: {RADIUS_CARD}px;
         }}
         QPushButton {{
             min-height: 20px;
-            background: {BUTTON_BG};
+            background: {GLASS_FILL};
             color: {TEXT_PRIMARY};
-            border: none;
-            border-radius: 6px;
-            padding: 6px 12px;
+            border: 1px solid {GLASS_HAIRLINE};
+            border-radius: {RADIUS_CONTROL}px;
+            padding: 6px 14px;
             font-weight: 600;
         }}
         QPushButton:hover {{
-            background: {BUTTON_ACTIVE_BG};
+            background: {GLASS_FILL_STRONG};
+            border: 1px solid {GLASS_HAIRLINE_STRONG};
             color: {TEXT_PRIMARY};
         }}
         QPushButton:pressed {{
-            background: {ELEVATED_BG};
+            background: {rgba(ELEVATED_BG, 235)};
+            border: 1px solid {GLASS_HAIRLINE};
         }}
         QPushButton:focus {{
-            background: {BUTTON_ACTIVE_BG};
-            color: {GREEN_ACCENT};
-        }}
-        QPushButton:disabled {{
-            background: {SEPARATOR_COLOR};
-            color: {TEXT_MUTED};
-        }}
-        QPushButton#applyButton {{
-            background: {GREEN_ACCENT};
-            color: {WINDOW_BG};
-        }}
-        QPushButton#applyButton:hover {{
-            background: {ACCENT_HOVER};
-            color: {WINDOW_BG};
-        }}
-        QPushButton#applyButton:pressed {{
-            background: {ACCENT_PRESSED};
+            background: {GLASS_FILL_STRONG};
+            border: 1px solid {accent_ring};
             color: {TEXT_PRIMARY};
         }}
+        QPushButton:disabled {{
+            background: {GLASS_SHEEN};
+            border: 1px solid transparent;
+            color: {TEXT_MUTED};
+        }}
+        /* 退出按钮是最次要的动作：默认没有底色，悬停时才浮起一层玻璃。 */
         QPushButton#cancelButton {{
             background: transparent;
+            border: 1px solid transparent;
             color: {TEXT_MUTED};
         }}
         QPushButton#cancelButton:hover {{
-            background: {ELEVATED_BG};
+            background: {GLASS_FILL};
+            border: 1px solid {GLASS_HAIRLINE};
             color: {TEXT_PRIMARY};
         }}
         QPushButton#cancelButton:focus {{
-            background: {BUTTON_ACTIVE_BG};
-            color: {GREEN_ACCENT};
+            background: {GLASS_FILL};
+            border: 1px solid {accent_ring};
+            color: {TEXT_PRIMARY};
         }}
         QPushButton#cancelButton:pressed {{
-            background: {SEPARATOR_COLOR};
+            background: {GLASS_FILL_STRONG};
             color: {TEXT_PRIMARY};
         }}
         QComboBox {{
             min-height: 20px;
-            background: {ELEVATED_BG};
+            background: {GLASS_FILL};
             color: {TEXT_PRIMARY};
-            border: none;
-            border-bottom: 2px solid transparent;
-            border-radius: 6px;
+            border: 1px solid {GLASS_HAIRLINE};
+            border-radius: {RADIUS_CONTROL}px;
             padding: 5px 28px 5px 10px;
-            selection-background-color: {BUTTON_ACTIVE_BG};
+            selection-background-color: {accent_soft};
         }}
         QComboBox:hover {{
-            background: {BUTTON_ACTIVE_BG};
+            background: {GLASS_FILL_STRONG};
+            border: 1px solid {GLASS_HAIRLINE_STRONG};
         }}
         QComboBox::drop-down {{
             subcontrol-origin: padding;
@@ -256,11 +301,11 @@ def build_settings_stylesheet() -> str:
         QComboBox QAbstractItemView {{
             background: {ELEVATED_BG};
             color: {TEXT_PRIMARY};
-            border: none;
-            border-radius: 8px;
+            border: 1px solid {GLASS_HAIRLINE};
+            border-radius: {RADIUS_CARD}px;
             padding: 4px;
             outline: none;
-            selection-background-color: {BUTTON_ACTIVE_BG};
+            selection-background-color: {accent_soft};
             selection-color: {TEXT_PRIMARY};
         }}
         QComboBox QAbstractItemView::item {{
@@ -268,25 +313,25 @@ def build_settings_stylesheet() -> str:
         }}
         QLineEdit {{
             min-height: 20px;
-            background: {ELEVATED_BG};
+            background: {GLASS_FILL};
             color: {TEXT_PRIMARY};
-            border: none;
-            border-bottom: 2px solid transparent;
-            border-radius: 6px;
+            border: 1px solid {GLASS_HAIRLINE};
+            border-radius: {RADIUS_CONTROL}px;
             padding: 5px 10px;
-            selection-background-color: {BUTTON_ACTIVE_BG};
+            selection-background-color: {accent_soft};
             selection-color: {TEXT_PRIMARY};
         }}
         QLineEdit:hover {{
-            background: {BUTTON_ACTIVE_BG};
+            background: {GLASS_FILL_STRONG};
         }}
+        /* 焦点靠描边提亮表达，控件高度不随焦点变化。 */
         QLineEdit:focus, QComboBox:focus {{
-            background: {BUTTON_ACTIVE_BG};
-            border-bottom: 2px solid {GREEN_ACCENT};
+            background: {GLASS_FILL_STRONG};
+            border: 1px solid {accent_ring};
         }}
         QSlider::groove:horizontal {{
             height: 4px;
-            background: {SEPARATOR_COLOR};
+            background: {GLASS_HAIRLINE};
             border-radius: 2px;
         }}
         QSlider::sub-page:horizontal {{
@@ -303,6 +348,9 @@ def build_settings_stylesheet() -> str:
         }}
         QSlider::handle:horizontal:hover {{
             background: {ACCENT_HOVER};
+        }}
+        QSlider::handle:horizontal:pressed {{
+            background: {ACCENT_PRESSED};
         }}
         QSlider::handle:horizontal:focus {{
             background: {GREEN_ACCENT};

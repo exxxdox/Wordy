@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from io import BytesIO
+from threading import Barrier, Event, Thread
 from unittest.mock import MagicMock
 
 from wordy.audio.sidetone import SidetoneAudioPlayer
@@ -150,6 +151,31 @@ class TestSidetoneAudioPlayer:
         wrapper.write_stream(b"\x02\x03")
         sidetone.write_stream.assert_not_called()
 
+    def test_write_stream_disables_sidetone_when_single_slot_queue_is_full(self):
+        """慢返听最多保留一个待写块，不能让延迟和内存持续增长。"""
+        main, sidetone = self._make_players()
+        writing = Event()
+        release = Event()
+
+        def block_write(_data):
+            writing.set()
+            release.wait()
+
+        sidetone.write_stream.side_effect = block_write
+        wrapper = SidetoneAudioPlayer(main, sidetone)
+        wrapper.set_sidetone_enabled(True)
+        wrapper.open_stream(8, 1, 48000)
+
+        wrapper.write_stream(b"first")
+        assert writing.wait(1)
+        wrapper.write_stream(b"queued")
+        wrapper.write_stream(b"overflow")
+
+        assert wrapper._sidetone_stream_dead is True
+        release.set()
+        wrapper.close_stream()
+        assert sidetone.write_stream.call_count <= 2
+
     # ── close_stream ────────────────────────────────────────────────
 
     def test_close_stream_disabled_closes_main_only(self):
@@ -185,6 +211,27 @@ class TestSidetoneAudioPlayer:
         main.close_stream.assert_called_once()
         sidetone.close_stream.assert_called_once()
 
+    def test_close_stream_does_not_wait_forever_for_blocked_sidetone(self):
+        main, sidetone = self._make_players()
+        writing = Event()
+        release = Event()
+        sidetone.write_stream.side_effect = lambda _data: (writing.set(), release.wait())
+        wrapper = SidetoneAudioPlayer(main, sidetone)
+        wrapper.set_sidetone_enabled(True)
+        wrapper.open_stream(8, 1, 48000)
+        wrapper.write_stream(b"blocked")
+        assert writing.wait(1)
+
+        closing = Thread(target=wrapper.close_stream)
+        closing.start()
+        closing.join(0.5)
+        try:
+            assert not closing.is_alive()
+            main.close_stream.assert_called_once()
+        finally:
+            release.set()
+            closing.join(1)
+
     # ── play_wav ────────────────────────────────────────────────────
 
     def test_play_wav_disabled_calls_main_only(self):
@@ -207,14 +254,39 @@ class TestSidetoneAudioPlayer:
         main.play_wav.assert_called_once_with("test.wav", device_index=3)
         sidetone.play_wav.assert_called_once_with("test.wav", device_index=None)
 
-    def test_play_wav_main_fails_skips_sidetone(self):
+    def test_play_wav_starts_main_and_sidetone_concurrently_and_waits_for_both(self):
+        main, sidetone = self._make_players()
+        started = Barrier(3)
+        release = Event()
+
+        def wait_for_other(*_args, **_kwargs):
+            started.wait(timeout=1)
+            release.wait()
+            return True
+
+        main.play_wav.side_effect = wait_for_other
+        sidetone.play_wav.side_effect = wait_for_other
+        wrapper = SidetoneAudioPlayer(main, sidetone)
+        wrapper.set_sidetone_enabled(True)
+
+        result = []
+        playback = Thread(target=lambda: result.append(wrapper.play_wav("test.wav", device_index=3)))
+        playback.start()
+        started.wait(timeout=1)
+        assert playback.is_alive()
+        release.set()
+        playback.join(1)
+
+        assert result == [True]
+
+    def test_play_wav_main_failure_still_returns_false(self):
         main, sidetone = self._make_players()
         main.play_wav.return_value = False
         wrapper = SidetoneAudioPlayer(main, sidetone)
         wrapper.set_sidetone_enabled(True)
         result = wrapper.play_wav("missing.wav")
         assert result is False
-        sidetone.play_wav.assert_not_called()
+        sidetone.play_wav.assert_called_once()
 
     def test_play_wav_bytesio_resets_position(self):
         main, sidetone = self._make_players()
@@ -300,3 +372,22 @@ class TestSidetoneAudioPlayer:
         wrapper.set_sidetone_enabled(False)
         wrapper.close_stream()
         sidetone.close_stream.assert_called_once()
+def test_cancelled_concurrent_playback_returns_false_and_shares_event():
+    from threading import Event
+
+    main, sidetone = MagicMock(), MagicMock()
+    main.output_device_name = "CABLE Input"
+    cancelled = Event()
+
+    def play_then_cancel(*args, **kwargs):
+        cancelled.set()
+        return True
+
+    main.play_wav.side_effect = play_then_cancel
+    wrapper = SidetoneAudioPlayer(main, sidetone)
+    wrapper.set_sidetone_enabled(True)
+    assert wrapper.play_wav("test.wav", cancel_event=cancelled) is False
+    main.play_wav.assert_called_once_with("test.wav", device_index=None, cancel_event=cancelled)
+    sidetone.play_wav.assert_called_once_with(
+        "test.wav", device_index=None, cancel_event=cancelled
+    )

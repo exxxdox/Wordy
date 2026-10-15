@@ -9,11 +9,25 @@ import pytest
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QCursor
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QPushButton
 
 from wordy.ui.overlay import InputOverlay
 from wordy.ui.settings import SettingsWindow
 from wordy.ui.settings_state import SettingsState
+
+
+def _move_cursor_onto(widget) -> None:
+    from PySide6.QtGui import QCursor
+    QCursor.setPos(widget.mapToGlobal(widget.rect().center()))
+
+
+def _settings_icon_is_idle(root) -> bool:
+    """设置入口当前是否处于未高亮状态。"""
+    from wordy.ui.theme import CONFIG_BUTTON_IDLE
+    pixmap = root.settings_button.pixmap()
+    if pixmap is None:
+        return False
+    idle = root._make_settings_icon(root._settings_icon_size, CONFIG_BUTTON_IDLE)
+    return pixmap.toImage() == idle.toImage()
 
 
 def test_overlay_button_hover_changes_icons_without_background_highlight(qapp, monkeypatch):
@@ -140,6 +154,85 @@ def test_enter_submits_and_hides_but_whitespace_stays_visible(qapp, monkeypatch,
     overlay.stop()
 
 
+def _settings_button_overlay(monkeypatch, qapp):
+    """建一个已显示、未真正创建设置窗口的输入框。"""
+    monkeypatch.setattr(InputOverlay, "_start_load_voices", lambda *args, **kwargs: None)
+    overlay = InputOverlay(lambda text: None)
+    overlay._ensure_ui()
+    monkeypatch.setattr(overlay, "_create_settings_window", lambda: None)
+    root = overlay.root
+    assert root is not None
+    root.show()
+    qapp.processEvents()
+    return overlay, root
+
+
+def test_opening_settings_clears_the_settings_button_highlight(qapp, monkeypatch):
+    """点开设置后设置入口必须立刻回到未高亮状态。
+
+    高亮只靠 Leave 事件收回，而鼠标停在齿轮上时那个事件不会来——设置窗口只是
+    被置顶盖住，光标没离开输入框——图标就会一直亮着。
+    """
+    overlay, root = _settings_button_overlay(monkeypatch, qapp)
+    try:
+        root.set_settings_hover(True)
+        assert not _settings_icon_is_idle(root), "前置条件：设置入口应处于高亮"
+
+        overlay._open_settings()
+
+        assert _settings_icon_is_idle(root), "进入设置后设置入口仍在高亮"
+    finally:
+        overlay.stop()
+
+
+def test_hiding_overlay_clears_the_settings_button_highlight(qapp, monkeypatch):
+    """收起输入框也要收掉高亮：隐藏时不会再有 Leave，留着下次显示还是亮的。"""
+    overlay, root = _settings_button_overlay(monkeypatch, qapp)
+    try:
+        root.set_settings_hover(True)
+        assert not _settings_icon_is_idle(root)
+
+        overlay.hide()
+
+        assert _settings_icon_is_idle(root), "收起输入框后设置入口仍在高亮"
+    finally:
+        overlay.stop()
+
+
+def test_enter_does_not_highlight_while_settings_window_is_open(qapp, monkeypatch):
+    """设置窗口开着时输入框不再是交互面，即使光标还停在齿轮上也不该点亮。
+
+    层叠顺序变化时 Qt 会补发没有配对的 Enter，照单全收会让图标一直亮着。
+    """
+    from PySide6.QtCore import QEvent
+
+    overlay, root = _settings_button_overlay(monkeypatch, qapp)
+    try:
+        monkeypatch.setattr(overlay, "_active_settings_window", lambda: object())
+        _move_cursor_onto(root.settings_button)
+
+        qapp.sendEvent(root.settings_button, QEvent(QEvent.Type.Enter))
+
+        assert _settings_icon_is_idle(root), "设置窗口已打开时不应被 Enter 点亮"
+    finally:
+        overlay.stop()
+
+
+def test_enter_highlights_the_settings_button_while_settings_is_closed(qapp, monkeypatch):
+    """设置窗口没开时，真实进入事件必须点亮图标——这是 hover 高亮的唯一来源。"""
+    from PySide6.QtCore import QEvent
+
+    overlay, root = _settings_button_overlay(monkeypatch, qapp)
+    try:
+        assert overlay._active_settings_window() is None
+
+        qapp.sendEvent(root.settings_button, QEvent(QEvent.Type.Enter))
+
+        assert not _settings_icon_is_idle(root), "悬停设置入口时必须高亮"
+    finally:
+        overlay.stop()
+
+
 def test_tab_to_settings_stays_visible_and_enter_opens_settings(qapp, monkeypatch):
     monkeypatch.setattr(InputOverlay, "_start_load_voices", lambda *args, **kwargs: None)
     overlay = InputOverlay(lambda text: None)
@@ -235,9 +328,12 @@ def test_native_close_flushes_pending_settings(qapp, fake_keyring, monkeypatch):
     flush = Mock()
     monkeypatch.setattr(settings._settings, "flush", flush)
     assert settings.window is not None
-    # 原生关闭按钮通过相同的 Qt closeEvent 保存待写入设置。
-    assert settings.window.windowFlags() & Qt.WindowType.WindowCloseButtonHint
-    settings.window.close()
+    # 自绘关闭按钮通过相同的 Qt closeEvent 保存待写入设置。
+    from PySide6.QtWidgets import QPushButton
+
+    close_button = settings.window.findChild(QPushButton, "dialogCloseButton")
+    assert close_button is not None
+    close_button.click()
     qapp.processEvents()
     closed.assert_called_once()
     flush.assert_called_once()
@@ -319,6 +415,8 @@ def test_output_scan_only_runs_on_first_audio_tab_visit(qapp, monkeypatch):
         scan.assert_not_called()
         tabs = settings.window.findChild(QTabWidget, "settingsTabs")
         tabs.setCurrentIndex(1)
+        # 设备枚举延后到页签首帧之后，避免阻塞切换。
+        QTest.qWait(settings.AUDIO_SCAN_DELAY_MS + 20)
         scan.assert_called_once()
         assert settings.audio_output_combo.findText("测试输出") >= 0
         tabs.setCurrentIndex(0)
@@ -327,6 +425,70 @@ def test_output_scan_only_runs_on_first_audio_tab_visit(qapp, monkeypatch):
         settings.close()
     finally:
         overlay.stop()
+
+
+def test_settings_tab_switch_has_no_fade_and_defers_audio_scan(qapp, fake_keyring):
+    """页签切换必须是瞬时的，设备枚举仍延后执行。"""
+    scan = Mock()
+    settings = SettingsWindow(
+        None,
+        SettingsState(),
+        lambda: None,
+        lambda: None,
+        lambda field, value: None,
+        lambda: None,
+        on_audio_outputs_needed=scan,
+    )
+    try:
+        from PySide6.QtWidgets import QTabWidget
+
+        tabs = settings.window.findChild(QTabWidget, "settingsTabs")
+        assert tabs is not None
+        tabs.setCurrentIndex(1)
+
+        page = tabs.widget(1)
+        assert page is not None
+        assert page.graphicsEffect() is None, "切页不应给新页挂图形效果"
+        scan.assert_not_called()
+
+        QTest.qWait(settings.AUDIO_SCAN_DELAY_MS + 20)
+        scan.assert_called_once()
+    finally:
+        settings.close()
+
+
+def test_settings_tab_switch_renders_content_at_full_opacity_immediately(qapp, fake_keyring):
+    """切换页签后首帧必须已是最终画面。
+
+    新页被压暗再亮回来，看起来就是内容「跳一下」：整页亮度先掉一档，
+    导航栏却不变，视觉上像闪了一下。
+    """
+    settings = SettingsWindow(
+        None,
+        SettingsState(),
+        lambda: None,
+        lambda: None,
+        lambda field, value: None,
+        lambda: None,
+    )
+    try:
+        from PySide6.QtWidgets import QTabWidget
+
+        tabs = settings.window.findChild(QTabWidget, "settingsTabs")
+        assert tabs is not None
+
+        tabs.setCurrentIndex(2)
+        QTest.qWait(settings.AUDIO_SCAN_DELAY_MS + 20)
+        settled = settings.window.grab().toImage()
+
+        tabs.setCurrentIndex(0)
+        QTest.qWait(settings.AUDIO_SCAN_DELAY_MS + 20)
+        tabs.setCurrentIndex(2)
+        immediate = settings.window.grab().toImage()
+
+        assert immediate == settled, "切页首帧必须与稳定后一致，否则内容会闪一下"
+    finally:
+        settings.close()
 
 
 @pytest.mark.parametrize("provider", ["Cartesia", "Volcengine"])
@@ -374,11 +536,10 @@ def test_settings_click_keeps_windows_visible_without_native_focus_reentry(qapp,
         settings = overlay._settings_window
         assert settings is not None
         assert shown_windows == [settings.window]
-        # 设置外层必须有首帧底色，不能依赖透明合成等到子面板首次绘制。
-        assert not settings.window.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        assert not settings.window.testAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
-        from PySide6.QtGui import QPalette
-        assert settings.window.palette().color(QPalette.ColorRole.Window).alpha() == 255
+        # 玻璃底由窗口自绘，因此走透明合成；但对用户可见时必须完全不透明——
+        # 不能等到子面板首帧才出现底色。
+        assert settings.window.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        assert settings.window.windowOpacity() == 1.0
         initial_geometry = settings.window.geometry()
         qapp.processEvents()
         assert settings.window.geometry() == initial_geometry
@@ -412,25 +573,14 @@ def test_settings_opens_immediately_at_full_opacity(qapp):
         settings.close()
 
 
-def test_native_window_can_maximize_minimize_restore_and_close(qapp):
+def test_frameless_window_can_maximize_minimize_restore_and_close(qapp):
     closed = Mock()
     settings = SettingsWindow(None, SettingsState(), lambda: None, lambda: None,
                               lambda *args: None, closed)
     window = settings.window
     try:
-        flags = window.windowFlags()
-        assert not flags & Qt.WindowType.FramelessWindowHint
-        assert flags & Qt.WindowType.WindowMinimizeButtonHint
-        assert flags & Qt.WindowType.WindowMaximizeButtonHint
-        assert flags & Qt.WindowType.WindowCloseButtonHint
-        if qapp.platformName() == "windows":
-            # 验证真正的 Win32 边框也含标题栏、系统菜单与最小/最大化按钮。
-            getter = ctypes.windll.user32.GetWindowLongPtrW
-            getter.argtypes = [ctypes.c_void_p, ctypes.c_int]
-            getter.restype = ctypes.c_ssize_t
-            native_style = getter(int(window.winId()), -16)
-            for bit in (0x00C00000, 0x00080000, 0x00020000, 0x00010000):
-                assert native_style & bit == bit
+        # 无边框窗口自行绘制三个控制按钮，不再有原生样式位可断言；
+        # 这里守住的是三种窗口状态与关闭回调在自绘 chrome 下仍然成立。
         window.showMaximized()
         qapp.processEvents()
         assert window.isMaximized()

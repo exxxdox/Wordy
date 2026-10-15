@@ -2,7 +2,3 @@
 # -*- coding: utf-8 -*-
 
 """Wordy — 常驻热键输入 → TTS 生成 → 播放，支持 VB-CABLE 音频侦听。"""
-
-from wordy.config import AppSettings
-
-__all__ = ["AppSettings"]

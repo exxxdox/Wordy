@@ -26,10 +26,6 @@ class TestSettingsState:
         s = SettingsState()
         assert s.voices_loading is False
 
-    def test_default_voice_fetch_error_is_none(self):
-        s = SettingsState()
-        assert s.voice_fetch_error is None
-
     def test_default_cartesia_api_key_saved_is_false(self):
         s = SettingsState()
         assert s.cartesia_api_key_saved is False
@@ -58,11 +54,6 @@ class TestSettingsState:
         assert s.voices_cache == []
         assert s.voices_loading is False
         assert s.cartesia_api_key_saved is False
-
-    def test_voice_fetch_error_stores_exception(self):
-        err = RuntimeError("network timeout")
-        s = SettingsState(voice_fetch_error=err)
-        assert s.voice_fetch_error is err
 
     def test_audio_output_devices_error_stores_exception(self):
         err = OSError("no devices")

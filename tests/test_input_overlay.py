@@ -6,7 +6,6 @@
 import importlib
 import sys
 from collections.abc import Callable
-from pathlib import Path
 from types import ModuleType
 from typing import cast
 
@@ -121,7 +120,6 @@ def _new_apply_overlay(module: ModuleType) -> object:
     overlay._hotkey = cfg.hotkey
     overlay._hotkey_name = cfg.name
     overlay._tts_api_provider = "Cartesia"
-    overlay._last_saved_config_file = Path("config.json")
     overlay.root = None
     overlay.width = 0
     overlay.height = 0

@@ -58,15 +58,12 @@ def test_palette_backwards_compat_aliases_preserved() -> None:
     legacy = (
         "GREEN_ACCENT",
         "INPUT_BACKGROUND",
-        "INPUT_BORDER",
         "WINDOW_BG",
         "TEXT_PRIMARY",
         "TEXT_MUTED",
         "TEXT_WARNING",
         "TEXT_ERROR",
         "SEPARATOR_COLOR",
-        "BUTTON_BG",
-        "BUTTON_ACTIVE_BG",
         "CONFIG_BUTTON_IDLE",
     )
     for name in legacy:
@@ -120,7 +117,6 @@ def _new_settings_window(monkeypatch: pytest.MonkeyPatch):
     state = SettingsState(
         voices_cache=[{"id": "voice-a", "name": "Old Voice"}],
         voices_loading=False,
-        voice_fetch_error=None,
     )
     window: Any | None = None
     try:
@@ -146,7 +142,6 @@ def test_settings_stylesheet_contains_modern_selectors(monkeypatch: pytest.Monke
 
         required_substrings = (
             "QFrame#dialogShell",
-            "QPushButton#applyButton",
             "QPushButton#cancelButton",
             "QScrollBar::handle:vertical",
             "QScrollBar::handle:vertical:hover",
@@ -235,10 +230,6 @@ def _import_input_overlay(monkeypatch: pytest.MonkeyPatch):
     _test_settings.fixed_center = _OVERLAY_CONFIG["fixed_center"]
     monkeypatch.setattr(AppSettings, "load", lambda **kw: _test_settings)
     monkeypatch.setattr(AppSettings, "update", lambda self, **kw: Path("/tmp/wavtrans-test-config.json"))
-    monkeypatch.setattr(
-        "wordy.config.get_active_config_file", lambda: Path("/tmp/wavtrans-test-config.json")
-    )
-
     original_module = sys.modules.pop("wordy.ui.overlay", None)
     module = importlib.import_module("wordy.ui.overlay")
 
@@ -293,5 +284,18 @@ def test_input_overlay_capsule_invariants_preserved(monkeypatch: pytest.MonkeyPa
         size = root.size()
         assert size.width() == 540, f"overlay root width must be 540, got {size.width()}"
         assert size.height() == 58, f"overlay root height must be 58, got {size.height()}"
+
+        # 玻璃胶囊：上缘的细高光描边必须亮于其下方的玻璃填充，否则边缘没有厚度。
+        image = root.grab().toImage()
+        center_x = root.width() // 2
+
+        def _brightest(top: int, bottom: int) -> int:
+            return max(image.pixelColor(center_x, y).lightness() for y in range(top, bottom))
+
+        edge_band = _brightest(0, 4)
+        fill_band = _brightest(8, 16)
+        assert edge_band > fill_band, (
+            f"玻璃胶囊上缘高光必须亮于玻璃填充：edge={edge_band} fill={fill_band}"
+        )
     finally:
         overlay.stop()

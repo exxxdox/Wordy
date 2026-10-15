@@ -49,6 +49,19 @@ class FakeInputOverlay:
         pass
 
 
+class FakeChatWheelController:
+    """主应用生命周期测试不创建真实 QWidget 或注册系统热键。"""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        pass
+
+    def start(self) -> None:
+        pass
+
+    def stop(self) -> None:
+        pass
+
+
 class FakeTTSEngine(BackendTTSEngine):
     """Stub TTS engine with recordable side effects."""
 
@@ -147,6 +160,7 @@ def _patch_dependencies(monkeypatch):
     monkeypatch.setattr(AppSettings, "load", lambda **kw: _default_settings)
     # Patch InputOverlay to the fake.
     monkeypatch.setattr("wordy.main.InputOverlay", FakeInputOverlay)
+    monkeypatch.setattr("wordy.main.ChatWheelController", FakeChatWheelController)
     # 只替换 manager 的 janitor 工厂，保留 stdlib 线程供异步预热验证使用。
     monkeypatch.setattr("wordy.tts_manager.threading", SimpleNamespace(
         Thread=FakeJanitorThread, Event=threading.Event,
@@ -523,7 +537,6 @@ def test_on_submit_does_not_spawn_raw_daemon_thread(app, monkeypatch):
 
 def test_backend_switch_enqueues_old_worker_without_inline_cleanup(app, monkeypatch):
     """Backend switch must enqueue the old executor+engine for the janitor and NOT call shutdown/close inline."""
-    import wordy.main as main_mod
 
     old_engine = app.tts_manager.engine
     old_executor = app.tts_manager._executor
@@ -646,7 +659,6 @@ def test_run_enqueues_current_worker_and_sentinel_then_joins_janitor(app, monkey
 
     No inline executor.shutdown / engine.close calls are allowed during run cleanup.
     """
-    import wordy.main as main_mod
 
     # FakeExecutor 同步执行，异步预热必须用真实串行 worker 验证。
     executor = ThreadPoolExecutor(max_workers=1)
