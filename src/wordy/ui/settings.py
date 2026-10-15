@@ -10,8 +10,9 @@ from typing import Callable
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFont, QFontDatabase, QIcon
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit,
-    QPushButton, QScrollArea, QSlider, QStyle, QTabWidget, QVBoxLayout, QWidget,
+    QApplication, QCheckBox, QComboBox, QFontComboBox, QFrame, QHBoxLayout, QLabel,
+    QLineEdit, QPushButton, QScrollArea, QSlider, QStyle, QTabWidget, QVBoxLayout,
+    QWidget,
 )
 
 from wordy.config import AppSettings
@@ -54,10 +55,24 @@ DIALOG_MIN_HEIGHT = 636
 CONTENT_MARGIN = 20
 SECTION_GAP = 12
 INLINE_GAP = 10
+# 卡片内边距：带描边的容器里，内容要留出呼吸位，否则贴到框线上。
+# 不能再大——窄窗口（DIALOG_MIN_WIDTH）下 TTS 页的最小宽度余量只剩 26px，
+# 每加 2px 内边距就吃掉 4px，14px 就会溢出并触发横向裁切。数值同 INLINE_GAP。
+CARD_PADDING = 10
 BUTTON_GAP = 16
 BUTTON_MIN_WIDTH = 88
 # 录制结果改由浮动弹窗呈现，原地提示回到中性指引。
 RECORD_HINT = "点击录制后按下新的快捷键组合"
+
+
+def _font_is_usable(family: str) -> bool:
+    """该族能不能真的拿来当界面字体。
+
+    用 isSmoothlyScalable 而不是"在不在 QFontDatabase.families() 里"：
+    点阵遗留字体（Small Fonts / MS Sans Serif / Terminal…）确实列在 families()
+    中，但 DirectWrite 建不出字面，Qt 会一路失败并刷日志——选它等于没选。
+    """
+    return bool(family) and QFontDatabase.isSmoothlyScalable(family)
 
 
 class SettingsWindow:
@@ -340,8 +355,10 @@ class SettingsWindow:
         self._tts_provider_container = QFrame()
         self._tts_provider_container.setObjectName("ttsProviderContainer")
         container_layout = QVBoxLayout(self._tts_provider_container)
-        # 服务商与生成模式沿用同一条左对齐线，不额外缩进内层表单。
-        container_layout.setContentsMargins(0, 12, 0, 4)
+        # 服务商与生成模式沿用同一条左对齐线：横向内边距由容器统一给，
+        # 内层表单仍是 0，两者照样对齐。给的是卡片内边距而不是 0——容器带
+        # 1px 描边，内容贴到 0 会让带边框的控件直接压在框线上。
+        container_layout.setContentsMargins(CARD_PADDING, 12, CARD_PADDING, 12)
         container_layout.setSpacing(0)
 
         # 生成模式
@@ -402,12 +419,15 @@ class SettingsWindow:
         section.addWidget(self._section_title("界面字体"))
         self.ui_font_combo = NoWheelFontComboBox()
         self.ui_font_combo.setAccessibleName("界面字体")
-        # 只列系统已装字体：手打族名容易拼错，拼错了只能靠回退兜底。
-        # 存的族本机没装时，下拉框停在内置首选上——回退说明由提示文字讲清楚，
+        # 只列可平滑缩放的族。点阵遗留字体（Small Fonts / MS Sans Serif / Terminal…）
+        # 既不能当界面字体，又会因为 DirectWrite 建不出字面而在滚动列表时刷日志——
+        # QFontComboBox 默认用每个族自己的字面渲染列表项，滚到哪就试建哪个。
+        self.ui_font_combo.setFontFilters(QFontComboBox.FontFilter.ScalableFonts)
+        # 存的族不可用时，下拉框停在内置首选上——回退说明由提示文字讲清楚，
         # 配置里保留用户的选择，字体装回来就能接着用。
         saved_font = s.ui_font.strip()
         self.ui_font_combo.setCurrentFont(
-            QFont(saved_font if saved_font in QFontDatabase.families() else UI_FONT_FAMILIES[0])
+            QFont(saved_font if _font_is_usable(saved_font) else UI_FONT_FAMILIES[0])
         )
         section.addWidget(self.ui_font_combo)
         self.ui_font_hint = self._hint_label("", TEXT_MUTED)
@@ -417,9 +437,9 @@ class SettingsWindow:
         self.ui_font_combo.currentFontChanged.connect(self._on_ui_font_changed)
 
     def _refresh_ui_font_hint(self, family: str) -> None:
-        """说明当前生效的字体；选的族没装时点明已回退。"""
+        """说明当前生效的字体；选的族用不了时点明已回退。"""
         name = family.strip()
-        missing = bool(name) and name not in QFontDatabase.families()
+        missing = bool(name) and not _font_is_usable(name)
         if not name:
             text = "使用内置字体栈。"
         elif missing:

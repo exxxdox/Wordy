@@ -247,6 +247,8 @@ class AppSettings:
         _apply_if_present(raw, "overlay_opacity", settings, _clamp, (MIN_OVERLAY_OPACITY, MAX_OVERLAY_OPACITY))
         # 空字符串表示不显示提示；旧配置缺少字段时保留默认文字。
         _apply_if_present(raw, "overlay_placeholder", settings, lambda v: v if isinstance(v, str) else None)
+        # 界面首选字体族。空串是合法值（= 用内置字体栈），别用 _nonempty_str 滤掉。
+        _apply_if_present(raw, "ui_font", settings, lambda v: v.strip() if isinstance(v, str) else None)
         _apply_if_present(raw, "fixed_center", settings, lambda v: v if isinstance(v, bool) else None)
         from wordy.hotkey.native import parse_hotkey
         wheel_hotkey = raw.get("chat_wheel_hotkey")

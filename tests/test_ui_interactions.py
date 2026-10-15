@@ -566,6 +566,29 @@ def test_saved_font_missing_on_this_machine_falls_back_with_a_notice(qapp, fake_
         settings.close()
 
 
+def test_ui_font_picker_excludes_bitmap_legacy_families(qapp, fake_keyring):
+    """字体列表不能带点阵遗留字体。
+
+    Qt 为这类族建 DirectWrite 字面必然失败并往控制台刷
+    "CreateFontFaceFromHDC() failed"，而 QFontComboBox 默认用每个族自己的
+    字面渲染列表项——滚一下弹窗就刷一屏。它们本身也不适合当界面字体。
+    """
+    from PySide6.QtGui import QFontDatabase
+    from PySide6.QtWidgets import QFontComboBox
+
+    settings = SettingsWindow(None, SettingsState(), lambda: None, lambda: None,
+                              lambda field, value: None, lambda: None)
+    try:
+        combo = settings.ui_font_combo
+        assert combo.fontFilters() == QFontComboBox.FontFilter.ScalableFonts
+
+        bitmap = {f for f in QFontDatabase.families() if not QFontDatabase.isSmoothlyScalable(f)}
+        listed = {combo.itemText(i) for i in range(combo.count())}
+        assert not (listed & bitmap), f"列表里混进了点阵字体: {sorted(listed & bitmap)}"
+    finally:
+        settings.close()
+
+
 def test_settings_tab_switch_has_no_fade_and_defers_audio_scan(qapp, fake_keyring):
     """页签切换必须是瞬时的，设备枚举仍延后执行。"""
     scan = Mock()

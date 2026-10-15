@@ -27,6 +27,17 @@ def _read_toml_file(path: Path) -> dict[str, object]:
     return tomllib.loads(path.read_text(encoding="utf-8"))
 
 
+def _load_from_disk(path: Path) -> AppSettings:
+    """绕开 load() 的实例缓存，强制真的从磁盘读一次。
+
+    同一个配置路径上 load() 会直接返回已缓存的实例，断言就变成在跟内存里的
+    那个对象自说自话——"存得进、读不回"的字段会被这种写法放过。
+    """
+    wordy.config._cached_settings = None
+    wordy.config._cached_config_file = None
+    return AppSettings.load(config_file=path)
+
+
 # ---------------------------------------------------------------------------
 # display_hotkey — unchanged
 # ---------------------------------------------------------------------------
@@ -52,8 +63,27 @@ def test_ui_font_round_trips(tmp_path: Path):
 
     s.update(ui_font="Consolas", config_file=cfg)
 
-    assert AppSettings.load(config_file=cfg).ui_font == "Consolas"
     assert _read_toml_file(cfg)["ui_font"] == "Consolas"
+    assert _load_from_disk(cfg).ui_font == "Consolas"
+
+
+def test_ui_font_is_read_back_from_an_existing_file(tmp_path: Path):
+    """文件里已有 ui_font 时必须被读出来。
+
+    load() 是逐字段显式解析的，不是按 dataclass 字段全量恢复——漏写一行
+    就会变成"存得进、读不回"。这里绕开 load() 的实例缓存，直接读盘。
+    """
+    cfg = tmp_path / "ui_font_only.toml"
+    cfg.write_text('ui_font = "Consolas"\n', encoding="utf-8")
+
+    assert _load_from_disk(cfg).ui_font == "Consolas"
+
+
+def test_ui_font_missing_from_file_falls_back_to_the_default(tmp_path: Path):
+    cfg = tmp_path / "ui_font_absent.toml"
+    cfg.write_text("volume = 1.0\n", encoding="utf-8")
+
+    assert _load_from_disk(cfg).ui_font == ""
 
 
 # ---------------------------------------------------------------------------
