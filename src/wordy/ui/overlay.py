@@ -39,6 +39,8 @@ logger = logging.getLogger(__name__)
 OUTSIDE_CLICK_INTERVAL_MS = 80
 FOCUS_CLEAR_DELAY_MS = 260
 SETTINGS_IGNORE_FOCUS_DELAY_MS = 300
+# 预热撞上正在使用的输入框时，隔多久再试一次。
+SETTINGS_PREWARM_RETRY_DELAY_MS = 800
 VoiceInfo: TypeAlias = dict[str, object]
 
 
@@ -523,7 +525,7 @@ class InputOverlay:
         self._create_settings_window()
         QTimer.singleShot(SETTINGS_IGNORE_FOCUS_DELAY_MS, self._clear_ignore_focus_out)
 
-    def _create_settings_window(self) -> None:
+    def _create_settings_window(self, *, prewarm: bool = False) -> None:
         try:
             cartesia_status = wordy.secret.get_cartesia_api_key_status()
             cartesia_api_key_saved = bool(cartesia_status.get("cartesia_api_key_set", False))
@@ -563,7 +565,26 @@ class InputOverlay:
             on_field_changed=self._on_settings_field_changed,
             on_close=self._on_settings_window_closed,
             on_audio_outputs_needed=self._refresh_settings_audio_outputs,
+            prewarm=prewarm,
         )
+
+    def prewarm_settings_window(self) -> None:
+        """启动后先建一次设置窗口再丢弃，把一次性构建成本移出首次点击。
+
+        首次构建要付 Qt 的一次性开销（QTabWidget/QScrollArea/QSS 首次解析、
+        原生窗口创建），冷启动实测约 0.4s，全都会落在点击那一下。预热实例
+        不显示、随后走正常关闭路径丢弃，下一次打开仍是全新的窗口。
+        """
+        if self._active_settings_window() is not None:
+            return
+        if self.root is not None and self.root.isVisible():
+            # 正在用输入框：别把这段一次性成本插进交互中间，等收起后再来。
+            QTimer.singleShot(SETTINGS_PREWARM_RETRY_DELAY_MS, self.prewarm_settings_window)
+            return
+        self._create_settings_window(prewarm=True)
+        settings = self._active_settings_window()
+        if settings is not None:
+            settings.close()
 
     def _refresh_settings_audio_outputs(self) -> None:
         settings = self._active_settings_window()

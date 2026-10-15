@@ -427,6 +427,86 @@ def test_output_scan_only_runs_on_first_audio_tab_visit(qapp, monkeypatch):
         overlay.stop()
 
 
+def test_prewarm_builds_settings_tree_without_showing_it(qapp, fake_keyring):
+    """预热只建控件树，绝不把设置窗口显示出来。"""
+    settings = SettingsWindow(
+        None,
+        SettingsState(),
+        lambda: None,
+        lambda: None,
+        lambda field, value: None,
+        lambda: None,
+        prewarm=True,
+    )
+    try:
+        assert settings.title_bar is not None, "预热必须真的建出控件树，否则首次点击省不下成本"
+        assert not settings.window.isVisible(), "预热不能把设置窗口显示出来"
+    finally:
+        settings.close()
+
+
+def test_prewarm_window_is_discarded_without_writing_config(qapp, fake_keyring, monkeypatch):
+    """丢弃预热实例要走正常关闭路径，但不该为一次没改过配置的丢弃落盘。"""
+    from wordy.config import AppSettings
+
+    flush = Mock()
+    monkeypatch.setattr(AppSettings.load(), "flush", flush)
+    settings = SettingsWindow(
+        None,
+        SettingsState(),
+        lambda: None,
+        lambda: None,
+        lambda field, value: None,
+        lambda: None,
+        prewarm=True,
+    )
+    settings.close()
+    flush.assert_not_called()
+
+
+def test_prewarm_settings_window_leaves_no_open_window(qapp, fake_keyring, monkeypatch):
+    """预热实例必须被丢弃：留着会让下一次打开读到过期的设备与音色状态。"""
+    monkeypatch.setattr(InputOverlay, "_start_load_voices", lambda *args, **kwargs: None)
+    overlay = InputOverlay(lambda text: None)
+    overlay._ensure_ui()
+    monkeypatch.setattr(overlay, "_enumerate_input_devices", lambda: [])
+    driver = overlay._create_settings_window.__globals__["VBCableDriverManager"]
+    monkeypatch.setattr(driver, "is_installed", lambda: False)
+    try:
+        overlay.prewarm_settings_window()
+
+        assert overlay._active_settings_window() is None, "预热实例没有被丢弃"
+        overlay._open_settings()
+        settings = overlay._active_settings_window()
+        assert settings is not None and settings.window.isVisible()
+        settings.close()
+    finally:
+        overlay.stop()
+
+
+def test_prewarm_settings_window_skips_while_overlay_is_open(qapp, fake_keyring, monkeypatch):
+    """输入框正显示时不插入这段一次性成本，改为稍后重试。"""
+    monkeypatch.setattr(InputOverlay, "_start_load_voices", lambda *args, **kwargs: None)
+    overlay = InputOverlay(lambda text: None)
+    overlay._ensure_ui()
+    root = overlay.root
+    assert root is not None
+    create = Mock()
+    monkeypatch.setattr(overlay, "_create_settings_window", create)
+    retry = Mock()
+    monkeypatch.setattr("wordy.ui.overlay.QTimer.singleShot", retry)
+    try:
+        root.show()
+        qapp.processEvents()
+
+        overlay.prewarm_settings_window()
+
+        create.assert_not_called()
+        retry.assert_called_once()
+    finally:
+        overlay.stop()
+
+
 def test_settings_tab_switch_has_no_fade_and_defers_audio_scan(qapp, fake_keyring):
     """页签切换必须是瞬时的，设备枚举仍延后执行。"""
     scan = Mock()

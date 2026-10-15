@@ -45,6 +45,9 @@ class FakeInputOverlay:
     def run(self) -> None:
         pass
 
+    def prewarm_settings_window(self) -> None:
+        pass
+
     def stop(self) -> None:
         pass
 

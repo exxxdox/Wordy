@@ -33,8 +33,14 @@ from wordy.ui.overlay import InputOverlay
 from wordy.ui.tray import TrayApp
 from wordy.chat_wheel_controller import ChatWheelController
 
+from PySide6.QtCore import QTimer
+
 
 logger = logging.getLogger(__name__)
+
+# 首次打开设置要付 Qt 的一次性构建成本（QTabWidget/QScrollArea/QSS 首次解析，
+# 冷启动实测约 0.4s）。等界面起来后空闲时预热一次，把这笔成本移出首次点击。
+SETTINGS_PREWARM_DELAY_MS = 1000
 
 
 def configure_logging() -> None:
@@ -313,6 +319,8 @@ class WordyApp:
                 self.tts_manager.connect_async()
             # TrayApp 已负责托盘生命周期，无需再创建仅保存引用的控制器。
             tray_app = TrayApp(self.overlay)
+            # 界面已经起来，趁空闲先把设置窗口的一次性构建成本付掉。
+            QTimer.singleShot(SETTINGS_PREWARM_DELAY_MS, self.overlay.prewarm_settings_window)
 
             def _pre_stop() -> None:
                 dispose_tray_once()

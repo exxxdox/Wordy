@@ -70,10 +70,13 @@ class SettingsWindow:
                  on_refresh_voices: Callable[[], None],
                  on_field_changed: Callable[[str, object], None],
                  on_close: Callable[[], None],
-                 on_audio_outputs_needed: Callable[[], None] | None = None):
+                 on_audio_outputs_needed: Callable[[], None] | None = None,
+                 prewarm: bool = False):
         self.root = root
         self._on_audio_outputs_needed = on_audio_outputs_needed
         self._audio_outputs_requested = False
+        # 预热实例不显示也不改配置，丢弃时不必落盘。
+        self._prewarmed = prewarm
         self.on_record_hotkey = on_record_hotkey
         self.on_refresh_voices = on_refresh_voices
         self.on_field_changed = on_field_changed
@@ -149,6 +152,10 @@ class SettingsWindow:
         # 遮蔽要在 show 前、且在所有窗口标志/属性改完之后：
         # show 期间若因改动标志重建 HWND，遮蔽会连窗口一起丢掉。
         set_window_cloaked(window, True)
+        if prewarm:
+            # 预热只建控件树：上面的 DWM/缩放调用已经通过 winId 建出原生窗口，
+            # 那一步和 QTabWidget/QScrollArea 的首次解析才是首次点击卡顿的来源。
+            return
         window.show()
         self.lift_and_focus()
 
@@ -260,7 +267,9 @@ class SettingsWindow:
                     # 先收起窗口，再由唯一关闭路径保存；避免双重 fsync 延迟关闭反馈。
                     if self.window is not None:
                         self.window.hide()
-                    self._settings.flush()  # 确保 debounce 写入完成
+                    # 预热实例从头到尾没改过配置，丢弃它不值得再写一次盘。
+                    if not self._prewarmed:
+                        self._settings.flush()  # 确保 debounce 写入完成
                     self.on_close()
                 finally:
                     self._closed = True
