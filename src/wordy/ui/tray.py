@@ -30,10 +30,14 @@ from PySide6.QtWidgets import (
 
 from wordy.qt_lifecycle import safe_qt_call
 from wordy.ui.theme import (
-    BUTTON_GHOST_BORDER, GLASS_FILL, GLASS_FILL_STRONG, GLASS_HAIRLINE, GREEN_ACCENT,
-    SCROLLBAR_HANDLE, SCROLLBAR_HANDLE_HOVER, SEPARATOR_COLOR, TEXT_MUTED, TEXT_PRIMARY,
-    UI_FONT, WINDOW_BG,
+    GLASS_FILL, GLASS_FILL_STRONG, GLASS_HAIRLINE, SCROLLBAR_HANDLE,
+    SCROLLBAR_HANDLE_HOVER, SEPARATOR_COLOR, TEXT_MUTED, TEXT_PRIMARY, UI_FONT, WINDOW_BG,
 )
+
+# 应用图标是品牌标识，配色与打包用的 wavtrans.ico 保持一致，
+# 不参与界面主题换色——否则托盘里的标识会和 exe 图标对不上。
+ICON_BACKGROUND = "#0b1220"
+ICON_ACCENT = "#22d3a0"
 
 
 
@@ -56,11 +60,11 @@ def _create_tts_tray_icon() -> QIcon:
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
-    # 中性玻璃底 + 细高光描边，与设置页、悬浮框共用同一主题。
+    # 应用标识：配色与打包用的 wavtrans.ico 一致，故意不跟随界面主题换色。
     bg = QPainterPath()
-    bg.addRoundedRect(QRectF(4, 4, 56, 56), 16, 16)
-    painter.fillPath(bg, QBrush(QColor(WINDOW_BG)))
-    painter.setPen(QPen(QColor(BUTTON_GHOST_BORDER), 1.5))
+    bg.addRoundedRect(QRectF(4, 4, 56, 56), 12, 12)
+    painter.fillPath(bg, QBrush(QColor(ICON_BACKGROUND)))
+    painter.setPen(QPen(QColor(ICON_ACCENT), 1.5))
     painter.drawPath(bg)
 
     # 几何波形：五条等宽竖线，对称高度
@@ -71,7 +75,7 @@ def _create_tts_tray_icon() -> QIcon:
     x_start = 16.0
 
     painter.setPen(Qt.PenStyle.NoPen)
-    painter.setBrush(QBrush(QColor(GREEN_ACCENT)))
+    painter.setBrush(QBrush(QColor(ICON_ACCENT)))
     for i, h in enumerate(heights):
         rx = x_start + i * (bar_w + bar_gap)
         ry = base_y - h

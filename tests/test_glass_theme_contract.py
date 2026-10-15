@@ -156,14 +156,13 @@ _PAINT_SOURCES = (
 )
 
 # 旧主题的硬编码色；留在手绘代码里说明还没接上主题。
+# 不含应用图标品牌色：那是标识，故意不跟随界面换色，由下面单独的用例钉住。
 _LEGACY_HARDCODED_COLORS = (
     '"#55d9f2"',
     '"#8d9fff"',
     '"#9bb3cb"',
     '"#6b839b"',
     '"#f0fbff"',
-    '"#22d3a0"',
-    '"#0b1220"',
     '"#071321"',
     '"#0e2033"',
     '"#152d45"',
@@ -180,6 +179,24 @@ def test_painted_widgets_use_theme_tokens(file_name: str) -> None:
 
     leftovers = [color for color in _LEGACY_HARDCODED_COLORS if color in text]
     assert leftovers == [], f"{file_name} 仍硬编码旧主题色: {leftovers}"
+
+
+def test_tray_icon_keeps_the_application_brand_palette() -> None:
+    """托盘图标是应用标识，必须保持原来的绿白配色，不跟随界面主题。
+
+    这个配色和打包用的 wavtrans.ico 是同一套；换成强调色会让托盘里的应用
+    标识和 exe 图标对不上。
+    """
+    from wordy.ui.tray import ICON_ACCENT, ICON_BACKGROUND
+
+    assert ICON_BACKGROUND == "#0b1220"
+    assert ICON_ACCENT == "#22d3a0"
+
+    with open(os.path.join(_UI_DIR, "tray.py"), encoding="utf-8") as handle:
+        text = handle.read()
+
+    assert "ICON_ACCENT" in text and "ICON_BACKGROUND" in text
+    assert "GREEN_ACCENT" not in text, "托盘图标不应使用界面强调色"
 
 
 def test_overlay_paint_uses_specular_hairline_instead_of_terminal_dots() -> None:
