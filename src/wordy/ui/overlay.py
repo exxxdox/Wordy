@@ -271,6 +271,8 @@ class InputOverlay:
         """隐藏输入框。"""
         self._stop_outside_click_watcher()
         if self.root is not None:
+            # 隐藏期间不会再有 Leave，留着高亮下次显示还是亮的。
+            self.root.set_settings_hover(False)
             self.root.hide()
 
     def toggle(self) -> None:
@@ -388,7 +390,11 @@ class InputOverlay:
                 self._on_settings_button_release()
                 return True
             if event_type == QEvent.Type.Enter:
-                self.root.set_settings_hover(True)
+                # 设置窗口开着时输入框不再是交互面：层叠顺序变化会让 Qt 补发
+                # 没有配对的 Enter，照单全收会把图标一直点亮。设置窗口没开时
+                # Enter/Leave 就是悬停的真实来源，不要再去猜光标位置。
+                if not self._settings_window_exists():
+                    self.root.set_settings_hover(True)
                 return False
             if event_type == QEvent.Type.Leave:
                 self.root.set_settings_hover(False)
@@ -508,6 +514,10 @@ class InputOverlay:
         QTimer.singleShot(100, self._clear_ignore_focus_out)
 
     def _open_settings(self) -> None:
+        # 进入设置后输入框不再是交互面，主动收掉设置入口的高亮：
+        # 鼠标若仍停在齿轮上，Leave 不会来，高亮会一直留着。
+        if self.root is not None:
+            self.root.set_settings_hover(False)
         self._ignore_focus_out = True
         settings = self._active_settings_window()
         if settings is not None:

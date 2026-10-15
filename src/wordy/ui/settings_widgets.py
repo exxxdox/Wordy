@@ -20,7 +20,7 @@ from PySide6.QtWidgets import QApplication, QCheckBox, QComboBox, QDialog, QSlid
 if TYPE_CHECKING:
     from wordy.ui.settings import SettingsWindow
 
-from wordy.ui.theme import GREEN_ACCENT, SEPARATOR_COLOR, SURFACE_BG, TEXT_PRIMARY
+from wordy.ui.theme import BUTTON_GHOST_BORDER, ELEVATED_BG, GREEN_ACCENT, TEXT_PRIMARY
 
 INPUT_TEXT_COLOR = GREEN_ACCENT
 
@@ -120,12 +120,13 @@ class CheckmarkCheckBox(QCheckBox):
         indicator_y = (self.height() - self.INDICATOR_SIZE) // 2
         indicator_rect = QRect(0, indicator_y, self.INDICATOR_SIZE, self.INDICATOR_SIZE)
         accent_color = QColor(INPUT_TEXT_COLOR)
-        border_color = accent_color if self.isChecked() else QColor(SEPARATOR_COLOR)
-        background_color = accent_color if self.isChecked() else QColor(SURFACE_BG)
+        # 未勾选态是玻璃空槽：底色比窗口表面亮一档，描边用可见的浅灰。
+        border_color = accent_color if self.isChecked() else QColor(BUTTON_GHOST_BORDER)
+        background_color = accent_color if self.isChecked() else QColor(ELEVATED_BG)
 
         painter.setPen(QPen(border_color, 1))
         painter.setBrush(background_color)
-        painter.drawRoundedRect(indicator_rect.adjusted(0, 0, -1, -1), 3, 3)
+        painter.drawRoundedRect(indicator_rect.adjusted(0, 0, -1, -1), 4, 4)
 
         if self.isChecked():
             check_path = QPainterPath()

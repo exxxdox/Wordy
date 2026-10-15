@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
     QFrame, QGraphicsOpacityEffect, QHBoxLayout, QLabel, QVBoxLayout, QWidget,
 )
 
-from wordy.ui.theme import ELEVATED_BG, SEPARATOR_COLOR, TEXT_PRIMARY
+from wordy.ui.theme import ELEVATED_BG, RADIUS_CARD, SEPARATOR_COLOR, TEXT_PRIMARY
 
 # 停留时长按“读完一条短反馈”取值；淡出比淡入慢，收起时才不会显得突兀。
 HOLD_MS = 2600
@@ -42,12 +42,18 @@ MIN_WIDTH = 140
 # 同时最多并列几条；再多会盖住设置内容，最旧的先让位。
 MAX_VISIBLE = 3
 TEXT_PX = 12
-RADIUS_PX = 10
+# 卡片圆角跟主题阶梯走，和设置页其他玻璃面板保持同一层级。
+RADIUS_PX = RADIUS_CARD
 # 卡片外留白，用来手绘投影；分层叠加出由内向外衰减的暗边。
 SHADOW_PAD = 12
 SHADOW_STEPS = 5
-SHADOW_ALPHA = 18
-SHADOW_OFFSET = 3
+SHADOW_OFFSET = 4
+# 投影分两层：近处一小圈较实的接触影交代卡片贴在底面上，
+# 外面一大圈更淡的环境影交代它浮起的高度。单层投影只会读成一块模糊黑边。
+CONTACT_SHADOW_STEPS = 2
+CONTACT_SHADOW_ALPHA = 32
+CONTACT_SHADOW_OFFSET = 2
+AMBIENT_SHADOW_ALPHA = 15
 # 卡片内边距、色条与 1px 边框：宽度按这些常量显式换算，不依赖布局 sizeHint 缓存。
 CARD_PAD_LEFT = 10
 CARD_PAD_RIGHT = 16
@@ -274,7 +280,7 @@ class StatusToast(QWidget):
         return self.rect().contains(self.mapFromGlobal(QCursor.pos()))
 
     def paintEvent(self, _event: QPaintEvent) -> None:
-        """在卡片外圈画分层圆角矩形当投影。
+        """在卡片外圈画两层圆角投影，制造浮起的高度。
 
         Qt 每个控件只能挂一个图形效果，投影必须手绘，不能再用
         ``QGraphicsDropShadowEffect`` 嵌在淡出效果里。
@@ -282,10 +288,23 @@ class StatusToast(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(0, 0, 0, SHADOW_ALPHA))
-        for step in range(SHADOW_STEPS, 0, -1):
+
+        # 环境影：铺得最开、最淡，先画，让接触影压在上面。
+        painter.setBrush(QColor(0, 0, 0, AMBIENT_SHADOW_ALPHA))
+        for step in range(SHADOW_STEPS, CONTACT_SHADOW_STEPS, -1):
             painter.drawRoundedRect(
                 self.rect().adjusted(step, step + SHADOW_OFFSET, -step, -step + SHADOW_OFFSET),
+                RADIUS_PX + step,
+                RADIUS_PX + step,
+            )
+
+        # 接触影：贴着卡片的一圈更实的暗边，交代卡片和底面的关系。
+        painter.setBrush(QColor(0, 0, 0, CONTACT_SHADOW_ALPHA))
+        for step in range(CONTACT_SHADOW_STEPS, 0, -1):
+            painter.drawRoundedRect(
+                self.rect().adjusted(
+                    step, step + CONTACT_SHADOW_OFFSET, -step, -step + CONTACT_SHADOW_OFFSET
+                ),
                 RADIUS_PX + step,
                 RADIUS_PX + step,
             )

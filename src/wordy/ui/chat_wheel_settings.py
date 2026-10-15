@@ -22,7 +22,11 @@ from shiboken6 import isValid
 from wordy.audio.clips import AUDIO_EXTENSIONS, import_audio_clip, remove_audio_clip
 from wordy.config import AppSettings
 from wordy.ui.status_toast import show_status_toast
-from wordy.ui.theme import GREEN_ACCENT, TEXT_ERROR, TEXT_MUTED, TEXT_PRIMARY
+from wordy.ui import glass
+from wordy.ui.theme import (
+    ACCENT_SECONDARY, ELEVATED_BG, GREEN_ACCENT, TEXT_ERROR, TEXT_MUTED, TEXT_PRIMARY,
+    WINDOW_BG, tint,
+)
 
 logger = logging.getLogger(__name__)
 DIRECTIONS = ("上", "右上", "右", "右下", "下", "左下", "左", "左上")
@@ -112,10 +116,16 @@ class _WheelPicker(QWidget):
         center = QPointF(170, 120)
         outer = QRectF(58, 8, 224, 224)
         inner = QRectF(129, 79, 82, 82)
-        cyan, violet = QColor("#55d9f2"), QColor("#8d9fff")
+        accent = QColor(GREEN_ACCENT)
+        secondary = QColor(ACCENT_SECONDARY)
+        # 与运行轮盘共用同一套玻璃叠层，两处视觉不漂移；扇区同样保持足够不透明度。
+        disc = QPainterPath()
+        disc.addEllipse(QRectF(48, -2, 244, 244))
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(4, 12, 24, 185))
-        painter.drawEllipse(QRectF(48, -2, 244, 244))
+        painter.setBrush(tint(WINDOW_BG, 190))
+        painter.drawPath(disc)
+        glass.paint_noise(painter, disc)
+        glass.paint_edge_glow(painter, disc, QRectF(48, -2, 244, 244), alpha=48)
 
         for index, button in enumerate(self.buttons):
             active = button.isChecked()
@@ -129,49 +139,61 @@ class _WheelPicker(QWidget):
             path.arcTo(inner, angle - 44, 43)
             path.closeSubpath()
             if active:
-                painter.setPen(QPen(QColor(85, 217, 242, 45), 7))
+                painter.setPen(QPen(tint(GREEN_ACCENT, 50), 7))
                 painter.setBrush(Qt.BrushStyle.NoBrush)
                 painter.drawPath(path)
-            painter.setPen(QPen(cyan if highlighted else QColor(65, 112, 153, 180),
-                                1.5 if highlighted else 0.8))
-            painter.setBrush(QColor(26, 88, 116, 240) if active else
-                             QColor(15, 46, 70, 235) if highlighted else QColor(9, 27, 46, 235))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(tint(GREEN_ACCENT, 95) if active else
+                             tint(ELEVATED_BG, 250) if highlighted else tint(ELEVATED_BG, 215))
+            painter.drawPath(path)
+            # 与运行轮盘一致：分隔用居中 1px 细线，避免相邻扇区各自内缩叠出深缝。
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.setPen(QPen(accent if highlighted else tint(TEXT_PRIMARY, 45), 1.0))
             painter.drawPath(path)
 
             radians = math.radians(90 - index * 45)
             text_center = center + QPointF(78 * math.cos(radians), -78 * math.sin(radians))
             label = button.text().split("\n", 1)[-1]
             painter.setFont(QFont("Segoe UI", 7, QFont.Weight.DemiBold))
-            painter.setPen(cyan if highlighted else violet)
-            painter.drawText(QRectF(text_center.x() - 38, text_center.y() - 18, 76, 14),
-                             Qt.AlignmentFlag.AlignCenter, f"0{index + 1}")
+            glass.paint_lifted_text(
+                painter,
+                QRectF(text_center.x() - 38, text_center.y() - 18, 76, 14),
+                Qt.AlignmentFlag.AlignCenter,
+                f"0{index + 1}",
+                accent if highlighted else secondary,
+            )
             painter.setFont(QFont("Microsoft YaHei UI", 8, QFont.Weight.DemiBold))
-            painter.setPen(QColor("#f0fbff") if label != "未设置" else QColor("#6b839b"))
             text = painter.fontMetrics().elidedText(label, Qt.TextElideMode.ElideRight, 82)
-            painter.drawText(QRectF(text_center.x() - 42, text_center.y() - 2, 84, 24),
-                             Qt.AlignmentFlag.AlignCenter, text)
+            glass.paint_lifted_text(
+                painter,
+                QRectF(text_center.x() - 42, text_center.y() - 2, 84, 24),
+                Qt.AlignmentFlag.AlignCenter,
+                text,
+                QColor(TEXT_PRIMARY) if label != "未设置" else QColor(TEXT_MUTED),
+            )
 
         for tick in range(40):
             angle = math.radians(tick * 9)
             major = tick % 5 == 0
-            painter.setPen(QPen(violet if major else QColor(63, 107, 141, 150),
+            painter.setPen(QPen(secondary if major else tint(TEXT_PRIMARY, 45),
                                 1.4 if major else 0.8))
             painter.drawLine(center + QPointF(116 * math.cos(angle), 116 * math.sin(angle)),
                              center + QPointF((121 if major else 119) * math.cos(angle),
                                               (121 if major else 119) * math.sin(angle)))
 
-        painter.setBrush(QColor(7, 19, 33, 250))
-        painter.setPen(QPen(QColor(85, 217, 242, 135), 1))
+        painter.setBrush(tint(WINDOW_BG, 250))
+        painter.setPen(QPen(tint(GREEN_ACCENT, 110), 1))
         painter.drawEllipse(QRectF(133, 83, 74, 74))
-        painter.setPen(QPen(cyan, 2))
+        # 静态双弧代替运行轮盘的入场扫描：设置页不应有持续动画。
+        painter.setPen(QPen(accent, 2))
         painter.drawArc(QRectF(138, 88, 64, 64), 16 * 18, 52 * 16)
-        painter.setPen(QPen(violet, 2))
+        painter.setPen(QPen(secondary, 2))
         painter.drawArc(QRectF(138, 88, 64, 64), 16 * 198, 52 * 16)
         painter.setFont(QFont("Segoe UI", 8, QFont.Weight.DemiBold))
-        painter.setPen(cyan)
+        painter.setPen(accent)
         painter.drawText(QRectF(137, 101, 66, 17), Qt.AlignmentFlag.AlignCenter, "WORDY")
         painter.setFont(QFont("Microsoft YaHei UI", 7))
-        painter.setPen(QColor("#9bb3cb"))
+        painter.setPen(QColor(TEXT_MUTED))
         painter.drawText(QRectF(137, 121, 66, 17), Qt.AlignmentFlag.AlignCenter, "点击编辑")
         painter.end()
 
