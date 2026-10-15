@@ -92,6 +92,15 @@ driver.py(VBCableDriverManager) → config.py(AppSettings) → main.py(生命周
 
 - **PCM 格式匹配**：Volcengine SSE 返回 `pcm_s16le`（base64 编码），PyAudio 流**必须**用 `pyaudio.paInt16` 打开。不要复用 Cartesia 的 CABLE/非CABLE 的 float32/int16 分支——Cartesia 可切换输出编码，但固定编码的引擎必须硬编码正确的 PyAudio format。
 
+## 设置页反馈提示
+
+临时反馈（保存结果、录制结果、密钥与音色操作结果等）统一走 `ui/status_toast.py` 的浮动反馈队列：每条自动淡出、悬停保持、移开继续淡出；多条同时出现时上下并列（新的在下、旧的在上），各自计时逐个消失，同时最多 `MAX_VISIBLE` 条。需要长期停留的状态说明（设备数量、密钥状态、录制中指引）仍留在原地标签。面板被单独实例化时 `show_status_toast()` 返回 False，调用方回退到原地标签（测试里的独立面板走这条路径）。
+
+- **一个控件只能挂一个 `QGraphicsEffect`**：淡出已占用不透明度效果。曾在其内层卡片再加投影效果，结果卡片在可见状态下改变尺寸时，投影缓存的源图失效，Qt 整块不绘制（离屏渲染与平台合成都复现）。浮起观感改由 `paintEvent` 手绘的分层圆角矩形 + 状态色混出的渐变底色和描边实现（`_mix`）；卡片外留出 `SHADOW_PAD` 画投影，比较可见位置用 `card_geometry()`，不要用控件矩形。
+- **不要用 `adjustSize()` 定尺寸**：控件已可见时布局 `sizeHint` 缓存不更新，第二条更长的反馈会沿用上一条的尺寸导致文字被裁。尺寸按字体度量显式算出（见 `StatusToast.fit_width`）。
+- **悬停判定要核对真实光标**：显示新卡片时 Qt 会给同层卡片补发没配对的 Enter/Leave（光标并不在卡片上），照单全收会把停留时间压成悬停时长。`enterEvent` 用 `_cursor_inside()` 校验，`leaveEvent` 只在真的悬停过后才重新计时。
+- 队列挂在设置窗口（`self.window`）而非页签页，否则会被页签透明度动画一起淡化。
+
 ## 测试注意事项
 
 - `conftest.py` 提供 session 级 `qapp` fixture（全局唯一 QApplication + offscreen 平台），PySide6 测试通过参数 `qapp` 引用

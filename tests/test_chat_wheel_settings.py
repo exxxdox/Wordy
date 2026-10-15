@@ -30,6 +30,36 @@ def test_hotkey_is_committed_only_after_registration(qapp):
     assert panel.hotkey_apply.isEnabled()
 
 
+def test_import_feedback_goes_to_host_queue(qapp, monkeypatch):
+    """挂进设置窗口后，轮盘导入的反馈走浮动弹窗而不是原地标签。"""
+    from PySide6.QtWidgets import QVBoxLayout, QWidget
+
+    from wordy.ui.status_toast import StatusToastQueue
+
+    # 导入在工作线程里跑；让它立刻失败，避免测试依赖真实音频文件。
+    monkeypatch.setattr(
+        "wordy.ui.chat_wheel_settings.import_audio_clip",
+        Mock(side_effect=OSError("无法读取")),
+    )
+    host = QWidget()
+    host.resize(420, 400)
+    queue = StatusToastQueue(host)
+    container = QWidget(host)
+    layout = QVBoxLayout(container)
+    panel = ChatWheelSettings(AppSettings(), Mock())
+    layout.addWidget(panel)
+    host.show()
+    qapp.processEvents()
+
+    try:
+        panel.import_file(0, Path("clip.mp3"))
+
+        assert queue.texts() == ["正在导入上音频…"]
+        assert panel.status_label.isVisible() is False
+    finally:
+        host.close()
+
+
 def test_import_updates_file_and_label_together(qapp):
     settings = AppSettings()
     changed = Mock()

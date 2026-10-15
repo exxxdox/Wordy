@@ -199,6 +199,36 @@ class TestVolcenginePanelApiKey:
 
 
 
+def test_voice_feedback_stacks_as_popups(qapp, mock_state):
+    """音色设置的反馈全部走浮动弹窗，加载与结果两条上下并列。"""
+    from PySide6.QtTest import QTest
+
+    from wordy.ui.status_toast import SLIDE_MS, StatusToastQueue
+
+    host = QWidget()
+    host.resize(420, 400)
+    queue = StatusToastQueue(host)
+    container = QWidget(host)
+    layout = QVBoxLayout(container)
+    panel = CartesiaPanel()
+    panel.build(layout, mock_state, lambda: None)
+    host.show()
+    qapp.processEvents()
+
+    try:
+        panel.set_voices_loading()
+        panel.set_voices_loaded([{"id": "v1", "name": "Voice"}], "v1")
+        # 队列重排是滑动动画，等它落位后再比可见卡片的位置。
+        QTest.qWait(SLIDE_MS + 40)
+
+        assert queue.texts() == ["正在加载音色列表...", "已加载 1 个音色"]
+        older, newer = queue.cards()
+        assert older.card_geometry().bottom() < newer.card_geometry().y(), "多条反馈应上下并列"
+        assert panel.voice_status.isVisible() is False, "反馈不再占用原地标签"
+    finally:
+        host.close()
+
+
 def test_provider_switch_failure_restores_config_and_controls(qapp, tmp_path):
     from wordy.config import AppSettings
     from PySide6.QtWidgets import QComboBox

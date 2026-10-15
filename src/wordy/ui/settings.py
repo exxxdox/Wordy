@@ -37,6 +37,7 @@ from wordy.ui.settings_widgets import (
     CheckmarkCheckBox, NoWheelComboBox, NoWheelSlider, _SettingsDialog,
 )
 from wordy.ui.settings_style import build_settings_stylesheet
+from wordy.ui.status_toast import StatusToastQueue
 from wordy.ui.window import center_window, disable_window_transitions
 from wordy.ui.chat_wheel_settings import ChatWheelSettings
 
@@ -52,6 +53,8 @@ SECTION_GAP = 12
 INLINE_GAP = 10
 BUTTON_GAP = 16
 BUTTON_MIN_WIDTH = 88
+# 录制结果改由浮动弹窗呈现，原地提示回到中性指引。
+RECORD_HINT = "点击录制后按下新的快捷键组合"
 
 
 class SettingsWindow:
@@ -95,7 +98,8 @@ class SettingsWindow:
         self.audio_output_combo: QComboBox = NoWheelComboBox()
         self.audio_output_status_label: QLabel = QLabel()
         self.log_level_combo: QComboBox = NoWheelComboBox()
-        self.status_label: QLabel = QLabel()
+        # 临时反馈走浮动弹窗队列，不再占用页脚布局位置。
+        self.status_toasts: StatusToastQueue | None = None
         self.volume_value_label: QLabel = QLabel()
         self.volume_slider: QSlider = NoWheelSlider(Qt.Orientation.Horizontal)
         self.opacity_value_label: QLabel = QLabel()
@@ -191,11 +195,13 @@ class SettingsWindow:
         """更新快捷键录制结果。录制成功后直接注册并保存。"""
         self.record_button.setEnabled(True)
         self.record_button.setText("重新录制")
+        # 结果只在浮动弹窗中出现，原地提示回到中性指引。
+        self._reset_record_hint()
         if error is not None:
-            self._set_label(self.record_status_label, f"录制失败：{error}", TEXT_ERROR)
+            self.set_status(f"录制失败：{error}", TEXT_ERROR)
             return
         if hotkey is None or hotkey_name is None:
-            self._set_label(self.record_status_label, "已取消录制", TEXT_MUTED)
+            self.set_status("已取消录制", TEXT_MUTED)
             self.record_button.setText("录制快捷键")
             return
         # 存储录制结果，由 overlay 回调处理注册
@@ -204,7 +210,11 @@ class SettingsWindow:
         # overlay 回调负责 try_register_hotkey，成功则写入 config
         self.on_field_changed("hotkey", hotkey)
         self.pending_label.setText(f"当前：{hotkey_name}")
-        self._set_label(self.record_status_label, "已录制，快捷键已更新", INPUT_TEXT_COLOR)
+        self.set_status("已录制，快捷键已更新", INPUT_TEXT_COLOR)
+
+    def _reset_record_hint(self) -> None:
+        """把录制提示还原成中性指引，避免上一次结果长期留在固定位置。"""
+        self._set_label(self.record_status_label, RECORD_HINT, TEXT_MUTED)
 
     def set_hotkey_warning(self, text: str) -> None:
         """提示当前快捷键不可用，并引导用户重新录制。"""
@@ -232,10 +242,14 @@ class SettingsWindow:
         return []
 
     def set_status(self, text: str, color: str = INPUT_TEXT_COLOR) -> None:
-        """在底部状态栏显示临时消息。"""
-        self._set_label(self.status_label, text, color)
-        # 空状态不占一整行，让常态页脚只显示保存提示与关闭入口。
-        self.status_label.setVisible(bool(text))
+        """以浮动弹窗显示临时反馈；空文本表示立刻收起全部反馈。"""
+        queue = self.status_toasts
+        if queue is None:  # 窗口未构建完成时无处安放反馈
+            return
+        if text:
+            queue.push(text, color)
+        else:
+            queue.clear()
 
     def _handle_dialog_close(self) -> None:
         if self._closing:
@@ -349,6 +363,8 @@ class SettingsWindow:
         footer_layout.setSpacing(0)
         self._build_buttons(footer_layout)
         shell_layout.addWidget(footer, 0)
+        # 反馈弹窗挂在窗口上而非页签页，避免被页签透明度动画一起淡化。
+        self.status_toasts = StatusToastQueue(self.window)
         # 初始本地页不扫描硬件；只在首次查看音频页时读取最新设备。
         tab_widget.currentChanged.connect(self._on_settings_tab_changed)
 
@@ -415,7 +431,7 @@ class SettingsWindow:
         header.addWidget(self._section_title("全局快捷键"), 1)
         # 当前值只显示一次，避免重复信息挤占表单空间。
         self.pending_label = self._body_label(f"当前：{s.name}", INPUT_TEXT_COLOR, True)
-        self.record_status_label = self._hint_label("点击录制后按下新的快捷键组合", TEXT_MUTED)
+        self.record_status_label = self._hint_label(RECORD_HINT, TEXT_MUTED)
         self.record_button = QPushButton("录制快捷键")
         self.record_button.clicked.connect(lambda _checked=False: self.on_record_hotkey())
         header.addWidget(self.record_button)
@@ -729,11 +745,6 @@ class SettingsWindow:
         section.addWidget(self._hint_label("选择日志窗口显示和收集的最低等级，修改后立即生效。", TEXT_MUTED))
 
     def _build_buttons(self, parent_layout: QVBoxLayout) -> None:
-        self.status_label = self._hint_label("", INPUT_TEXT_COLOR)
-        self.status_label.setObjectName("applyStatusLabel")
-        self.status_label.hide()
-        parent_layout.addWidget(self.status_label)
-
         button_row = QHBoxLayout()
         button_row.setContentsMargins(0, 0, 0, 0)
         button_row.setSpacing(BUTTON_GAP)

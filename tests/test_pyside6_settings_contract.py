@@ -419,19 +419,26 @@ def test_settings_window_recording_cancel_and_error_reenable(monkeypatch: pytest
 
 
 
-def test_settings_window_exposes_inline_status_api(monkeypatch: pytest.MonkeyPatch) -> None:
-    """当前状态接口支持非模态反馈与清空。"""
+def test_settings_window_exposes_transient_status_queue(monkeypatch: pytest.MonkeyPatch) -> None:
+    """临时反馈走浮动弹窗队列：入队后可见，空文本立刻收起。"""
+    from PySide6.QtWidgets import QLabel
+
     _app, window = _new_settings_window(monkeypatch)
     try:
-        assert window.status_label.isVisible() is False
+        toasts = window.status_toasts
+        assert toasts is not None, "SettingsWindow 必须提供浮动反馈队列"
+        # 反馈不再占据页脚布局位置。
+        assert window.window.findChild(QLabel, "applyStatusLabel") is None
+
         window.set_status("设置已应用")
-        status_label = window.status_label
-        assert "设置已应用" in status_label.text()
-        assert status_label.isVisible() is True
+        assert toasts.texts() == ["设置已应用"]
+        assert toasts.cards()[0].isVisible() is True
+
+        window.set_status("快捷键未启用：注册失败")
+        assert toasts.texts() == ["设置已应用", "快捷键未启用：注册失败"], "多条反馈上下并列"
 
         window.set_status("")
-        assert status_label.text() == ""
-        assert status_label.isVisible() is False
+        assert toasts.texts() == []
     finally:
         window.close()
 

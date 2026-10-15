@@ -22,6 +22,7 @@ from wordy.ui.theme import (
     GREEN_ACCENT, TEXT_ERROR, TEXT_MUTED, TEXT_WARNING,
 )
 from wordy.ui.settings_widgets import NoWheelComboBox
+from wordy.ui.status_toast import show_status_toast
 
 INPUT_TEXT_COLOR = GREEN_ACCENT
 INLINE_GAP = 10
@@ -59,6 +60,14 @@ class _BasePanel:
     def _set_label(widget: QLabel, text: str, color: str) -> None:
         widget.setText(text)
         widget.setStyleSheet(f"color: {color};")
+
+    @classmethod
+    def _status(cls, label: QLabel, text: str, color: str) -> None:
+        """操作结果走设置窗口的浮动弹窗队列，面板独立使用时回退到原地标签。"""
+        if show_status_toast(label, text, color):
+            return
+        cls._set_label(label, text, color)
+        label.setVisible(True)
 
     @staticmethod
     def _create_section(parent: QVBoxLayout) -> QVBoxLayout:
@@ -115,6 +124,8 @@ class CartesiaPanel(_BasePanel):
         self.voice_title = self._section_title("音色设置")
         sec2.addWidget(self.voice_title)
         self.voice_status = self._hint_label("", TEXT_MUTED)
+        # 音色反馈全部走浮动弹窗队列；这条原地标签只在面板独立使用时出现。
+        self.voice_status.setVisible(False)
         sec2.addWidget(self.voice_status)
         voice_row = QHBoxLayout()
         voice_row.setContentsMargins(0, 0, 0, 0)
@@ -179,7 +190,7 @@ class CartesiaPanel(_BasePanel):
         raw = self.api_key_input.text()
         normalized = wordy.secret.normalize_api_key_input(raw) if raw else ""
         if not normalized:
-            self._set_label(self.api_status, "请输入有效的 API Key。", TEXT_WARNING)
+            self._status(self.api_status, "请输入有效的 API Key。", TEXT_WARNING)
             return
         try:
             wordy.secret.save_cartesia_api_key(normalized)
@@ -192,7 +203,7 @@ class CartesiaPanel(_BasePanel):
             if self._on_field_changed is not None:
                 self._on_field_changed("cartesia_api_key", normalized)
         except Exception as e:
-            self._set_label(self.api_status, f"保存失败：{e}", TEXT_ERROR)
+            self._status(self.api_status, f"保存失败：{e}", TEXT_ERROR)
 
     def _on_clear_key(self, _checked: bool = False) -> None:
         """清除已保存的 API Key 并触发引擎重建。"""
@@ -201,31 +212,31 @@ class CartesiaPanel(_BasePanel):
             AppSettings.load().cartesia_api_key_set = False
             self.api_key_input.clear()
             self._set_label(self.key_status_label, "当前密钥：未保存", TEXT_MUTED)
-            self._set_label(self.api_status, "API Key 已清除。", INPUT_TEXT_COLOR)
+            self._status(self.api_status, "API Key 已清除。", INPUT_TEXT_COLOR)
             # 通知 overlay 重建引擎（无密钥状态）
             if self._on_field_changed is not None:
                 self._on_field_changed("cartesia_api_key", None)
         except Exception as e:
-            self._set_label(self.api_status, f"清除失败：{e}", TEXT_ERROR)
+            self._status(self.api_status, f"清除失败：{e}", TEXT_ERROR)
 
     # ── status ───────────────────────────────────────────────────────
 
     def set_voices_loading(self) -> None:
         self.refresh_btn.setEnabled(False)
         self.refresh_btn.setText("加载中...")
-        self._set_label(self.voice_status, "正在加载音色列表...", TEXT_WARNING)
+        self._status(self.voice_status, "正在加载音色列表...", TEXT_WARNING)
 
     def set_voices_error(self, error: Exception | str) -> None:
         self.refresh_btn.setEnabled(True)
         self.refresh_btn.setText("刷新音色列表")
-        self._set_label(self.voice_status, f"加载失败：{error}", TEXT_ERROR)
+        self._status(self.voice_status, f"加载失败：{error}", TEXT_ERROR)
 
     def set_voices_loaded(self, voices: list[dict], selected_voice_id: str | None) -> list[str]:
         self.refresh_btn.setEnabled(True)
         self.refresh_btn.setText("刷新音色列表")
         self._apply_voices(voices, selected_voice_id)
         labels = list(self.voice_label_to_id.keys())
-        self._set_label(self.voice_status, f"已加载 {len(labels)} 个音色", INPUT_TEXT_COLOR)
+        self._status(self.voice_status, f"已加载 {len(labels)} 个音色", INPUT_TEXT_COLOR)
         return labels
 
 
@@ -286,7 +297,7 @@ class VolcenginePanel(_BasePanel):
         raw = self.api_key_input.text()
         normalized = raw.strip() if raw else ""
         if not normalized:
-            self._set_label(self.api_status, "请输入有效的 Access Key。", TEXT_WARNING)
+            self._status(self.api_status, "请输入有效的 Access Key。", TEXT_WARNING)
             return
         try:
             wordy.secret.save_volcengine_access_key(normalized)
@@ -299,7 +310,7 @@ class VolcenginePanel(_BasePanel):
             if self._on_field_changed is not None:
                 self._on_field_changed("volcengine_access_key", normalized)
         except Exception as e:
-            self._set_label(self.api_status, f"保存失败：{e}", TEXT_ERROR)
+            self._status(self.api_status, f"保存失败：{e}", TEXT_ERROR)
 
     def _on_clear_key(self, _checked: bool = False) -> None:
         """清除已保存的 Access Key 并触发引擎重建。"""
@@ -308,12 +319,12 @@ class VolcenginePanel(_BasePanel):
             AppSettings.load().volcengine_access_key_set = False
             self.api_key_input.clear()
             self._set_label(self.key_status_label, "当前密钥：未保存", TEXT_MUTED)
-            self._set_label(self.api_status, "Access Key 已清除。", INPUT_TEXT_COLOR)
+            self._status(self.api_status, "Access Key 已清除。", INPUT_TEXT_COLOR)
             # 通知 overlay 重建引擎（无密钥状态）
             if self._on_field_changed is not None:
                 self._on_field_changed("volcengine_access_key", None)
         except Exception as e:
-            self._set_label(self.api_status, f"清除失败：{e}", TEXT_ERROR)
+            self._status(self.api_status, f"清除失败：{e}", TEXT_ERROR)
 
     def _on_speaker_changed(self, text: str) -> None:
         """Speaker ID 变更：直接写入 AppSettings 并通知 overlay 重建引擎。"""

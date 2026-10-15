@@ -21,6 +21,7 @@ from shiboken6 import isValid
 
 from wordy.audio.clips import AUDIO_EXTENSIONS, import_audio_clip, remove_audio_clip
 from wordy.config import AppSettings
+from wordy.ui.status_toast import show_status_toast
 from wordy.ui.theme import GREEN_ACCENT, TEXT_ERROR, TEXT_MUTED, TEXT_PRIMARY
 
 logger = logging.getLogger(__name__)
@@ -237,6 +238,8 @@ class ChatWheelSettings(QWidget):
         self.status_label = QLabel("")
         self.status_label.setWordWrap(True)
         self.status_label.setAccessibleName("轮盘设置状态")
+        # 反馈优先走设置窗口的浮动弹窗，原地标签仅在面板独立使用时出现。
+        self.status_label.setVisible(False)
         layout.addWidget(self.status_label)
         layout.addStretch()
         for index in range(8):
@@ -254,8 +257,13 @@ class ChatWheelSettings(QWidget):
         return super().eventFilter(watched, event)
 
     def _status(self, text: str, *, error: bool = False) -> None:
+        color = TEXT_ERROR if error else GREEN_ACCENT
+        # 宿主窗口存在时用浮动弹窗，反馈不再长期停在页面固定位置。
+        if show_status_toast(self, text, color):
+            return
         self.status_label.setText(text)
-        self.status_label.setStyleSheet(f"color: {TEXT_ERROR if error else GREEN_ACCENT};")
+        self.status_label.setStyleSheet(f"color: {color};")
+        self.status_label.setVisible(True)
 
     def _apply_hotkey(self) -> None:
         text = self.hotkey_input.keySequence().toString(QKeySequence.SequenceFormat.PortableText).lower()
