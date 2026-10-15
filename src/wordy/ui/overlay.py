@@ -26,6 +26,7 @@ from wordy.audio.driver import VBCableDriverManager
 from wordy.ui.settings_state import SettingsState
 from wordy.ui.settings import SettingsWindow
 from wordy.ui.overlay_widgets import _OverlaySignals, _OverlayWidget
+from wordy.ui.theme import ui_font_stack
 from wordy.ui.window import activate_window, center_window, clamp_window_position, get_cursor_position, is_left_button_down, is_point_in_widget
 
 from wordy.qt_lifecycle import safe_qt_call
@@ -794,6 +795,11 @@ class InputOverlay:
         elif field_name == "overlay_placeholder":
             if self.entry is not None:
                 self.entry.setPlaceholderText(str(value))
+
+        elif field_name == "ui_font":
+            # 悬浮输入框的字体当场跟着设置走；托盘菜单在每次弹出时自己读配置。
+            if self.root is not None:
+                self.root.set_ui_font(ui_font_stack(str(value)))
 
         elif field_name == "fixed_center":
             if bool(value) and self.root:

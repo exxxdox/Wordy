@@ -32,14 +32,14 @@ from wordy.ui.theme import (
 )
 
 
-def build_settings_stylesheet() -> str:
-    """构建设置窗口的完整 QSS 样式表。"""
+def build_settings_stylesheet(font_stack: str | None = None) -> str:
+    """构建设置窗口的完整 QSS 样式表。font_stack 为空时用内置字体栈。"""
     # 强调色只在少数地方需要半透明版本，先换算一次，省得逐处拼字符串。
     accent_soft = rgba(GREEN_ACCENT, 40)
     accent_ring = rgba(GREEN_ACCENT, 150)
     return f'''
         QWidget {{
-            font-family: {UI_FONT};
+            font-family: {font_stack or UI_FONT};
             font-size: 13px;
         }}
         QDialog {{

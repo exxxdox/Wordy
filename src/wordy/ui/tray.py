@@ -28,10 +28,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from wordy.config import AppSettings
 from wordy.qt_lifecycle import safe_qt_call
 from wordy.ui.theme import (
     GLASS_FILL, GLASS_FILL_STRONG, GLASS_HAIRLINE, SCROLLBAR_HANDLE,
-    SCROLLBAR_HANDLE_HOVER, SEPARATOR_COLOR, TEXT_MUTED, TEXT_PRIMARY, UI_FONT, WINDOW_BG,
+    SCROLLBAR_HANDLE_HOVER, SEPARATOR_COLOR, TEXT_MUTED, TEXT_PRIMARY, WINDOW_BG,
+    ui_font_stack,
 )
 
 # 应用图标是品牌标识，配色与打包用的 wavtrans.ico 保持一致，
@@ -85,7 +87,7 @@ def _create_tts_tray_icon() -> QIcon:
     return QIcon(pixmap)
 
 
-def _menu_stylesheet() -> str:
+def _menu_stylesheet(font_stack: str) -> str:
     """托盘菜单的玻璃样式。
 
     Windows 上部分原生菜单会忽略 QSS；忽略时退回系统外观，不会报错。
@@ -94,7 +96,7 @@ def _menu_stylesheet() -> str:
         f"QMenu {{"
         f" background: {GLASS_FILL}; color: {TEXT_PRIMARY};"
         f" border: 1px solid {GLASS_HAIRLINE}; border-radius: 10px; padding: 6px;"
-        f" font-family: {UI_FONT}; font-size: 13px;"
+        f" font-family: {font_stack}; font-size: 13px;"
         f"}}"
         f"QMenu::item {{ padding: 7px 22px 7px 14px; border-radius: 6px; }}"
         f"QMenu::item:selected {{ background: {GLASS_FILL_STRONG}; color: {TEXT_PRIMARY}; }}"
@@ -191,7 +193,11 @@ class TrayApp:
             return
 
         menu = QMenu()
-        menu.setStyleSheet(_menu_stylesheet())
+        # 菜单样式每次弹出时重算：字体等外观设置在设置页改完就该跟上，
+        # 而这里没有 overlay→tray 的反向引用可用，读配置是最省事的接线。
+        menu.aboutToShow.connect(
+            lambda: menu.setStyleSheet(_menu_stylesheet(ui_font_stack(AppSettings.load().ui_font)))
+        )
         self.menu = menu
 
         settings_action = QAction("打开设置", menu)

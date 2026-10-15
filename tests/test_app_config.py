@@ -44,6 +44,18 @@ def test_display_hotkey():
     assert display_hotkey("") == ""
 
 
+def test_ui_font_round_trips(tmp_path: Path):
+    """界面字体是持久化设置：存盘后必须能原值读回。"""
+    cfg = tmp_path / "ui_font.toml"
+    s = AppSettings.load(config_file=cfg)
+    assert s.ui_font == "", "默认必须是空值，让 UI 用内置字体栈"
+
+    s.update(ui_font="Consolas", config_file=cfg)
+
+    assert AppSettings.load(config_file=cfg).ui_font == "Consolas"
+    assert _read_toml_file(cfg)["ui_font"] == "Consolas"
+
+
 # ---------------------------------------------------------------------------
 # Hotkey parsing through AppSettings.load()
 # ---------------------------------------------------------------------------

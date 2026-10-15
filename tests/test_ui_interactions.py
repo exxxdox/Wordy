@@ -507,6 +507,65 @@ def test_prewarm_settings_window_skips_while_overlay_is_open(qapp, fake_keyring,
         overlay.stop()
 
 
+def test_ui_font_change_restyles_the_overlay_immediately(qapp, fake_keyring, monkeypatch):
+    """设置页换字体后，悬浮输入框的文字要当场跟着换。"""
+    monkeypatch.setattr(InputOverlay, "_start_load_voices", lambda *args, **kwargs: None)
+    overlay = InputOverlay(lambda text: None)
+    overlay._ensure_ui()
+    root = overlay.root
+    assert root is not None
+    try:
+        assert '"Consolas"' not in root.entry.styleSheet()
+
+        overlay._on_settings_field_changed("ui_font", "Consolas")
+
+        for widget in (root.entry, root.prompt_label, root.submit_button):
+            assert '"Consolas"' in widget.styleSheet()
+    finally:
+        overlay.stop()
+
+
+def test_ui_font_selection_restyles_the_settings_window_and_persists(qapp, fake_keyring):
+    """在设置页选字体，本窗口当场换字体，并写进配置。"""
+    from PySide6.QtGui import QFont
+
+    from wordy.config import AppSettings
+    from wordy.ui.theme import ui_font_stack
+
+    settings = SettingsWindow(None, SettingsState(), lambda: None, lambda: None,
+                              lambda field, value: None, lambda: None)
+    try:
+        window = settings.window
+        assert window is not None
+        settings.ui_font_combo.setCurrentFont(QFont("Consolas"))
+        # offscreen 平台没有字体库，族名会被替换；断言机制而非具体族名：
+        # 下拉框当前值、配置、样式表三者必须一致。
+        chosen = settings.ui_font_combo.currentFont().family()
+
+        assert AppSettings.load().ui_font == chosen
+        assert f"font-family: {ui_font_stack(chosen)};" in window.styleSheet()
+    finally:
+        settings.close()
+
+
+def test_saved_font_missing_on_this_machine_falls_back_with_a_notice(qapp, fake_keyring):
+    """存的族本机没装：窗口照常构建、选中族仍排在最前、提示说明已回退。"""
+    from wordy.config import AppSettings
+
+    missing = "一个一定不存在的字体族"
+    AppSettings.load().update(ui_font=missing)
+    settings = SettingsWindow(None, SettingsState(), lambda: None, lambda: None,
+                              lambda field, value: None, lambda: None)
+    try:
+        window = settings.window
+        assert window is not None
+        assert f'"{missing}"' in window.styleSheet()
+        assert "回退" in settings.ui_font_hint.text()
+        assert missing in settings.ui_font_hint.text()
+    finally:
+        settings.close()
+
+
 def test_settings_tab_switch_has_no_fade_and_defers_audio_scan(qapp, fake_keyring):
     """页签切换必须是瞬时的，设备枚举仍延后执行。"""
     scan = Mock()

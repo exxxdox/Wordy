@@ -745,3 +745,16 @@ def test_tray_quit_action_does_not_reenter_event_loop(
                 overlay.stop()
             except Exception:
                 pass
+
+
+def test_menu_stylesheet_uses_the_given_font_stack():
+    """托盘菜单的字体跟着设置走，并且保留内置回退链。"""
+    from wordy.ui.theme import UI_FONT, UI_FONT_FAMILIES, ui_font_stack
+    from wordy.ui.tray import _menu_stylesheet
+
+    assert f"font-family: {UI_FONT};" in _menu_stylesheet(ui_font_stack())
+
+    custom = _menu_stylesheet(ui_font_stack("Consolas"))
+    assert '"Consolas"' in custom
+    for family in UI_FONT_FAMILIES:
+        assert f'"{family}"' in custom

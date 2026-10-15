@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Callable
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QIcon
+from PySide6.QtGui import QFont, QFontDatabase, QIcon
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QScrollArea, QSlider, QStyle, QTabWidget, QVBoxLayout, QWidget,
@@ -25,15 +25,15 @@ from wordy.tts.constants import (
 )
 from wordy.identity import normalize_identity
 from wordy.ui.theme import (
-    GREEN_ACCENT, TEXT_ERROR, TEXT_MUTED, TEXT_WARNING,
+    GREEN_ACCENT, TEXT_ERROR, TEXT_MUTED, TEXT_WARNING, UI_FONT_FAMILIES, ui_font_stack,
 )
 from wordy.ui.tts_panels import PROVIDER_PANELS
 from wordy.ui.settings_state import (
     AudioOutputDevice, AudioOutputIdentity, SettingsState, VoiceRecord,
 )
 from wordy.ui.settings_widgets import (
-    CheckmarkCheckBox, NoWheelComboBox, NoWheelSlider, WINDOW_EDGE_PAD, _SettingsDialog,
-    _TitleBar,
+    CheckmarkCheckBox, NoWheelComboBox, NoWheelFontComboBox, NoWheelSlider,
+    WINDOW_EDGE_PAD, _SettingsDialog, _TitleBar,
 )
 from wordy.ui.settings_style import build_settings_stylesheet
 from wordy.ui.status_toast import StatusToastQueue
@@ -135,7 +135,7 @@ class SettingsWindow:
         self.window.setSizeGripEnabled(False)  # 缩放改由 startSystemResize 承担，不叠加尺寸手柄。
         # 玻璃底由 paintEvent 自绘，窗口本身必须透明才透得出背后。
         self.window.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.window.setStyleSheet(build_settings_stylesheet())
+        self.window.setStyleSheet(build_settings_stylesheet(ui_font_stack(self._settings.ui_font)))
         window = self.window
         self._build(state)
         # 深色样式和布局在隐藏时完成，按最终尺寸居中，避免首帧白底或显示后跳位。
@@ -313,6 +313,8 @@ class SettingsWindow:
         local_layout = self._create_tab_page(tab_widget, "本地设置")
         self._build_hotkey_section(local_layout, s)
         self._add_inner_gap(local_layout)
+        self._build_ui_font_section(local_layout, s)
+        self._add_inner_gap(local_layout)
         self._build_placeholder_section(local_layout, s)
         self._add_inner_gap(local_layout)
         self._build_volume_section(local_layout, s)
@@ -394,6 +396,46 @@ class SettingsWindow:
     def _load_audio_outputs(self) -> None:
         if self.exists() and self._on_audio_outputs_needed is not None:
             self._on_audio_outputs_needed()
+
+    def _build_ui_font_section(self, parent_layout: QVBoxLayout, s: AppSettings) -> None:
+        section = self._create_section(parent_layout)
+        section.addWidget(self._section_title("界面字体"))
+        self.ui_font_combo = NoWheelFontComboBox()
+        self.ui_font_combo.setAccessibleName("界面字体")
+        # 只列系统已装字体：手打族名容易拼错，拼错了只能靠回退兜底。
+        # 存的族本机没装时，下拉框停在内置首选上——回退说明由提示文字讲清楚，
+        # 配置里保留用户的选择，字体装回来就能接着用。
+        saved_font = s.ui_font.strip()
+        self.ui_font_combo.setCurrentFont(
+            QFont(saved_font if saved_font in QFontDatabase.families() else UI_FONT_FAMILIES[0])
+        )
+        section.addWidget(self.ui_font_combo)
+        self.ui_font_hint = self._hint_label("", TEXT_MUTED)
+        section.addWidget(self.ui_font_hint)
+        self._refresh_ui_font_hint(saved_font)
+        # 初始赋值完成后再连接，打开设置不会把默认值误写入配置。
+        self.ui_font_combo.currentFontChanged.connect(self._on_ui_font_changed)
+
+    def _refresh_ui_font_hint(self, family: str) -> None:
+        """说明当前生效的字体；选的族没装时点明已回退。"""
+        name = family.strip()
+        missing = bool(name) and name not in QFontDatabase.families()
+        if not name:
+            text = "使用内置字体栈。"
+        elif missing:
+            text = f"未安装「{name}」，已回退到内置字体。"
+        else:
+            text = f"界面使用「{name}」，找不到时回退到内置字体。"
+        self._set_label(self.ui_font_hint, text, TEXT_WARNING if missing else TEXT_MUTED)
+
+    def _on_ui_font_changed(self, font: QFont) -> None:
+        family = font.family()
+        self._settings.ui_font = family
+        self.on_field_changed("ui_font", family)
+        # 本窗口当场换字体；悬浮输入框与托盘菜单各自在自己的刷新路径上跟进。
+        if self.window is not None:
+            self.window.setStyleSheet(build_settings_stylesheet(ui_font_stack(family)))
+        self._refresh_ui_font_hint(family)
 
     def _build_placeholder_section(self, parent_layout: QVBoxLayout, s: AppSettings) -> None:
         section = self._create_section(parent_layout)

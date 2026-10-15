@@ -63,8 +63,21 @@ RADIUS_CARD = 14
 RADIUS_CONTROL = 10
 RADIUS_CHIP = 8
 
-# 字体栈 —— UI 标签用系统无衬线
-UI_FONT ='"Segoe UI Variable", "Microsoft YaHei UI", "Segoe UI", sans-serif'
+# 字体栈 —— UI 标签用系统无衬线。首选族排在最前，其余是回退链：
+# 用户选的字体没装时 Qt 会沿列表往后找，不需要额外判断。
+UI_FONT_FAMILIES = ("Segoe UI Variable", "Microsoft YaHei UI", "Segoe UI")
+UI_FONT = ", ".join(f'"{family}"' for family in UI_FONT_FAMILIES) + ", sans-serif"
+
+
+def ui_font_stack(preferred: str | None = None) -> str:
+    """拼 QSS 用的 font-family：用户首选族优先，后面跟内置回退栈。
+
+    保持纯函数：theme 不能 import AppSettings（会连带拖起 keyring），
+    首选族由调用方从配置里读出来传进来。
+    """
+    name = (preferred or "").strip()
+    families = (name, *UI_FONT_FAMILIES) if name and name not in UI_FONT_FAMILIES else UI_FONT_FAMILIES
+    return ", ".join(f'"{family}"' for family in families) + ", sans-serif"
 
 
 def rgba(hex_color: str, alpha: int) -> str:

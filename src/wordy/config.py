@@ -74,6 +74,9 @@ class AppSettings:
     volume: float = 1.0
     overlay_opacity: float = 1.0
     overlay_placeholder: str = "Hello World~"
+    # 界面首选字体族；空 = 用 theme.UI_FONT_FAMILIES 内置栈。
+    # 只影响 QSS 界面（设置窗口、悬浮输入框、托盘菜单）。
+    ui_font: str = ""
     fixed_center: bool = True
     log_level: str = "INFO"
     window_position: dict[str, int] | None = None

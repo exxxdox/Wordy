@@ -19,8 +19,8 @@ from PySide6.QtGui import (
     QPainterPath, QPaintEvent, QPen, QShowEvent,
 )
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QDialog, QHBoxLayout, QLabel, QPushButton,
-    QSlider, QWidget,
+    QApplication, QCheckBox, QComboBox, QDialog, QFontComboBox, QHBoxLayout, QLabel,
+    QPushButton, QSlider, QWidget,
 )
 
 if TYPE_CHECKING:
@@ -427,6 +427,13 @@ class _TitleBar(QWidget):
 
 class NoWheelComboBox(QComboBox):
     """忽略折叠状态下的鼠标滚轮，避免误切换选项并让滚动传递给设置页。"""
+
+    def wheelEvent(self, event) -> None:  # type: ignore[override]
+        event.ignore()
+
+
+class NoWheelFontComboBox(QFontComboBox):
+    """同上，但列出已安装字体族供界面字体选择。"""
 
     def wheelEvent(self, event) -> None:  # type: ignore[override]
         event.ignore()

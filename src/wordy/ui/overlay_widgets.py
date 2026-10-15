@@ -19,7 +19,7 @@ from PySide6.QtWidgets import QLabel, QLineEdit, QPushButton, QStyle, QWidget
 from wordy.ui import glass
 from wordy.ui.theme import (
     ACCENT_HOVER, ACCENT_SECONDARY, CONFIG_BUTTON_IDLE, GREEN_ACCENT,
-    INPUT_BACKGROUND, RADIUS_WINDOW, UI_FONT, TEXT_PRIMARY,
+    INPUT_BACKGROUND, RADIUS_WINDOW, TEXT_PRIMARY, ui_font_stack,
 )
 
 # Material Symbols 设置图标 SVG 路径
@@ -65,6 +65,10 @@ class _OverlaySignals(QObject):
 class _OverlayWidget(QWidget):
     """无边框透明胶囊输入框 —— 终端风格。"""
 
+    PROMPT_FONT_SIZE = 20
+    ENTRY_FONT_SIZE = 24
+    SUBMIT_FONT_SIZE = 22
+
     def __init__(self, owner: "InputOverlay", signals: _OverlaySignals) -> None:
         super().__init__()
         self._owner = owner
@@ -84,22 +88,14 @@ class _OverlayWidget(QWidget):
         self.setFixedSize(owner.width, owner.height)
         self.setMouseTracking(True)
 
+        # 字体族由 _apply_font_styles 统一注入——设置页换字体时要能当场重刷。
+        self._font_stack = ui_font_stack(owner._cfg.ui_font)
         # 左侧提示符：用系统 UI 字体读作玻璃面板上的一个符号，而不是终端光标。
-        prompt_font_size = 20
         self.prompt_label = QLabel(">", self)
         self.prompt_label.setObjectName("overlayPrompt")
         self.prompt_label.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
-        prompt_y = (owner.height - prompt_font_size - 4) // 2
-        self.prompt_label.setGeometry(PROMPT_LEFT, prompt_y, 18, prompt_font_size + 4)
-        self.prompt_label.setStyleSheet(f'''
-            QLabel#overlayPrompt {{
-                color: {CONFIG_BUTTON_TEXT_COLOR};
-                background: transparent;
-                font-family: {UI_FONT};
-                font-size: {prompt_font_size}px;
-                font-weight: 500;
-            }}
-        ''')
+        prompt_y = (owner.height - self.PROMPT_FONT_SIZE - 4) // 2
+        self.prompt_label.setGeometry(PROMPT_LEFT, prompt_y, 18, self.PROMPT_FONT_SIZE + 4)
 
         self.entry = QLineEdit(self)
         self.entry.setObjectName("overlayEntry")
@@ -114,18 +110,6 @@ class _OverlayWidget(QWidget):
         )
         self.entry.returnPressed.connect(owner._on_return)
         self.entry.installEventFilter(signals)
-        self.entry.setStyleSheet(f'''
-            QLineEdit#overlayEntry {{
-                background: transparent;
-                color: {TEXT_PRIMARY};
-                selection-background-color: {CONFIG_BUTTON_HOVER_TEXT_COLOR};
-                selection-color: {INPUT_BACKGROUND_COLOR};
-                border: none;
-                font-family: {UI_FONT};
-                font-size: 24px;
-                padding: 0;
-            }}
-        ''')
 
         # 显式入口让鼠标用户也能朗读；不抢输入焦点，避免点击时触发失焦收起。
         self.submit_button = QPushButton(self)
@@ -141,12 +125,8 @@ class _OverlayWidget(QWidget):
         self.submit_button.setIconSize(QSize(20, 20))
         self.submit_button.clicked.connect(owner._on_read)
         self.entry.textChanged.connect(self._on_submit_text_changed)
-        self.submit_button.setStyleSheet(f'''
-            QPushButton {{ background: transparent; color: {INPUT_TEXT_COLOR};
-                border: none; border-radius: 9px;
-                font-size: 22px; padding: 0; }}
-            QPushButton:disabled {{ color: {CONFIG_BUTTON_TEXT_COLOR}; background: transparent; }}
-        ''')
+
+        self._apply_font_styles()
 
         # Material Symbols SVG 设置图标（透明背景）
         icon_size = 24
@@ -249,6 +229,47 @@ class _OverlayWidget(QWidget):
         renderer.render(p)
         p.end()
         return pixmap
+
+    def _apply_font_styles(self) -> None:
+        """把当前字体栈写进三处带文字的样式表。
+
+        抽成方法是因为这三条规则里只有 font-family 会随设置变，其余是静态外观；
+        换字体时整段重设最省事，也保证三处永远用同一个栈。
+        """
+        self.prompt_label.setStyleSheet(f'''
+            QLabel#overlayPrompt {{
+                color: {CONFIG_BUTTON_TEXT_COLOR};
+                background: transparent;
+                font-family: {self._font_stack};
+                font-size: {self.PROMPT_FONT_SIZE}px;
+                font-weight: 500;
+            }}
+        ''')
+        self.entry.setStyleSheet(f'''
+            QLineEdit#overlayEntry {{
+                background: transparent;
+                color: {TEXT_PRIMARY};
+                selection-background-color: {CONFIG_BUTTON_HOVER_TEXT_COLOR};
+                selection-color: {INPUT_BACKGROUND_COLOR};
+                border: none;
+                font-family: {self._font_stack};
+                font-size: {self.ENTRY_FONT_SIZE}px;
+                padding: 0;
+            }}
+        ''')
+        # 提交按钮原先没写族名，一直飘在应用默认字体上，跟旁边的输入框不是一套。
+        self.submit_button.setStyleSheet(f'''
+            QPushButton {{ background: transparent; color: {INPUT_TEXT_COLOR};
+                border: none; border-radius: 9px;
+                font-family: {self._font_stack};
+                font-size: {self.SUBMIT_FONT_SIZE}px; padding: 0; }}
+            QPushButton:disabled {{ color: {CONFIG_BUTTON_TEXT_COLOR}; background: transparent; }}
+        ''')
+
+    def set_ui_font(self, font_stack: str) -> None:
+        """设置页改字体后当场重刷，不必等下次启动。"""
+        self._font_stack = font_stack
+        self._apply_font_styles()
 
     def set_overlay_opacity(self, opacity: float) -> None:
         self._overlay_opacity = opacity
