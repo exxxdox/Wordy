@@ -19,7 +19,7 @@ _ = os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 pytest.importorskip("PySide6.QtGui")
 
-from PySide6.QtCore import QRectF  # noqa: E402
+from PySide6.QtCore import QRectF, Qt  # noqa: E402
 from PySide6.QtGui import QColor, QImage, QPainter, QPainterPath  # noqa: E402
 
 from wordy.ui import glass  # noqa: E402
@@ -211,3 +211,57 @@ def test_edge_glow_ignores_alpha_at_zero() -> None:
     )
 
     assert image.pixelColor(80, 22).lightness() == _BASE.lightness()
+
+
+# ---------------------------------------------------------------------------
+# 浮起投影
+# ---------------------------------------------------------------------------
+
+# 面板四周留够投影铺开的余量，投影贴边会被画布裁掉。
+_SHADOW_BOUNDS = QRectF(40, 30, 80, 40)
+
+
+def _render_shadow(*, opacity: float = 1.0) -> QImage:
+    def draw(painter: QPainter) -> None:
+        glass.paint_drop_shadow(painter, _SHADOW_BOUNDS, _RADIUS, opacity=opacity)
+        # 面板压在最上层：投影只该出现在它的外侧。
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(_BASE)
+        painter.drawRoundedRect(_SHADOW_BOUNDS, _RADIUS, _RADIUS)
+
+    return _render(160, 120, draw)
+
+
+def test_drop_shadow_darkens_outside_the_panel_and_fades_outward() -> None:
+    """投影必须在面板外侧并向外衰减：没有向外的暗边就读不出浮起。"""
+    image = _render_shadow()
+    # 投影很短，取样点贴着面板边缘取，更远处应当已经回到纯底色。
+    near = image.pixelColor(80, 72).lightness()
+    far = image.pixelColor(80, 88).lightness()
+    inside = image.pixelColor(80, 50).lightness()
+
+    assert near < _BASE.lightness(), f"面板外侧必须出现投影：near={near}"
+    assert near < far, f"投影必须向外衰减，否则外缘是一道硬边：near={near} far={far}"
+    assert inside == _BASE.lightness(), "面板本体不应被自己的投影压暗"
+
+
+def test_drop_shadow_wraps_the_sides_and_not_only_the_bottom() -> None:
+    """投影是四周等宽的：左右两侧同样要有暗边，只压住下缘会读成一条描边。"""
+    image = _render_shadow()
+
+    assert image.pixelColor(38, 50).lightness() < _BASE.lightness(), "左侧缺少投影"
+    assert image.pixelColor(122, 50).lightness() < _BASE.lightness(), "右侧缺少投影"
+
+
+def test_drop_shadow_never_paints_under_the_panel() -> None:
+    """投影不得压到面板底下：面板半透明时那层黑会透出来糊在内容上。"""
+    image = _render(160, 120, lambda painter: glass.paint_drop_shadow(painter, _SHADOW_BOUNDS, _RADIUS))
+
+    assert image.pixelColor(80, 50).lightness() == _BASE.lightness(), "面板本体被投影压暗"
+
+
+def test_drop_shadow_ignores_zero_opacity() -> None:
+    """不透明度为 0 时投影整体消失，跟随输入框的透明度设置。"""
+    image = _render_shadow(opacity=0.0)
+
+    assert image.pixelColor(80, 74).lightness() == _BASE.lightness()

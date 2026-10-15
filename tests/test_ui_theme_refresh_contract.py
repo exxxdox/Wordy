@@ -281,19 +281,27 @@ def test_input_overlay_capsule_invariants_preserved(monkeypatch: pytest.MonkeyPa
         assert pixmap is not None, "settingsButton must have a pixmap set"
         assert not pixmap.isNull(), "settingsButton pixmap must be valid"
 
+        # 窗口比胶囊大一圈：那圈余量是投影的画布，契约钉的是胶囊本体的尺寸。
+        from wordy.ui.overlay_widgets import SHADOW_PAD
+
         size = root.size()
-        assert size.width() == 540, f"overlay root width must be 540, got {size.width()}"
-        assert size.height() == 58, f"overlay root height must be 58, got {size.height()}"
+        expected_width = 540 + 2 * SHADOW_PAD
+        expected_height = 58 + 2 * SHADOW_PAD
+        assert size.width() == expected_width, f"overlay root width must be {expected_width}, got {size.width()}"
+        assert size.height() == expected_height, f"overlay root height must be {expected_height}, got {size.height()}"
+        content = root.content_rect()
+        assert content.width() == 540, f"overlay capsule width must be 540, got {content.width()}"
+        assert content.height() == 58, f"overlay capsule height must be 58, got {content.height()}"
 
         # 玻璃胶囊：上缘的细高光描边必须亮于其下方的玻璃填充，否则边缘没有厚度。
         image = root.grab().toImage()
-        center_x = root.width() // 2
+        center_x = content.center().x()
 
         def _brightest(top: int, bottom: int) -> int:
             return max(image.pixelColor(center_x, y).lightness() for y in range(top, bottom))
 
-        edge_band = _brightest(0, 4)
-        fill_band = _brightest(8, 16)
+        edge_band = _brightest(content.top(), content.top() + 4)
+        fill_band = _brightest(content.top() + 8, content.top() + 16)
         assert edge_band > fill_band, (
             f"玻璃胶囊上缘高光必须亮于玻璃填充：edge={edge_band} fill={fill_band}"
         )

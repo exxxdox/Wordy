@@ -33,6 +33,17 @@ SHADE_WIDTH = 3.0
 # 玻璃上文字的投影：够把内容从玻璃上分离，又不至于读成描边字。
 TEXT_SHADOW_ALPHA = 150
 
+# 浮起投影分两层：外侧一层更淡的环境影铺开浮起的高度，贴着面板的一圈更实，
+# 交代面板与底面的接触。单层投影只会读成一块模糊黑边。
+# 收得很短、不带方向偏移、alpha 压得低：这是悬浮输入框那种贴着桌面的一点点
+# 分离感，铺太长或偏下会变成一块落地影。
+SHADOW_STEPS = 4
+SHADOW_ALPHA = 9
+SHADOW_OFFSET = 0
+CONTACT_SHADOW_STEPS = 2
+CONTACT_SHADOW_ALPHA = 18
+CONTACT_SHADOW_OFFSET = 0
+
 _noise_image: QImage | None = None
 
 
@@ -123,6 +134,53 @@ def paint_glass_rim(
     painter.setPen(QPen(rim if isinstance(rim, QBrush) else QBrush(rim), 1.0))
     painter.setOpacity(opacity)
     painter.drawPath(_inset_path(bounds, radius, 0.5))
+    painter.restore()
+
+
+def paint_drop_shadow(
+    painter: QPainter,
+    bounds: QRectF,
+    radius: float,
+    *,
+    opacity: float = 1.0,
+) -> None:
+    """在面板外圈画两层圆角投影，让玻璃从背景上浮起。
+
+    投影全部落在 ``bounds`` 之外，调用方必须在窗口里预留出
+    ``SHADOW_STEPS + SHADOW_OFFSET`` 以上的余量，否则会被窗口边界裁成硬边。
+    """
+    if opacity <= 0.0:
+        return
+    painter.save()
+    painter.setPen(Qt.PenStyle.NoPen)
+    # 面板本体不参与投影：面板半透明时，压在它下面的暗影会透出来糊在内容上。
+    # 裁剪区取「所有层的外接矩形减去面板」，投影正好只留在外侧那一圈。
+    area = QPainterPath()
+    area.addRect(
+        bounds.adjusted(
+            -SHADOW_STEPS - 1, -SHADOW_STEPS + SHADOW_OFFSET - 1,
+            SHADOW_STEPS + 1, SHADOW_STEPS + SHADOW_OFFSET + 1,
+        )
+    )
+    painter.setClipPath(area.subtracted(_rounded(bounds, radius)))
+
+    # 环境影：铺得最开、最淡，先画，让接触影压在上面。
+    painter.setBrush(QColor(0, 0, 0, round(SHADOW_ALPHA * opacity)))
+    for step in range(SHADOW_STEPS, CONTACT_SHADOW_STEPS, -1):
+        painter.drawRoundedRect(
+            bounds.adjusted(-step, -step + SHADOW_OFFSET, step, step + SHADOW_OFFSET),
+            radius + step,
+            radius + step,
+        )
+
+    # 接触影：贴着面板的一圈更实的暗边，交代面板和底面的关系。
+    painter.setBrush(QColor(0, 0, 0, round(CONTACT_SHADOW_ALPHA * opacity)))
+    for step in range(CONTACT_SHADOW_STEPS, 0, -1):
+        painter.drawRoundedRect(
+            bounds.adjusted(-step, -step + CONTACT_SHADOW_OFFSET, step, step + CONTACT_SHADOW_OFFSET),
+            radius + step,
+            radius + step,
+        )
     painter.restore()
 
 

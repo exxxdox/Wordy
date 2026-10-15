@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QPoint, QSize, Qt
 from PySide6.QtGui import QCursor
 from PySide6.QtTest import QTest
 
@@ -88,15 +88,52 @@ def test_opacity_slider_changes_rendered_overlay_background(qapp, monkeypatch):
             get_style.restype = ctypes.c_ssize_t
             assert get_style(int(root.winId()), -20) & 0x00080000  # WS_EX_LAYERED
         settings.opacity_slider.setValue(settings.opacity_slider.maximum())
-        opaque = root.grab().toImage().pixelColor(200, 5).alpha()
+        # 取样点跟着胶囊走：窗口比胶囊大一圈，投影留白不在里面。
+        # 噪点按窗口坐标平铺，取样点平移后落在噪点的另一个相位上，
+        # 半透明档的实测值会有几个 alpha 的抖动，所以上限留出余量。
+        capsule = root.content_rect()
+        probe = capsule.topLeft() + QPoint(200, 5)
+        opaque = root.grab().toImage().pixelColor(probe).alpha()
         settings.opacity_slider.setValue(0)
         qapp.processEvents()
-        translucent = root.grab().toImage().pixelColor(200, 5).alpha()
+        translucent = root.grab().toImage().pixelColor(probe).alpha()
         assert opaque == 255
-        assert 70 <= translucent <= 100, (opaque, translucent)
-        assert root.grab().toImage().pixelColor(300, 30).alpha() < 110
+        assert 70 <= translucent <= 115, (opaque, translucent)
+        assert root.grab().toImage().pixelColor(capsule.topLeft() + QPoint(300, 30)).alpha() < 110
     finally:
         settings.close()
+        overlay.stop()
+
+
+def test_overlay_shadow_padding_stays_outside_the_hit_area(qapp, monkeypatch):
+    """投影留白只用来画阴影：不算窗口内部，按在上面也不触发拖动。"""
+    from wordy.ui.overlay_widgets import SHADOW_PAD
+
+    monkeypatch.setattr(InputOverlay, "_start_load_voices", lambda *args, **kwargs: None)
+    overlay = InputOverlay(lambda text: None)
+    overlay._ensure_ui()
+    root = overlay.root
+    assert root is not None
+    root.move(300, 200)
+    root.show()
+    qapp.processEvents()
+    try:
+        capsule = root.content_rect()
+        assert capsule.topLeft() == QPoint(SHADOW_PAD, SHADOW_PAD)
+        assert capsule.size() == QSize(overlay.width, overlay.height)
+
+        inside = root.mapToGlobal(capsule.center())
+        padding = root.mapToGlobal(QPoint(SHADOW_PAD // 2, SHADOW_PAD // 2))
+        assert root.contains_global_point(inside.x(), inside.y())
+        assert not root.contains_global_point(padding.x(), padding.y())
+        assert overlay._is_point_in_tracked_windows(inside.x(), inside.y())
+        assert not overlay._is_point_in_tracked_windows(padding.x(), padding.y())
+
+        # 留白区的按下不进入拖动状态，否则那圈看不见的区域也能拖着窗口走。
+        QTest.mousePress(root, Qt.MouseButton.LeftButton, pos=QPoint(SHADOW_PAD // 2, SHADOW_PAD // 2))
+        assert not overlay._is_dragging_window
+        QTest.mouseRelease(root, Qt.MouseButton.LeftButton, pos=QPoint(SHADOW_PAD // 2, SHADOW_PAD // 2))
+    finally:
         overlay.stop()
 
 

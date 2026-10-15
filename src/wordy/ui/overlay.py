@@ -25,7 +25,7 @@ from wordy.audio.capture import list_input_devices
 from wordy.audio.driver import VBCableDriverManager
 from wordy.ui.settings_state import SettingsState
 from wordy.ui.settings import SettingsWindow
-from wordy.ui.overlay_widgets import _OverlaySignals, _OverlayWidget
+from wordy.ui.overlay_widgets import SHADOW_PAD, _OverlaySignals, _OverlayWidget
 from wordy.ui.theme import ui_font_stack
 from wordy.ui.window import activate_window, center_window, clamp_window_position, get_cursor_position, is_left_button_down, is_point_in_widget
 
@@ -454,18 +454,31 @@ class InputOverlay:
     def _handle_hotkey_triggered(self) -> None:
         self.toggle()
 
+    def _window_size(self) -> tuple[int, int]:
+        """窗口实际尺寸 = 胶囊内容尺寸 + 四周投影留白。
+
+        窗口比胶囊大一圈（见 overlay_widgets.SHADOW_PAD），居中与边界钳位都必须
+        按真实窗口算，否则胶囊会从中心或屏幕边缘偏出那圈留白。
+        """
+        root = self.root
+        if root is not None:
+            return root.width(), root.height()
+        return self.width + SHADOW_PAD * 2, self.height + SHADOW_PAD * 2
+
     def _position_window_for_show(self) -> None:
         if self.root is None:
             return
+        width, height = self._window_size()
         if self._cfg.fixed_center or self._cfg.window_position is None:
-            center_window(self.root, self.width, self.height)
+            center_window(self.root, width, height)
             return
         x, y = self._clamp_window_position(self._cfg.window_position["x"], self._cfg.window_position["y"])
-        self.root.setGeometry(x, y, self.width, self.height)
+        self.root.move(x, y)
 
     def _clamp_window_position(self, x: int, y: int) -> tuple[int, int]:
         root = self.root
-        return clamp_window_position(root, self.width, self.height, x, y)
+        width, height = self._window_size()
+        return clamp_window_position(root, width, height, x, y)
 
     def _active_settings_window(self) -> SettingsWindow | None:
         if self._settings_window is not None and self._settings_window.exists():
@@ -501,7 +514,7 @@ class InputOverlay:
         x = self._drag_start_window_x + position.x() - self._drag_start_mouse_x
         y = self._drag_start_window_y + position.y() - self._drag_start_mouse_y
         x, y = self._clamp_window_position(x, y)
-        self.root.setGeometry(x, y, self.width, self.height)
+        self.root.move(x, y)
 
     def _on_overlay_mouse_release(self) -> None:
         if self._cfg.fixed_center or not self._is_dragging_window or self.root is None:
@@ -803,7 +816,8 @@ class InputOverlay:
 
         elif field_name == "fixed_center":
             if bool(value) and self.root:
-                center_window(self.root, self.width, self.height)
+                # 居中按真实窗口尺寸算，否则胶囊会从屏幕中心偏出投影留白。
+                center_window(self.root, *self._window_size())
 
         elif field_name == "log_level":
             import logging as _log_mod
@@ -887,7 +901,8 @@ class InputOverlay:
         self._ignore_focus_out = False
 
     def _is_point_in_tracked_windows(self, x: int, y: int) -> bool:
-        if self.root is not None and is_point_in_widget(self.root, x, y):
+        # 输入框只认胶囊本体：窗口比胶囊大一圈用来画投影，点那圈留白算外部点击。
+        if self.root is not None and self.root.contains_global_point(x, y):
             return True
         settings = self._active_settings_window()
         if settings is not None and is_point_in_widget(settings.window, x, y):

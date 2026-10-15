@@ -104,6 +104,14 @@ driver.py(VBCableDriverManager) → config.py(AppSettings) → main.py(生命周
 - 最大化/全屏时余量与圆角都归零：`edge_pad()` / `corner_radius()` 是派生值，绘制、热区、布局三处自动一致。
 - 内容区仍靠留白分组，没有做成卡片：窄窗口下卡片边框会把表单切碎（`_create_tab_page` 的注释记录了这一点）。
 
+## 悬浮输入框的投影留白
+
+输入框与设置窗口同材质，但**窗口比胶囊本体大一圈**：`overlay_widgets.SHADOW_PAD`（8px）那圈余量只用来画浮起投影（`glass.paint_drop_shadow`），胶囊本体是 `content_rect()`。投影收得很短、四周等宽、不带方向偏移（`glass.SHADOW_STEPS / SHADOW_ALPHA`），是贴着桌面的一点点分离感，不是落地影。
+
+- **投影只画在面板外侧**：投影若压在面板底下，用户把不透明度调低时那层黑会从胶囊里透出来糊在内容上。`paint_drop_shadow` 用「层的外接矩形减去面板」的裁剪区保证这一点（把设置页的不透明度滑到 0 就能复现旧写法的问题）。
+- **留白不算窗口**：`contains_global_point()` 判外部点击、`mousePressEvent` 判是否开始拖动，都只看 `content_rect()`——按在那圈看不见的余量上应当收起输入框，而不是拖走窗口。
+- **几何一律按真实窗口算**：居中、固定居中、屏幕边界钳位走 `InputOverlay._window_size()`（取 root 实际尺寸）；`InputOverlay.width/height` 是胶囊内容尺寸，只用于布局子控件。
+
 ## 设置页反馈提示
 
 临时反馈（保存结果、录制结果、密钥与音色操作结果等）统一走 `ui/status_toast.py` 的浮动反馈队列：每条自动淡出、悬停保持、移开继续淡出；多条同时出现时上下并列（新的在下、旧的在上），各自计时逐个消失，同时最多 `MAX_VISIBLE` 条。需要长期停留的状态说明（设备数量、密钥状态、录制中指引）仍留在原地标签。面板被单独实例化时 `show_status_toast()` 返回 False，调用方回退到原地标签（测试里的独立面板走这条路径）。

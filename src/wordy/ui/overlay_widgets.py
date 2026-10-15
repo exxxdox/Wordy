@@ -8,7 +8,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from PySide6.QtCore import QObject, QPointF, QRectF, QSize, Qt, Signal, QVariantAnimation, QEasingCurve
+from PySide6.QtCore import QObject, QPointF, QRect, QRectF, QSize, Qt, Signal, QVariantAnimation, QEasingCurve
 from PySide6.QtGui import (
     QBrush, QColor, QIcon, QKeyEvent, QLinearGradient, QMouseEvent, QPainter,
     QPainterPath, QPaintEvent, QPixmap, QPolygonF,
@@ -43,6 +43,10 @@ PROMPT_LEFT = 10
 ENTRY_LEFT_PADDING = 32
 ENTRY_VERTICAL_PADDING = 9
 WINDOW_RADIUS = RADIUS_WINDOW
+# 胶囊四周留出的一圈余量，专门用来画浮起投影。窗口只比胶囊大这么多：
+# 余量不够时投影会被窗口边界裁成硬边，看着像描边而不是浮起来。
+# 投影很短（见 glass.SHADOW_STEPS），留白跟着收窄——这圈是点不到的死区。
+SHADOW_PAD = 8
 
 
 class _OverlaySignals(QObject):
@@ -85,7 +89,8 @@ class _OverlayWidget(QWidget):
             | Qt.WindowType.Tool
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
-        self.setFixedSize(owner.width, owner.height)
+        # 窗口比胶囊大一圈：多出来的余量是投影的画布，不是内容区。
+        self.setFixedSize(owner.width + SHADOW_PAD * 2, owner.height + SHADOW_PAD * 2)
         self.setMouseTracking(True)
 
         # 字体族由 _apply_font_styles 统一注入——设置页换字体时要能当场重刷。
@@ -95,7 +100,9 @@ class _OverlayWidget(QWidget):
         self.prompt_label.setObjectName("overlayPrompt")
         self.prompt_label.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
         prompt_y = (owner.height - self.PROMPT_FONT_SIZE - 4) // 2
-        self.prompt_label.setGeometry(PROMPT_LEFT, prompt_y, 18, self.PROMPT_FONT_SIZE + 4)
+        self.prompt_label.setGeometry(
+            PROMPT_LEFT + SHADOW_PAD, prompt_y + SHADOW_PAD, 18, self.PROMPT_FONT_SIZE + 4
+        )
 
         self.entry = QLineEdit(self)
         self.entry.setObjectName("overlayEntry")
@@ -104,7 +111,7 @@ class _OverlayWidget(QWidget):
         self.entry.setAccessibleName("朗读文本")
         self.entry.setToolTip("Enter 朗读 · Esc 收起")
         self.entry.setGeometry(
-            ENTRY_LEFT_PADDING, ENTRY_VERTICAL_PADDING,
+            ENTRY_LEFT_PADDING + SHADOW_PAD, ENTRY_VERTICAL_PADDING + SHADOW_PAD,
             owner.width - SETTINGS_BUTTON_ENTRY_RIGHT_PADDING,
             owner.height - ENTRY_VERTICAL_PADDING * 2,
         )
@@ -114,7 +121,9 @@ class _OverlayWidget(QWidget):
         # 显式入口让鼠标用户也能朗读；不抢输入焦点，避免点击时触发失焦收起。
         self.submit_button = QPushButton(self)
         self.submit_button.setObjectName("overlaySubmit")
-        self.submit_button.setGeometry(owner.width - 106, 11, 36, owner.height - 22)
+        self.submit_button.setGeometry(
+            owner.width - 106 + SHADOW_PAD, 11 + SHADOW_PAD, 36, owner.height - 22
+        )
         self.submit_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.submit_button.setCursor(Qt.CursorShape.ArrowCursor)
         self.submit_button.setAccessibleName("朗读")
@@ -142,20 +151,35 @@ class _OverlayWidget(QWidget):
         self.settings_button.setFocusPolicy(Qt.FocusPolicy.TabFocus)
         self.settings_button.setAccessibleName("设置")
         self.settings_button.setToolTip("打开设置")
-        self.settings_button.setGeometry(settings_x, settings_y, settings_hit_size, settings_hit_size)
+        self.settings_button.setGeometry(
+            settings_x + SHADOW_PAD, settings_y + SHADOW_PAD, settings_hit_size, settings_hit_size
+        )
         self.settings_button.setPixmap(self._make_settings_icon(icon_size, CONFIG_BUTTON_TEXT_COLOR))
         self.settings_button.setStyleSheet("background: transparent;")
         self.settings_button.installEventFilter(signals)
         self._settings_icon_size = icon_size
         self.set_settings_hover(False)
 
+    def content_rect(self) -> QRect:
+        """胶囊本体在窗口内的矩形；四周余量只是投影的画布，不是可交互区域。"""
+        return self.rect().adjusted(SHADOW_PAD, SHADOW_PAD, -SHADOW_PAD, -SHADOW_PAD)
+
+    def contains_global_point(self, x: int, y: int) -> bool:
+        """全局屏幕坐标是否落在胶囊本体上（投影留白不计入）。"""
+        rect = self.content_rect()
+        return rect.translated(self.mapToGlobal(rect.topLeft())).contains(x, y)
+
     def paintEvent(self, _event: QPaintEvent) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        w, h = self.width(), self.height()
         opacity = self._overlay_opacity
-        bounds = QRectF(1, 1, w - 2, h - 2)
+        content = self.content_rect()
+        bounds = QRectF(content).adjusted(1, 1, -1, -1)
+        # 渐变都按胶囊本体取值：窗口高出来的那圈余量不属于面板。
+        top, bottom = content.top(), content.bottom()
 
+        # 先画投影：胶囊浮在桌面上，暗边只出现在它的外侧，内侧由下面的玻璃底盖住。
+        glass.paint_drop_shadow(painter, QRectF(content), WINDOW_RADIUS, opacity=opacity)
         path = QPainterPath()
         path.addRoundedRect(bounds, WINDOW_RADIUS, WINDOW_RADIUS)
 
@@ -168,7 +192,7 @@ class _OverlayWidget(QWidget):
 
         painter.save()
         painter.setClipPath(path)
-        sheen = QLinearGradient(0, 0, 0, h)
+        sheen = QLinearGradient(0, top, 0, bottom)
         sheen.setColorAt(0.0, QColor(255, 255, 255, round(26 * opacity)))
         sheen.setColorAt(1.0, QColor(255, 255, 255, round(8 * opacity)))
         painter.setBrush(sheen)
@@ -176,7 +200,7 @@ class _OverlayWidget(QWidget):
 
         # 焦点时底部浮起强调色微光，沿用既有短动画，不做常驻闪烁。
         if self._focus_glow > 0.0:
-            glow = QLinearGradient(0, 0, 0, h)
+            glow = QLinearGradient(0, top, 0, bottom)
             glow.setColorAt(0.0, QColor(Qt.GlobalColor.transparent))
             light = QColor(ACCENT_SECONDARY)
             light.setAlphaF(0.10 * self._focus_glow * opacity)
@@ -190,7 +214,7 @@ class _OverlayWidget(QWidget):
 
         # 玻璃边缘：外侧光晕 + 内侧暗过渡 + 上缘最亮的受光棱。
         # 亮棱用相对亮度（alpha 不再乘窗口不透明度），整体透明度由 rim 统一施加。
-        edge = QLinearGradient(0, 0, 0, h)
+        edge = QLinearGradient(0, top, 0, bottom)
         edge.setColorAt(0.0, QColor(255, 255, 255, 255))
         edge.setColorAt(0.35, QColor(255, 255, 255, 118))
         edge.setColorAt(1.0, QColor(255, 255, 255, 88))
@@ -284,6 +308,11 @@ class _OverlayWidget(QWidget):
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
+            if not self.content_rect().contains(event.position().toPoint()):
+                # 投影留白是视觉装饰：按在上面的算外部点击（收起交给外部点击监视器），
+                # 否则拖那圈看不见的区域也能把窗口拖走。
+                event.ignore()
+                return
             self._owner._on_overlay_mouse_press(event)
             event.accept()
             return
