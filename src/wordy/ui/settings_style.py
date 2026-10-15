@@ -24,11 +24,10 @@ from wordy.ui.theme import (
     RADIUS_CONTROL,
     SCROLLBAR_HANDLE,
     SCROLLBAR_HANDLE_HOVER,
-    SURFACE_BG,
+    TEXT_ERROR,
     TEXT_MUTED,
     TEXT_PRIMARY,
     UI_FONT,
-    WINDOW_BG,
     rgba,
 )
 
@@ -44,14 +43,50 @@ def build_settings_stylesheet() -> str:
             font-size: 13px;
         }}
         QDialog {{
-            /* 顶亮底暗的极浅渐变：窗口有玻璃的受光方向，而不是一整块死色。 */
-            background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
-                stop:0 {SURFACE_BG}, stop:1 {WINDOW_BG});
+            /* 玻璃底、投影与圆角都由 _SettingsDialog.paintEvent 手绘：
+               这里必须透明，否则不透明底会整块盖住玻璃与投影。 */
+            background: transparent;
             color: {TEXT_PRIMARY};
         }}
         QFrame#dialogShell {{
             background: transparent;
             border: none;
+        }}
+        QWidget#settingsTitleBar {{
+            background: transparent;
+            border: none;
+        }}
+        QLabel#dialogTitle {{
+            color: {TEXT_PRIMARY};
+            font-size: 14px;
+            font-weight: 600;
+            background: transparent;
+            border: none;
+        }}
+        /* 三个窗口按钮默认只画字形，悬停才浮起一层玻璃；关闭键悬停用错误色。 */
+        QPushButton#dialogMinimizeButton,
+        QPushButton#dialogMaximizeButton,
+        QPushButton#dialogCloseButton {{
+            min-width: 0;
+            min-height: 0;
+            padding: 0;
+            background: transparent;
+            border: none;
+            border-radius: {RADIUS_CONTROL}px;
+        }}
+        QPushButton#dialogMinimizeButton:hover,
+        QPushButton#dialogMaximizeButton:hover {{
+            background: {GLASS_FILL_STRONG};
+        }}
+        QPushButton#dialogMinimizeButton:pressed,
+        QPushButton#dialogMaximizeButton:pressed {{
+            background: {GLASS_HAIRLINE};
+        }}
+        QPushButton#dialogCloseButton:hover {{
+            background: {rgba(TEXT_ERROR, 219)};
+        }}
+        QPushButton#dialogCloseButton:pressed {{
+            background: {rgba(TEXT_ERROR, 180)};
         }}
         QLabel#pageTitle {{
             color: {TEXT_PRIMARY};
@@ -92,7 +127,8 @@ def build_settings_stylesheet() -> str:
             padding: 2px 8px;
         }}
         QWidget#settingsFooter {{
-            background: {WINDOW_BG};
+            /* 透明底，只留一条分隔细线，不再整块盖住玻璃。 */
+            background: transparent;
             border: none;
             border-top: 1px solid {GLASS_HAIRLINE};
         }}

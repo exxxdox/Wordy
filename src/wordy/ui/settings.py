@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Callable
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QColor, QIcon, QPalette
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFrame, QHBoxLayout, QLabel, QLineEdit,
     QPushButton, QScrollArea, QSlider, QStyle, QTabWidget, QVBoxLayout, QWidget,
@@ -25,27 +25,32 @@ from wordy.tts.constants import (
 )
 from wordy.identity import normalize_identity
 from wordy.ui.theme import (
-    GREEN_ACCENT, SURFACE_BG, TEXT_ERROR, TEXT_MUTED, TEXT_WARNING,
+    GREEN_ACCENT, TEXT_ERROR, TEXT_MUTED, TEXT_WARNING,
 )
 from wordy.ui.tts_panels import PROVIDER_PANELS
 from wordy.ui.settings_state import (
     AudioOutputDevice, AudioOutputIdentity, SettingsState, VoiceRecord,
 )
 from wordy.ui.settings_widgets import (
-    CheckmarkCheckBox, NoWheelComboBox, NoWheelSlider, _SettingsDialog,
+    CheckmarkCheckBox, NoWheelComboBox, NoWheelSlider, WINDOW_EDGE_PAD, _SettingsDialog,
+    _TitleBar,
 )
 from wordy.ui.settings_style import build_settings_stylesheet
 from wordy.ui.status_toast import StatusToastQueue
-from wordy.ui.window import center_window, disable_window_transitions
+from wordy.ui.window import (
+    center_window, disable_window_transitions, enable_system_resize, set_window_cloaked,
+)
 from wordy.ui.chat_wheel_settings import ChatWheelSettings
 
 INPUT_TEXT_COLOR = GREEN_ACCENT
 SYSTEM_DEFAULT_AUDIO_OUTPUT_LABEL = "系统默认"
 # 单列表单无需宽屏留白；保留导航和密钥操作行所需宽度，仍允许原生缩放。
-DIALOG_WIDTH = 480
-DIALOG_HEIGHT = 580
-DIALOG_MIN_WIDTH = 480
-DIALOG_MIN_HEIGHT = 580
+# 尺寸含窗口四周的透明余量（WINDOW_EDGE_PAD=12）：玻璃本体仍是 480×580，
+# 高度再加上自绘标题栏的 44。写成字面量是因为静态尺寸契约只识别顶层 int 常量。
+DIALOG_WIDTH = 504
+DIALOG_HEIGHT = 636
+DIALOG_MIN_WIDTH = 504
+DIALOG_MIN_HEIGHT = 636
 CONTENT_MARGIN = 20
 SECTION_GAP = 12
 INLINE_GAP = 10
@@ -115,22 +120,18 @@ class SettingsWindow:
         app_style = QApplication.style()
         settings_icon = app_style.standardIcon(QStyle.StandardPixmap.SP_ComputerIcon) if app_style is not None else QIcon()
         self.window.setWindowIcon(settings_icon)
-        # 标题栏、拖动、缩放与三个窗口按钮统一交给 Windows 原生窗口管理。
+        # 无边框玻璃窗口：标题栏、拖动、缩放和三个窗口按钮全部由内容自绘，
+        # 窗口本体只负责透明合成与手绘玻璃底。
         self.window.setWindowFlags(
-            Qt.WindowType.Window | Qt.WindowType.WindowTitleHint | Qt.WindowType.WindowSystemMenuHint
-            | Qt.WindowType.WindowMinMaxButtonsHint | Qt.WindowType.WindowCloseButtonHint
+            Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint
             | Qt.WindowType.WindowStaysOnTopHint
         )
         self.window.setModal(False)
         self.window.setMinimumSize(DIALOG_MIN_WIDTH, DIALOG_MIN_HEIGHT)
         self.window.resize(DIALOG_WIDTH, DIALOG_HEIGHT)
-        self.window.setSizeGripEnabled(False)  # 原生边框已提供缩放，不再叠加自绘尺寸手柄。
-        # 设置页无需桌面透底；透明窗口首次 expose 没有系统底色，可能短暂闪白。
-        # 使用深色不透明底，原生窗口创建到 Qt 首次绘制期间也保持相同背景。
-        palette = self.window.palette()
-        palette.setColor(QPalette.ColorRole.Window, QColor(SURFACE_BG))
-        self.window.setPalette(palette)
-        self.window.setAutoFillBackground(True)
+        self.window.setSizeGripEnabled(False)  # 缩放改由 startSystemResize 承担，不叠加尺寸手柄。
+        # 玻璃底由 paintEvent 自绘，窗口本身必须透明才透得出背后。
+        self.window.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.window.setStyleSheet(build_settings_stylesheet())
         window = self.window
         self._build(state)
@@ -142,6 +143,12 @@ class SettingsWindow:
         center_window(window, window.width(), window.height(), parent)
         # Qt 尺寸已稳定，但 Windows 打开动画仍会视觉缩放；必须在 show 前禁用。
         disable_window_transitions(window)
+        # 无边框窗口是 WS_POPUP，系统本来不给缩放；补上可缩放边框样式，
+        # startSystemResize 才会真的改尺寸，否则只有光标变、窗口不动。
+        enable_system_resize(window)
+        # 遮蔽要在 show 前、且在所有窗口标志/属性改完之后：
+        # show 期间若因改动标志重建 HWND，遮蔽会连窗口一起丢掉。
+        set_window_cloaked(window, True)
         window.show()
         self.lift_and_focus()
 
@@ -265,14 +272,23 @@ class SettingsWindow:
         self._state = state
         s = self._settings  # 当前 live config
         outer_layout = QVBoxLayout(self.window)
-        outer_layout.setContentsMargins(0, 0, 0, 0)
+        # 四周留出透明余量：容投影、当缩放热区，并让子控件不贴边——
+        # 热区必须落在没有子控件的区域，鼠标按下才会直达窗口自己。
+        outer_layout.setContentsMargins(WINDOW_EDGE_PAD, WINDOW_EDGE_PAD, WINDOW_EDGE_PAD, WINDOW_EDGE_PAD)
         outer_layout.setSpacing(0)
         dialog_shell = QFrame()
         dialog_shell.setObjectName("dialogShell")
+        # 内容区不继承窗口在边缘设的缩放光标。
+        dialog_shell.setCursor(Qt.CursorShape.ArrowCursor)
         outer_layout.addWidget(dialog_shell, 1)
         shell_layout = QVBoxLayout(dialog_shell)
-        shell_layout.setContentsMargins(0, 12, 0, 0)
+        # 顶部留白由自绘标题栏取代；标题栏高度已计入 DIALOG_HEIGHT。
+        shell_layout.setContentsMargins(0, 0, 0, 0)
         shell_layout.setSpacing(0)
+        title_bar = _TitleBar(self.window)
+        self.title_bar = title_bar
+        self.window.title_bar = title_bar
+        shell_layout.addWidget(title_bar, 0)
         tab_widget = QTabWidget()
         tab_widget.setObjectName("settingsTabs")
         tab_widget.setDocumentMode(True)

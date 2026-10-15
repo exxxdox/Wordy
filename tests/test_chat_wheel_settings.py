@@ -199,7 +199,7 @@ def test_qt_page_key_name_is_converted_for_native_listener(qapp):
 
 def test_real_settings_window_wheel_fits_default_width(qapp, fake_keyring):
     from PySide6.QtWidgets import QScrollArea, QTabWidget
-    from wordy.ui.settings import SettingsWindow
+    from wordy.ui.settings import DIALOG_WIDTH, SettingsWindow
     from wordy.ui.settings_state import SettingsState
 
     settings = AppSettings.load()
@@ -208,7 +208,7 @@ def test_real_settings_window_wheel_fits_default_width(qapp, fake_keyring):
     window = SettingsWindow(None, SettingsState(), Mock(), Mock(), Mock(), Mock())
     try:
         assert window.window is not None
-        assert window.window.size().width() == 480
+        assert window.window.size().width() == DIALOG_WIDTH
         tabs = window.window.findChild(QTabWidget, "settingsTabs")
         assert tabs is not None
         tabs.setCurrentIndex(3)

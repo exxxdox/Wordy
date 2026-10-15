@@ -91,17 +91,92 @@ def is_point_in_widget(widget: Any, x: int, y: int) -> bool:
     return geometry.left() <= x <= geometry.right() and geometry.top() <= y <= geometry.bottom()
 
 
-def disable_window_transitions(widget: Any) -> bool:
-    """只禁用指定窗口的 DWM 过渡动画；不支持时保持正常显示。"""
-    if not _IS_WINDOWS:
-        return False
+# DWM 属性号：过渡动画、首帧遮蔽、以及补边框后要压掉的系统圆角。
+DWMWA_TRANSITIONS_FORCEDISABLED = 3
+DWMWA_CLOAK = 13
+DWMWA_WINDOW_CORNER_PREFERENCE = 33
+DWMWCP_DONOTROUND = 1
+
+# 无边框窗口在 Windows 上是 WS_POPUP，没有可缩放边框；系统的缩放循环要求这一位，
+# 缺了就会静默忽略 startSystemResize——光标会变，但拖不动窗口。
+_GWL_STYLE = -16
+_WS_THICKFRAME = 0x00040000
+_SWP_NOMOVE = 0x0002
+_SWP_NOSIZE = 0x0001
+_SWP_NOZORDER = 0x0004
+_SWP_FRAMECHANGED = 0x0020
+
+
+def _dwm_set_int(hwnd: int, attribute: int, value: int) -> bool:
+    """写入一个 DWM 整数属性；系统不支持或调用失败时返回 False。"""
     try:
         setter = ctypes.windll.dwmapi.DwmSetWindowAttribute
         # HWND 在 64 位 Windows 上不能按 ctypes 默认的 32 位 int 传递。
         setter.argtypes = [ctypes.c_void_p, ctypes.c_uint32, ctypes.c_void_p, ctypes.c_uint32]
         setter.restype = ctypes.c_long
-        disabled = ctypes.c_int(1)  # BOOL；DWMWA_TRANSITIONS_FORCEDISABLED = 3。
-        return setter(int(widget.winId()), 3, ctypes.byref(disabled), ctypes.sizeof(disabled)) == 0
+        raw = ctypes.c_int(value)
+        return setter(hwnd, attribute, ctypes.byref(raw), ctypes.sizeof(raw)) == 0
+    except (AttributeError, OSError, RuntimeError):
+        return False
+
+
+def disable_window_transitions(widget: Any) -> bool:
+    """只禁用指定窗口的 DWM 过渡动画；不支持时保持正常显示。"""
+    if not _IS_WINDOWS:
+        return False
+    try:
+        hwnd = int(widget.winId())
+    except (AttributeError, OSError, RuntimeError):
+        return False
+    return _dwm_set_int(hwnd, DWMWA_TRANSITIONS_FORCEDISABLED, 1)
+
+
+def set_window_cloaked(widget: Any, cloaked: bool) -> bool:
+    """把窗口从 DWM 合成中摘除/放回，消除无边框透明窗口的首帧空档。
+
+    透明窗口从 HWND 创建到首次合成之间必然有一段没有内容的空档，靠"提前多画一帧"
+    堵不住。cloak 让这段空档整个不出现在屏幕上，等首帧真正画好再解除。
+    非 Windows 或调用失败时返回 False，调用方按"没有防闪白"继续，不影响功能。
+    """
+    if not _IS_WINDOWS:
+        return False
+    try:
+        hwnd = int(widget.winId())
+    except (AttributeError, OSError, RuntimeError):
+        return False
+    return _dwm_set_int(hwnd, DWMWA_CLOAK, 1 if cloaked else 0)
+
+
+def enable_system_resize(widget: Any) -> bool:
+    """给无边框窗口补上可缩放边框样式，让 startSystemResize 真的生效。
+
+    FramelessWindowHint 让窗口变成 WS_POPUP，缺少 WS_THICKFRAME；Windows 的缩放
+    循环要求这一位，缺了就静默忽略缩放请求——光标会变，但拖不动窗口。
+    补上边框后 DWM 会顺带给窗口加系统圆角，和自绘的圆角叠成两层，
+    所以同时把 DWM 圆角偏好压成 DONOTROUND。
+    """
+    if not _IS_WINDOWS:
+        return False
+    try:
+        user32 = ctypes.windll.user32
+        getter = user32.GetWindowLongPtrW
+        getter.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        getter.restype = ctypes.c_ssize_t
+        hwnd = int(widget.winId())
+        style = getter(hwnd, _GWL_STYLE)
+        if style & _WS_THICKFRAME:  # 已经有了就别再改，改动会触发非客户区重算
+            return True
+        setter = user32.SetWindowLongPtrW
+        setter.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_ssize_t]
+        setter.restype = ctypes.c_ssize_t
+        setter(hwnd, _GWL_STYLE, style | _WS_THICKFRAME)
+        # 框架样式变了必须让 Windows 重算非客户区，否则新样式不生效。
+        user32.SetWindowPos(
+            hwnd, 0, 0, 0, 0, 0,
+            _SWP_NOMOVE | _SWP_NOSIZE | _SWP_NOZORDER | _SWP_FRAMECHANGED,
+        )
+        _dwm_set_int(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND)
+        return True
     except (AttributeError, OSError, RuntimeError):
         return False
 

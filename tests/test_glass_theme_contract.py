@@ -126,7 +126,11 @@ def test_settings_stylesheet_uses_glass_layers_and_hairlines() -> None:
     css = build_settings_stylesheet()
     assert "border: 1px solid rgba(255, 255, 255," in css, "控件必须用 1px 细高光描边"
     assert "border-bottom: 2px solid" not in css, "底边加粗是终端风格，玻璃主题改用 1px 描边"
-    assert "qlineargradient" in css, "窗口背景用渐变分层，避免整块纯色"
+    # 窗口背景的渐变分层已从 QSS 搬到 paintEvent 手绘（玻璃窗口要透出背后），
+    # 这里守住的是"仍然用渐变分层而不是整块纯色"，改由手绘源文件承担。
+    with open(os.path.join(_UI_DIR, "settings_widgets.py"), encoding="utf-8") as handle:
+        paint_source = handle.read()
+    assert "QLinearGradient" in paint_source, "玻璃底必须用渐变分层，避免整块纯色"
 
 
 def test_settings_stylesheet_drops_dead_apply_button_style() -> None:

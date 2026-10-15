@@ -443,24 +443,22 @@ def test_settings_window_exposes_transient_status_queue(monkeypatch: pytest.Monk
         window.close()
 
 
-def test_settings_window_uses_native_controls_and_preserves_topmost(monkeypatch: pytest.MonkeyPatch) -> None:
-    """原生窗口提供最小化、最大化和关闭，同时保留置顶行为。"""
+def test_settings_window_is_frameless_and_preserves_topmost(monkeypatch: pytest.MonkeyPatch) -> None:
+    """自绘玻璃窗口去掉原生边框；最小化、最大化和关闭改由内部标题栏提供。"""
     _app, window = _new_settings_window(monkeypatch)
     try:
         from PySide6.QtCore import Qt
 
         flags = window.window.windowFlags()
         assert window.window.windowType() == Qt.WindowType.Window
-        assert not flags & Qt.WindowType.FramelessWindowHint
-        controls = Qt.WindowType.WindowMinMaxButtonsHint | Qt.WindowType.WindowCloseButtonHint
-        assert flags & controls == controls
+        assert flags & Qt.WindowType.FramelessWindowHint, "玻璃窗口必须去掉原生边框"
         assert flags & Qt.WindowType.WindowStaysOnTopHint, "settings window must preserve WindowStaysOnTopHint"
     finally:
         window.close()
 
 
-def test_settings_window_native_title_replaces_internal_chrome(monkeypatch: pytest.MonkeyPatch) -> None:
-    """标题和关闭由系统提供，内容区不重复绘制标题栏。"""
+def test_settings_window_draws_its_own_title_bar(monkeypatch: pytest.MonkeyPatch) -> None:
+    """无边框窗口必须自带标题与三个窗口控制按钮。"""
     _app, window = _new_settings_window(monkeypatch)
     try:
         from PySide6.QtWidgets import QLabel, QPushButton
@@ -468,20 +466,25 @@ def test_settings_window_native_title_replaces_internal_chrome(monkeypatch: pyte
         window.window.show()
         _app.processEvents()
         assert window.window.windowTitle() == "设置"
-        assert window.window.findChild(QLabel, "dialogTitle") is None
-        assert window.window.findChild(QPushButton, "dialogCloseButton") is None
+        assert window.window.findChild(QLabel, "dialogTitle") is not None
+        for name in ("dialogMinimizeButton", "dialogMaximizeButton", "dialogCloseButton"):
+            assert window.window.findChild(QPushButton, name) is not None, f"缺少自绘窗口控制按钮: {name}"
     finally:
         window.close()
 
 
-def test_settings_window_has_opaque_background_for_first_frame(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Settings must have a first-frame background rather than transparent composition."""
+def test_settings_window_uses_translucent_glass_background(monkeypatch: pytest.MonkeyPatch) -> None:
+    """玻璃底由窗口自绘，因此必须启用透明合成。
+
+    但用户可见时不允许半透明：窗口不能在首帧还没画出来时透出桌面。
+    这条守住的是"看得见的时候已经是不透明的"，不是"必须用不透明底"。
+    """
     _app, window = _new_settings_window(monkeypatch)
     try:
         from PySide6.QtCore import Qt
 
-        assert window.window.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground) is False
-        assert window.window.testAttribute(Qt.WidgetAttribute.WA_NoSystemBackground) is False
+        assert window.window.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground) is True
+        assert window.window.windowOpacity() == 1.0
     finally:
         window.close()
 
@@ -520,9 +523,10 @@ def test_settings_compact_width_keeps_navigation_and_forms_visible(monkeypatch: 
     app, settings = _new_settings_window(monkeypatch)
     try:
         from PySide6.QtWidgets import QScrollArea, QTabWidget
+        from wordy.ui.settings import DIALOG_WIDTH
 
         dialog = settings.window
-        assert dialog.width() == 480
+        assert dialog.width() == DIALOG_WIDTH
         tabs = dialog.findChild(QTabWidget, "settingsTabs")
         assert tabs is not None
         bar = tabs.tabBar()

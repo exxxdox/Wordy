@@ -328,9 +328,12 @@ def test_native_close_flushes_pending_settings(qapp, fake_keyring, monkeypatch):
     flush = Mock()
     monkeypatch.setattr(settings._settings, "flush", flush)
     assert settings.window is not None
-    # 原生关闭按钮通过相同的 Qt closeEvent 保存待写入设置。
-    assert settings.window.windowFlags() & Qt.WindowType.WindowCloseButtonHint
-    settings.window.close()
+    # 自绘关闭按钮通过相同的 Qt closeEvent 保存待写入设置。
+    from PySide6.QtWidgets import QPushButton
+
+    close_button = settings.window.findChild(QPushButton, "dialogCloseButton")
+    assert close_button is not None
+    close_button.click()
     qapp.processEvents()
     closed.assert_called_once()
     flush.assert_called_once()
@@ -533,11 +536,10 @@ def test_settings_click_keeps_windows_visible_without_native_focus_reentry(qapp,
         settings = overlay._settings_window
         assert settings is not None
         assert shown_windows == [settings.window]
-        # 设置外层必须有首帧底色，不能依赖透明合成等到子面板首次绘制。
-        assert not settings.window.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        assert not settings.window.testAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
-        from PySide6.QtGui import QPalette
-        assert settings.window.palette().color(QPalette.ColorRole.Window).alpha() == 255
+        # 玻璃底由窗口自绘，因此走透明合成；但对用户可见时必须完全不透明——
+        # 不能等到子面板首帧才出现底色。
+        assert settings.window.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        assert settings.window.windowOpacity() == 1.0
         initial_geometry = settings.window.geometry()
         qapp.processEvents()
         assert settings.window.geometry() == initial_geometry
@@ -571,25 +573,14 @@ def test_settings_opens_immediately_at_full_opacity(qapp):
         settings.close()
 
 
-def test_native_window_can_maximize_minimize_restore_and_close(qapp):
+def test_frameless_window_can_maximize_minimize_restore_and_close(qapp):
     closed = Mock()
     settings = SettingsWindow(None, SettingsState(), lambda: None, lambda: None,
                               lambda *args: None, closed)
     window = settings.window
     try:
-        flags = window.windowFlags()
-        assert not flags & Qt.WindowType.FramelessWindowHint
-        assert flags & Qt.WindowType.WindowMinimizeButtonHint
-        assert flags & Qt.WindowType.WindowMaximizeButtonHint
-        assert flags & Qt.WindowType.WindowCloseButtonHint
-        if qapp.platformName() == "windows":
-            # 验证真正的 Win32 边框也含标题栏、系统菜单与最小/最大化按钮。
-            getter = ctypes.windll.user32.GetWindowLongPtrW
-            getter.argtypes = [ctypes.c_void_p, ctypes.c_int]
-            getter.restype = ctypes.c_ssize_t
-            native_style = getter(int(window.winId()), -16)
-            for bit in (0x00C00000, 0x00080000, 0x00020000, 0x00010000):
-                assert native_style & bit == bit
+        # 无边框窗口自行绘制三个控制按钮，不再有原生样式位可断言；
+        # 这里守住的是三种窗口状态与关闭回调在自绘 chrome 下仍然成立。
         window.showMaximized()
         qapp.processEvents()
         assert window.isMaximized()
