@@ -31,6 +31,9 @@ from wordy.ui.theme import (
     rgba,
 )
 
+# 全窗基准字号（px）。字体下拉框要按它折算点值字号，两处必须同一个数。
+BASE_FONT_PX = 13
+
 
 def build_settings_stylesheet(font_stack: str | None = None) -> str:
     """构建设置窗口的完整 QSS 样式表。font_stack 为空时用内置字体栈。"""
@@ -40,7 +43,7 @@ def build_settings_stylesheet(font_stack: str | None = None) -> str:
     return f'''
         QWidget {{
             font-family: {font_stack or UI_FONT};
-            font-size: 13px;
+            font-size: {BASE_FONT_PX}px;
         }}
         QDialog {{
             /* 玻璃底、投影与圆角都由 _SettingsDialog.paintEvent 手绘：

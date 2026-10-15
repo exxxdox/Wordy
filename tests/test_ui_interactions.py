@@ -589,6 +589,27 @@ def test_ui_font_picker_excludes_bitmap_legacy_families(qapp, fake_keyring):
         settings.close()
 
 
+def test_font_picker_declares_a_point_size(qapp, fake_keyring):
+    """字体下拉框必须声明点值字号。
+
+    QFontComboBox 弹窗内部会拿当前字体的 pointSize 重设字号；设置页全局 QSS 用的
+    是 px，pointSize() 返回 -1，Qt 就会打 "Point size <= 0 (-1)"。给它一条自己的
+    规则、按当前 DPI 从基准 px 折算成 pt：警告消失，渲染尺寸不变。
+    """
+    from wordy.ui.settings_style import BASE_FONT_PX
+
+    settings = SettingsWindow(None, SettingsState(), lambda: None, lambda: None,
+                              lambda field, value: None, lambda: None)
+    try:
+        window = settings.window
+        assert window is not None
+        expected = BASE_FONT_PX * 72.0 / max(1.0, float(window.logicalDpiY()))
+
+        assert f"font-size: {expected:.2f}pt;" in settings.ui_font_combo.styleSheet()
+    finally:
+        settings.close()
+
+
 def test_settings_tab_switch_has_no_fade_and_defers_audio_scan(qapp, fake_keyring):
     """页签切换必须是瞬时的，设备枚举仍延后执行。"""
     scan = Mock()

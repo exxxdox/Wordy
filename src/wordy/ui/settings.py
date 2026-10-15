@@ -36,7 +36,7 @@ from wordy.ui.settings_widgets import (
     CheckmarkCheckBox, NoWheelComboBox, NoWheelFontComboBox, NoWheelSlider,
     WINDOW_EDGE_PAD, _SettingsDialog, _TitleBar,
 )
-from wordy.ui.settings_style import build_settings_stylesheet
+from wordy.ui.settings_style import BASE_FONT_PX, build_settings_stylesheet
 from wordy.ui.status_toast import StatusToastQueue
 from wordy.ui.window import (
     center_window, disable_window_transitions, enable_system_resize, set_window_cloaked,
@@ -423,6 +423,12 @@ class SettingsWindow:
         # 既不能当界面字体，又会因为 DirectWrite 建不出字面而在滚动列表时刷日志——
         # QFontComboBox 默认用每个族自己的字面渲染列表项，滚到哪就试建哪个。
         self.ui_font_combo.setFontFilters(QFontComboBox.FontFilter.ScalableFonts)
+        # 这一条专门修 Qt 的告警：QFontComboBox 弹窗内部会拿当前字体的 pointSize
+        # 重设字号，而全窗 QSS 用的是 px，pointSize() 是 -1，Qt 便打
+        # "QFont::setPointSize: Point size <= 0 (-1)"。控件级规则比全窗 QWidget 规则
+        # 更具体，能把字号换成 pt；按当前 DPI 从基准 px 折算，渲染尺寸不变。
+        font_pt = BASE_FONT_PX * 72.0 / max(1.0, float(self.window.logicalDpiY()) if self.window else 96.0)
+        self.ui_font_combo.setStyleSheet(f"QFontComboBox {{ font-size: {font_pt:.2f}pt; }}")
         # 存的族不可用时，下拉框停在内置首选上——回退说明由提示文字讲清楚，
         # 配置里保留用户的选择，字体装回来就能接着用。
         saved_font = s.ui_font.strip()
