@@ -36,7 +36,7 @@ def test_surface_tokens_are_neutral_glass_layers() -> None:
     theme = importlib.import_module("wordy.ui.theme")
 
     layers: list[int] = []
-    for name in ("WINDOW_BG", "SURFACE_BG", "ELEVATED_BG", "RAISED_BG"):
+    for name in ("WINDOW_BG", "SURFACE_BG", "ELEVATED_BG"):
         value = getattr(theme, name, None)
         assert isinstance(value, str), f"缺少分层表面 token: {name}"
         assert _HEX_RE.match(value), f"{name}={value!r} 不是 6 位 hex"

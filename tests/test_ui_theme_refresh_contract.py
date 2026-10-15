@@ -58,15 +58,12 @@ def test_palette_backwards_compat_aliases_preserved() -> None:
     legacy = (
         "GREEN_ACCENT",
         "INPUT_BACKGROUND",
-        "INPUT_BORDER",
         "WINDOW_BG",
         "TEXT_PRIMARY",
         "TEXT_MUTED",
         "TEXT_WARNING",
         "TEXT_ERROR",
         "SEPARATOR_COLOR",
-        "BUTTON_BG",
-        "BUTTON_ACTIVE_BG",
         "CONFIG_BUTTON_IDLE",
     )
     for name in legacy:
@@ -233,10 +230,6 @@ def _import_input_overlay(monkeypatch: pytest.MonkeyPatch):
     _test_settings.fixed_center = _OVERLAY_CONFIG["fixed_center"]
     monkeypatch.setattr(AppSettings, "load", lambda **kw: _test_settings)
     monkeypatch.setattr(AppSettings, "update", lambda self, **kw: Path("/tmp/wavtrans-test-config.json"))
-    monkeypatch.setattr(
-        "wordy.config.get_active_config_file", lambda: Path("/tmp/wavtrans-test-config.json")
-    )
-
     original_module = sys.modules.pop("wordy.ui.overlay", None)
     module = importlib.import_module("wordy.ui.overlay")
 

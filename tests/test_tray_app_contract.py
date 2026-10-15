@@ -81,8 +81,6 @@ def _import_input_overlay(monkeypatch: pytest.MonkeyPatch):
     _test_settings.fixed_center = _CONFIG["fixed_center"]
     monkeypatch.setattr(AppSettings, "load", lambda **kw: _test_settings)
     monkeypatch.setattr(AppSettings, "update", lambda self, **kw: Path("/tmp/wavtrans-test-config.json"))
-    monkeypatch.setattr("wordy.config.get_active_config_file", lambda: Path("/tmp/wavtrans-test-config.json"))
-
     original_module = sys.modules.pop("wordy.ui.overlay", None)
     module = importlib.import_module("wordy.ui.overlay")
 
@@ -210,7 +208,6 @@ def test_tray_settings_action_delegates_to_overlay_open_settings(
     tray_mod, overlay, tray = _make_tray_with_real_overlay(monkeypatch, available=True)
     try:
         calls: list[int] = []
-        original = overlay._open_settings
 
         def _spy() -> None:
             calls.append(1)

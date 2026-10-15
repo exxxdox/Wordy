@@ -6,7 +6,6 @@
 import importlib
 import sys
 from collections.abc import Callable
-from pathlib import Path
 from types import ModuleType
 from typing import cast
 

@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
 
 import wordy.secret
 from wordy.config import AppSettings
-from wordy.tts.labels import VoiceLabelMaps, build_voice_label_maps
+from wordy.tts.labels import build_voice_label_maps
 from wordy.ui.theme import (
     GREEN_ACCENT, TEXT_ERROR, TEXT_MUTED, TEXT_WARNING,
 )

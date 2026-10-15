@@ -8,7 +8,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from PySide6.QtCore import QEvent, QObject, QPointF, QRectF, QSize, Qt, Signal, QVariantAnimation, QEasingCurve
+from PySide6.QtCore import QObject, QPointF, QRectF, QSize, Qt, Signal, QVariantAnimation, QEasingCurve
 from PySide6.QtGui import (
     QBrush, QColor, QIcon, QKeyEvent, QLinearGradient, QMouseEvent, QPainter,
     QPainterPath, QPaintEvent, QPixmap, QPolygonF,

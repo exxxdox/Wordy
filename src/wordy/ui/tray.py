@@ -6,7 +6,7 @@ from __future__ import annotations
 import importlib
 from typing import Protocol
 
-from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
+from PySide6.QtCore import QRectF, Qt, QTimer
 from PySide6.QtGui import (
     QAction,
     QBrush,

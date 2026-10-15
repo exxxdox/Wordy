@@ -20,13 +20,12 @@ from wordy.constants import (
     MIN_OVERLAY_OPACITY, MIN_VOLUME, OVERLAY_OPACITY_STEP, VOLUME_STEP,
 )
 from wordy.tts.constants import (
-    TTS_API_PROVIDER_CARTESIA, TTS_API_PROVIDER_VOLCENGINE, TTS_API_PROVIDERS,
+    TTS_API_PROVIDERS,
     TTS_BACKENDS_BY_PROVIDER,
 )
 from wordy.identity import normalize_identity
-from wordy.tts.labels import VoiceLabelMaps, build_voice_label_maps
 from wordy.ui.theme import (
-    GREEN_ACCENT, SURFACE_BG, TEXT_ERROR, TEXT_MUTED, TEXT_PRIMARY, TEXT_WARNING,
+    GREEN_ACCENT, SURFACE_BG, TEXT_ERROR, TEXT_MUTED, TEXT_WARNING,
 )
 from wordy.ui.tts_panels import PROVIDER_PANELS
 from wordy.ui.settings_state import (

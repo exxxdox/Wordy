@@ -310,8 +310,6 @@ def test_atomic_write_preserves_original_on_failure(tmp_path, monkeypatch):
     s.update(hotkey="f8", volume=1.5, fixed_center=True, config_file=cfg)
     original_content = cfg.read_bytes()
 
-    original_replace = os.replace
-
     def failing_replace(src, dst):
         raise OSError("Simulated write failure")
 
@@ -742,13 +740,16 @@ def test_setattr_private_fields_dont_save(tmp_path: Path):
     s = AppSettings.load(config_file=cfg)
     s.volume = 1.0
     s.flush()
-    mtime_before = cfg.stat().st_mtime
+    # 用文件字节而非 mtime 比对：Windows 的 mtime 精度可能让原子写落在同一刻度，断言会假绿。
+    before = cfg.read_bytes()
 
     s._loaded = False  # 内部字段，不触发 save
     s._loaded = True
     # 未设置任何公共字段，文件不应改变
     # 注：_loaded 来回切换不会触发保存
     s.flush()
+
+    assert cfg.read_bytes() == before, "_ 前缀字段赋值不应触发保存"
 
 
 def test_toml_round_trip(tmp_path: Path):

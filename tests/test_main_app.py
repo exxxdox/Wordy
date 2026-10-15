@@ -537,7 +537,6 @@ def test_on_submit_does_not_spawn_raw_daemon_thread(app, monkeypatch):
 
 def test_backend_switch_enqueues_old_worker_without_inline_cleanup(app, monkeypatch):
     """Backend switch must enqueue the old executor+engine for the janitor and NOT call shutdown/close inline."""
-    import wordy.main as main_mod
 
     old_engine = app.tts_manager.engine
     old_executor = app.tts_manager._executor
@@ -660,7 +659,6 @@ def test_run_enqueues_current_worker_and_sentinel_then_joins_janitor(app, monkey
 
     No inline executor.shutdown / engine.close calls are allowed during run cleanup.
     """
-    import wordy.main as main_mod
 
     # FakeExecutor 同步执行，异步预热必须用真实串行 worker 验证。
     executor = ThreadPoolExecutor(max_workers=1)

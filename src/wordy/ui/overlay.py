@@ -19,13 +19,9 @@ import wordy.secret
 from wordy.config import AppSettings
 from wordy.hotkey import display_hotkey
 from wordy.tts.constants import (
-    TTS_API_PROVIDER_CARTESIA,
     TTS_API_PROVIDER_VOLCENGINE,
-    TTS_BACKEND_VOLCENGINE_STREAMING,
-    TTS_BACKENDS_BY_PROVIDER,
 )
 from wordy.audio.capture import list_input_devices
-from wordy.identity import normalize_identity
 from wordy.audio.driver import VBCableDriverManager
 from wordy.ui.settings_state import SettingsState
 from wordy.ui.settings import SettingsWindow
@@ -715,6 +711,9 @@ class InputOverlay:
                 raise RuntimeError("当前 TTS 后端未提供音色列表获取方法")
             voices = fetch_voices()
         except Exception as error:
+            # error 只在 except 块内绑定，出块即被 Python 隐式删除；下面把它关进 lambda 安全，
+            # 只因 safe_qt_call 是同步执行。若改成延迟调用，闭包求值时 error 已不存在，会变成
+            # NameError —— 届时需先把 error 存成独立局部变量。（ruff 的 F841 在此是误报，勿删 as error）
             signals = self._signals
             if not self._closed and signals is not None:
                 # Qt 对象可能在检查后被 GUI 线程释放，复用既有安全调用兜底。

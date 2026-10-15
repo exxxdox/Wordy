@@ -102,7 +102,6 @@ def test_create_tts_engine_resolves_default(monkeypatch, api_key, provider_key, 
     fake_audio_player = Mock(spec=TTSAudioPlayer)
     
     from wordy.tts import registry
-    original_registry = registry.TTS_ENGINE_REGISTRY.copy()
     monkeypatch.setattr(
         registry,
         "TTS_ENGINE_REGISTRY",

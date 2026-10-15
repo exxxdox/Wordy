@@ -21,7 +21,6 @@ if TYPE_CHECKING:
 WINDOW_BG = "#131316"
 SURFACE_BG = "#1c1c1e"
 ELEVATED_BG = "#2c2c2e"
-RAISED_BG = "#3a3a3c"
 
 # 强调色（Apple systemBlue 暗色外观）
 # 保留既有 token 名称，让所有现有状态提示同步采用新强调色。
@@ -40,8 +39,6 @@ TEXT_ERROR = "#ff453a"
 SEPARATOR_COLOR = "#38383a"
 
 # 次级按钮
-BUTTON_BG = "#2c2c2e"
-BUTTON_ACTIVE_BG = "#3a3a3c"
 BUTTON_GHOST_BORDER = "#48484a"
 
 SCROLLBAR_HANDLE = "#48484a"
@@ -49,7 +46,6 @@ SCROLLBAR_HANDLE_HOVER = "#6c6c70"
 
 # 主窗口（输入框）背景与边框
 INPUT_BACKGROUND = "#1c1c1e"
-INPUT_BORDER = "#48484a"
 
 # 设置图标默认色（未悬停）
 CONFIG_BUTTON_IDLE = "#98989d"
@@ -67,9 +63,8 @@ RADIUS_CARD = 14
 RADIUS_CONTROL = 10
 RADIUS_CHIP = 8
 
-# 字体栈 —— 终端/极客风格用等宽字体，UI 标签用系统无衬线
-MONO_FONT = '"Cascadia Code", "JetBrains Mono", "Consolas", "Courier New", monospace'
-UI_FONT = '"Segoe UI Variable", "Microsoft YaHei UI", "Segoe UI", sans-serif'
+# 字体栈 —— UI 标签用系统无衬线
+UI_FONT ='"Segoe UI Variable", "Microsoft YaHei UI", "Segoe UI", sans-serif'
 
 
 def rgba(hex_color: str, alpha: int) -> str:

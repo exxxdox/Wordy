@@ -48,11 +48,6 @@ _cached_config_file: Path | None = None
 # 工具函数
 # ---------------------------------------------------------------------------
 
-def get_active_config_file() -> Path:
-    """返回用户级配置文件路径。"""
-    return _USER_CONFIG_FILE
-
-
 def _clamp(value: float, lo: float, hi: float) -> float:
     return min(max(float(value), lo), hi)
 

@@ -3,11 +3,11 @@
 
 """audio_router 模块单元测试。"""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
-from wordy.audio.router import AudioRouter, RouterStats
+from wordy.audio.router import AudioRouter
 
 
 class TestAudioRouter:
