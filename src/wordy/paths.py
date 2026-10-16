@@ -13,13 +13,13 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-APP_DIR_NAME = "Wordy"
+APP_DIR_NAME = "wordy"
 
 
 def config_directory() -> Path:
-    """所有持久化文件的根目录：``$XDG_CONFIG_HOME/Wordy``。
+    """所有持久化文件的根目录：``$XDG_CONFIG_HOME/wordy``。
 
-    未设置、空串、全空白或给的是相对路径时退回 ``~/.config/Wordy``：XDG
+    未设置、空串、全空白或给的是相对路径时退回 ``~/.config/wordy``：XDG
     规范规定相对路径无效，照用会把文件写到随当前工作目录漂移的位置。
     """
     root = os.environ.get("XDG_CONFIG_HOME", "").strip()
