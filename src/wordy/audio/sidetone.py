@@ -3,7 +3,8 @@
 
 """返听（Sidetone）包装器：将 TTS 音频同时输出到主设备和系统默认设备。
 
-返听流写入通过容量为 1 的队列异步执行，避免慢设备无限积压。
+返听流写入通过小容量队列异步执行；队列吸收设备与线程调度抖动，
+生产侧永不阻塞主链路，慢设备持续落后时才停用本次返听。
 """
 
 from __future__ import annotations
@@ -13,13 +14,15 @@ from queue import Full, Queue
 from threading import Event, Thread
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     from wordy.audio.player import AudioPlayer
 
 logger = logging.getLogger(__name__)
 
+# 返听队列缓冲的音频块数：吸收 worker 启动延迟与设备写入抖动，避免一次抖动就整条静音。
+_STREAM_QUEUE_BLOCKS = 8
 _STREAM_CLOSE_TIMEOUT_SECONDS = 0.1
 _STREAM_STOP = object()
 
@@ -31,8 +34,8 @@ class SidetoneAudioPlayer:
     开关关闭时所有方法近乎零开销直通主播放器（仅一个 bool 判断）。
     返听失败不影响主链路：stream 打开失败、写入异常均记录 warning 并继续。
 
-    返听 write_stream 通过单个后台线程异步执行。队列只允许一个待写块；
-    慢设备造成积压时停用本次返听，主链路继续播放。
+    返听 write_stream 通过单个后台线程异步执行，提交永不阻塞主链路；
+    队列缓存若干块以吸收设备抖动，持续落后时才停用本次返听。
     """
 
     def __init__(self, main_player: AudioPlayer, sidetone_player: AudioPlayer) -> None:
@@ -159,18 +162,21 @@ class SidetoneAudioPlayer:
             logger.warning("返听设备流打开失败", exc_info=True)
 
         if not self._sidetone_stream_dead:
-            self._sidetone_queue = Queue(maxsize=1)
-            self._sidetone_thread = Thread(
+            queue: Queue[bytes | object] = Queue(maxsize=_STREAM_QUEUE_BLOCKS)
+            thread = Thread(
                 target=self._sidetone_write_loop,
+                args=(queue,),
                 name="sidetone-write",
                 daemon=True,
             )
-            self._sidetone_thread.start()
+            self._sidetone_queue = queue
+            self._sidetone_thread = thread
+            thread.start()
         return True
 
     def write_stream(self, data: bytes) -> None:
         """写入流数据：返听先提交到后台线程 → 主设备同步写入。两者并行执行。"""
-        # 单槽已满说明返听已落后；继续排队只会增加内存和听感延迟。
+        # 提交永不等待：返听拖慢主输出比返听漏一段更糟。队列满说明返听已持续落后。
         if self._sidetone_enabled and not self._sidetone_stream_dead:
             queue = self._sidetone_queue
             if queue is not None:
@@ -178,20 +184,17 @@ class SidetoneAudioPlayer:
                     queue.put_nowait(data)
                 except Full:
                     self._sidetone_stream_dead = True
-                    logger.warning("返听写入速度不足，本次流内不再继续排队")
+                    logger.warning("返听写入持续落后，本次流内不再继续排队")
         self._main.write_stream(data)
 
-    def _sidetone_write_loop(self) -> None:
-        """按顺序消费有界队列；线程为 daemon，异常设备不能阻止进程退出。"""
-        queue = self._sidetone_queue
-        if queue is None:
-            return
+    def _sidetone_write_loop(self, queue: Queue[bytes | object]) -> None:
+        """按顺序消费本次流的队列；关闭时清空实例引用不会丢失待写块。"""
         while True:
             item = queue.get()
             try:
                 if item is _STREAM_STOP:
                     return
-                self._sidetone_write_safe(item)  # type: ignore[arg-type]
+                self._sidetone_write_safe(cast(bytes, item))
             finally:
                 queue.task_done()
 

@@ -7,7 +7,10 @@ from __future__ import annotations
 
 from io import BytesIO
 from threading import Barrier, Event, Thread
+from time import perf_counter
 from unittest.mock import MagicMock
+
+from pytest import MonkeyPatch
 
 from wordy.audio.sidetone import SidetoneAudioPlayer
 
@@ -151,30 +154,84 @@ class TestSidetoneAudioPlayer:
         wrapper.write_stream(b"\x02\x03")
         sidetone.write_stream.assert_not_called()
 
-    def test_write_stream_disables_sidetone_when_single_slot_queue_is_full(self):
-        """慢返听最多保留一个待写块，不能让延迟和内存持续增长。"""
+    def test_write_stream_absorbs_device_backlog_without_dropping_blocks(self):
+        """设备短暂卡住时，返听须缓存后续块而不是整条静音。"""
         main, sidetone = self._make_players()
         writing = Event()
         release = Event()
 
-        def block_write(_data):
-            writing.set()
-            release.wait()
+        def block_first(data: bytes) -> None:
+            if data == b"first":
+                writing.set()
+                release.wait()
 
-        sidetone.write_stream.side_effect = block_write
+        sidetone.write_stream.side_effect = block_first
         wrapper = SidetoneAudioPlayer(main, sidetone)
         wrapper.set_sidetone_enabled(True)
         wrapper.open_stream(8, 1, 48000)
 
         wrapper.write_stream(b"first")
         assert writing.wait(1)
-        wrapper.write_stream(b"queued")
-        wrapper.write_stream(b"overflow")
+        for block in (b"second", b"third", b"fourth"):
+            wrapper.write_stream(block)
+        assert wrapper._sidetone_stream_dead is False
 
-        assert wrapper._sidetone_stream_dead is True
         release.set()
         wrapper.close_stream()
-        assert sidetone.write_stream.call_count <= 2
+
+        assert [item.args[0] for item in sidetone.write_stream.call_args_list] == [
+            b"first", b"second", b"third", b"fourth",
+        ]
+
+    def test_write_stream_never_blocks_main_path_when_device_is_stuck(self):
+        """设备卡住时提交返听不得阻塞主输出。"""
+        main, sidetone = self._make_players()
+        writing = Event()
+        release = Event()
+        sidetone.write_stream.side_effect = lambda _data: (
+            writing.set(), release.wait(),
+        )
+        wrapper = SidetoneAudioPlayer(main, sidetone)
+        wrapper.set_sidetone_enabled(True)
+        wrapper.open_stream(8, 1, 48000)
+
+        wrapper.write_stream(b"first")
+        assert writing.wait(1)
+
+        started = perf_counter()
+        for index in range(4):
+            wrapper.write_stream(bytes([index]))
+        elapsed = perf_counter() - started
+
+        assert elapsed < 0.05, f"返听提交阻塞了主链路 {elapsed:.3f}s"
+        assert main.write_stream.call_count == 5
+        release.set()
+        wrapper.close_stream()
+
+    def test_write_stream_disables_sidetone_when_queue_capacity_is_exhausted(
+        self, monkeypatch: MonkeyPatch,
+    ) -> None:
+        """返听持续落后超过队列容量时仍须有界失败，主链路继续。"""
+        monkeypatch.setattr("wordy.audio.sidetone._STREAM_QUEUE_BLOCKS", 2)
+        main, sidetone = self._make_players()
+        writing = Event()
+        release = Event()
+        sidetone.write_stream.side_effect = lambda _data: (
+            writing.set(), release.wait(),
+        )
+        wrapper = SidetoneAudioPlayer(main, sidetone)
+        wrapper.set_sidetone_enabled(True)
+        wrapper.open_stream(8, 1, 48000)
+
+        wrapper.write_stream(b"first")
+        assert writing.wait(1)
+        for index in range(4):
+            wrapper.write_stream(bytes([index]))
+
+        assert wrapper._sidetone_stream_dead is True
+        assert main.write_stream.call_count == 5
+        release.set()
+        wrapper.close_stream()
 
     # ── close_stream ────────────────────────────────────────────────
 
@@ -231,6 +288,41 @@ class TestSidetoneAudioPlayer:
         finally:
             release.set()
             closing.join(1)
+
+    def test_close_stream_keeps_queue_for_worker_that_starts_late(self):
+        """短音频关闭时，尚未调度的 worker 仍须消费已提交块。"""
+        main, sidetone = self._make_players()
+        loop_started = Event()
+        release_loop = Event()
+        wrapper = SidetoneAudioPlayer(main, sidetone)
+        original_loop = getattr(wrapper, "_sidetone_write_loop")
+
+        def delayed_loop(queue: object | None = None) -> None:
+            loop_started.set()
+            release_loop.wait()
+            if queue is None:
+                original_loop()
+            else:
+                original_loop(queue)
+
+        setattr(wrapper, "_sidetone_write_loop", delayed_loop)
+        wrapper.set_sidetone_enabled(True)
+        wrapper.open_stream(8, 1, 48000)
+        assert loop_started.wait(1)
+        wrapper.write_stream(b"tail")
+
+        closing = Thread(target=wrapper.close_stream)
+        closing.start()
+        for _ in range(100):
+            if wrapper._sidetone_queue is None:
+                break
+            Event().wait(0.001)
+        assert wrapper._sidetone_queue is None
+        release_loop.set()
+        closing.join(1)
+
+        assert not closing.is_alive()
+        sidetone.write_stream.assert_called_once_with(b"tail")
 
     # ── play_wav ────────────────────────────────────────────────────
 
