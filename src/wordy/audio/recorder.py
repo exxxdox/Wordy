@@ -145,7 +145,13 @@ class SystemAudioRecorder:
             self._discard_path()
             raise RecordingError("录音线程未能及时停止，本次录音已丢弃")
 
-        path = self._write_wav(self._collect_frames())
+        try:
+            path = self._write_wav(self._collect_frames())
+        except Exception:
+            # 兜底：任何未预期的失败（如拼接缓冲时的 MemoryError）都不能把临时
+            # 文件留在 %TEMP% 里再没人认领；_discard_path 可重复调用。
+            self._discard_path()
+            raise
         # 所有权移交给调用方：导入成功后由调用方删除，失败留在调用方手里重试。
         self._path = None
         return path

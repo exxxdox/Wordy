@@ -256,6 +256,24 @@ def test_stop_hands_temp_file_over_to_caller(monkeypatch):
     path.unlink()
 
 
+def test_unexpected_failure_still_discards_temp(monkeypatch):
+    """未预期的异常也不能把临时文件留在 %TEMP% 里没人认领。"""
+    buffers = [_buffer(48000, 2)]
+    recorder, audio = _started(monkeypatch, rate=48000.0, channels=2, buffers=buffers)
+    assert audio.stream is not None
+    assert audio.stream.drained.wait(timeout=2)
+    temp = recorder._path
+    assert temp is not None
+    monkeypatch.setattr(
+        recorder, "_collect_frames", Mock(side_effect=MemoryError("out of memory"))
+    )
+
+    with pytest.raises(MemoryError):
+        recorder.stop()
+
+    assert not temp.exists()
+
+
 def test_too_short_recording_is_rejected(monkeypatch):
     recorder, audio = _started(monkeypatch, channels=2, buffers=[])
     assert audio.stream is not None

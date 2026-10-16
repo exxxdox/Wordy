@@ -334,6 +334,22 @@ def test_too_short_recording_keeps_previous_slot(qapp, monkeypatch):
     assert settings.chat_wheel_slots == [""] * 8
 
 
+def test_unexpected_recording_failure_reports_and_resets_state(qapp, monkeypatch):
+    """非 RecordingError 的意外失败不能静默穿出 Qt 槽：要给提示且让按钮恢复。"""
+    recorder = _FakeRecorder(result=Path("unused.wav"))
+    panel, settings = _recording_panel(monkeypatch, recorder)
+    monkeypatch.setattr(recorder, "stop", Mock(side_effect=MemoryError("out of memory")))
+
+    panel.record_button.click()
+    panel.record_button.click()
+
+    assert panel._recording is None
+    assert panel.record_button.text() == "录制"
+    assert panel.record_button.isEnabled()
+    assert "失败" in panel.status_label.text()
+    assert settings.chat_wheel_slots == [""] * 8
+
+
 def test_closing_window_cancels_recording(qapp, monkeypatch, tmp_path):
     from PySide6.QtWidgets import QVBoxLayout, QWidget
 

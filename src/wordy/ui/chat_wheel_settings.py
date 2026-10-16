@@ -405,8 +405,9 @@ class ChatWheelSettings(QWidget):
             return
         try:
             path = recorder.stop()
-        except RecordingError as error:
-            self._status(str(error), error=True)
+        except Exception as error:  # noqa: BLE001 - 兜底，异常不能静默穿出 Qt 槽
+            logger.exception("结束录音失败")
+            self._status(f"录音失败：{error}", error=True)
             return
         # 时间戳让八个槽在轮盘上互相分得清，用户仍可随时改名。
         self.import_file(index, path, label=f"录音 {datetime.now():%H%M%S}", temporary=True)
