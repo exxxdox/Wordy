@@ -6,9 +6,53 @@ import os
 import tomllib
 from pathlib import Path
 
+import pytest
+
 import wordy.config
-from wordy.config import AppSettings, display_hotkey, MIN_VOLUME, MAX_VOLUME
+from wordy.audio import clips
+from wordy.config import (
+    AppSettings, USER_CONFIG_FILE, display_hotkey, MAX_VOLUME, MIN_VOLUME,
+)
+from wordy.paths import config_directory
 from wordy.tts.constants import DEFAULT_TTS_BACKEND, TTS_BACKENDS
+
+
+# ---------------------------------------------------------------------------
+# 持久化目录
+# ---------------------------------------------------------------------------
+
+def test_config_directory_honours_xdg_config_home(monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    assert config_directory() == tmp_path / "xdg" / "Wordy"
+
+
+@pytest.mark.parametrize("value", [None, "", "   ", "relative/config"])
+def test_config_directory_falls_back_to_home_config(monkeypatch, value):
+    """未设置、空串、全空白与相对路径都退回 ~/.config/Wordy。
+
+    XDG 规范规定相对路径无效；照用会把配置写到随工作目录漂移的位置。
+    """
+    if value is None:
+        monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    else:
+        monkeypatch.setenv("XDG_CONFIG_HOME", value)
+    assert config_directory() == Path.home() / ".config" / "Wordy"
+
+
+def test_config_file_lives_inside_config_directory():
+    assert USER_CONFIG_FILE.parent.name == "Wordy"
+    assert USER_CONFIG_FILE.name == "config.toml"
+
+
+def test_managed_clips_follow_the_config_directory(tmp_path):
+    """录音托管目录从配置文件位置推导，因此自动跟着搬进 Wordy 目录。"""
+    source = tmp_path / "clip.wav"
+    source.write_bytes(b"pcm")
+    config_file = tmp_path / "Wordy" / "config.toml"
+
+    imported = clips.import_audio_clip(source, config_file)
+
+    assert imported.parent == tmp_path / "Wordy" / "audio_clips"
 
 
 # ---------------------------------------------------------------------------

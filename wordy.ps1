@@ -60,7 +60,7 @@ try {
             $hiddenImports = @(
                 'wordy.config', 'wordy.secret', 'wordy.log',
                 'wordy.hotkey', 'wordy.hotkey.parser', 'wordy.hotkey.native',
-                'wordy.identity', 'wordy.qt_lifecycle',
+                'wordy.identity', 'wordy.paths', 'wordy.qt_lifecycle',
                 'wordy.audio.capture', 'wordy.audio.player', 'wordy.audio.router', 'wordy.audio.driver',
                 'wordy.audio.recorder', 'pyaudiowpatch',
                 'wordy.tts.constants', 'wordy.tts.engine', 'wordy.tts.registry',

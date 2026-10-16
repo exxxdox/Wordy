@@ -215,7 +215,7 @@ for _name in _STUBBABLE_MODULES:
 def _isolate_config_file(monkeypatch: pytest.MonkeyPatch, tmp_path: "Path") -> "Iterator[None]":
     """将所有测试的默认配置文件重定向到临时目录。
 
-    防止测试意外读写 ~/.wordy.toml。显式传 config_file= 的测试不受影响。
+    防止测试意外读写真实的 ``$XDG_CONFIG_HOME/Wordy``。显式传 config_file= 的测试不受影响。
     同时清除 load() 缓存，避免跨测试缓存污染。
     """
     import wordy.config

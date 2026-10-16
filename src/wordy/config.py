@@ -23,6 +23,7 @@ import wordy.secret
 from wordy._toml_serializer import read_toml, write_toml_atomic
 from wordy.hotkey import display_hotkey
 from wordy.identity import AudioIdentity, normalize_identity
+from wordy.paths import config_directory
 from wordy.tts.constants import (
     DEFAULT_TTS_API_PROVIDER,
     DEFAULT_TTS_BACKEND,
@@ -36,7 +37,7 @@ from wordy.constants import (
     MIN_VOLUME,
 )
 
-_USER_CONFIG_FILE: Path = Path.home() / ".wordy.toml"
+_USER_CONFIG_FILE: Path = config_directory() / "config.toml"
 USER_CONFIG_FILE: Path = _USER_CONFIG_FILE  # 测试 monkeypatch 使用
 
 # load() 缓存：同一配置文件多次调用复用同一实例，避免重复磁盘 I/O
