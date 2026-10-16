@@ -197,6 +197,217 @@ def test_qt_page_key_name_is_converted_for_native_listener(qapp):
     changed.assert_called_once_with("chat_wheel_hotkey", "ctrl+page up")
 
 
+class _InlineThread:
+    """就地执行 target 的假线程，让导入结果在断言前同步落地。"""
+
+    def __init__(self, target=None, name=None, daemon=None):
+        self._target = target
+
+    def start(self):
+        assert self._target is not None
+        self._target()
+
+
+class _FakeRecorder:
+    def __init__(self, result=None, start_error=None):
+        self.result = result
+        self.start_error = start_error
+        self.started = False
+        self.cancelled = False
+        self.elapsed_seconds = 0.0
+
+    def start(self):
+        if self.start_error is not None:
+            raise self.start_error
+        self.started = True
+
+    def stop(self):
+        assert self.result is not None
+        return self.result
+
+    def cancel(self):
+        self.cancelled = True
+
+
+def _recording_panel(monkeypatch, recorder):
+    """装好假录音器与就地导入线程的面板，返回 (panel, settings)。"""
+    monkeypatch.setattr("wordy.ui.chat_wheel_settings.SystemAudioRecorder", lambda: recorder)
+    monkeypatch.setattr("wordy.ui.chat_wheel_settings.threading.Thread", _InlineThread)
+    monkeypatch.setattr(
+        "wordy.ui.chat_wheel_settings.import_audio_clip",
+        lambda source, config_file=None: Path("managed.wav"),
+    )
+    settings = AppSettings()
+    return ChatWheelSettings(settings, Mock()), settings
+
+
+def test_record_button_saves_recording_with_timestamp_label(qapp, monkeypatch, tmp_path):
+    source = tmp_path / "recording.wav"
+    source.write_bytes(b"pcm")
+    recorder = _FakeRecorder(result=source)
+    panel, settings = _recording_panel(monkeypatch, recorder)
+
+    panel.record_button.click()
+    assert recorder.started is True
+    assert panel._recording == 0
+    assert panel.record_button.text().startswith("停止")
+    assert not panel.choose_button.isEnabled()
+    assert not panel.preview_button.isEnabled()
+    assert not panel.clear_button.isEnabled()
+
+    panel.record_button.click()
+
+    assert panel._recording is None
+    assert panel.record_button.text() == "录制"
+    assert settings.chat_wheel_slots[0] == "managed.wav"
+    assert settings.chat_wheel_labels[0].startswith("录音 ")
+    assert not source.exists(), "录音临时文件必须在导入后删除"
+    assert panel.choose_button.isEnabled()
+
+
+def test_recording_hint_stays_in_place_instead_of_covering_buttons(qapp, monkeypatch):
+    """录制中指引走原地标签：浮动弹窗锚在页脚上沿，正好盖住动作行的按钮。"""
+    from PySide6.QtWidgets import QVBoxLayout, QWidget
+
+    from wordy.ui.status_toast import StatusToastQueue
+
+    source = Path("unused.wav")
+    recorder = _FakeRecorder(result=source)
+    monkeypatch.setattr("wordy.ui.chat_wheel_settings.SystemAudioRecorder", lambda: recorder)
+    monkeypatch.setattr("wordy.ui.chat_wheel_settings.threading.Thread", _InlineThread)
+    monkeypatch.setattr(
+        "wordy.ui.chat_wheel_settings.import_audio_clip",
+        lambda path, config_file=None: Path("managed.wav"),
+    )
+    host = QWidget()
+    host.resize(420, 400)
+    queue = StatusToastQueue(host)
+    container = QWidget(host)
+    layout = QVBoxLayout(container)
+    panel = ChatWheelSettings(AppSettings(), Mock())
+    layout.addWidget(panel)
+    host.show()
+    qapp.processEvents()
+
+    try:
+        panel.record_button.click()
+
+        assert queue.texts() == [], "录制中指引不应占用浮动弹窗"
+        assert panel.status_label.isVisible()
+        assert "再次点击" in panel.status_label.text()
+
+        panel.record_button.click()
+
+        assert not panel.status_label.isVisible(), "录音结束后指引要收起"
+    finally:
+        host.close()
+
+
+def test_recording_start_failure_reports_reason(qapp, monkeypatch):
+    from wordy.audio.recorder import RecordingError
+
+    recorder = _FakeRecorder(start_error=RecordingError("未安装 PyAudioWPatch，无法录制系统声音"))
+    panel, settings = _recording_panel(monkeypatch, recorder)
+
+    panel.record_button.click()
+
+    assert panel._recording is None
+    assert "PyAudioWPatch" in panel.status_label.text()
+    assert settings.chat_wheel_slots == [""] * 8
+
+
+def test_too_short_recording_keeps_previous_slot(qapp, monkeypatch):
+    from wordy.audio.recorder import RecordingError
+
+    recorder = _FakeRecorder(result=Path("unused.wav"))
+    panel, settings = _recording_panel(monkeypatch, recorder)
+    monkeypatch.setattr(
+        recorder, "stop",
+        Mock(side_effect=RecordingError("录音太短，请至少录制 0.5 秒")),
+    )
+
+    panel.record_button.click()
+    panel.record_button.click()
+
+    assert panel._recording is None
+    assert "太短" in panel.status_label.text()
+    assert settings.chat_wheel_slots == [""] * 8
+
+
+def test_closing_window_cancels_recording(qapp, monkeypatch, tmp_path):
+    from PySide6.QtWidgets import QVBoxLayout, QWidget
+
+    recorder = _FakeRecorder(result=tmp_path / "unused.wav")
+    panel, settings = _recording_panel(monkeypatch, recorder)
+    parent = QWidget()
+    QVBoxLayout(parent).addWidget(panel)
+    parent.show()
+    qapp.processEvents()
+
+    panel.record_button.click()
+    assert panel._recording == 0
+    parent.close()
+
+    assert recorder.cancelled is True
+    assert panel._recording is None
+    assert settings.chat_wheel_slots == [""] * 8
+
+
+def test_import_failure_keeps_recording_temp_file(qapp, monkeypatch, tmp_path):
+    """导入失败不能连录音一起销毁：临时文件此时是这份音频唯一的副本。"""
+    source = tmp_path / "recording.wav"
+    source.write_bytes(b"pcm")
+    monkeypatch.setattr("wordy.ui.chat_wheel_settings.threading.Thread", _InlineThread)
+    monkeypatch.setattr(
+        "wordy.ui.chat_wheel_settings.import_audio_clip",
+        Mock(side_effect=OSError("磁盘已满")),
+    )
+    settings = AppSettings()
+    panel = ChatWheelSettings(settings, Mock())
+
+    panel.import_file(0, source, label="录音 093000", temporary=True)
+
+    assert source.is_file(), "导入失败时录音临时文件必须保留"
+    assert settings.chat_wheel_slots[0] == ""
+
+
+def test_save_failure_keeps_recording_temp_file(qapp, monkeypatch, tmp_path):
+    """槽位没落盘就不算存住：托管副本被回收时录音本体仍要在。"""
+    source = tmp_path / "recording.wav"
+    source.write_bytes(b"pcm")
+    monkeypatch.setattr("wordy.ui.chat_wheel_settings.threading.Thread", _InlineThread)
+    monkeypatch.setattr(
+        "wordy.ui.chat_wheel_settings.import_audio_clip",
+        lambda path, config_file=None: Path("managed.wav"),
+    )
+    monkeypatch.setattr(AppSettings, "save", Mock(side_effect=OSError("磁盘已满")))
+    settings = AppSettings()
+    panel = ChatWheelSettings(settings, Mock())
+
+    panel.import_file(0, source, label="录音 093000", temporary=True)
+
+    assert source.is_file(), "槽位保存失败时录音临时文件必须保留"
+    assert settings.chat_wheel_slots[0] == ""
+
+
+def test_import_file_temporary_source_is_removed(qapp, monkeypatch, tmp_path):
+    source = tmp_path / "recording.wav"
+    source.write_bytes(b"pcm")
+    monkeypatch.setattr("wordy.ui.chat_wheel_settings.threading.Thread", _InlineThread)
+    monkeypatch.setattr(
+        "wordy.ui.chat_wheel_settings.import_audio_clip",
+        lambda path, config_file=None: Path("managed.wav"),
+    )
+    settings = AppSettings()
+    panel = ChatWheelSettings(settings, Mock())
+
+    panel.import_file(3, source, label="录音 093000", temporary=True)
+
+    assert not source.exists()
+    assert settings.chat_wheel_slots[3] == "managed.wav"
+    assert settings.chat_wheel_labels[3] == "录音 093000"
+
+
 def test_real_settings_window_wheel_fits_default_width(qapp, fake_keyring):
     from PySide6.QtWidgets import QScrollArea, QTabWidget
     from wordy.ui.settings import DIALOG_WIDTH, SettingsWindow
@@ -222,6 +433,11 @@ def test_real_settings_window_wheel_fits_default_width(qapp, fake_keyring):
         assert isinstance(scroll, QScrollArea)
         assert scroll.horizontalScrollBar().maximum() == 0
         assert panel.clear_button.geometry().right() < panel.width()
+        assert scroll.verticalScrollBar().maximum() == 0
+        # 录制指引显示时也要留在默认尺寸内，不能把页面顶出视口。
+        panel._hint("正在录制上音频，再次点击「停止」即可结束。")
+        qapp.processEvents()
+        assert scroll.horizontalScrollBar().maximum() == 0
         assert scroll.verticalScrollBar().maximum() == 0
     finally:
         window.close()

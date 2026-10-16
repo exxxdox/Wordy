@@ -62,6 +62,7 @@ try {
                 'wordy.hotkey', 'wordy.hotkey.parser', 'wordy.hotkey.native',
                 'wordy.identity', 'wordy.qt_lifecycle',
                 'wordy.audio.capture', 'wordy.audio.player', 'wordy.audio.router', 'wordy.audio.driver',
+                'wordy.audio.recorder', 'pyaudiowpatch',
                 'wordy.tts.constants', 'wordy.tts.engine', 'wordy.tts.registry',
                 'wordy.tts.labels', 'wordy.tts.cartesia',
                 'wordy.ui.overlay', 'wordy.ui.overlay_widgets', 'wordy.ui.settings',

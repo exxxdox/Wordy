@@ -6,9 +6,10 @@ import logging
 import math
 import threading
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor, QFont, QKeySequence, QMouseEvent, QPaintEvent, QPainter,
     QPainterPath, QPen, QShowEvent,
@@ -20,6 +21,7 @@ from PySide6.QtWidgets import (
 from shiboken6 import isValid
 
 from wordy.audio.clips import AUDIO_EXTENSIONS, import_audio_clip, remove_audio_clip
+from wordy.audio.recorder import MAX_RECORD_SECONDS, RecordingError, SystemAudioRecorder
 from wordy.config import AppSettings
 from wordy.ui.status_toast import show_status_toast
 from wordy.ui import glass
@@ -30,10 +32,12 @@ from wordy.ui.theme import (
 
 logger = logging.getLogger(__name__)
 DIRECTIONS = ("上", "右上", "右", "右下", "下", "左下", "左", "左上")
+RECORD_TICK_MS = 200
 
 
 class _ImportSignals(QObject):
-    finished = Signal(int, str, str, str)
+    # index, filename, label, error, 录音临时文件路径（非录音导入为空串）
+    finished = Signal(int, str, str, str, str)
 
 
 class _WheelPicker(QWidget):
@@ -206,6 +210,12 @@ class ChatWheelSettings(QWidget):
         self._on_field_changed = on_field_changed
         self._busy: set[int] = set()
         self._closed = threading.Event()
+        # 录制独占面板：开始后锁住槽切换与其他编辑动作，录音只落在开始时的槽。
+        self._recording: int | None = None
+        self._recorder: SystemAudioRecorder | None = None
+        self._record_timer = QTimer(self)
+        self._record_timer.setInterval(RECORD_TICK_MS)
+        self._record_timer.timeout.connect(self._tick_recording)
         self._signals = _ImportSignals(self)
         self._signals.finished.connect(self._finish_import)
         self.selected_index = 0
@@ -248,6 +258,10 @@ class ChatWheelSettings(QWidget):
         self.choose_button = QPushButton("选择文件")
         self.choose_button.clicked.connect(lambda: self._choose_file(self.selected_index))
         action_row.addWidget(self.choose_button, 1)
+        # 文案保持两字，动作行必须留在同一行里：加行高会顶掉滚动区契约。
+        self.record_button = QPushButton("录制")
+        self.record_button.clicked.connect(self._toggle_record)
+        action_row.addWidget(self.record_button)
         self.preview_button = QPushButton("试听")
         self.preview_button.clicked.connect(
             lambda: self._on_field_changed("chat_wheel_preview", self.selected_index))
@@ -276,7 +290,23 @@ class ChatWheelSettings(QWidget):
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
         if event.type() == QEvent.Type.Close:
             self._closed.set()
+            # 采集线程独立于窗口，窗口销毁前不收掉会留下采集流和临时文件。
+            self._cancel_recording()
         return super().eventFilter(watched, event)
+
+    def _hint(self, text: str) -> None:
+        """长期停留的状态说明写原地标签，不走浮动队列。
+
+        浮动弹窗锚在页脚上沿、向上生长，而本页的动作行就在页脚正上方；
+        弹窗不仅遮住按钮，自身还会吃掉点击，录制中就没法再点「停止」。
+        """
+        self.status_label.setText(text)
+        self.status_label.setStyleSheet(f"color: {GREEN_ACCENT};")
+        self.status_label.setVisible(True)
+
+    def _clear_hint(self) -> None:
+        self.status_label.clear()
+        self.status_label.setVisible(False)
 
     def _status(self, text: str, *, error: bool = False) -> None:
         color = TEXT_ERROR if error else GREEN_ACCENT
@@ -311,7 +341,9 @@ class ChatWheelSettings(QWidget):
         if filename:
             self.import_file(index, Path(filename))
 
-    def import_file(self, index: int, source: Path) -> None:
+    def import_file(self, index: int, source: Path, label: str | None = None,
+                    temporary: bool = False) -> None:
+        """把一个音频文件导入槽位；``label`` 缺省沿用文件名，``temporary`` 用于录音副本。"""
         if index in self._busy:
             return
         self._busy.add(index)
@@ -319,6 +351,7 @@ class ChatWheelSettings(QWidget):
         self._status(f"正在导入{DIRECTIONS[index]}音频…")
         config_file = self._settings._config_file
         signals = self._signals
+        slot_label = label or source.stem
 
         def run() -> None:
             filename, error = "", ""
@@ -326,30 +359,128 @@ class ChatWheelSettings(QWidget):
                 filename = import_audio_clip(source, config_file).name
             except Exception as exc:
                 error = str(exc)
-            # 设置窗口关闭后 QObject 可能已销毁，丢弃结果并回收未使用文件。
+            # 录音临时文件的删除时机由 _finish_import 决定：只有内容既进了托管
+            # 目录、槽位又落了盘，才谈得上安全回收。
             try:
                 if not self._closed.is_set() and isValid(signals):
-                    signals.finished.emit(index, filename, source.stem, error)
+                    signals.finished.emit(index, filename, slot_label, error,
+                                          str(source) if temporary else "")
                     return
             except RuntimeError:
                 pass
+            # 设置窗口关闭后 QObject 可能已销毁，丢弃结果并回收未使用文件。
             if filename:
                 self._remove_unused(filename, config_file)
+            if temporary:
+                self._discard_temporary(str(source))
 
         threading.Thread(target=run, name="ChatWheelImport", daemon=True).start()
 
-    def _finish_import(self, index: int, filename: str, label: str, error: str) -> None:
+    def _toggle_record(self) -> None:
+        if self._recording is not None:
+            self._finish_recording()
+            return
+        index = self.selected_index
+        # 首次点击才构造录音器：面板构造期不加载 pyaudiowpatch，预热窗口也不受影响。
+        recorder = SystemAudioRecorder()
+        try:
+            recorder.start()
+        except RecordingError as error:
+            self._status(str(error), error=True)
+            return
+        self._recorder = recorder
+        self._recording = index
+        self._record_timer.start()
+        self._refresh_all_slots()
+        self._hint(f"正在录制{DIRECTIONS[index]}音频，再次点击「停止」即可结束。")
+
+    def _finish_recording(self) -> None:
+        index, recorder = self._recording, self._recorder
+        self._record_timer.stop()
+        self._recording = None
+        self._recorder = None
+        self._clear_hint()
+        self._refresh_all_slots()
+        if index is None or recorder is None:
+            return
+        try:
+            path = recorder.stop()
+        except RecordingError as error:
+            self._status(str(error), error=True)
+            return
+        # 时间戳让八个槽在轮盘上互相分得清，用户仍可随时改名。
+        self.import_file(index, path, label=f"录音 {datetime.now():%H%M%S}", temporary=True)
+
+    def _cancel_recording(self) -> None:
+        """丢弃进行中的录音；采集线程不碰 Qt，可以在这里安全收尾。"""
+        self._record_timer.stop()
+        recorder, self._recorder = self._recorder, None
+        self._recording = None
+        self._clear_hint()
+        if recorder is not None:
+            recorder.cancel()
+
+    def _tick_recording(self) -> None:
+        recorder = self._recorder
+        if self._recording is None or recorder is None:
+            self._record_timer.stop()
+            return
+        # 到达上限时走与手动停止同一条收尾路径，避免两套结束逻辑。
+        if recorder.elapsed_seconds >= MAX_RECORD_SECONDS:
+            self._finish_recording()
+            return
+        self._refresh_record_button()
+
+    def _refresh_record_button(self) -> None:
+        recording = self._recording
+        recorder = self._recorder
+        elapsed = int(recorder.elapsed_seconds) if recording is not None and recorder else 0
+        text = f"停止 {elapsed}s" if recording is not None else "录制"
+        self.record_button.setText(text)
+        direction = DIRECTIONS[recording if recording is not None else self.selected_index]
+        self.record_button.setAccessibleName(
+            f"停止录制{direction}音频" if recording else f"录制{direction}音频"
+        )
+
+    def _refresh_all_slots(self) -> None:
+        for slot in range(8):
+            self._refresh_slot(slot)
+
+    def _finish_import(self, index: int, filename: str, label: str, error: str,
+                       temporary_source: str = "") -> None:
         self._busy.discard(index)
         if self._closed.is_set():
             if filename:
                 self._remove_unused(filename, self._settings._config_file)
+            # 窗口已关，这份录音不会再被导入，可以连同临时文件一起回收。
+            self._discard_temporary(temporary_source)
             return
         if error:
             self._status(f"导入失败：{error}", error=True)
             self._refresh_slot(index)
+            self._keep_temporary(temporary_source, "导入失败")
             return
         if not self._replace_clip(index, filename, label):
             self._remove_unused(filename, self._settings._config_file)
+            self._keep_temporary(temporary_source, "槽位保存失败")
+            return
+        self._discard_temporary(temporary_source)
+
+    @staticmethod
+    def _discard_temporary(path: str) -> None:
+        """只在录音已安全落入托管目录、槽位也已落盘时调用。"""
+        if not path:
+            return
+        try:
+            Path(path).unlink(missing_ok=True)
+        except OSError:
+            logger.warning("无法删除录音临时文件 %s", path)
+
+    @staticmethod
+    def _keep_temporary(path: str, reason: str) -> None:
+        """失败路径下录音临时文件是唯一副本：保留并记下路径，不静默销毁。"""
+        if path:
+            logger.warning("%s，录音临时文件保留在 %s", reason, path)
 
     def _replace_clip(self, index: int, filename: str, label: str) -> bool:
         old_slots = list(self._settings.chat_wheel_slots)
@@ -413,7 +544,9 @@ class ChatWheelSettings(QWidget):
         self._refresh_slot(index)
 
     def _refresh_slot(self, index: int) -> None:
-        busy = index in self._busy
+        recording = index == self._recording
+        # 录制期间锁住全部槽位：录音只能落在开始时的那个槽。
+        busy = index in self._busy or self._recording is not None
         filled = bool(self._settings.chat_wheel_slots[index])
         label = self._settings.chat_wheel_labels[index].strip()
         self.slot_buttons[index].setText(f"{DIRECTIONS[index]}\n{label or '未设置'}")
@@ -422,7 +555,11 @@ class ChatWheelSettings(QWidget):
             return
         self.label_input.setText(label)
         self.choose_button.setEnabled(not busy)
-        self.choose_button.setText("导入中…" if busy else "选择文件")
+        self.choose_button.setText(
+            "录制中…" if recording else "导入中…" if busy else "选择文件"
+        )
+        self.record_button.setEnabled(recording or index not in self._busy)
+        self._refresh_record_button()
         self.preview_button.setEnabled(filled and not busy)
         self.clear_button.setEnabled(filled and not busy)
         self.label_input.setEnabled(filled and not busy)

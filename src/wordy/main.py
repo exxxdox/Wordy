@@ -12,6 +12,7 @@ import sys
 from typing import cast
 
 from wordy.audio.player import AudioPlayer, OutputDeviceSelection
+from wordy.audio.recorder import cancel_active_recording
 from wordy.audio.sidetone import SidetoneAudioPlayer
 from wordy.config import AppSettings
 from wordy.log import install_log_stream
@@ -299,6 +300,9 @@ class WordyApp:
             if background_stopped:
                 return
             background_stopped = True
+            # app.quit() 不给顶层窗口派发 Close，设置页的关窗清理不会执行，
+            # 进行中的录音必须在这里收掉，否则采集流会活到进程退出。
+            cancel_active_recording()
             if self._chat_wheel_controller is not None:
                 self._chat_wheel_controller.stop()
             # 退出后不会继续播放，避免先重开音频流再由 shutdown 立即关闭。
