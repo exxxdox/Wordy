@@ -33,7 +33,10 @@ def test_audio_file_waits_for_worker_handoff_without_voice(manager, mock_player,
         ready.set()
         thread.join(2)
     assert not thread.is_alive()
-    mock_player.play_wav.assert_called_once_with(str(file), cancel_event=manager._audio_files_stopped)
+    # 取消句柄从全局停止标志换成单次播放的句柄，退出时另由 shutdown 一并触发。
+    cancel_event = mock_player.play_wav.call_args.kwargs["cancel_event"]
+    assert cancel_event is not manager._audio_files_stopped
+    assert isinstance(cancel_event, threading.Event)
     manager.shutdown()
 
 
@@ -50,6 +53,50 @@ def test_audio_file_reports_failed_output(manager, mock_player, monkeypatch):
     operation(*args)
     error.assert_called_once()
     manager.shutdown()
+
+
+def test_stop_audio_file_interrupts_current_clip(manager, mock_player):
+    """停止试听只打断这一次播放，不能连累后续播放（那是 shutdown 的事）。"""
+    manager.play_audio_file(Path("clip.wav"))
+    operation, *args = manager.executor.submit.call_args.args
+
+    manager.stop_audio_file()
+    operation(*args)
+
+    mock_player.play_wav.assert_not_called()
+
+    # 只打断这一次：下一次播放拿到的是全新的、未被触发的句柄。
+    manager.play_audio_file(Path("next.wav"))
+    _operation, *next_args = manager.executor.submit.call_args.args
+    assert next_args[-2] is not args[-2]
+    assert next_args[-2].is_set() is False
+    manager.shutdown()
+
+
+def test_audio_file_reports_finish_on_success_and_failure(manager, mock_player, mock_engine):
+    """播完和播放失败都要回调，否则设置页的「停止」按钮会一直挂着。"""
+    finished = MagicMock()
+    manager.play_audio_file(Path("clip.wav"), None, finished)
+    operation, *args = manager.executor.submit.call_args.args
+    operation(*args)
+    finished.assert_called_once_with()
+
+    manager.play_audio_file(Path("missing.wav"), None, finished)
+    operation, *args = manager.executor.submit.call_args.args
+    mock_player.play_wav.return_value = False
+    operation(*args)
+    assert finished.call_count == 2
+
+
+def test_shutdown_interrupts_playing_clip(manager, mock_player):
+    """退出时全局标志已不再直接传给播放层，shutdown 必须显式打断当前片段。"""
+    manager.play_audio_file(Path("clip.wav"))
+    operation, *args = manager.executor.submit.call_args.args
+
+    manager.shutdown()
+    operation(*args)
+
+    mock_player.play_wav.assert_not_called()
 
 
 def test_shutdown_discards_queued_audio_files(manager, mock_player):
@@ -475,6 +522,39 @@ class TestTTSManagerSpeak:
         mock_settings.volcengine_voice_id = "BV001"
         manager.speak("hello")
         manager._executor.submit.assert_called_once()
+
+    def test_speak_reports_finish(self, manager, mock_settings, mock_engine):
+        finished = MagicMock()
+        manager.speak("hello", finished)
+        operation, *args = manager._executor.submit.call_args.args
+        operation(*args, **manager._executor.submit.call_args.kwargs)
+        finished.assert_called_once_with()
+        mock_engine.speak.assert_called_once_with("hello")
+
+    def test_speak_reports_finish_on_engine_error(self, manager, mock_settings, mock_engine):
+        mock_engine.speak.side_effect = OSError("网络中断")
+        finished = MagicMock()
+        manager.speak("hello", finished)
+        operation, *args = manager._executor.submit.call_args.args
+        operation(*args, **manager._executor.submit.call_args.kwargs)
+        finished.assert_called_once_with()
+
+    def test_speak_reports_finish_when_it_bails(self, manager, mock_settings):
+        """早退也必须回调：设置页的「朗读中…」靠它复位，否则永远挂着。"""
+        finished = MagicMock()
+        manager.speak("   ", finished)
+        finished.assert_called_once_with()
+        manager._executor.submit.assert_not_called()
+
+        mock_settings.volcengine_voice_id = None
+        manager.speak("hello", finished)
+        assert finished.call_count == 2
+
+    def test_speak_reports_finish_when_submit_fails(self, manager, mock_settings):
+        manager._executor.submit.side_effect = RuntimeError("executor 已关闭")
+        finished = MagicMock()
+        manager.speak("hello", finished)
+        finished.assert_called_once_with()
 
     def test_fetch_voices_delegates_to_engine(self, manager, mock_engine):
         mock_engine.fetch_voices.return_value = [{"id": "v1", "name": "Voice 1"}]

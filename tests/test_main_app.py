@@ -523,7 +523,8 @@ def test_on_submit_with_voice_queues_through_executor(app):
     fn, args, kwargs = app.tts_manager._executor.submissions[0]
     assert fn == app.tts_manager._generate_and_play
     assert args == ("hello world",)
-    assert kwargs == {"engine": app.tts_manager.engine, "ready": app.tts_manager._worker_ready, "backend": app.tts_manager.tts_backend}
+    assert kwargs == {"engine": app.tts_manager.engine, "ready": app.tts_manager._worker_ready,
+                      "backend": app.tts_manager.tts_backend, "on_finished": None}
     # FakeExecutor runs synchronously, so speak was invoked.
     assert app.tts_manager.engine.speak_calls == ["hello world"]
 
@@ -631,7 +632,8 @@ def test_backend_switch_submit_after_switch_uses_new_engine_and_executor(app, mo
     fn, args, kwargs = new_executor.submissions[0]
     assert fn == app.tts_manager._generate_and_play
     assert args == ("after-switch",)
-    assert kwargs == {"engine": app.tts_manager.engine, "ready": app.tts_manager._worker_ready, "backend": app.tts_manager.tts_backend}
+    assert kwargs == {"engine": app.tts_manager.engine, "ready": app.tts_manager._worker_ready,
+                      "backend": app.tts_manager.tts_backend, "on_finished": None}
     assert new_engine.speak_calls == ["after-switch"]
 
 

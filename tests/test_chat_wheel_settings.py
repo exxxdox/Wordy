@@ -2,6 +2,7 @@
 
 from pathlib import Path
 import threading
+from typing import cast
 from unittest.mock import Mock
 import pytest
 from PySide6.QtCore import QPoint, Qt
@@ -54,7 +55,7 @@ def test_import_feedback_goes_to_host_queue(qapp, monkeypatch):
     try:
         panel.import_file(0, Path("clip.mp3"))
 
-        assert queue.texts() == ["正在导入上音频…"]
+        assert queue.texts() == ["正在导入音频 1…"]
         assert panel.status_label.isVisible() is False
     finally:
         host.close()
@@ -84,7 +85,7 @@ def test_wheel_selects_slot_and_shows_only_its_editor(qapp):
     panel.slot_buttons[1].click()
 
     assert panel.selected_index == 1
-    assert panel.editor_title.text() == "右上音频"
+    assert panel.editor_title.text() == "音频 2"
     assert panel.label_input.text() == "右上方"
     assert panel.slot_buttons[1].property("selected") is True
     assert panel.slot_buttons[1].isChecked()
@@ -263,6 +264,155 @@ def test_record_button_saves_recording_with_timestamp_label(qapp, monkeypatch, t
     assert settings.chat_wheel_labels[0].startswith("录音 ")
     assert not source.exists(), "录音临时文件必须在导入后删除"
     assert panel.choose_button.isEnabled()
+
+
+def test_slot_names_are_numbers_not_directions(qapp):
+    settings = AppSettings(chat_wheel_slots=["a.wav"] + [""] * 7)
+    panel = ChatWheelSettings(settings, Mock())
+
+    assert panel.editor_title.text() == "音频 1"
+    assert panel.preview_button.accessibleName() == "试听音频 1"
+    panel.slot_buttons[4].click()
+    assert panel.editor_title.text() == "音频 5"
+    assert panel.clear_button.accessibleName() == "清空音频 5"
+
+
+def test_preview_button_toggles_to_stop_and_back(qapp):
+    settings = AppSettings(chat_wheel_slots=["a.wav"] + [""] * 7)
+    changed = Mock()
+    panel = ChatWheelSettings(settings, changed)
+
+    panel.preview_button.click()
+
+    assert panel.preview_button.text() == "停止"
+    assert panel.preview_button.isEnabled()
+    changed.assert_called_once_with("chat_wheel_preview", 0)
+
+    panel.preview_button.click()
+
+    assert panel.preview_button.text() == "试听"
+    changed.assert_called_with("chat_wheel_preview_stop", 0)
+
+
+def test_preview_button_resets_when_playback_ends(qapp):
+    """播完（或被打断）后主程序回调复位按钮，否则「停止」会一直挂着。"""
+    settings = AppSettings(chat_wheel_slots=["a.wav"] + [""] * 7)
+    panel = ChatWheelSettings(settings, Mock())
+    panel.preview_button.click()
+
+    panel.set_preview_playing(False)
+
+    assert panel.preview_button.text() == "试听"
+    assert panel._previewing is False
+
+
+def test_starting_a_recording_stops_the_preview(qapp, monkeypatch):
+    """录音抓的是系统声音，正在试听的片段会被录进去，所以必须先停掉。"""
+    recorder = _FakeRecorder(result=Path("unused.wav"))
+    panel, settings = _recording_panel(monkeypatch, recorder)
+    settings.update(chat_wheel_slots=["a.wav"] + [""] * 7)
+    panel._select_slot(0)
+    changed = cast(Mock, panel._on_field_changed)
+
+    panel.preview_button.click()
+    assert panel._previewing is True
+
+    panel.record_button.click()
+
+    assert panel._previewing is False
+    changed.assert_any_call("chat_wheel_preview_stop", 0)
+
+
+def test_text_input_shares_the_label_row(qapp):
+    """轮盘页纵向余量为 0，文字框必须和名称同行，不能新增一行。"""
+    panel = ChatWheelSettings(AppSettings(), Mock())
+
+    assert panel.text_input.parent() is panel.label_input.parent()
+    assert panel.text_input.maxLength() > 0
+
+
+def test_saving_text_replaces_the_slot_clip(qapp):
+    settings = AppSettings(chat_wheel_slots=["a.wav"] + [""] * 7,
+                           chat_wheel_labels=["旧片段"] + [""] * 7)
+    panel = ChatWheelSettings(settings, Mock())
+
+    panel.text_input.setText("马上到")
+    panel.text_input.editingFinished.emit()
+
+    assert settings.chat_wheel_texts[0] == "马上到"
+    assert settings.chat_wheel_slots[0] == ""
+    assert panel.status_label.text() == "文字已保存。"
+
+
+def test_focusing_the_text_box_without_editing_keeps_the_clip(qapp):
+    """失焦也会触发 editingFinished；没改动就不能把音频删掉。"""
+    settings = AppSettings(chat_wheel_slots=["a.wav"] + [""] * 7)
+    panel = ChatWheelSettings(settings, Mock())
+
+    panel.text_input.editingFinished.emit()
+
+    assert settings.chat_wheel_slots[0] == "a.wav"
+    assert settings.chat_wheel_texts[0] == ""
+
+
+def test_importing_a_clip_clears_the_slot_text(qapp):
+    settings = AppSettings(chat_wheel_texts=["马上到"] + [""] * 7)
+    panel = ChatWheelSettings(settings, Mock())
+
+    panel._finish_import(0, "managed.wav", "新片段", "")
+
+    assert settings.chat_wheel_slots[0] == "managed.wav"
+    assert settings.chat_wheel_texts[0] == ""
+
+
+def test_text_slot_previews_as_speaking_and_resets(qapp):
+    """朗读打断不了，所以按钮如实显示「朗读中…」并禁用，而不是假装能停。"""
+    settings = AppSettings(chat_wheel_texts=["马上到"] + [""] * 7)
+    changed = Mock()
+    panel = ChatWheelSettings(settings, changed)
+
+    panel.preview_button.click()
+
+    assert panel.preview_button.text() == "朗读中…"
+    assert not panel.preview_button.isEnabled()
+    changed.assert_called_once_with("chat_wheel_preview", 0)
+
+    panel.preview_button.click()  # 禁用时点击无效
+    assert panel.preview_button.text() == "朗读中…"
+    assert panel._preview_speech is True
+
+    panel.set_preview_playing(False)
+    assert panel.preview_button.text() == "试听"
+    assert panel.preview_button.isEnabled()
+    assert panel._preview_speech is False
+
+
+def test_speaking_disables_preview_on_every_slot(qapp):
+    """完成回调不带槽号，所以朗读期间必须全局禁用试听，否则回调会误复位新的试听。"""
+    settings = AppSettings(chat_wheel_slots=["", "b.wav"] + [""] * 6,
+                           chat_wheel_texts=["马上到"] + [""] * 7)
+    panel = ChatWheelSettings(settings, Mock())
+    panel.preview_button.click()
+
+    panel.slot_buttons[1].click()
+
+    assert panel.preview_button.text() == "朗读中…"
+    assert not panel.preview_button.isEnabled()
+
+
+def test_recording_is_refused_while_speaking(qapp, monkeypatch):
+    """录音采的是系统声音，正在朗读的 TTS 会被录进去。"""
+    recorder = _FakeRecorder(result=Path("unused.wav"))
+    panel, settings = _recording_panel(monkeypatch, recorder)
+    settings.update(chat_wheel_texts=["马上到"] + [""] * 7)
+    panel._select_slot(0)
+    panel.preview_button.click()
+
+    panel.record_button.click()
+
+    assert recorder.started is False
+    assert panel._recording is None
+    assert "朗读" in panel.status_label.text()
 
 
 def test_recording_hint_stays_in_place_instead_of_covering_buttons(qapp, monkeypatch):
@@ -453,6 +603,12 @@ def test_real_settings_window_wheel_fits_default_width(qapp, fake_keyring):
         # 录制指引显示时也要留在默认尺寸内，不能把页面顶出视口。
         panel._hint("正在录制上音频，再次点击「停止」即可结束。")
         qapp.processEvents()
+        assert scroll.horizontalScrollBar().maximum() == 0
+        assert scroll.verticalScrollBar().maximum() == 0
+        # 名称与朗读文字同行的两个输入框不能把面板撑宽。
+        panel.text_input.setText("这是一段很长的朗读文字" * 10)
+        qapp.processEvents()
+        assert panel.text_input.geometry().right() < panel.width()
         assert scroll.horizontalScrollBar().maximum() == 0
         assert scroll.verticalScrollBar().maximum() == 0
     finally:

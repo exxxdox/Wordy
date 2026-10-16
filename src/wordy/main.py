@@ -131,6 +131,9 @@ class WordyApp:
             return
         if field == "chat_wheel_preview" and isinstance(value, int):
             controller.play_slot(value)
+        elif field == "chat_wheel_preview_stop":
+            # 只打断这一次试听，不触碰全局停止标志。
+            self.tts_manager.stop_audio_file()
         elif field == "chat_wheel_hotkey":
             error = None
             try:
@@ -140,6 +143,12 @@ class WordyApp:
             settings = self.overlay._active_settings_window()
             if settings is not None:
                 settings.chat_wheel_panel.set_hotkey_result(error)
+
+    def _on_chat_wheel_playback_finished(self) -> None:
+        """播放结束（播完/被停止/失败）后复位试听按钮；设置窗口没开时无事可做。"""
+        settings = self.overlay._active_settings_window()
+        if settings is not None:
+            settings.chat_wheel_panel.set_preview_playing(False)
 
     def _on_chat_wheel_error(self, message: str) -> None:
         logger.warning(message)
@@ -313,7 +322,8 @@ class WordyApp:
             self.overlay.prepare_ui()
             # QApplication 已创建后才分配轮盘；退出先注销热键，阻止延迟事件重开。
             self._chat_wheel_controller = ChatWheelController(
-                self._settings, self.tts_manager.play_audio_file, self._on_chat_wheel_error)
+                self._settings, self.tts_manager.play_audio_file, self._on_chat_wheel_error,
+                self._on_chat_wheel_playback_finished, self.tts_manager.speak)
             try:
                 self._chat_wheel_controller.start()
             except (ValueError, RuntimeError, OSError) as error:

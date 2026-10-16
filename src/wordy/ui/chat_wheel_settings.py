@@ -31,7 +31,8 @@ from wordy.ui.theme import (
 )
 
 logger = logging.getLogger(__name__)
-DIRECTIONS = ("上", "右上", "右", "右下", "下", "左下", "左", "左上")
+# 槽位用数字编号标识：方向名（上/右上…）既指不明确，又和运行时轮盘的方向概念重名。
+SLOT_NAMES = tuple(f"音频 {index}" for index in range(1, 9))
 RECORD_TICK_MS = 200
 
 
@@ -55,10 +56,10 @@ class _WheelPicker(QWidget):
         self.setFixedSize(340, 240)
         self.setMouseTracking(True)
         self.buttons: list[QPushButton] = []
-        for index, direction in enumerate(DIRECTIONS):
-            button = QPushButton(direction, self)
+        for index in range(8):
+            button = QPushButton(self)
             button.setObjectName("wheelSlot")
-            button.setAccessibleName(f"编辑{direction}音频")
+            button.setAccessibleName(f"编辑{SLOT_NAMES[index]}")
             button.setCheckable(True)
             # 鼠标统一由轮盘处理，避免透明按钮的 hover/pressed 状态覆盖扇区选中色。
             button.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
@@ -213,6 +214,10 @@ class ChatWheelSettings(QWidget):
         # 录制独占面板：开始后锁住槽切换与其他编辑动作，录音只落在开始时的槽。
         self._recording: int | None = None
         self._recorder: SystemAudioRecorder | None = None
+        # 试听是否正在播放：由主程序在播放结束时回调复位。
+        self._previewing = False
+        # 正在朗读文字（而非播放音频）。朗读打断不了，按钮如实显示「朗读中…」。
+        self._preview_speech = False
         self._record_timer = QTimer(self)
         self._record_timer.setInterval(RECORD_TICK_MS)
         self._record_timer.timeout.connect(self._tick_recording)
@@ -249,11 +254,21 @@ class ChatWheelSettings(QWidget):
         self.editor_title = QLabel()
         self.editor_title.setObjectName("sectionTitle")
         layout.addWidget(self.editor_title)
+        # 名称与朗读文字同行分栏：轮盘页纵向余量为 0，再占一行就会顶出滚动条。
+        inputs_row = QHBoxLayout()
+        inputs_row.setSpacing(6)
         self.label_input = QLineEdit()
-        self.label_input.setPlaceholderText("选择音频后命名")
+        self.label_input.setPlaceholderText("名称")
         self.label_input.setMaxLength(40)
         self.label_input.editingFinished.connect(self._save_label)
-        layout.addWidget(self.label_input)
+        inputs_row.addWidget(self.label_input, 1)
+        self.text_input = QLineEdit()
+        self.text_input.setPlaceholderText("或输入要朗读的文字")
+        # 朗读走单 worker 执行器且无法打断，太长会卡住后续播放与轮盘。
+        self.text_input.setMaxLength(200)
+        self.text_input.editingFinished.connect(self._save_text)
+        inputs_row.addWidget(self.text_input, 1)
+        layout.addLayout(inputs_row)
         action_row = QHBoxLayout()
         self.choose_button = QPushButton("选择文件")
         self.choose_button.clicked.connect(lambda: self._choose_file(self.selected_index))
@@ -263,8 +278,7 @@ class ChatWheelSettings(QWidget):
         self.record_button.clicked.connect(self._toggle_record)
         action_row.addWidget(self.record_button)
         self.preview_button = QPushButton("试听")
-        self.preview_button.clicked.connect(
-            lambda: self._on_field_changed("chat_wheel_preview", self.selected_index))
+        self.preview_button.clicked.connect(self._toggle_preview)
         action_row.addWidget(self.preview_button)
         self.clear_button = QPushButton("清空")
         self.clear_button.clicked.connect(
@@ -348,7 +362,7 @@ class ChatWheelSettings(QWidget):
             return
         self._busy.add(index)
         self._refresh_slot(index)
-        self._status(f"正在导入{DIRECTIONS[index]}音频…")
+        self._status(f"正在导入{SLOT_NAMES[index]}…")
         config_file = self._settings._config_file
         signals = self._signals
         slot_label = label or source.stem
@@ -376,11 +390,48 @@ class ChatWheelSettings(QWidget):
 
         threading.Thread(target=run, name="ChatWheelImport", daemon=True).start()
 
+    def _toggle_preview(self) -> None:
+        if self._previewing:
+            self._stop_preview()
+            return
+        index = self.selected_index
+        text = self._settings.chat_wheel_texts[index].strip()
+        if not (text or self._settings.chat_wheel_slots[index]):
+            return
+        self._previewing = True
+        self._preview_speech = bool(text)
+        self._refresh_all_slots()
+        self._on_field_changed("chat_wheel_preview", index)
+
+    def _stop_preview(self) -> None:
+        if not self._previewing:
+            return
+        if self._preview_speech:
+            # 朗读无法打断，也没有可发的取消信号；等播放结束回调复位。
+            return
+        self._previewing = False
+        self._refresh_all_slots()
+        self._on_field_changed("chat_wheel_preview_stop", self.selected_index)
+
+    def set_preview_playing(self, playing: bool) -> None:
+        """播放结束时由主程序回调复位按钮；重复通知是幂等的。"""
+        if self._previewing == playing and not self._preview_speech:
+            return
+        self._previewing = playing
+        self._preview_speech = False
+        self._refresh_all_slots()
+
     def _toggle_record(self) -> None:
         if self._recording is not None:
             self._finish_recording()
             return
         index = self.selected_index
+        if self._preview_speech:
+            # 朗读停不下来，硬录会把 TTS 一起录进片段。
+            self._status("朗读中，请等朗读结束再录制。", error=True)
+            return
+        # 录音采的是系统声音，正在试听的片段会被一起录进去，先停掉。
+        self._stop_preview()
         # 首次点击才构造录音器：面板构造期不加载 pyaudiowpatch，预热窗口也不受影响。
         recorder = SystemAudioRecorder()
         try:
@@ -392,7 +443,7 @@ class ChatWheelSettings(QWidget):
         self._recording = index
         self._record_timer.start()
         self._refresh_all_slots()
-        self._hint(f"正在录制{DIRECTIONS[index]}音频，再次点击「停止」即可结束。")
+        self._hint(f"正在录制{SLOT_NAMES[index]}，再次点击「停止」即可结束。")
 
     def _finish_recording(self) -> None:
         index, recorder = self._recording, self._recorder
@@ -438,9 +489,9 @@ class ChatWheelSettings(QWidget):
         elapsed = int(recorder.elapsed_seconds) if recording is not None and recorder else 0
         text = f"停止 {elapsed}s" if recording is not None else "录制"
         self.record_button.setText(text)
-        direction = DIRECTIONS[recording if recording is not None else self.selected_index]
+        slot_name = SLOT_NAMES[recording if recording is not None else self.selected_index]
         self.record_button.setAccessibleName(
-            f"停止录制{direction}音频" if recording else f"录制{direction}音频"
+            f"停止录制{slot_name}" if recording else f"录制{slot_name}"
         )
 
     def _refresh_all_slots(self) -> None:
@@ -483,22 +534,28 @@ class ChatWheelSettings(QWidget):
         if path:
             logger.warning("%s，录音临时文件保留在 %s", reason, path)
 
-    def _replace_clip(self, index: int, filename: str, label: str) -> bool:
+    def _replace_clip(self, index: int, filename: str, label: str, text: str = "") -> bool:
+        """写入一个槽的全部内容：音频文件名、名称、朗读文字互斥共存。"""
+        # 被替换/清空的片段可能正在试听，先停掉再动文件。
+        self._stop_preview()
         old_slots = list(self._settings.chat_wheel_slots)
         old_labels = list(self._settings.chat_wheel_labels)
-        slots, labels = list(old_slots), list(old_labels)
-        slots[index], labels[index] = filename, label[:40]
+        old_texts = list(self._settings.chat_wheel_texts)
+        slots, labels, texts = list(old_slots), list(old_labels), list(old_texts)
+        slots[index], labels[index], texts[index] = filename, label[:40], text[:200]
         try:
-            self._settings.update(chat_wheel_slots=slots, chat_wheel_labels=labels)
+            self._settings.update(chat_wheel_slots=slots, chat_wheel_labels=labels,
+                                  chat_wheel_texts=texts)
         except Exception as error:
-            # update 会先更改内存；落盘失败必须恢复旧槽，才能安全删除导入副本。
+            # update 会先更改内存；落盘失败必须把三个数组一起恢复，才能安全删除导入副本。
             object.__setattr__(self._settings, "chat_wheel_slots", old_slots)
             object.__setattr__(self._settings, "chat_wheel_labels", old_labels)
+            object.__setattr__(self._settings, "chat_wheel_texts", old_texts)
             self._status(f"保存失败：{error}", error=True)
             self._refresh_slot(index)
             return False
         self._refresh_slot(index)
-        self._status("音频已保存。" if filename else "音频已清空。")
+        self._status("文字已保存。" if text else "音频已保存。" if filename else "音频已清空。")
         old = old_slots[index]
         if old and old not in slots:
             self._remove_unused(old, self._settings._config_file)
@@ -528,6 +585,16 @@ class ChatWheelSettings(QWidget):
             return
         self._refresh_slot(index)
 
+    def _save_text(self) -> None:
+        """把该槽内容换成一段朗读文字（文件名一并清空，与「清空」同一语义）。"""
+        index = self.selected_index
+        text = self.text_input.text().strip()[:200]
+        # 失焦也会触发本回调；内容没变就直接返回，否则点一下输入框再点走就会删掉音频。
+        if self._settings.chat_wheel_texts[index] == text:
+            return
+        # 名称沿用已存的值：输入框里可能还有没提交的编辑。
+        self._replace_clip(index, "", self._settings.chat_wheel_labels[index], text)
+
     def _select_slot(self, index: int) -> None:
         self.selected_index = index
         for button_index, button in enumerate(self.slot_buttons):
@@ -537,30 +604,45 @@ class ChatWheelSettings(QWidget):
             button.style().unpolish(button)
             button.style().polish(button)
         self.wheel_picker.update()
-        self.editor_title.setText(f"{DIRECTIONS[index]}音频")
-        self.label_input.setAccessibleName(f"{DIRECTIONS[index]}音频名称")
-        self.choose_button.setAccessibleName(f"选择{DIRECTIONS[index]}音频")
-        self.preview_button.setAccessibleName(f"试听{DIRECTIONS[index]}音频")
-        self.clear_button.setAccessibleName(f"清空{DIRECTIONS[index]}音频")
+        self.editor_title.setText(SLOT_NAMES[index])
+        self.label_input.setAccessibleName(f"{SLOT_NAMES[index]}名称")
+        self.text_input.setAccessibleName(f"{SLOT_NAMES[index]}朗读文字")
+        self.choose_button.setAccessibleName(f"选择{SLOT_NAMES[index]}")
+        self.clear_button.setAccessibleName(f"清空{SLOT_NAMES[index]}")
         self._refresh_slot(index)
 
     def _refresh_slot(self, index: int) -> None:
         recording = index == self._recording
         # 录制期间锁住全部槽位：录音只能落在开始时的那个槽。
         busy = index in self._busy or self._recording is not None
-        filled = bool(self._settings.chat_wheel_slots[index])
+        text = self._settings.chat_wheel_texts[index].strip()
+        filled = bool(self._settings.chat_wheel_slots[index] or text)
         label = self._settings.chat_wheel_labels[index].strip()
-        self.slot_buttons[index].setText(f"{DIRECTIONS[index]}\n{label or '未设置'}")
+        self.slot_buttons[index].setText(label or text or "未设置")
         self.slot_buttons[index].setEnabled(not busy)
         if index != self.selected_index:
             return
         self.label_input.setText(label)
+        self.text_input.setText(text)
         self.choose_button.setEnabled(not busy)
         self.choose_button.setText(
             "录制中…" if recording else "导入中…" if busy else "选择文件"
         )
         self.record_button.setEnabled(recording or index not in self._busy)
         self._refresh_record_button()
-        self.preview_button.setEnabled(filled and not busy)
+        if self._preview_speech:
+            # 朗读打断不了，完成回调又不带槽号：期间对所有槽禁用，
+            # 否则回调会把之后新开的试听误复位。
+            self.preview_button.setEnabled(False)
+            self.preview_button.setText("朗读中…")
+            self.preview_button.setAccessibleName(f"正在朗读{SLOT_NAMES[index]}")
+        else:
+            # 试听中按钮必须始终可点，否则一旦别的槽忙起来「停止」就点不动了。
+            self.preview_button.setEnabled((filled and not busy) or self._previewing)
+            self.preview_button.setText("停止" if self._previewing else "试听")
+            self.preview_button.setAccessibleName(
+                f"停止试听{SLOT_NAMES[index]}" if self._previewing else f"试听{SLOT_NAMES[index]}"
+            )
         self.clear_button.setEnabled(filled and not busy)
         self.label_input.setEnabled(filled and not busy)
+        self.text_input.setEnabled(not busy)

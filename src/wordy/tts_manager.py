@@ -97,6 +97,8 @@ class TTSManager:
         self._worker_ready: threading.Event | None = None
         # 本地文件可能很长；退出必须停止文件任务，不能等待整段音频播完。
         self._audio_files_stopped = threading.Event()
+        # 单次文件播放的取消句柄：让「停止试听」只打断这一次，不牵连后续播放。
+        self._clip_cancel: threading.Event | None = None
 
         worker = self._create_worker()
         self.engine = worker.engine
@@ -279,20 +281,38 @@ class TTSManager:
 
     # ── 播放/音色列表 ─────────────────────────────────────────────────────
 
-    def speak(self, text: str) -> None:
-        """提交文本到串行执行器生成并播放。"""
+    def speak(self, text: str, on_finished: Callable[[], None] | None = None) -> None:
+        """提交文本到串行执行器生成并播放。
+
+        ``on_finished`` 在朗读结束（含早退、失败）后调用一次。引擎没有取消钩子，
+        所以这里只报完成，不提供中断。
+        """
         if not text.strip():
             logger.warning("提交文本为空，已忽略。")
+            self._notify_finished(on_finished)
             return
         if not self._get_active_voice_id():
             logger.error("缺少音色配置，请先打开设置，刷新音色列表并选择一个音色。")
+            self._notify_finished(on_finished)
             return
         # 提交时绑定引擎，防止排队文本在服务商切换后串到新的 worker。
-        self._executor.submit(self._generate_and_play, text, engine=self.engine,
-                              ready=self._worker_ready, backend=self.tts_backend)
+        try:
+            self._executor.submit(self._generate_and_play, text, engine=self.engine,
+                                  ready=self._worker_ready, backend=self.tts_backend,
+                                  on_finished=on_finished)
+        except RuntimeError as error:
+            # 退出后 executor 已关闭；调用方仍然需要收到完成通知才能复位按钮。
+            logger.warning("TTS worker 不可用，文本未提交: %s", error)
+            self._notify_finished(on_finished)
+
+    @staticmethod
+    def _notify_finished(on_finished: Callable[[], None] | None) -> None:
+        if on_finished is not None:
+            on_finished()
 
     def _generate_and_play(self, text: str, *, engine: BackendTTSEngine,
-                           ready: threading.Event | None, backend: str) -> None:
+                           ready: threading.Event | None, backend: str,
+                           on_finished: Callable[[], None] | None = None) -> None:
         """在后台 worker 中生成 TTS 并播放（由 executor 执行）。"""
         try:
             if ready is not None:
@@ -300,18 +320,37 @@ class TTSManager:
             engine.speak(text)
         except Exception as e:
             logger.error("%s 播放失败: %s", backend, e)
+        finally:
+            self._notify_finished(on_finished)
 
     def fetch_voices(self) -> list[dict[str, object]]:
         """获取当前引擎的可用音色列表。"""
         return self.engine.fetch_voices()
 
-    def play_audio_file(self, path: Path, on_error: Callable[[str], None] | None = None) -> None:
+    def play_audio_file(self, path: Path, on_error: Callable[[str], None] | None = None,
+                        on_finished: Callable[[], None] | None = None) -> None:
         """本地文件与 TTS 共用串行 worker，不要求密钥或音色。"""
+        # 新播放顶掉旧播放，避免连点两次后两条音频叠在一起。
+        self.stop_audio_file()
+        cancel = threading.Event()
+        self._clip_cancel = cancel
         if not self._audio_files_stopped.is_set():
-            self._executor.submit(self._play_audio_file, path, self.engine, self._worker_ready, on_error)
+            self._executor.submit(self._play_audio_file, path, self.engine, self._worker_ready,
+                                  on_error, cancel, on_finished)
+
+    def stop_audio_file(self) -> None:
+        """打断当前文件播放；没有正在播放的片段时什么也不做。
+
+        只作用于这一次播放——全局退出走 ``_audio_files_stopped``。
+        """
+        cancel = self._clip_cancel
+        if cancel is not None:
+            cancel.set()
 
     def _play_audio_file(self, path: Path, engine: BackendTTSEngine,
-                         ready: threading.Event | None, on_error: Callable[[str], None] | None) -> None:
+                         ready: threading.Event | None, on_error: Callable[[str], None] | None,
+                         cancel: threading.Event,
+                         on_finished: Callable[[], None] | None) -> None:
         try:
             if ready is not None:
                 ready.wait()
@@ -319,9 +358,9 @@ class TTSManager:
                 return
             # reset 会立即重开实时流；关闭引擎才真正释放设备，下次 speak 自动连接。
             engine.close()
-            with decoded_audio_clip(path, self._audio_files_stopped) as wav_path:
-                if not self._audio_player.play_wav(str(wav_path), cancel_event=self._audio_files_stopped):
-                    if self._audio_files_stopped.is_set():
+            with decoded_audio_clip(path, cancel) as wav_path:
+                if not self._audio_player.play_wav(str(wav_path), cancel_event=cancel):
+                    if cancel.is_set():
                         return
                     raise RuntimeError("无法打开音频输出设备")
         except InterruptedError:
@@ -330,6 +369,12 @@ class TTSManager:
             logger.error("音频文件播放失败: %s", error)
             if on_error is not None:
                 on_error(f"音频播放失败：{error}")
+        finally:
+            if self._clip_cancel is cancel:
+                self._clip_cancel = None
+            # 播完、被打断、失败都要回调，否则设置页的「停止」按钮会一直挂着。
+            if on_finished is not None:
+                on_finished()
 
     def connect_async(self) -> None:
         """后台预热 TTS 连接；失败记日志，首次播放时懒连接自动重试。"""
@@ -357,6 +402,8 @@ class TTSManager:
         返回 True 表示 janitor 正常退出，False 表示超时。
         """
         self._audio_files_stopped.set()
+        # 播放层现在只看单次句柄，退出必须显式打断正在播的那一段。
+        self.stop_audio_file()
         self._enqueue_retire_current()
         self._janitor_queue.put(None)
         self._janitor_thread.join(timeout=_JANITOR_JOIN_TIMEOUT_SECONDS)

@@ -72,6 +72,8 @@ class AppSettings:
     chat_wheel_hotkey: str = "f8"
     chat_wheel_slots: list[str] = field(default_factory=lambda: [""] * 8)
     chat_wheel_labels: list[str] = field(default_factory=lambda: [""] * 8)
+    # 与文件名互斥：非空则选中该槽时用当前 TTS 朗读这段文字，而不是播放音频。
+    chat_wheel_texts: list[str] = field(default_factory=lambda: [""] * 8)
     volume: float = 1.0
     overlay_opacity: float = 1.0
     overlay_placeholder: str = "Hello World~"
@@ -259,10 +261,11 @@ class AppSettings:
                 settings.chat_wheel_hotkey = wheel_hotkey
             except ValueError:
                 pass
-        for key in ("chat_wheel_slots", "chat_wheel_labels"):
+        for key in ("chat_wheel_slots", "chat_wheel_labels", "chat_wheel_texts"):
             values = raw.get(key)
             if isinstance(values, list):
-                # 文件名只允许目录内单个文件，拒绝配置中的绝对路径和目录穿越。
+                # 文件名只允许目录内单个文件，拒绝配置中的绝对路径和目录穿越；
+                # 标签与朗读文字是自由文本，只要求是字符串。
                 clean = [v if isinstance(v, str) and (key != "chat_wheel_slots" or
                          ("/" not in v and "\\" not in v and ":" not in v and v not in (".", "..")))
                          else "" for v in values[:8]]

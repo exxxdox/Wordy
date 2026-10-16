@@ -14,13 +14,19 @@ from wordy.audio.clips import resolve_audio_clip
 class ChatWheelController(QObject):
     triggered = Signal()
     playback_error = Signal(str)
+    # 播放结束（播完、被停止或失败）后发出，供设置页复位「停止」按钮。
+    playback_finished = Signal()
 
     def __init__(self, settings: AppSettings,
-                 play_file: Callable[[Path, Callable[[str], None]], None],
-                 on_error: Callable[[str], None]):
+                 play_file: Callable[
+                     [Path, Callable[[str], None], Callable[[], None]], None],
+                 on_error: Callable[[str], None],
+                 on_finished: Callable[[], None] | None = None,
+                 speak_text: Callable[[str, Callable[[], None]], None] | None = None):
         super().__init__()
         self.settings = settings
         self._play_file = play_file
+        self._speak_text = speak_text
         self._listener: NativeHotkeyListener | None = None
         self._key_code = parse_hotkey(settings.chat_wheel_hotkey)[1]
         self._binding: tuple[int, int] | None = None
@@ -29,6 +35,9 @@ class ChatWheelController(QObject):
         # 原生监听器运行在后台；显式排队保证窗口只由 GUI 线程操作。
         self.triggered.connect(self._open, Qt.ConnectionType.QueuedConnection)
         self.playback_error.connect(on_error, Qt.ConnectionType.QueuedConnection)
+        if on_finished is not None:
+            # 完成回调来自播放 worker 线程，必须排队回到 GUI 线程。
+            self.playback_finished.connect(on_finished, Qt.ConnectionType.QueuedConnection)
 
     def start(self) -> None:
         self.set_hotkey(self.settings.chat_wheel_hotkey)
@@ -65,12 +74,26 @@ class ChatWheelController(QObject):
     def _open(self) -> None:
         if self._stopped:
             return
-        labels = [self.settings.chat_wheel_labels[i] or "音频"
-                  if filename else "" for i, filename in enumerate(self.settings.chat_wheel_slots)]
+        # 标签非空同时代表「可选中」和「显示什么」，所以空槽必须留空串；
+        # 文字槽没有文件名，得把文字本身当作显示文本传进去。
+        labels = [
+            label or (text if text else "音频") if (text or filename) else ""
+            for filename, label, text in zip(
+                self.settings.chat_wheel_slots,
+                self.settings.chat_wheel_labels,
+                self.settings.chat_wheel_texts,
+            )
+        ]
         self.wheel.open_wheel(labels, self._key_code)
 
     def play_slot(self, index: int) -> None:
         if self._stopped or not 0 <= index < 8:
+            return
+        # 一个槽一份内容：有文字就朗读文字，否则才去找音频文件。
+        text = self.settings.chat_wheel_texts[index].strip()
+        if text:
+            if self._speak_text is not None:
+                self._speak_text(text, self.playback_finished.emit)
             return
         filename = self.settings.chat_wheel_slots[index]
         if not filename:
@@ -87,7 +110,7 @@ class ChatWheelController(QObject):
         if not file.is_file():
             self.playback_error.emit("音频文件已丢失，请重新选择文件")
             return
-        self._play_file(file, self.playback_error.emit)
+        self._play_file(file, self.playback_error.emit, self.playback_finished.emit)
 
     def stop(self) -> None:
         self._stopped = True
