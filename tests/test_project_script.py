@@ -91,6 +91,8 @@ def test_build_forwards_flags_and_cleans_only_its_artifacts(script_project):
                      "--hidden-import wordy.ui.overlay_widgets", "--collect-all keyring",
                      "--collect-submodules websockets", "src/wordy/__main__.py"):
         assert expected in build
+    # 单文件产物，成功提示必须指向 exe 本身，否则发布脚本找不到文件。
+    assert str(Path("dist") / "Wordy.exe") in result.stdout
     assert not (root / "build").exists()
     assert not (root / "Wordy.spec").exists()
     assert (root / "keep.txt").read_text() == "keep"
