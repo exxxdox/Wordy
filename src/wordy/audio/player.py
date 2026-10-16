@@ -4,6 +4,7 @@
 """音频设备查找和 WAV 播放。"""
 
 import logging
+import threading
 import wave
 from threading import Event
 from collections.abc import Mapping
@@ -12,6 +13,25 @@ from typing import TypedDict, cast
 
 import numpy as np
 import pyaudio
+
+# PortAudio 的初始化计数是进程级且非原子的。并发跑 Pa_Initialize/Pa_Terminate 会让
+# 一个线程把全局设备表释放掉，另一个线程还在读它：表现为 Pa_GetDeviceCount 返回
+# 垃圾值、报告「没有默认输出设备」，严重时原生访问违例直接段错误（没有 Python 栈）。
+# 返听会同时跑主输出与返听两路播放（SidetoneAudioPlayer.play_wav），所以必须串行化。
+# 只锁生命周期调用，不锁中间的实际播放，否则一次播放会把另一路整个堵住。
+_PORTAUDIO_LIFECYCLE_LOCK = threading.Lock()
+
+
+def _new_pyaudio():
+    """构造 PyAudio 实例（= Pa_Initialize），全程持有生命周期锁。"""
+    with _PORTAUDIO_LIFECYCLE_LOCK:
+        return pyaudio.PyAudio()
+
+
+def _terminate_pyaudio_locked(instance) -> None:
+    """终止 PyAudio 实例（= Pa_Terminate），全程持有生命周期锁。"""
+    with _PORTAUDIO_LIFECYCLE_LOCK:
+        instance.terminate()
 
 
 logger = logging.getLogger(__name__)
@@ -101,7 +121,7 @@ def list_output_devices() -> list[OutputDeviceInfo]:
     """
     p = None
     try:
-        p = pyaudio.PyAudio()
+        p = _new_pyaudio()
     except Exception as e:  # noqa: BLE001 - 枚举失败需返回空列表
         logger.warning("初始化 PyAudio 失败: %s", e)
         return []
@@ -145,7 +165,7 @@ def list_output_devices() -> list[OutputDeviceInfo]:
     finally:
         if p is not None:
             try:
-                p.terminate()
+                _terminate_pyaudio_locked(p)
             except Exception as e:  # noqa: BLE001
                 logger.warning("pyaudio.terminate 失败: %s", e)
 
@@ -399,7 +419,7 @@ class AudioPlayer:
         格式/采样率不兼容时自动回退为 int16，并通过 ``_last_actual_format`` /
         ``_last_actual_rate`` 暴露实际协商结果（调用方在返回后读取）。
         """
-        p = pyaudio.PyAudio()
+        p = _new_pyaudio()
 
         self._last_actual_format = None
         self._last_actual_rate = None
@@ -518,7 +538,7 @@ class AudioPlayer:
         """
         p = None
         try:
-            p = pyaudio.PyAudio()
+            p = _new_pyaudio()
             resolved_index = self._resolve_output_device(p, None)
             if resolved_index is None:
                 return None
@@ -530,7 +550,7 @@ class AudioPlayer:
         finally:
             if p is not None:
                 try:
-                    p.terminate()
+                    _terminate_pyaudio_locked(p)
                 except Exception:
                     pass
 
@@ -557,7 +577,7 @@ class AudioPlayer:
             return
 
         try:
-            p.terminate()
+            _terminate_pyaudio_locked(p)
         except Exception as e:  # noqa: BLE001
             logger.warning("pyaudio.terminate 失败: %s", e)
 

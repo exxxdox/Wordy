@@ -8,6 +8,14 @@
 
 所有落盘文件集中在 `paths.config_directory()` 返回的同一个目录（目录名固定小写 `wordy`）——配置文件 `config.toml` 与轮盘托管音频 `audio_clips/`（后者从配置文件父目录推导，自动跟随）。`XDG_CONFIG_HOME` 未设置、为空串或给的是相对路径时退回 `~/.config/wordy`（相对路径按 XDG 规范视为无效）。根目录解析刻意放在 `src/wordy/paths.py` 而不是 `config.py`：`config` 有一条契约禁止出现 `os.environ`（防止密钥重新从环境读回来），而路径解析本质上要读环境。录制过程中的临时文件不在这里，走 `%TEMP%`。
 
+## PortAudio 生命周期
+
+`AudioPlayer` 每次播放都新建再终止一个 `PyAudio` 实例，而 PortAudio 的初始化计数是**进程级且非原子**的：两个线程并发跑 `Pa_Initialize`/`Pa_Terminate`，会让一个线程把全局设备表释放掉、另一个线程还在读它。症状是 `Pa_GetDeviceCount` 返回垃圾值（实测是一个被截断的指针，如 `-1294395680`）、日志报「没有默认输出设备」，重则原生访问违例**直接段错误**——没有 Python 堆栈，看起来就是「闪退」。
+
+返听（`SidetoneAudioPlayer.play_wav`）用 `ThreadPoolExecutor(max_workers=2)` 同时跑主输出与返听两路播放，正好制造这个并发。因此 `player.py` 用模块级 `_PORTAUDIO_LIFECYCLE_LOCK` 包住每一次 `_new_pyaudio()` 与 `_terminate_pyaudio_locked()`，**只锁生命周期调用、不锁中间的实际播放**（否则一路播放会把另一路整个堵住）。回归用例在 `tests/test_audio_player.py::test_portaudio_lifecycle_is_serialized`：真跑真 PortAudio 会让 pytest 进程本身挂掉，所以它用假实例检测重叠。
+
+`pyaudiowpatch`（录音）是另一份静态链接的 PortAudio，有独立的初始化计数，不共用这把锁。
+
 ## 音频设备枚举
 
 `audio/capture.py` 只提供 `list_input_devices()`，供设置页面枚举输入设备。麦克风侦听由 Windows 原生策略管理，不维护软件录音流。

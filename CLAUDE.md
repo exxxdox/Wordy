@@ -74,6 +74,14 @@ driver.py(VBCableDriverManager) → config.py(AppSettings) → main.py(生命周
 
 **AudioPlayer 回退链**：打开流失败时依次尝试 → int16 格式 → int16 + 设备默认采样率 → 系统默认输出设备。VB-CABLE 设备自动做单声道→双声道 upmix（避免 Pa 将相邻样本错拆为 L/R）。
 
+## PortAudio 生命周期
+
+`AudioPlayer` 每次播放都新建再终止一个 `PyAudio` 实例，而 PortAudio 的初始化计数是**进程级且非原子**的：两个线程并发跑 `Pa_Initialize`/`Pa_Terminate`，会让一个线程把全局设备表释放掉、另一个线程还在读它。症状是 `Pa_GetDeviceCount` 返回垃圾值（实测是一个被截断的指针，如 `-1294395680`）、日志报「没有默认输出设备」，重则原生访问违例**直接段错误**——没有 Python 堆栈，看起来就是「闪退」。
+
+返听（`SidetoneAudioPlayer.play_wav`）用 `ThreadPoolExecutor(max_workers=2)` 同时跑主输出与返听两路播放，正好制造这个并发。因此 `player.py` 用模块级 `_PORTAUDIO_LIFECYCLE_LOCK` 包住每一次 `_new_pyaudio()` 与 `_terminate_pyaudio_locked()`，**只锁生命周期调用、不锁中间的实际播放**（否则一路播放会把另一路整个堵住）。回归用例在 `tests/test_audio_player.py::test_portaudio_lifecycle_is_serialized`：真跑真 PortAudio 会让 pytest 进程本身挂掉，所以它用假实例检测重叠。
+
+`pyaudiowpatch`（录音）是另一份静态链接的 PortAudio，有独立的初始化计数，不共用这把锁。
+
 ## 关机顺序
 
 `pre_stop_hook` → `_stop_background_threads()`(停止路由器 + janitor) → `shutdown_log_stream()` → `app.quit()`。后台线程必须在 Qt 事件循环退出前停止，否则 QThreadStorage 警告。

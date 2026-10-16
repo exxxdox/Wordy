@@ -109,6 +109,53 @@ def _patch_pyaudio(monkeypatch):
 # Constructor tests
 # ---------------------------------------------------------------------------
 
+def test_portaudio_lifecycle_is_serialized():
+    """并发跑 Pa_Initialize/Pa_Terminate 会让 PortAudio 释放别的线程还在用的全局设备表。
+
+    实测（两个线程各 150 次）：无锁时进程段错误退出码 139，加锁后正常。
+    这里用会检测重叠的假 PyAudio 复现同一竞态——真跑真 PortAudio 会让 pytest
+    进程本身挂掉，那样测试就没法报告失败了。
+    """
+    import threading
+    import time
+
+    from wordy.audio import player as player_module
+
+    inside: list[str] = []
+    overlaps: list[str] = []
+
+    class _SlowPortAudio:
+        def __init__(self) -> None:
+            self._enter("init")
+
+        def _enter(self, phase: str) -> None:
+            inside.append(phase)
+            if len(inside) > 1:
+                overlaps.append(phase)
+            time.sleep(0.01)  # 拉大窗口：没有锁时必然重叠
+            inside.pop()
+
+        def terminate(self) -> None:
+            self._enter("terminate")
+
+    original = player_module.pyaudio.PyAudio
+    player_module.pyaudio.PyAudio = _SlowPortAudio
+    try:
+        def worker() -> None:
+            for _ in range(5):
+                player_module._terminate_pyaudio_locked(player_module._new_pyaudio())
+
+        threads = [threading.Thread(target=worker) for _ in range(4)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+    finally:
+        player_module.pyaudio.PyAudio = original
+
+    assert overlaps == [], "PortAudio 生命周期调用发生了并发重叠"
+
+
 def test_audio_player_ctor_accepts_output_device():
     """AudioPlayer(output_device={'name': ..., 'host_api_name': ...}) stores the device."""
     player = AudioPlayer(output_device={"name": "VB-Cable Output", "host_api_name": "WASAPI"})
