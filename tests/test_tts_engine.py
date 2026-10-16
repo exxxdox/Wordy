@@ -4,6 +4,7 @@
 """Tests for BackendTTSEngine ABC and TTSAudioPlayer Protocol."""
 
 from io import BytesIO
+from threading import Event
 
 import pytest
 
@@ -17,7 +18,15 @@ from wordy.tts.engine import BackendTTSEngine, VoiceInfo
 class _DummyAudioPlayer:
     """A TTSAudioPlayer stub that satisfies the Protocol structurally."""
 
-    def play_wav(self, wav_path: str | BytesIO, device_index: int | None = None) -> bool:
+    # Protocol 要求的状态成员；替身不使用但必须存在才能结构匹配
+    output_device_name: str | None = None
+
+    def play_wav(
+        self,
+        wav_path: str | BytesIO,
+        device_index: int | None = None,
+        cancel_event: Event | None = None,
+    ) -> bool:
         return True
 
     def open_stream(
@@ -35,6 +44,12 @@ class _DummyAudioPlayer:
 
     def close_stream(self) -> None:
         pass
+
+    def get_stream_config(self) -> dict[str, int | None]:
+        return {}
+
+    def query_output_device_default_rate(self) -> int | None:
+        return None
 
 
 class _ConcreteEngine(BackendTTSEngine):

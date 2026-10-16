@@ -16,7 +16,7 @@ import os
 import sys
 from pathlib import Path
 from types import ModuleType
-from typing import Any
+from typing import Any, Callable
 from unittest.mock import MagicMock
 
 import pytest
@@ -515,10 +515,11 @@ def test_tray_quit_action_invokes_overlay_stop_once(
 
         monkeypatch.setattr(overlay, "stop", stop_spy_only)
 
-        scheduled: list[tuple[int, object]] = []
+        # 延迟槽是无参可调用，标注成 object 会让调用点被 pyright 判为不可调用。
+        scheduled: list[tuple[int, Callable[[], None]]] = []
         original_single_shot = QtCore.QTimer.singleShot
 
-        def fake_single_shot(msec: int, slot: object) -> None:
+        def fake_single_shot(msec: int, slot: Callable[[], None]) -> None:
             scheduled.append((msec, slot))
 
         monkeypatch.setattr(QtCore.QTimer, "singleShot", staticmethod(fake_single_shot))

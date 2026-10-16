@@ -4,6 +4,7 @@
 """Tests for tts_backend_registry.py."""
 
 import sys
+from typing import cast
 from unittest.mock import Mock
 
 import pytest
@@ -110,6 +111,8 @@ def test_create_tts_engine_resolves_default(monkeypatch, api_key, provider_key, 
     
     # Should resolve default backend
     # The provider credential must still win after removing the unused constructor alias.
-    engine = create_tts_engine(None, fake_audio_player, api_key, volcengine_access_key=provider_key)
+    # 有意传 None 验证默认后端解析；create_tts_engine 形参标注为 str，
+    # 用 cast 表达「运行期仍传 None」而不放宽被测签名。
+    engine = create_tts_engine(cast("str", None), fake_audio_player, api_key, volcengine_access_key=provider_key)
     assert isinstance(engine, FakeFakeEngine)
     assert engine.api_key == expected_key

@@ -6,27 +6,52 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
+from typing import Any, cast
 from unittest.mock import Mock
-from typing import Any
 
 import pytest
 
 _ = os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 _ = pytest.importorskip("PySide6")
 
+from PySide6.QtGui import QWheelEvent
+from PySide6.QtWidgets import QApplication, QComboBox, QDialog
+
+from wordy.ui.settings import SettingsWindow
+
 
 # 共享 QApplication；conftest 隔离配置与密钥，真实 API 错误必须失败。
 pytestmark = pytest.mark.usefixtures("qapp", "fake_keyring")
 
 
+def _dialog(window: SettingsWindow) -> QDialog:
+    """Narrow the dialog created synchronously by SettingsWindow.__init__."""
+    dialog = window.window
+    assert dialog is not None
+    return dialog
+
+
+def _voice_combo(window: SettingsWindow) -> QComboBox:
+    """Narrow the active provider's dynamically exposed voice combo."""
+    combo = window.voice_combo
+    assert combo is not None
+    return combo
+
+
+def _field_changed_mock(window: SettingsWindow) -> Mock:
+    """Recover the Mock installed by the shared test factory."""
+    callback = window.on_field_changed
+    assert isinstance(callback, Mock)
+    return callback
+
+
 def _new_settings_window(
     monkeypatch: pytest.MonkeyPatch,
-    on_close=None,
+    on_close: Callable[[], None] | None = None,
     **state_overrides: Any,
-):
-    from PySide6.QtWidgets import QApplication
+) -> tuple[QApplication, SettingsWindow]:
     from wordy.config import AppSettings
-    from wordy.ui.settings import SettingsWindow
     from wordy.ui.settings_state import SettingsState
 
     settings = AppSettings.load()
@@ -40,13 +65,15 @@ def _new_settings_window(
     state = SettingsState(voices_cache=[{"id": "voice-a", "name": "Old Voice"}], **state_overrides)
     app = QApplication.instance()
     assert app is not None
+    # instance() 的桩类型是 QCoreApplication；此处由 qapp fixture 保证已是 QApplication。
+    qt_app = cast(QApplication, app)
     window = SettingsWindow(
         None, state, on_record_hotkey=lambda: None, on_refresh_voices=lambda: None,
         on_field_changed=Mock(), on_close=on_close or (lambda: None),
     )
     # 构建阶段同步音频输出；后续断言只记录受测交互触发的通知。
-    window.on_field_changed.reset_mock()
-    return app, window
+    _field_changed_mock(window).reset_mock()
+    return qt_app, window
 
 
 def _device_entry(name: str, host_api_name: str, display_name: str | None = None) -> dict[str, str]:
@@ -77,13 +104,13 @@ SENTINEL_EXISTING_API_KEY = "sk_existing_DO_NOT_LEAK"
 def _line_edit_texts(window: Any) -> list[str]:
     from PySide6.QtWidgets import QLineEdit
 
-    return [line_edit.text() for line_edit in window.window.findChildren(QLineEdit)]
+    return [line_edit.text() for line_edit in _dialog(window).findChildren(QLineEdit)]
 
 
 def _label_texts(window: Any) -> list[str]:
     from PySide6.QtWidgets import QLabel
 
-    return [label.text() for label in window.window.findChildren(QLabel)]
+    return [label.text() for label in _dialog(window).findChildren(QLabel)]
 
 
 def test_settings_window_api_key_input_is_masked_and_never_prefills_existing_key(
@@ -144,7 +171,7 @@ def test_settings_window_api_key_save_normalizes_env_assignment_immediately(
         PROVIDER_PANELS["Cartesia"].save_key_btn.click()
         assert wordy.secret.load_cartesia_api_key() == "sk_test_NEW"
         assert api_key_input.text() == ""
-        window.on_field_changed.assert_called_once_with("cartesia_api_key", "sk_test_NEW")
+        _field_changed_mock(window).assert_called_once_with("cartesia_api_key", "sk_test_NEW")
     finally:
         window.close()
 
@@ -163,7 +190,7 @@ def test_settings_window_blank_api_key_save_keeps_existing_key_unchanged(
         from wordy.ui.tts_panels import PROVIDER_PANELS
         PROVIDER_PANELS["Cartesia"].save_key_btn.click()
         assert wordy.secret.load_cartesia_api_key() == SENTINEL_EXISTING_API_KEY
-        window.on_field_changed.assert_not_called()
+        _field_changed_mock(window).assert_not_called()
     finally:
         window.close()
 
@@ -182,7 +209,7 @@ def test_settings_window_clear_api_key_control_deletes_key_immediately(
         clear_control.click()
         assert wordy.secret.load_cartesia_api_key() is None
         assert window._settings.cartesia_api_key_set is False
-        window.on_field_changed.assert_called_once_with("cartesia_api_key", None)
+        _field_changed_mock(window).assert_called_once_with("cartesia_api_key", None)
     finally:
         window.close()
 
@@ -198,7 +225,7 @@ def test_settings_window_changes_update_live_settings_and_flush_on_close(monkeyp
             "voice-a",
         )
         assert "Refreshed Voice" in labels
-        window.voice_combo.setCurrentText("Refreshed Voice")
+        _voice_combo(window).setCurrentText("Refreshed Voice")
         window.tts_backend_combo.setCurrentText("Cartesia Realtime")
         window.volume_slider.setValue(window._volume_to_slider(1.35))
         window.fixed_center_check.setChecked(False)
@@ -211,8 +238,8 @@ def test_settings_window_changes_update_live_settings_and_flush_on_close(monkeyp
         assert settings.volume == 1.35
         assert settings.tts_backend == "Cartesia Realtime"
         assert settings.fixed_center is False
-        window.on_field_changed.assert_any_call("cartesia_voice_id", "voice-b")
-        window.on_field_changed.assert_any_call("volume", 1.35)
+        _field_changed_mock(window).assert_any_call("cartesia_voice_id", "voice-b")
+        _field_changed_mock(window).assert_any_call("volume", 1.35)
         # 关闭须 flush 滑块 debounce，并保留即时生效的其他设置。
         window.close()
         import tomllib
@@ -245,13 +272,14 @@ def test_settings_window_dropdowns_ignore_collapsed_mouse_wheel(monkeypatch: pyt
         )
         window.audio_output_combo.addItems(["系统默认", "Speakers [Windows WASAPI]"])
 
-        for combo in (window.voice_combo, window.tts_backend_combo, window.audio_output_combo):
+        for combo in (_voice_combo(window), window.tts_backend_combo, window.audio_output_combo):
             if combo.count() < 2:
                 combo.addItem("extra")
             combo.setCurrentIndex(0)
             event = _FakeWheelEvent()
 
-            combo.wheelEvent(event)
+            # Handler only consumes ignore(); cast keeps the focused event double minimal.
+            combo.wheelEvent(cast(QWheelEvent, event))
 
             assert event.ignored is True
             assert combo.currentIndex() == 0
@@ -267,7 +295,7 @@ def test_settings_window_sliders_ignore_mouse_wheel(monkeypatch: pytest.MonkeyPa
             slider.setValue(slider.minimum())
             event = _FakeWheelEvent()
 
-            slider.wheelEvent(event)
+            slider.wheelEvent(cast(QWheelEvent, event))
 
             assert event.ignored is True
             assert slider.value() == slider.minimum()
@@ -289,7 +317,7 @@ def test_settings_window_recording_button_lifecycle(monkeypatch: pytest.MonkeyPa
         assert window.record_button.text() == "重新录制"
         assert window._recorded_hotkey == "f7"
         assert window._recorded_hotkey_name == "F7"
-        window.on_field_changed.assert_called_once_with("hotkey", "f7")
+        _field_changed_mock(window).assert_called_once_with("hotkey", "f7")
         assert window.pending_label.text() == "当前：F7"
     finally:
         window.close()
@@ -305,7 +333,7 @@ def test_settings_window_escape_during_recording_is_accepted_without_closing(mon
         window.set_recording_started()
         event = QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Escape, Qt.KeyboardModifier.NoModifier)
 
-        window.window.keyPressEvent(event)
+        _dialog(window).keyPressEvent(event)
 
         assert event.isAccepted() is True
         assert window.exists() is True
@@ -334,12 +362,12 @@ def test_settings_window_space_hotkey_press_during_recording_is_accepted_without
             Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier,
         )
 
-        window.window.keyPressEvent(event)
+        _dialog(window).keyPressEvent(event)
 
         assert event.isAccepted() is True
         assert window.exists() is True
         assert window._closed is False
-        assert window.voice_combo.view().isVisible() is False
+        assert _voice_combo(window).view().isVisible() is False
     finally:
         window.close()
 
@@ -354,7 +382,7 @@ def test_settings_window_space_hotkey_on_focused_button_during_recording_does_no
         from PySide6.QtGui import QKeyEvent
         from PySide6.QtWidgets import QPushButton
 
-        cancel_button = window.window.findChild(QPushButton, "cancelButton")
+        cancel_button = _dialog(window).findChild(QPushButton, "cancelButton")
         assert cancel_button is not None
         cancel_button.setFocus(Qt.FocusReason.OtherFocusReason)
         window.set_recording_started()
@@ -390,7 +418,7 @@ def test_settings_window_space_hotkey_release_during_recording_is_accepted_witho
             Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier,
         )
 
-        window.window.keyReleaseEvent(event)
+        _dialog(window).keyReleaseEvent(event)
 
         assert event.isAccepted() is True
         assert window.exists() is True
@@ -428,7 +456,7 @@ def test_settings_window_exposes_transient_status_queue(monkeypatch: pytest.Monk
         toasts = window.status_toasts
         assert toasts is not None, "SettingsWindow 必须提供浮动反馈队列"
         # 反馈不再占据页脚布局位置。
-        assert window.window.findChild(QLabel, "applyStatusLabel") is None
+        assert _dialog(window).findChild(QLabel, "applyStatusLabel") is None
 
         window.set_status("设置已应用")
         assert toasts.texts() == ["设置已应用"]
@@ -449,8 +477,8 @@ def test_settings_window_is_frameless_and_preserves_topmost(monkeypatch: pytest.
     try:
         from PySide6.QtCore import Qt
 
-        flags = window.window.windowFlags()
-        assert window.window.windowType() == Qt.WindowType.Window
+        flags = _dialog(window).windowFlags()
+        assert _dialog(window).windowType() == Qt.WindowType.Window
         assert flags & Qt.WindowType.FramelessWindowHint, "玻璃窗口必须去掉原生边框"
         assert flags & Qt.WindowType.WindowStaysOnTopHint, "settings window must preserve WindowStaysOnTopHint"
     finally:
@@ -463,12 +491,12 @@ def test_settings_window_draws_its_own_title_bar(monkeypatch: pytest.MonkeyPatch
     try:
         from PySide6.QtWidgets import QLabel, QPushButton
 
-        window.window.show()
+        _dialog(window).show()
         _app.processEvents()
-        assert window.window.windowTitle() == "设置"
-        assert window.window.findChild(QLabel, "dialogTitle") is not None
+        assert _dialog(window).windowTitle() == "设置"
+        assert _dialog(window).findChild(QLabel, "dialogTitle") is not None
         for name in ("dialogMinimizeButton", "dialogMaximizeButton", "dialogCloseButton"):
-            assert window.window.findChild(QPushButton, name) is not None, f"缺少自绘窗口控制按钮: {name}"
+            assert _dialog(window).findChild(QPushButton, name) is not None, f"缺少自绘窗口控制按钮: {name}"
     finally:
         window.close()
 
@@ -483,8 +511,8 @@ def test_settings_window_uses_translucent_glass_background(monkeypatch: pytest.M
     try:
         from PySide6.QtCore import Qt
 
-        assert window.window.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground) is True
-        assert window.window.windowOpacity() == 1.0
+        assert _dialog(window).testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground) is True
+        assert _dialog(window).windowOpacity() == 1.0
     finally:
         window.close()
 
@@ -495,10 +523,10 @@ def test_settings_window_native_resize_needs_no_size_grip(monkeypatch: pytest.Mo
     try:
         from PySide6.QtWidgets import QSizeGrip
 
-        window.window.show()
+        _dialog(window).show()
         _app.processEvents()
-        assert window.window.isSizeGripEnabled() is False
-        assert window.window.findChild(QSizeGrip) is None
+        assert _dialog(window).isSizeGripEnabled() is False
+        assert _dialog(window).findChild(QSizeGrip) is None
     finally:
         window.close()
 
@@ -509,9 +537,9 @@ def test_settings_window_native_chrome_preserves_dialog_content(monkeypatch: pyt
     try:
         from PySide6.QtWidgets import QFrame
 
-        window.window.show()
+        _dialog(window).show()
         _app.processEvents()
-        shell = window.window.findChild(QFrame, "dialogShell")
+        shell = _dialog(window).findChild(QFrame, "dialogShell")
         assert shell is not None, "settings dialog must contain QFrame#dialogShell"
         assert shell.isVisible() is True
     finally:
@@ -525,7 +553,7 @@ def test_settings_compact_width_keeps_navigation_and_forms_visible(monkeypatch: 
         from PySide6.QtWidgets import QScrollArea, QTabWidget
         from wordy.ui.settings import DIALOG_WIDTH
 
-        dialog = settings.window
+        dialog = _dialog(settings)
         assert dialog.width() == DIALOG_WIDTH
         tabs = dialog.findChild(QTabWidget, "settingsTabs")
         assert tabs is not None
@@ -547,7 +575,9 @@ def test_settings_compact_width_keeps_navigation_and_forms_visible(monkeypatch: 
                 page = tabs.widget(index)
                 assert isinstance(page, QScrollArea)
                 assert page.horizontalScrollBar().maximum() == 0
-                assert page.widget().minimumSizeHint().width() <= page.viewport().width()
+                content = page.widget()
+                assert content is not None
+                assert content.minimumSizeHint().width() <= page.viewport().width()
     finally:
         settings.close()
 
@@ -565,15 +595,15 @@ def test_settings_window_default_height_fits_all_sections_without_initial_scroll
     try:
         from PySide6.QtWidgets import QScrollArea
 
-        window.window.show()
+        _dialog(window).show()
         _app.processEvents()
-        scroll_area = window.window.findChild(QScrollArea)
+        scroll_area = _dialog(window).findChild(QScrollArea)
         assert scroll_area is not None, "settings dialog must contain a QScrollArea"
 
         content = scroll_area.widget()
         assert content is not None, "settings QScrollArea must have a content widget"
         scrollbar_maximum = scroll_area.verticalScrollBar().maximum()
-        dialog_height = window.window.height()
+        dialog_height = _dialog(window).height()
         viewport_height = scroll_area.viewport().height()
         content_height = content.height()
         content_size_hint_height = content.sizeHint().height()
@@ -592,7 +622,7 @@ def test_local_setting_headers_share_the_same_right_edge(monkeypatch: pytest.Mon
     """标题行操作和值统一右对齐，避免相邻设置行视觉参差。"""
     app, window = _new_settings_window(monkeypatch)
     try:
-        window.window.show()
+        _dialog(window).show()
         app.processEvents()
         right_edges = {
             window.record_button.geometry().right(),
@@ -612,7 +642,7 @@ def test_settings_window_close_path_invokes_on_close_once(monkeypatch: pytest.Mo
 
     flush = Mock()
     monkeypatch.setattr(window._settings, "flush", flush)
-    close = window.close if close_path == "owner" else window.window.close
+    close = window.close if close_path == "owner" else _dialog(window).close
     close()
     close()
 
@@ -628,11 +658,11 @@ def test_settings_window_idle_escape_routes_through_close_once(monkeypatch: pyte
         from PySide6.QtCore import QEvent, Qt
         from PySide6.QtGui import QKeyEvent
 
-        window.window.show()
+        _dialog(window).show()
         _app.processEvents()
-        assert window.window.isVisible() is True
+        assert _dialog(window).isVisible() is True
 
-        window.window.keyPressEvent(
+        _dialog(window).keyPressEvent(
             QKeyEvent(
                 QEvent.Type.KeyPress,
                 Qt.Key.Key_Escape,
@@ -697,7 +727,7 @@ def test_settings_window_native_minimize_and_restore_preserves_content(monkeypat
     """原生最小化和恢复只改变窗口状态，不触发关闭或丢失输入。"""
     _app, window = _new_settings_window(monkeypatch)
     try:
-        dialog = window.window
+        dialog = _dialog(window)
         window.placeholder_input.setText("继续编辑")
         dialog.showMinimized()
         _app.processEvents()
@@ -716,7 +746,7 @@ def test_settings_window_native_maximize_and_restore_keeps_window_alive(monkeypa
     """原生最大化和恢复保留设置窗口实例与可见内容。"""
     _app, window = _new_settings_window(monkeypatch)
     try:
-        dialog = window.window
+        dialog = _dialog(window)
         dialog.showMaximized()
         _app.processEvents()
         assert dialog.isMaximized()
@@ -736,14 +766,15 @@ def test_settings_window_content_press_does_not_start_custom_drag(monkeypatch: p
     try:
         from PySide6.QtCore import QEvent, QPoint
 
-        dialog = window.window
+        dialog = _dialog(window)
         dialog.move(QPoint(120, 130))
         start_pos = dialog.pos()
 
-        assert dialog.eventFilter(window.voice_combo, _mouse_event(QEvent.Type.MouseButtonPress, 10, 10, 300, 320)) is False
+        voice_combo = _voice_combo(window)
+        assert dialog.eventFilter(voice_combo, _mouse_event(QEvent.Type.MouseButtonPress, 10, 10, 300, 320)) is False
         assert not hasattr(dialog, "_drag_active")
         assert not hasattr(dialog, "_drag_position")
-        assert dialog.eventFilter(window.voice_combo, _mouse_event(QEvent.Type.MouseMove, 30, 30, 360, 380)) is False
+        assert dialog.eventFilter(voice_combo, _mouse_event(QEvent.Type.MouseMove, 30, 30, 360, 380)) is False
         assert dialog.pos() == start_pos
     finally:
         window.close()
@@ -819,9 +850,9 @@ def test_settings_window_output_device_selection_persists_structured_identity(
             f"got {identity!r}"
         )
 
-        window.on_field_changed.assert_called_once_with("audio_output_device", identity)
+        _field_changed_mock(window).assert_called_once_with("audio_output_device", identity)
         combo.setCurrentText(SYSTEM_DEFAULT_LABEL)
-        window.on_field_changed.assert_called_with("audio_output_device", None)
+        _field_changed_mock(window).assert_called_with("audio_output_device", None)
         assert window._settings.audio_output_device is None, (
             "selecting 系统默认 must clear structured identity to None"
         )
@@ -899,7 +930,7 @@ def test_settings_window_output_device_combo_falls_back_to_default_when_stored_i
         assert window._settings.audio_output_device == {
             "name": "Headphones (Disconnected)", "host_api_name": "Windows WASAPI",
         }
-        window.on_field_changed.assert_not_called()
+        _field_changed_mock(window).assert_not_called()
     finally:
         window.close()
 

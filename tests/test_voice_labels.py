@@ -5,12 +5,15 @@
 import ast
 from pathlib import Path
 
+from wordy.tts.engine import VoiceInfo
 from wordy.tts.labels import VoiceLabelMaps, build_voice_label_maps
 
 
 class TestBuildVoiceLabelMaps:
+    # 标注为 list[VoiceInfo]（= list[dict[str, object]]）：list 不变型，
+    # 裸字面量会推断成 list[dict[str, str]]，无法传给 build_voice_label_maps。
     def test_unique_names_no_suffix(self):
-        voices = [
+        voices: list[VoiceInfo] = [
             {"id": "id1", "name": "Alice"},
             {"id": "id2", "name": "Bob"},
         ]
@@ -23,7 +26,7 @@ class TestBuildVoiceLabelMaps:
         assert result.selected_label is None
 
     def test_duplicate_names_suffixed_with_id_prefix(self):
-        voices = [
+        voices: list[VoiceInfo] = [
             {"id": "abcdef12345", "name": "Alice"},
             {"id": "abcdef67890", "name": "Alice"},
         ]
@@ -35,7 +38,7 @@ class TestBuildVoiceLabelMaps:
         assert result.selected_label == "Alice (abcdef67)"
 
     def test_non_string_entries_skipped(self):
-        voices = [
+        voices: list[VoiceInfo] = [
             {"id": "id1", "name": "Alice"},
             {"id": 123, "name": "Bad"},
             {"id": "id3", "name": None},
@@ -46,7 +49,7 @@ class TestBuildVoiceLabelMaps:
         assert result.label_to_id == {"Alice": "id1"}
 
     def test_selected_voice_id_not_present(self):
-        voices = [{"id": "id1", "name": "Alice"}]
+        voices: list[VoiceInfo] = [{"id": "id1", "name": "Alice"}]
         result = build_voice_label_maps(voices, selected_voice_id="missing")
 
         assert result.selected_label is None

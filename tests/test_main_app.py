@@ -10,7 +10,7 @@ import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
-from typing import Any, Callable
+from typing import Any, Callable, cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -19,6 +19,7 @@ import pytest
 sys.path.insert(0, str(__file__).replace("/tests/test_main_app.py", ""))
 
 from wordy.config import AppSettings
+from wordy.identity import AudioIdentity
 from wordy.tts.constants import TTS_BACKEND_CARTESIA_BYTES, TTS_BACKEND_CARTESIA_REALTIME
 from wordy.tts.engine import BackendTTSEngine
 # 直接测试生命周期所属对象，不要求主应用保留测试专用转发属性。
@@ -416,7 +417,7 @@ def test_run_prepares_overlay_tray_hook_and_disposes_tray_before_overlay_run(app
     instance = main_mod.WordyApp()
     instance.tts_manager.engine = app.tts_manager.engine
     instance.tts_manager._executor = app.tts_manager._executor
-    instance.tts_manager._janitor_queue = queue.Queue()
+    instance.tts_manager._janitor_queue = queue.SimpleQueue()
 
     class FakeJanitorThread:
         def is_alive(self) -> bool:
@@ -469,7 +470,7 @@ def test_run_disposes_tray_in_finally_when_overlay_run_raises(app, monkeypatch):
     instance = main_mod.WordyApp()
     instance.tts_manager.engine = app.tts_manager.engine
     instance.tts_manager._executor = app.tts_manager._executor
-    instance.tts_manager._janitor_queue = queue.Queue()
+    instance.tts_manager._janitor_queue = queue.SimpleQueue()
 
     class FakeJanitorThread:
         def is_alive(self) -> bool:
@@ -765,7 +766,7 @@ def test_run_without_cartesia_api_key_does_not_eager_connect(monkeypatch):
     instance = main_mod.WordyApp()
     run_calls: list[None] = []
     instance.overlay.run = lambda: run_calls.append(None)
-    observed_queue: queue.Queue = queue.Queue()
+    observed_queue: queue.SimpleQueue = queue.SimpleQueue()
     instance.tts_manager._janitor_queue = observed_queue
 
     class FakeJanitorThread:
@@ -855,7 +856,7 @@ def test_cartesia_api_key_change_rebuilds_tts_engine_without_leaking_key(monkeyp
     instance = main_mod.WordyApp()
     old_engine = instance.tts_manager.engine
     old_executor = instance.tts_manager._executor
-    instance.tts_manager._janitor_queue = queue.Queue()
+    instance.tts_manager._janitor_queue = queue.SimpleQueue()
 
     callback = getattr(instance, "_on_cartesia_api_key_change", None)
     if not callable(callback):
@@ -895,7 +896,7 @@ def test_on_cartesia_api_key_change_engine_build_failure_does_not_corrupt_state(
     instance = main_mod.WordyApp()
     old_engine = instance.tts_manager.engine
     old_executor = instance.tts_manager._executor
-    observed_queue: queue.Queue = queue.Queue()
+    observed_queue: queue.SimpleQueue = queue.SimpleQueue()
     instance.tts_manager._janitor_queue = observed_queue
 
     def failing_factory(*args: Any, **kwargs: Any) -> FakeTTSEngine:
@@ -1190,7 +1191,8 @@ def test_enabling_audio_route_runtime_switches_player_output(monkeypatch):
     assert router_cls.instances
     router = router_cls.instances[-1]
     assert router.started is True
-    app.player.set_output_device.assert_called_once()
+    # 运行时 AudioPlayer 已被 fake factory 替换为 MagicMock
+    cast(MagicMock, app.player).set_output_device.assert_called_once()
 
 
 def test_enabling_audio_route_uses_stored_mic_when_not_in_route_config(monkeypatch):
@@ -1228,18 +1230,20 @@ def test_audio_route_keeps_cable_output_when_local_output_changes(monkeypatch):
     monkeypatch.setattr("wordy.tts_manager.create_tts_engine", lambda *a, **kw: engine)
     app = main_mod.WordyApp()
     app.routing.apply_config({"audio_routing_enabled": True})
-    app.player.set_output_device.reset_mock()
+    # 运行时 AudioPlayer 已被 fake factory 替换为 MagicMock
+    player_mock = cast(MagicMock, app.player)
+    player_mock.set_output_device.reset_mock()
 
     local_output = {"name": "Speakers", "host_api_name": "Windows WASAPI"}
     app.routing.on_output_device_change(local_output)
 
-    app.player.set_output_device.assert_not_called()
+    player_mock.set_output_device.assert_not_called()
     assert app.routing._saved_output_device == local_output
     assert app.routing._saved_output_device == local_output
 
     app.routing.apply_config({"audio_routing_enabled": False})
 
-    app.player.set_output_device.assert_called_once_with(local_output)
+    player_mock.set_output_device.assert_called_once_with(local_output)
 
 
 def test_disabling_audio_route_runtime_stops_router(monkeypatch):
@@ -1332,14 +1336,14 @@ def test_app_constructs_audio_player_with_structured_load_audio_output_device(mo
       * AudioPlayer receives the structured value via an ``output_device`` kwarg
         (not the legacy ``output_device_name`` flattened to a string).
     """
-    structured = {"name": "Speakers (Realtek)", "host_api_name": "WASAPI"}
+    structured: AudioIdentity = {"name": "Speakers (Realtek)", "host_api_name": "WASAPI"}
     load_calls: list[None] = []
     s = AppSettings()
     s.tts_backend = TTS_BACKEND_CARTESIA_BYTES
     s.voice_id = "fake-voice"
     s.voice_name = "Fake"
     s.volume = 1.0
-    s.audio_output_device = dict(structured)
+    s.audio_output_device = structured
     s.audio_output_device_name = None
 
     def fake_load(**kw: Any) -> AppSettings:
@@ -1451,13 +1455,13 @@ def test_on_audio_output_change_with_structured_device_calls_set_output_device(m
 
 def test_on_audio_output_change_with_none_clears_via_set_output_device(monkeypatch):
     """_on_audio_output_change(None) must call player.set_output_device(None)."""
-    initial_structured = {"name": "Initial Device", "host_api_name": "MME"}
+    initial_structured: AudioIdentity = {"name": "Initial Device", "host_api_name": "MME"}
     s = AppSettings()
     s.tts_backend = TTS_BACKEND_CARTESIA_BYTES
     s.voice_id = "fake-voice"
     s.voice_name = "Fake"
     s.volume = 1.0
-    s.audio_output_device = dict(initial_structured)
+    s.audio_output_device = initial_structured
     s.audio_output_device_name = "Initial Device"
     monkeypatch.setattr(AppSettings, "load", lambda **kw: s)
     _ = _patch_structured_audio_player_factory(monkeypatch)

@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from wordy.audio.player import OutputDeviceSelection
 from wordy.routing_controller import RoutingController
 
 
@@ -307,7 +308,7 @@ def test_stop_keeps_router_for_restore_retry_and_restores_local_output_once(mock
     router._listen_original_state = ListenPolicyState(enabled=False, output_id="old-output")
     router._listen_original_device = "Mic"
     ctrl._router = router
-    local_output = {"name": "Speakers", "host_api_name": "Windows WASAPI"}
+    local_output: OutputDeviceSelection = {"name": "Speakers", "host_api_name": "Windows WASAPI"}
     ctrl._saved_output_device = local_output
     with patch("wordy.audio.listen_policy.restore_listen_policy", side_effect=[False, True]) as restore:
         assert ctrl.stop() is False
@@ -346,7 +347,7 @@ def test_virtual_output_change_restore_failure_returns_to_local_output(mock_play
     router._listen_original_state = ListenPolicyState(enabled=False, output_id="old-output")
     router._listen_original_device = "Mic"
     ctrl._router = router
-    local_output = {"name": "Speakers", "host_api_name": "Windows WASAPI"}
+    local_output: OutputDeviceSelection = {"name": "Speakers", "host_api_name": "Windows WASAPI"}
     ctrl._saved_output_device = local_output
     with patch("wordy.audio.listen_policy.restore_listen_policy", return_value=False):
         ctrl.apply_config({"virtual_output_device": "New Output"})

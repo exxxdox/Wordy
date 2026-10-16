@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from io import BytesIO
+from typing import Callable, cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -125,8 +126,11 @@ def test_audio_player_ctor_defaults_to_system_default_device():
 def test_audio_player_ctor_rejects_legacy_mode_kwarg():
     """Legacy device matching kwarg must raise TypeError."""
     legacy_key = "match" + "_" + "mode"
+    # 语义：已删除的 legacy kwarg 必须触发 TypeError。cast 到签名未知的 Callable，
+    # 静态检查才不会把 dict 展开按已知参数类型拦截（直接注解会被收窄回 __init__）。
+    ctor = cast(Callable[..., AudioPlayer], AudioPlayer)
     with pytest.raises(TypeError):
-        AudioPlayer(**{legacy_key: "default"})
+        ctor(**{legacy_key: "default"})
 
 
 def test_resolve_uses_named_output_device_when_set(_patch_pyaudio):
@@ -525,8 +529,8 @@ def test_close_stream_when_stop_raises_still_closes_and_terminates(_patch_pyaudi
     player = AudioPlayer()
     assert player.open_stream(audio_format=8, channels=1, rate=22050) is True
 
-    stream = player._stream
-    pa = player._stream_p
+    stream = cast(FakePyAudioStream, player._stream)
+    pa = cast(FakePyAudio, player._stream_p)
 
     def _boom():
         raise RuntimeError("stop blew up")
@@ -547,8 +551,8 @@ def test_close_stream_when_close_raises_still_terminates_pyaudio(_patch_pyaudio)
     player = AudioPlayer()
     assert player.open_stream(audio_format=8, channels=1, rate=22050) is True
 
-    stream = player._stream
-    pa = player._stream_p
+    stream = cast(FakePyAudioStream, player._stream)
+    pa = cast(FakePyAudio, player._stream_p)
 
     def _boom():
         raise RuntimeError("close blew up")

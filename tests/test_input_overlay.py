@@ -3,11 +3,16 @@
 
 """Tests for overlay.py input normalization and hotkey recording lifecycle."""
 
+from __future__ import annotations
+
 import importlib
 import sys
 from collections.abc import Callable
 from types import ModuleType
-from typing import cast
+from typing import TYPE_CHECKING, Protocol, cast
+
+if TYPE_CHECKING:
+    from wordy.config import AppSettings
 
 import pytest
 
@@ -83,7 +88,34 @@ class SettingsWindowStub:
         self.status_calls.append(text)
 
 
-def _new_cfg():
+# 动态导入无法向类型检查器暴露 InputOverlay；仅声明测试替换和调用的边界。
+class _OverlayStub(Protocol):
+    _cfg: AppSettings
+    _settings_window: SettingsWindowStub | None
+    _hotkey_listener: object | None
+    _recording_hotkey: bool
+    _hotkey: str
+    _hotkey_name: str
+    _tts_api_provider: str
+    root: object | None
+    width: int
+    height: int
+    _register_hotkey: Callable[[], None]
+    _unregister_hotkey: Callable[[], None]
+    _create_settings_window: Callable[[], None]
+    _active_settings_window: Callable[[], SettingsWindowStub | None]
+    try_register_hotkey: Callable[[str, str], bool]
+    _try_register_startup_hotkey: Callable[[], bool]
+    _finish_record_hotkey: Callable[[object, object], None]
+    _on_settings_field_changed: Callable[[str, object], None]
+    on_voice_change: Callable[[str, str], None] | None
+    on_volume_change: Callable[[float], None] | None
+    on_tts_backend_change: Callable[[str], None] | None
+    on_audio_output_change: Callable[[object], None] | None
+    on_cartesia_api_key_change: Callable[[str | None], None] | None
+
+
+def _new_cfg() -> AppSettings:
     """创建最小 AppSettings 实例供测试用。"""
     from wordy.config import AppSettings
     cfg = AppSettings()
@@ -106,15 +138,15 @@ def _new_cfg():
     return cfg
 
 
-def _new_hotkey_overlay(module: ModuleType) -> object:
+def _new_hotkey_overlay(module: ModuleType) -> _OverlayStub:
     """创建 overlay（__new__，跳过 __init__），注入 _cfg 供 hotkey 方法使用。"""
-    overlay = module.InputOverlay.__new__(module.InputOverlay)
+    overlay = cast(_OverlayStub, module.InputOverlay.__new__(module.InputOverlay))
     overlay._cfg = _new_cfg()
     return overlay
 
 
-def _new_apply_overlay(module: ModuleType) -> object:
-    overlay = module.InputOverlay.__new__(module.InputOverlay)
+def _new_apply_overlay(module: ModuleType) -> _OverlayStub:
+    overlay = cast(_OverlayStub, module.InputOverlay.__new__(module.InputOverlay))
     cfg = _new_cfg()
     overlay._cfg = cfg
     overlay._hotkey = cfg.hotkey

@@ -1,5 +1,6 @@
 """TTS 设置面板测试。"""
 
+from typing import cast
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -41,8 +42,9 @@ def test_provider_switch_only_updates_visible_panel_and_notifies(monkeypatch):
     })
     window._on_tts_api_selected(TTS_API_PROVIDER_VOLCENGINE)
     assert window._settings.active_tts_provider == TTS_API_PROVIDER_VOLCENGINE
-    window._provider_panel_widgets[TTS_API_PROVIDER_CARTESIA].setVisible.assert_called_once_with(False)
-    window._provider_panel_widgets[TTS_API_PROVIDER_VOLCENGINE].setVisible.assert_called_once_with(True)
+    # 映射按 QWidget 声明，但测试明确注入 MagicMock 以检查调用。
+    cast(MagicMock, window._provider_panel_widgets[TTS_API_PROVIDER_CARTESIA]).setVisible.assert_called_once_with(False)
+    cast(MagicMock, window._provider_panel_widgets[TTS_API_PROVIDER_VOLCENGINE]).setVisible.assert_called_once_with(True)
     window.on_field_changed.assert_called_once_with("active_tts_provider", TTS_API_PROVIDER_VOLCENGINE)
 
 
@@ -250,7 +252,7 @@ def test_provider_switch_failure_restores_config_and_controls(qapp, tmp_path):
     assert window.tts_api_combo.currentText() == TTS_API_PROVIDER_CARTESIA
     window._populate_backend_combo_for_provider.assert_not_called()
     for panel in window._provider_panel_widgets.values():
-        panel.setVisible.assert_not_called()
+        cast(MagicMock, panel).setVisible.assert_not_called()
     assert "切换失败" in window.set_status.call_args.args[0]
     settings.save()
     assert AppSettings.load(config_file=settings._config_file).active_tts_provider == TTS_API_PROVIDER_CARTESIA

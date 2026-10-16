@@ -199,7 +199,9 @@ _STUBBABLE_MODULES = (
 )
 
 # 强制导入真实模块并保存快照——在所有测试和 monkeypatch 之前
-_REAL_MODULE_SNAPSHOT: dict[str, object] = {}
+# 快照存的是 sys.modules 里的模块对象，用 ModuleType 而非 object，
+# 才能满足 sys.modules 赋值的类型契约（object 不可赋给 ModuleType）。
+_REAL_MODULE_SNAPSHOT: dict[str, ModuleType] = {}
 for _name in _STUBBABLE_MODULES:
     try:
         __import__(_name)

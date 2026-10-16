@@ -2,13 +2,15 @@
 
 from unittest.mock import Mock
 import ctypes
-from types import SimpleNamespace
+from types import FunctionType, SimpleNamespace
+from typing import cast
 
 import pytest
 
 from PySide6.QtCore import QPoint, QSize, Qt
 from PySide6.QtGui import QCursor
 from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QLabel
 
 from wordy.ui.overlay import InputOverlay
 from wordy.ui.settings import SettingsWindow
@@ -42,7 +44,9 @@ def test_overlay_button_hover_changes_icons_without_background_highlight(qapp, m
         root.entry.setText("hover")
         for button in (root.settings_button, root.submit_button):
             def icon_image():
-                if button is root.settings_button:
+                # 设置入口是 QLabel（pixmap），朗读入口是 QPushButton（icon）；
+                # 用 isinstance 收窄联合类型，`is` 比较不让 pyright 收窄。
+                if isinstance(button, QLabel):
                     return button.pixmap().toImage()
                 return button.icon().pixmap(16, 16).toImage()
             qapp.sendEvent(button, QEvent(QEvent.Type.Leave))
@@ -346,7 +350,7 @@ def test_scaled_cursor_click_on_read_is_not_treated_as_outside(qapp, monkeypatch
 
     monkeypatch.setattr(ctypes.windll, "user32", SimpleNamespace(GetCursorPos=physical_cursor))
     # 契约测试可能重载模块，替换实际方法的引用，避免跨测试模块缓存影响此回归。
-    monkeypatch.setitem(overlay._check_outside_click.__globals__, "is_left_button_down", lambda: True)
+    monkeypatch.setitem(cast(FunctionType, overlay._check_outside_click).__globals__, "is_left_button_down", lambda: True)
     overlay._ignore_focus_out = False
     overlay._outside_mouse_down = False
     QTest.mousePress(root.submit_button, Qt.MouseButton.LeftButton)
@@ -382,13 +386,15 @@ def test_enter_in_credentials_does_not_activate_title_close(qapp, fake_keyring):
     settings = SettingsWindow(None, SettingsState(), lambda: None, lambda: None,
                               lambda field, value: None, closed)
     assert settings.window is not None
-    from PySide6.QtWidgets import QTabWidget
+    from PySide6.QtWidgets import QLineEdit, QTabWidget
     tabs = settings.window.findChild(QTabWidget, "settingsTabs")
     assert tabs is not None
     tabs.setCurrentIndex(2)
-    settings.api_key_input.setFocus()
+    api_key_input: QLineEdit | None = settings.api_key_input
+    assert api_key_input is not None
+    api_key_input.setFocus()
     qapp.processEvents()
-    QTest.keyClick(settings.api_key_input, Qt.Key.Key_Return)
+    QTest.keyClick(api_key_input, Qt.Key.Key_Return)
     closed.assert_not_called()
     assert settings.window.isVisible()
     settings.close()
@@ -400,11 +406,13 @@ def test_placeholder_updates_live_and_persists_on_close(qapp, monkeypatch):
     monkeypatch.setattr(InputOverlay, "_start_load_voices", lambda *args, **kwargs: None)
     overlay = InputOverlay(lambda text: None)
     overlay._ensure_ui()
+    entry = overlay.entry
+    assert entry is not None
     settings = SettingsWindow(overlay.root, SettingsState(), lambda: None, lambda: None,
                               overlay._on_settings_field_changed, lambda: None)
-    assert overlay.entry.placeholderText() == "Hello World~"
+    assert entry.placeholderText() == "Hello World~"
     settings.placeholder_input.setText("写下你想说的话")
-    assert overlay.entry.placeholderText() == "写下你想说的话"
+    assert entry.placeholderText() == "写下你想说的话"
     settings.close()
     # 清除单例后读取磁盘，证明重启也会保留用户提示文字。
     monkeypatch.setattr(config, "_cached_settings", None)
@@ -412,7 +420,7 @@ def test_placeholder_updates_live_and_persists_on_close(qapp, monkeypatch):
     settings = SettingsWindow(overlay.root, SettingsState(), lambda: None, lambda: None,
                               overlay._on_settings_field_changed, lambda: None)
     settings.placeholder_input.clear()
-    assert overlay.entry.placeholderText() == ""
+    assert entry.placeholderText() == ""
     settings.close()
     monkeypatch.setattr(config, "_cached_settings", None)
     assert config.AppSettings.load().overlay_placeholder == ""
@@ -426,9 +434,10 @@ def test_settings_open_has_no_output_side_effect_and_close_flushes_once(qapp, mo
     settings = SettingsWindow(None, SettingsState(), lambda: None, lambda: None,
                               changed, lambda: None)
     changed.assert_not_called()
-    assert settings.window is not None
+    window = settings.window
+    assert window is not None
     visible_during_flush = []
-    flush = Mock(side_effect=lambda: visible_during_flush.append(settings.window.isVisible()))
+    flush = Mock(side_effect=lambda: visible_during_flush.append(window.isVisible()))
     monkeypatch.setattr(AppSettings.load(), "flush", flush)
     settings.close()
     flush.assert_called_once()
@@ -443,14 +452,17 @@ def test_output_scan_only_runs_on_first_audio_tab_visit(qapp, monkeypatch):
     scan = Mock(return_value=(["测试输出"], None))
     monkeypatch.setattr(overlay, "_enumerate_audio_output_devices", scan)
     monkeypatch.setattr(overlay, "_enumerate_input_devices", lambda: [])
-    driver = overlay._create_settings_window.__globals__["VBCableDriverManager"]
+    driver = cast(FunctionType, overlay._create_settings_window).__globals__["VBCableDriverManager"]
     monkeypatch.setattr(driver, "is_installed", lambda: False)
     try:
         overlay._open_settings()
         settings = overlay._settings_window
-        assert settings is not None and settings.window.isVisible()
+        assert settings is not None
+        window = settings.window
+        assert window is not None and window.isVisible()
         scan.assert_not_called()
-        tabs = settings.window.findChild(QTabWidget, "settingsTabs")
+        tabs = window.findChild(QTabWidget, "settingsTabs")
+        assert tabs is not None
         tabs.setCurrentIndex(1)
         # 设备枚举延后到页签首帧之后，避免阻塞切换。
         QTest.qWait(settings.AUDIO_SCAN_DELAY_MS + 20)
@@ -477,7 +489,9 @@ def test_prewarm_builds_settings_tree_without_showing_it(qapp, fake_keyring):
     )
     try:
         assert settings.title_bar is not None, "预热必须真的建出控件树，否则首次点击省不下成本"
-        assert not settings.window.isVisible(), "预热不能把设置窗口显示出来"
+        window = settings.window
+        assert window is not None
+        assert not window.isVisible(), "预热不能把设置窗口显示出来"
     finally:
         settings.close()
 
@@ -507,7 +521,7 @@ def test_prewarm_settings_window_leaves_no_open_window(qapp, fake_keyring, monke
     overlay = InputOverlay(lambda text: None)
     overlay._ensure_ui()
     monkeypatch.setattr(overlay, "_enumerate_input_devices", lambda: [])
-    driver = overlay._create_settings_window.__globals__["VBCableDriverManager"]
+    driver = cast(FunctionType, overlay._create_settings_window).__globals__["VBCableDriverManager"]
     monkeypatch.setattr(driver, "is_installed", lambda: False)
     try:
         overlay.prewarm_settings_window()
@@ -515,7 +529,9 @@ def test_prewarm_settings_window_leaves_no_open_window(qapp, fake_keyring, monke
         assert overlay._active_settings_window() is None, "预热实例没有被丢弃"
         overlay._open_settings()
         settings = overlay._active_settings_window()
-        assert settings is not None and settings.window.isVisible()
+        assert settings is not None
+        window = settings.window
+        assert window is not None and window.isVisible()
         settings.close()
     finally:
         overlay.stop()
@@ -662,7 +678,9 @@ def test_settings_tab_switch_has_no_fade_and_defers_audio_scan(qapp, fake_keyrin
     try:
         from PySide6.QtWidgets import QTabWidget
 
-        tabs = settings.window.findChild(QTabWidget, "settingsTabs")
+        window = settings.window
+        assert window is not None
+        tabs = window.findChild(QTabWidget, "settingsTabs")
         assert tabs is not None
         tabs.setCurrentIndex(1)
 
@@ -694,17 +712,19 @@ def test_settings_tab_switch_renders_content_at_full_opacity_immediately(qapp, f
     try:
         from PySide6.QtWidgets import QTabWidget
 
-        tabs = settings.window.findChild(QTabWidget, "settingsTabs")
+        window = settings.window
+        assert window is not None
+        tabs = window.findChild(QTabWidget, "settingsTabs")
         assert tabs is not None
 
         tabs.setCurrentIndex(2)
         QTest.qWait(settings.AUDIO_SCAN_DELAY_MS + 20)
-        settled = settings.window.grab().toImage()
+        settled = window.grab().toImage()
 
         tabs.setCurrentIndex(0)
         QTest.qWait(settings.AUDIO_SCAN_DELAY_MS + 20)
         tabs.setCurrentIndex(2)
-        immediate = settings.window.grab().toImage()
+        immediate = window.grab().toImage()
 
         assert immediate == settled, "切页首帧必须与稳定后一致，否则内容会闪一下"
     finally:
@@ -720,7 +740,7 @@ def test_settings_click_keeps_windows_visible_without_native_focus_reentry(qapp,
     overlay._cfg.active_tts_provider = provider
     overlay._ensure_ui()
     monkeypatch.setattr(overlay, "_enumerate_input_devices", lambda: [])
-    driver = overlay._create_settings_window.__globals__["VBCableDriverManager"]
+    driver = cast(FunctionType, overlay._create_settings_window).__globals__["VBCableDriverManager"]
     monkeypatch.setattr(driver, "is_installed", lambda: False)
     native_focus = Mock()
     monkeypatch.setitem(SettingsWindow.lift_and_focus.__globals__, "activate_window", native_focus)
@@ -746,6 +766,7 @@ def test_settings_click_keeps_windows_visible_without_native_focus_reentry(qapp,
 
     watcher = Watch()
     root = overlay.root
+    assert root is not None
     root.show()
     root.activateWindow()
     qapp.processEvents()
@@ -756,16 +777,18 @@ def test_settings_click_keeps_windows_visible_without_native_focus_reentry(qapp,
         settings = overlay._settings_window
         assert settings is not None
         assert shown_windows == [settings.window]
+        window = settings.window
+        assert window is not None
         # 玻璃底由窗口自绘，因此走透明合成；但对用户可见时必须完全不透明——
         # 不能等到子面板首帧才出现底色。
-        assert settings.window.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        assert settings.window.windowOpacity() == 1.0
-        initial_geometry = settings.window.geometry()
+        assert window.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        assert window.windowOpacity() == 1.0
+        initial_geometry = window.geometry()
         qapp.processEvents()
-        assert settings.window.geometry() == initial_geometry
-        assert root.isVisible() and settings.window.isVisible()
+        assert window.geometry() == initial_geometry
+        assert root.isVisible() and window.isVisible()
         if qapp.platformName() == "windows":
-            assert settings.window.isActiveWindow()
+            assert window.isActiveWindow()
             assert transitions == [(False, True)]
         settings.lift_and_focus()
         qapp.processEvents()
@@ -780,6 +803,7 @@ def test_settings_opens_immediately_at_full_opacity(qapp):
     settings = SettingsWindow(None, SettingsState(), lambda: None, lambda: None,
                               lambda *args: None, lambda: None)
     window = settings.window
+    assert window is not None
     geometry = window.geometry()
     try:
         assert window.isVisible()
@@ -798,6 +822,7 @@ def test_frameless_window_can_maximize_minimize_restore_and_close(qapp):
     settings = SettingsWindow(None, SettingsState(), lambda: None, lambda: None,
                               lambda *args: None, closed)
     window = settings.window
+    assert window is not None
     try:
         # 无边框窗口自行绘制三个控制按钮，不再有原生样式位可断言；
         # 这里守住的是三种窗口状态与关闭回调在自绘 chrome 下仍然成立。

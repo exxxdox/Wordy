@@ -3,6 +3,7 @@
 """Tests for Cartesia connect helper functions and logging redaction."""
 
 import logging
+from typing import TYPE_CHECKING, Iterator, Protocol, cast
 from unittest.mock import Mock
 
 import pytest
@@ -14,13 +15,12 @@ from tests._stubs import CARTESIA_NATIVE_DEPS, install_module_stubs
 
 install_module_stubs(CARTESIA_NATIVE_DEPS)
 
-# Import requests after stubbing - requests should exist, but just in case
-try:
-    from requests import Response
-except ImportError:
-    class Response:
-        pass
+# requests 在本文件顶部已无条件导入，Response 必然可用。
+# 原先的 except 分支内联定义了同名 class，让 Response 符号变成「声明类型」，
+# 下方的 Mock(spec=Response) 反而以此为准而报错 —— 删掉死掉的回落分支。
+from requests import Response
 
+from wordy.tts.engine import VoiceInfo
 from wordy.tts.labels import VoiceLabelMaps, build_voice_label_maps
 from wordy.tts.cartesia import (
     _ensure_cartesia_config,
@@ -34,13 +34,19 @@ from wordy.tts.cartesia import (
     DEFAULT_CARTESIA_VERSION,
 )
 
+if TYPE_CHECKING:
+    # cartesia 内部类只在类型层面引用：运行期不回落到已 stub 的模块。
+    from cartesia.lib._tts import TTSResourceConnection, TTSResourceConnectionManager
+    from wordy.tts.cartesia import CartesiaRealtimeTTS
+
 
 class TestBuildVoiceLabelMaps:
     """Test build_voice_label_maps handling of names and selection."""
 
     def test_unique_names(self):
         """Test all unique names are preserved without suffixes."""
-        voices = [
+        # list 不变型：裸字面量推断为 list[dict[str, str]]，需显式标成 VoiceInfo。
+        voices: list[VoiceInfo] = [
             {"id": "id1", "name": "Alice"},
             {"id": "id2", "name": "Bob"},
             {"id": "id3", "name": "Charlie"},
@@ -64,7 +70,7 @@ class TestBuildVoiceLabelMaps:
 
     def test_duplicate_names_get_suffixed(self):
         """Test duplicate names get (id prefix) suffix to disambiguate."""
-        voices = [
+        voices: list[VoiceInfo] = [
             {"id": "abcdef12345", "name": "Alice"},
             {"id": "abcdef67890", "name": "Alice"},
             {"id": "xyz000", "name": "Bob"},
@@ -82,7 +88,7 @@ class TestBuildVoiceLabelMaps:
 
     def test_selected_voice_found(self):
         """Test selected_voice_id correctly maps to selected_label."""
-        voices = [
+        voices: list[VoiceInfo] = [
             {"id": "id1", "name": "Alice"},
             {"id": "id2", "name": "Bob"},
         ]
@@ -92,7 +98,7 @@ class TestBuildVoiceLabelMaps:
 
     def test_selected_voice_not_found(self):
         """Test selected_label is None when selected_voice_id not found."""
-        voices = [
+        voices: list[VoiceInfo] = [
             {"id": "id1", "name": "Alice"},
         ]
         result = build_voice_label_maps(voices, selected_voice_id="nonexistent")
@@ -297,7 +303,7 @@ class TestLoggingTextRedactionExposure:
 
         fake_conn = _FakeConnection()
         fake_conn.context = lambda **kwargs: (captured_kwargs.update(kwargs) or _RecordingCtx())
-        tts._connection = fake_conn
+        _install_connection(tts, fake_conn)
 
         secret_text = "Another secret text that should be redacted from debug logs"
         caplog.set_level(logging.DEBUG, logger=cartesia_logger.name)
@@ -320,13 +326,36 @@ class TestLoggingTextRedactionExposure:
         )
 
 
+class _TTSContext(Protocol):
+    """realtime 一次请求的 context 最小接口，用作假连接的 context() 返回类型。"""
+
+    def push(self, text: str) -> None: ...
+    def no_more_inputs(self) -> None: ...
+    def receive(self) -> Iterator[object]: ...
+
+
+def _install_connection(tts: "CartesiaRealtimeTTS", connection: object) -> None:
+    """把 duck-typed 假连接挂到私有属性。
+
+    _connection 的声明类型是 cartesia 内部具体类，假连接只做结构模拟，
+    无法名义兼容；用 cast 收窄，运行期仍是原对象。
+    """
+    tts._connection = cast("TTSResourceConnection", connection)
+
+
+def _install_connection_manager(tts: "CartesiaRealtimeTTS", manager: object) -> None:
+    tts._connection_manager = cast("TTSResourceConnectionManager", manager)
+
+
 class _FakeConnection:
     """Fake websocket connection that records context() calls."""
 
     def __init__(self):
         self.context_calls = []
 
-    def context(self, **kwargs):
+    # 显式返回类型 _TTSContext：否则推断成 Mock，测试里替换 context 的 lambda
+    # 返回 _RecordingCtx/_FakeCtx 时会因返回类型不兼容而报错。
+    def context(self, **kwargs: object) -> _TTSContext:
         self.context_calls.append(kwargs)
         return Mock()
 
@@ -385,8 +414,8 @@ class TestRealtimeLifecycleLocking:
         """connect() must return immediately if _connection already exists."""
         tts, mock_player = _make_realtime_tts()
         existing = _FakeConnection()
-        tts._connection = existing
-        tts._connection_manager = _FakeConnectionManager(existing)
+        _install_connection(tts, existing)
+        _install_connection_manager(tts, _FakeConnectionManager(existing))
 
         tts.connect()
 
@@ -397,8 +426,8 @@ class TestRealtimeLifecycleLocking:
         """_close_websocket must call __exit__ and clear connection refs."""
         tts, _ = _make_realtime_tts()
         manager = _FakeConnectionManager()
-        tts._connection_manager = manager
-        tts._connection = manager.connection
+        _install_connection_manager(tts, manager)
+        _install_connection(tts, manager.connection)
 
         tts._close_websocket()
 
@@ -411,8 +440,8 @@ class TestRealtimeLifecycleLocking:
         """Exceptions from __exit__ are swallowed and refs still cleared."""
         tts, _ = _make_realtime_tts()
         manager = _FakeConnectionManager(raise_on_exit=True)
-        tts._connection_manager = manager
-        tts._connection = manager.connection
+        _install_connection_manager(tts, manager)
+        _install_connection(tts, manager.connection)
 
         tts._close_websocket()
 
@@ -431,8 +460,8 @@ class TestRealtimeLifecycleLocking:
         """close() must take the lock and also close the audio stream."""
         tts, mock_player = _make_realtime_tts()
         manager = _FakeConnectionManager()
-        tts._connection_manager = manager
-        tts._connection = manager.connection
+        _install_connection_manager(tts, manager)
+        _install_connection(tts, manager.connection)
 
         tts.close()
 
@@ -454,7 +483,7 @@ class TestRealtimeLifecycleLocking:
         """RLock allows connect() to run while the caller already owns the lock."""
         tts, _ = _make_realtime_tts()
         existing = _FakeConnection()
-        tts._connection = existing
+        _install_connection(tts, existing)
 
         with tts._lock:
             tts.connect()
@@ -490,21 +519,23 @@ class TestRealtimeAudioStream:
 class TestSharedRequestArgs:
     """Shared payload construction via CartesiaTTS._build_request_args."""
 
-    def _make_bytes(self, **overrides):
+    # 只暴露各用例实际覆写的 volume；原先的 **overrides 异构字典
+    # 拆包给固定签名构造器时无法静态校验，改为显式参数。
+    def _make_bytes(self, volume: float = 0.5):
         from wordy.tts.cartesia import CartesiaBytesTTS
 
         mock_player = Mock()
-        kwargs = dict(api_key="fake-key", voice_id="voice-1", volume=0.5)
-        kwargs.update(overrides)
-        return CartesiaBytesTTS(audio_player=mock_player, **kwargs)
+        return CartesiaBytesTTS(
+            audio_player=mock_player, api_key="fake-key", voice_id="voice-1", volume=volume
+        )
 
-    def _make_realtime(self, **overrides):
+    def _make_realtime(self, volume: float = 0.5):
         from wordy.tts.cartesia import CartesiaRealtimeTTS
 
         mock_player = Mock()
-        kwargs = dict(api_key="fake-key", voice_id="voice-1", volume=0.5)
-        kwargs.update(overrides)
-        return CartesiaRealtimeTTS(audio_player=mock_player, **kwargs)
+        return CartesiaRealtimeTTS(
+            audio_player=mock_player, api_key="fake-key", voice_id="voice-1", volume=volume
+        )
 
     def test_default_constants_preserved(self):
         """DEFAULT_CARTESIA_VERSION and default model/sample_rate/volume must stay stable."""
@@ -605,7 +636,7 @@ class TestSharedRequestArgs:
 
         fake_conn.context = lambda **kwargs: (captured_kwargs.update(kwargs) or _FakeCtx())
         captured_kwargs = {}
-        tts._connection = fake_conn
+        _install_connection(tts, fake_conn)
 
         tts._send_and_play_once("hi")
 

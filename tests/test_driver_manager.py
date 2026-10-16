@@ -71,8 +71,12 @@ class TestVBCableDriverManager:
             assert status["installed"] is True
             assert status["input_device_index"] == 1
             assert status["output_device_index"] == 2
-            assert "CABLE Output" in status["input_device_name"]
-            assert "CABLE Input" in status["output_device_name"]
+            # VBCableStatus 的设备名可为 None；先收窄再断言子串，语义不变
+            input_device_name = status["input_device_name"]
+            output_device_name = status["output_device_name"]
+            assert input_device_name is not None and output_device_name is not None
+            assert "CABLE Output" in input_device_name
+            assert "CABLE Input" in output_device_name
 
     def test_get_status_prefers_wasapi_over_legacy_host_apis(self):
         """同名重复端点中必须选择与 MMDevice 一致的 WASAPI 条目。"""
