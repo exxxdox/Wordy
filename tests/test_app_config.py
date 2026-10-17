@@ -539,6 +539,40 @@ def test_volcengine_voice_list_rejects_non_list(tmp_path: Path):
     assert s.volcengine_voice_list == []
 
 
+def test_volcengine_active_voice_comes_from_list_head(tmp_path: Path):
+    """没有独立的 voice_id 字段：列表首条就是当前音色。"""
+    s = AppSettings.load(config_file=tmp_path / "config.toml")
+    assert s.volcengine_voice_id is None
+    assert s.volcengine_voice_name is None
+
+    s.volcengine_voice_list = [
+        {"id": "S_abc", "name": "我的复刻音色"},
+        {"id": "S_def", "name": "备用音色"},
+    ]
+
+    assert s.volcengine_voice_id == "S_abc"
+    assert s.volcengine_voice_name == "我的复刻音色"
+
+
+def test_load_drops_legacy_volcengine_voice_id(tmp_path: Path):
+    """旧配置里的 voice_id/voice_name 不再读取，下次落盘自然清掉。"""
+    cfg = tmp_path / "config.toml"
+    cfg.write_text(
+        '[tts_providers.Volcengine]\n'
+        'voice_id = "S_old"\n'
+        'voice_name = "旧音色"\n'
+        'backend = "Volcengine Streaming"\n',
+        encoding="utf-8",
+    )
+
+    s = AppSettings.load(config_file=cfg)
+
+    provider = s.get_provider("Volcengine")
+    assert "voice_id" not in provider
+    assert "voice_name" not in provider
+    assert s.volcengine_voice_id is None
+
+
 def test_load_invalid_voice(tmp_path: Path):
     """AppSettings.load() returns None voice when stored voice_id is invalid."""
     cfg = tmp_path / "config.toml"

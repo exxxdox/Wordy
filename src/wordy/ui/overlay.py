@@ -828,7 +828,7 @@ class InputOverlay:
                 self.on_tts_api_provider_change(str(value))
 
         elif field_name in ("cartesia_voice_id", "cartesia_voice_name",
-                            "volcengine_voice_id", "volcengine_voice_name"):
+                            "volcengine_voice_list"):
             if self.on_voice_change:
                 active_vid = self._get_active_voice_id() or ""
                 active_vname = self._get_active_voice_name() or ""

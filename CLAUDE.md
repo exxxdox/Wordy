@@ -106,7 +106,7 @@ driver.py(VBCableDriverManager) → config.py(AppSettings) → main.py(生命周
 
 **厂商没有可枚举音色的 HTTP 接口**，别去写「拉取音色列表」。`POST /api/v3/tts/get_voice` 是**单查**（入参必填 `speaker_id`），只返回该音色的注册状态与试听音频 `demo_audio`，**没有任何人类可读名称字段**，也没有分页/列表参数；官方「大模型音色列表」文档是静态表格，不是接口。
 
-因此音色列表由用户**手动维护**并持久化在 `AppSettings.volcengine_voice_list`（`[{"id", "name"}]`，读取时由 `_normalize_voice_entries` 清洗：id 必须非空字符串、同 id 留第一条、缺名用 id 兜底——下拉按名称做标签，没名称的条目会被 `build_voice_label_maps` 静默丢掉）。`VolcenginePanel` 只做三件事：下拉快速切换（选中即写 `volcengine_voice_id`/`voice_name` 并通知重建引擎）、添加（同 ID 改名而非新增，且新条目直接生效）、删除（落到剩下第一条，全删光才回「无」）。`set_voices_loaded` 忽略传入的网络结果，始终按本地列表重填。
+因此音色列表由用户**手动维护**并持久化在 `AppSettings.volcengine_voice_list`（`[{"id", "name"}]`，读取时由 `_normalize_voice_entries` 清洗：id 必须非空字符串、同 id 留第一条、缺名用 id 兜底——下拉按名称做标签，没名称的条目会被 `build_voice_label_maps` 静默丢掉）。火山音色**不再单独存 id/name**：列表顺序就是选择，首条即当前生效音色；旧配置里的 `voice_id`/`voice_name` 键加载时直接丢弃。`VolcenginePanel` 只做三件事：下拉快速切换（把选中条目移到首位并通知重建引擎）、添加（同 ID 改名而非新增，新条目排首位直接生效）、删除（落到剩下第一条，全删光才回「无」）。`set_voices_loaded` 忽略传入的网络结果，始终按本地列表重填。
 
 ## 设置窗口玻璃外壳
 

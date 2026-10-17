@@ -203,6 +203,7 @@ def mock_settings() -> MagicMock:
     s.cartesia_voice_name = None
     s.volcengine_voice_id = "test-speaker"
     s.volcengine_voice_name = "Test Speaker"
+    s.volcengine_voice_list = []
     return s
 
 
@@ -472,9 +473,21 @@ class TestTTSManagerVoice:
 
     def test_set_active_voice_volcengine(self, manager, mock_engine, mock_settings):
         manager.set_active_voice("BV001", "Test Voice")
+        # 火山音色只存列表：选中的条目排到首位。
         mock_settings.update.assert_called_with(
-            volcengine_voice_id="BV001", volcengine_voice_name="Test Voice",
+            volcengine_voice_list=[{"id": "BV001", "name": "Test Voice"}],
         )
+        mock_engine.set_voice.assert_called_with("BV001")
+
+    def test_set_active_voice_volcengine_skips_save_when_already_head(
+        self, manager, mock_engine, mock_settings,
+    ):
+        """面板已把选中项排到首位时不再重复落盘。"""
+        mock_settings.volcengine_voice_list = [{"id": "BV001", "name": "Test Voice"}]
+
+        manager.set_active_voice("BV001", "Test Voice")
+
+        mock_settings.update.assert_not_called()
         mock_engine.set_voice.assert_called_with("BV001")
 
     def test_set_active_voice_cartesia(self, mock_settings, mock_player):

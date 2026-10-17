@@ -203,24 +203,25 @@ class TestVolcenginePanelVoiceList:
 
         assert AppSettings.load().volcengine_voice_list == []
 
-    def test_selecting_from_combo_makes_voice_active(self, qapp, mock_state):
-        """下拉切换是「快速切换」的入口：写配置 + 通知重建引擎。"""
+    def test_selecting_from_combo_moves_voice_to_front(self, qapp, mock_state):
+        """下拉切换 = 把选中条目挪到首位；列表顺序就是当前音色。"""
         changes: list[tuple[str, object]] = []
         panel = _build_volcengine_panel(
             mock_state, lambda field, value: changes.append((field, value))
         )
-        panel.new_voice_id.setText("S_abc")
-        panel.new_voice_name.setText("我的复刻音色")
-        panel._on_add_voice()
-        panel.voice_combo.setCurrentText(panel.NONE_VOICE_LABEL)
+        for voice_id, name in (("S_abc", "我的复刻音色"), ("S_def", "备用音色")):
+            panel.new_voice_id.setText(voice_id)
+            panel.new_voice_name.setText(name)
+            panel._on_add_voice()
         changes.clear()
 
         panel.voice_combo.setCurrentText("我的复刻音色")
 
         settings = AppSettings.load()
+        assert [entry["id"] for entry in settings.volcengine_voice_list] == ["S_abc", "S_def"]
         assert settings.volcengine_voice_id == "S_abc"
         assert settings.volcengine_voice_name == "我的复刻音色"
-        assert changes == [("volcengine_voice_id", "S_abc")]
+        assert changes == [("volcengine_voice_list", "S_abc")]
 
     def test_remove_voice_drops_entry_and_clears_active(self, qapp, mock_state):
         panel = _build_volcengine_panel(mock_state)
@@ -266,26 +267,34 @@ class TestVolcenginePanelVoiceList:
         panel._on_add_voice()
 
         settings = AppSettings.load()
+        assert settings.volcengine_voice_list == [{"id": "S_abc", "name": "我的复刻音色"}]
         assert settings.volcengine_voice_id == "S_abc"
         assert settings.volcengine_voice_name == "我的复刻音色"
-        assert changes == [("volcengine_voice_id", "S_abc")]
+        assert changes == [("volcengine_voice_list", "S_abc")]
 
-    def test_remove_without_selection_does_nothing(self, qapp, mock_state):
-        """下拉停在「无」（列表有货但当前没选音色）时，删除不能误删别的条目。"""
-        AppSettings.load().volcengine_voice_list = [{"id": "S_abc", "name": "音色甲"}]
+    def test_remove_from_empty_list_does_nothing(self, qapp, mock_state):
+        """列表为空时下拉只有「无」，删除不能误伤任何条目。"""
         panel = _build_volcengine_panel(mock_state)
         assert panel.voice_combo.currentText() == panel.NONE_VOICE_LABEL
 
         panel._on_remove_voice()
 
-        assert AppSettings.load().volcengine_voice_list == [{"id": "S_abc", "name": "音色甲"}]
+        assert AppSettings.load().volcengine_voice_list == []
+
+    def test_combo_hides_none_option_when_list_has_entries(self, qapp, mock_state):
+        """列表非空时没有「无」可选——首位条目就是当前音色。"""
+        s = AppSettings.load()
+        s.volcengine_voice_list = [{"id": "S_abc", "name": "我的复刻音色"}]
+
+        panel = _build_volcengine_panel(mock_state)
+
+        assert panel.voice_combo.count() == 1
+        assert panel.voice_combo.itemText(0) == "我的复刻音色"
 
     def test_saved_list_repopulates_combo_on_build(self, qapp, mock_state):
         """重启后下拉必须直接可用，用户不必重新录入。"""
         s = AppSettings.load()
         s.volcengine_voice_list = [{"id": "S_abc", "name": "我的复刻音色"}]
-        s.volcengine_voice_id = "S_abc"
-        s.volcengine_voice_name = "我的复刻音色"
 
         panel = _build_volcengine_panel(mock_state)
 

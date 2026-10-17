@@ -121,7 +121,7 @@ class AppSettings:
     tts_providers: dict[str, dict[str, object]] = field(default_factory=lambda: {
         "Cartesia": {"voice_id": None, "voice_name": None, "backend": "Cartesia Bytes",
                       "api_key_set": False, "api_key_storage": "none"},
-        "Volcengine": {"voice_id": None, "voice_name": None, "backend": "Volcengine Streaming",
+        "Volcengine": {"voice_list": [], "backend": "Volcengine Streaming",
                         "api_key_set": False, "api_key_storage": "none"},
     })
     active_tts_provider: str = DEFAULT_TTS_API_PROVIDER
@@ -218,17 +218,16 @@ class AppSettings:
     def cartesia_api_key_storage(self, value: str) -> None: self._set_provider_field("Cartesia", "api_key_storage", value)
 
     # -- Volcengine
+    # 火山音色没有独立的选择字段：列表顺序就是选择，首条即当前音色。
     @property
     def volcengine_voice_id(self) -> str | None:
-        v = self.get_provider("Volcengine").get("voice_id"); return v if isinstance(v, str) else None
-    @volcengine_voice_id.setter
-    def volcengine_voice_id(self, value: str | None) -> None: self._set_provider_field("Volcengine", "voice_id", value)
+        entries = self.volcengine_voice_list
+        return entries[0]["id"] if entries else None
 
     @property
     def volcengine_voice_name(self) -> str | None:
-        v = self.get_provider("Volcengine").get("voice_name"); return v if isinstance(v, str) else None
-    @volcengine_voice_name.setter
-    def volcengine_voice_name(self, value: str | None) -> None: self._set_provider_field("Volcengine", "voice_name", value)
+        entries = self.volcengine_voice_list
+        return entries[0]["name"] if entries else None
 
     @property
     def volcengine_voice_list(self) -> list[dict[str, str]]:
@@ -314,10 +313,14 @@ class AppSettings:
                 if isinstance(provider_data, dict) and provider_name in settings.tts_providers:
                     target = settings.tts_providers[provider_name]
                     # 白名单必须与持久化的 provider 字段保持一致：漏掉的键会被静默丢弃，
-                    # 表现就是「设置里改了、重启后没了」。voice_list 原样搬，读取时由
-                    # volcengine_voice_list 的 getter 统一清洗。
-                    for k in ("voice_id", "voice_name", "backend", "api_key_set",
-                              "api_key_storage", "voice_list"):
+                    # 表现就是「设置里改了、重启后没了」。Volcengine 只认 voice_list，
+                    # 旧的 voice_id/voice_name 不再读入；列表读取时由 getter 统一清洗。
+                    provider_keys = ("backend", "api_key_set", "api_key_storage")
+                    if provider_name == "Volcengine":
+                        provider_keys += ("voice_list",)
+                    else:
+                        provider_keys += ("voice_id", "voice_name")
+                    for k in provider_keys:
                         if k in provider_data:
                             target[k] = provider_data[k]
         # active_tts_provider

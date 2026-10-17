@@ -298,7 +298,7 @@ class VolcenginePanel(_BasePanel):
         self.voice_combo.setMinimumContentsLength(16)
         self.voice_combo.currentTextChanged.connect(self._on_voice_selected)
         sec2.addWidget(self.voice_combo)
-        self._apply_voice_list(AppSettings.load().volcengine_voice_id)
+        self._apply_voice_list()
         parent.addSpacing(12)
 
         # 维护列表
@@ -334,16 +334,20 @@ class VolcenginePanel(_BasePanel):
 
     # ── 音色列表（纯本地） ────────────────────────────────────────────
 
-    def _apply_voice_list(self, selected_id: str | None) -> None:
-        """用本地维护的列表重填下拉，结构对齐 CartesiaPanel 以便窗口统一读取。"""
+    def _apply_voice_list(self, selected_id: str | None = None) -> None:
+        """用本地维护的列表重填下拉；列表首条就是当前音色。"""
         entries: list[dict[str, object]] = [
             {"id": entry["id"], "name": entry["name"]}
             for entry in AppSettings.load().volcengine_voice_list
         ]
+        # 没有独立的选择字段：未显式指定时默认选中列表首条。
+        selected_id = selected_id or (str(entries[0]["id"]) if entries else None)
         maps = build_voice_label_maps(entries, selected_id)
         self.voice_combo.blockSignals(True)
         self.voice_combo.clear()
-        self.voice_combo.addItem(self.NONE_VOICE_LABEL)
+        # 列表非空时没有「无」这一项——首位条目就是当前音色。
+        if not entries:
+            self.voice_combo.addItem(self.NONE_VOICE_LABEL)
         self.voice_combo.addItems(maps.labels)
         self.voice_combo.setCurrentText(maps.selected_label or self.NONE_VOICE_LABEL)
         self.voice_combo.blockSignals(False)
@@ -351,19 +355,19 @@ class VolcenginePanel(_BasePanel):
         self.voice_label_to_name = maps.label_to_name
 
     def _on_voice_selected(self, label: str) -> None:
-        """下拉切换：写入 AppSettings 并通知 overlay 重建引擎。"""
-        settings = AppSettings.load()
-        if label == self.NONE_VOICE_LABEL:
-            settings.volcengine_voice_id = None
-            settings.volcengine_voice_name = None
-            return
+        """下拉切换：把选中条目挪到列表首位并通知 overlay 重建引擎。"""
         voice_id = self.voice_label_to_id.get(label)
         if not voice_id:
             return
-        settings.volcengine_voice_id = voice_id
-        settings.volcengine_voice_name = self.voice_label_to_name.get(label, voice_id)
+        settings = AppSettings.load()
+        entries = settings.volcengine_voice_list
+        settings.volcengine_voice_list = (
+            [entry for entry in entries if entry["id"] == voice_id]
+            + [entry for entry in entries if entry["id"] != voice_id]
+        )
+        self._apply_voice_list(voice_id)
         if self._on_field_changed is not None:
-            self._on_field_changed("volcengine_voice_id", voice_id)
+            self._on_field_changed("volcengine_voice_list", voice_id)
 
     def _on_add_voice(self, _checked: bool = False) -> None:
         """把输入框里的 ID/名称写进列表；同 ID 视为改名而不是新增一条。"""
@@ -373,18 +377,15 @@ class VolcenginePanel(_BasePanel):
             return
         name = self.new_voice_name.text().strip() or voice_id
         settings = AppSettings.load()
-        entries = [e for e in settings.volcengine_voice_list if e["id"] != voice_id]
-        entries.append({"id": voice_id, "name": name})
-        settings.volcengine_voice_list = entries
-        # 新录的音色直接生效：用户填完 ID 就是要用它，不必回下拉里再点一次。
-        settings.volcengine_voice_id = voice_id
-        settings.volcengine_voice_name = name
+        others = [e for e in settings.volcengine_voice_list if e["id"] != voice_id]
+        # 新录的音色直接生效：排到列表首位，列表顺序就是当前音色。
+        settings.volcengine_voice_list = [{"id": voice_id, "name": name}, *others]
         self.new_voice_id.clear()
         self.new_voice_name.clear()
         self._apply_voice_list(voice_id)
         self._status(self.voice_list_status, f"已保存音色：{name}", INPUT_TEXT_COLOR)
         if self._on_field_changed is not None:
-            self._on_field_changed("volcengine_voice_id", voice_id)
+            self._on_field_changed("volcengine_voice_list", voice_id)
 
     def _on_remove_voice(self, _checked: bool = False) -> None:
         """删除当前选中的音色（下拉选中项即生效项），随后落到剩下第一条。
@@ -393,19 +394,18 @@ class VolcenginePanel(_BasePanel):
         """
         voice_id = self.voice_label_to_id.get(self.voice_combo.currentText())
         if not voice_id:
-            self._status(self.voice_list_status, "请先在上面的下拉里选择要删除的音色。", TEXT_WARNING)
+            self._status(self.voice_list_status, "列表为空，没有可删除的音色。", TEXT_WARNING)
             return
         settings = AppSettings.load()
-        settings.volcengine_voice_list = [
+        remaining = [
             e for e in settings.volcengine_voice_list if e["id"] != voice_id
         ]
-        remaining = settings.volcengine_voice_list
-        settings.volcengine_voice_id = remaining[0]["id"] if remaining else None
-        settings.volcengine_voice_name = remaining[0]["name"] if remaining else None
-        self._apply_voice_list(settings.volcengine_voice_id)
+        settings.volcengine_voice_list = remaining
+        active_id = remaining[0]["id"] if remaining else None
+        self._apply_voice_list(active_id)
         self._status(self.voice_list_status, "已从列表删除。", INPUT_TEXT_COLOR)
         if self._on_field_changed is not None:
-            self._on_field_changed("volcengine_voice_id", settings.volcengine_voice_id)
+            self._on_field_changed("volcengine_voice_list", active_id)
 
     # ── handlers ─────────────────────────────────────────────────────
 
@@ -453,7 +453,7 @@ class VolcenginePanel(_BasePanel):
 
     def set_voices_loaded(self, voices: list[dict], selected_voice_id: str | None) -> list[str]:
         """忽略传入的网络结果——Volcengine 的音色始终来自本地维护的列表。"""
-        self._apply_voice_list(selected_voice_id or AppSettings.load().volcengine_voice_id)
+        self._apply_voice_list()
         return list(self.voice_label_to_id.keys())
 
 

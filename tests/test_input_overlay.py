@@ -123,8 +123,6 @@ def _new_cfg() -> AppSettings:
     cfg.cartesia_voice_id = "voice-a"
     cfg.cartesia_voice_name = "Voice A"
     cfg.cartesia_tts_backend = "cartesia-bytes"
-    cfg.volcengine_voice_id = None
-    cfg.volcengine_voice_name = None
     cfg.volcengine_tts_backend = "Volcengine Bytes"
     cfg.volume = 1.0
     cfg.overlay_opacity = 1.0

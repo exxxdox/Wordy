@@ -256,9 +256,15 @@ class TTSManager:
     def set_active_voice(self, voice_id: str, voice_name: str) -> None:
         """更新音色到配置和引擎。"""
         if self.tts_api_provider == TTS_API_PROVIDER_VOLCENGINE:
-            self._settings.update(
-                volcengine_voice_id=voice_id, volcengine_voice_name=voice_name
-            )
+            # 火山音色只存列表：首条即当前音色。面板通常已排好序，避免重复落盘。
+            entries = self._settings.volcengine_voice_list
+            if not entries or entries[0]["id"] != voice_id:
+                self._settings.update(
+                    volcengine_voice_list=[
+                        {"id": voice_id, "name": voice_name},
+                        *[entry for entry in entries if entry["id"] != voice_id],
+                    ]
+                )
         else:
             self._settings.update(
                 cartesia_voice_id=voice_id, cartesia_voice_name=voice_name
