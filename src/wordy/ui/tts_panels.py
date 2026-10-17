@@ -11,8 +11,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout,
+    QHBoxLayout, QLabel, QLineEdit, QPushButton, QSizePolicy, QVBoxLayout,
 )
 
 import wordy.secret
@@ -284,53 +285,90 @@ class VolcenginePanel(_BasePanel):
         sec.addWidget(self.api_status)
         parent.addSpacing(12)
 
-        # 音色切换
+        # 当前音色：选择、完整 ID 与删除放在一起，避免用户在两个分区间来回确认。
         sec2 = self._create_section(parent)
-        sec2.addWidget(self._section_title("音色"))
+        sec2.addWidget(self._section_title("当前音色"))
+        sec2.addWidget(self._hint_label("选择后立即生效；音色列表仅保存在本机。", TEXT_MUTED))
         self.voice_status = self._hint_label("", TEXT_MUTED)
         # 反馈走浮动弹窗队列；这条原地标签只在面板独立使用时出现。
         self.voice_status.setVisible(False)
         sec2.addWidget(self.voice_status)
+        current_row = QHBoxLayout()
+        current_row.setContentsMargins(0, 0, 0, 0)
+        current_row.setSpacing(INLINE_GAP)
         self.voice_combo = NoWheelComboBox()
         self.voice_combo.setSizeAdjustPolicy(
             NoWheelComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
         )
         self.voice_combo.setMinimumContentsLength(16)
         self.voice_combo.currentTextChanged.connect(self._on_voice_selected)
-        sec2.addWidget(self.voice_combo)
-        self._apply_voice_list()
+        current_row.addWidget(self.voice_combo, 1)
+        self.remove_voice_btn = QPushButton("删除当前")
+        self.remove_voice_btn.setObjectName("dangerButton")
+        self.remove_voice_btn.setMinimumWidth(BUTTON_MIN_WIDTH)
+        self.remove_voice_btn.clicked.connect(self._on_remove_voice)
+        current_row.addWidget(self.remove_voice_btn)
+        sec2.addLayout(current_row)
+        self.current_voice_id = QLabel()
+        self.current_voice_id.setObjectName("voiceIdValue")
+        self.current_voice_id.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        # Speaker ID 可能很长；允许标签在窄窗口中换行，不反向撑宽设置窗口。
+        self.current_voice_id.setWordWrap(True)
+        self.current_voice_id.setSizePolicy(
+            QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
+        )
+        sec2.addWidget(self.current_voice_id)
         parent.addSpacing(12)
 
-        # 维护列表
+        # 编辑器
         sec3 = self._create_section(parent)
-        sec3.addWidget(self._section_title("维护音色列表"))
-        sec3.addWidget(self._hint_label(
-            "音色列表保存在本地，不联网查询。填好 Speaker ID 和显示名后点「添加」，"
-            "之后即可在上面的下拉里直接切换。",
-            TEXT_MUTED,
-        ))
+        sec3.addWidget(self._section_title("添加或修改"))
+        id_row = QHBoxLayout()
+        id_row.setContentsMargins(0, 0, 0, 0)
+        id_row.setSpacing(INLINE_GAP)
+        id_label = QLabel("Speaker ID")
+        id_label.setObjectName("fieldLabel")
         self.new_voice_id = QLineEdit()
-        self.new_voice_id.setPlaceholderText("Speaker ID，如 S_xxxx 或 BV001_streaming")
-        sec3.addWidget(self.new_voice_id)
+        self.new_voice_id.setPlaceholderText("S_xxxx 或 BV001_streaming")
+        self.new_voice_id.setClearButtonEnabled(True)
+        id_label.setBuddy(self.new_voice_id)
+        id_row.addWidget(id_label)
+        id_row.addWidget(self.new_voice_id, 1)
+        sec3.addLayout(id_row)
+        name_row = QHBoxLayout()
+        name_row.setContentsMargins(0, 0, 0, 0)
+        name_row.setSpacing(INLINE_GAP)
+        name_label = QLabel("显示名称")
+        name_label.setObjectName("fieldLabel")
         self.new_voice_name = QLineEdit()
-        self.new_voice_name.setPlaceholderText("显示名称，如 我的复刻音色")
-        sec3.addWidget(self.new_voice_name)
+        self.new_voice_name.setPlaceholderText("例如：我的复刻音色（可选）")
+        self.new_voice_name.setClearButtonEnabled(True)
+        name_label.setBuddy(self.new_voice_name)
+        name_row.addWidget(name_label)
+        name_row.addWidget(self.new_voice_name, 1)
+        sec3.addLayout(name_row)
         list_row = QHBoxLayout()
         list_row.setContentsMargins(0, 0, 0, 0)
         list_row.setSpacing(INLINE_GAP)
-        self.add_voice_btn = QPushButton("添加")
+        self.add_voice_btn = QPushButton("添加并使用")
         self.add_voice_btn.setMinimumWidth(BUTTON_MIN_WIDTH)
         self.add_voice_btn.clicked.connect(self._on_add_voice)
-        list_row.addWidget(self.add_voice_btn)
-        self.remove_voice_btn = QPushButton("删除")
-        self.remove_voice_btn.setMinimumWidth(BUTTON_MIN_WIDTH)
-        self.remove_voice_btn.clicked.connect(self._on_remove_voice)
-        list_row.addWidget(self.remove_voice_btn)
         list_row.addStretch(1)
+        list_row.addWidget(self.add_voice_btn)
         sec3.addLayout(list_row)
         self.voice_list_status = self._hint_label("", TEXT_MUTED)
         self.voice_list_status.setVisible(False)
         sec3.addWidget(self.voice_list_status)
+        self.new_voice_id.textChanged.connect(self._sync_voice_editor_action)
+        self.new_voice_id.returnPressed.connect(self._on_add_voice)
+        self.new_voice_name.returnPressed.connect(self._on_add_voice)
+        self._apply_voice_list()
+        active_label = self.voice_combo.currentText()
+        active_id = self.voice_label_to_id.get(active_label)
+        if active_id:
+            self._populate_voice_editor(active_id, self.voice_label_to_name[active_label])
 
     # ── 音色列表（纯本地） ────────────────────────────────────────────
 
@@ -353,6 +391,22 @@ class VolcenginePanel(_BasePanel):
         self.voice_combo.blockSignals(False)
         self.voice_label_to_id = maps.label_to_id
         self.voice_label_to_name = maps.label_to_name
+        active_id = maps.label_to_id.get(maps.selected_label or "")
+        self.current_voice_id.setText(
+            f"Speaker ID  {active_id}" if active_id else "尚未添加音色"
+        )
+        self.remove_voice_btn.setEnabled(active_id is not None)
+
+    def _sync_voice_editor_action(self, raw_voice_id: str) -> None:
+        """明确区分新增与同 ID 改名，避免“添加”文案掩盖覆盖行为。"""
+        voice_id = raw_voice_id.strip()
+        known_ids = {entry["id"] for entry in AppSettings.load().volcengine_voice_list}
+        self.add_voice_btn.setText("保存修改" if voice_id in known_ids else "添加并使用")
+
+    def _populate_voice_editor(self, voice_id: str, name: str) -> None:
+        """把当前条目带入编辑器，避免改名时重新复制精确 ID。"""
+        self.new_voice_id.setText(voice_id)
+        self.new_voice_name.setText(name)
 
     def _on_voice_selected(self, label: str) -> None:
         """下拉切换：把选中条目挪到列表首位并通知 overlay 重建引擎。"""
@@ -366,6 +420,7 @@ class VolcenginePanel(_BasePanel):
             + [entry for entry in entries if entry["id"] != voice_id]
         )
         self._apply_voice_list(voice_id)
+        self._populate_voice_editor(voice_id, self.voice_label_to_name[label])
         if self._on_field_changed is not None:
             self._on_field_changed("volcengine_voice_list", voice_id)
 

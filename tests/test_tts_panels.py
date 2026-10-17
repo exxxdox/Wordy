@@ -150,11 +150,18 @@ class TestVolcenginePanelBuild:
 
     def test_voice_id_input_placeholder(self, qapp, mock_state):
         panel = _build_volcengine_panel(mock_state)
-        assert "Speaker ID" in panel.new_voice_id.placeholderText()
+        assert "BV001_streaming" in panel.new_voice_id.placeholderText()
 
     def test_combo_starts_with_none_entry(self, qapp, mock_state):
         panel = _build_volcengine_panel(mock_state)
         assert panel.voice_combo.currentText() == panel.NONE_VOICE_LABEL
+
+    def test_empty_list_makes_current_state_and_actions_explicit(self, qapp, mock_state):
+        panel = _build_volcengine_panel(mock_state)
+
+        assert panel.current_voice_id.text() == "尚未添加音色"
+        assert not panel.remove_voice_btn.isEnabled()
+        assert panel.add_voice_btn.text() == "添加并使用"
 
 
 class TestVolcenginePanelVoiceList:
@@ -172,6 +179,18 @@ class TestVolcenginePanelVoiceList:
         ]
         assert panel.voice_combo.currentText() == "我的复刻音色"
         assert panel.voice_label_to_id["我的复刻音色"] == "S_abc"
+        assert panel.current_voice_id.text() == "Speaker ID  S_abc"
+        assert panel.remove_voice_btn.isEnabled()
+
+    def test_existing_id_changes_editor_action_to_update(self, qapp, mock_state):
+        panel = _build_volcengine_panel(mock_state)
+        panel.new_voice_id.setText("S_abc")
+        panel.new_voice_name.setText("我的复刻音色")
+        panel._on_add_voice()
+
+        panel.new_voice_id.setText("S_abc")
+
+        assert panel.add_voice_btn.text() == "保存修改"
 
     def test_add_voice_with_same_id_updates_in_place(self, qapp, mock_state):
         """同 ID 重填名称是「改」，不是再插一条。"""
@@ -222,6 +241,10 @@ class TestVolcenginePanelVoiceList:
         assert settings.volcengine_voice_id == "S_abc"
         assert settings.volcengine_voice_name == "我的复刻音色"
         assert changes == [("volcengine_voice_list", "S_abc")]
+        assert panel.current_voice_id.text() == "Speaker ID  S_abc"
+        assert panel.new_voice_id.text() == "S_abc"
+        assert panel.new_voice_name.text() == "我的复刻音色"
+        assert panel.add_voice_btn.text() == "保存修改"
 
     def test_remove_voice_drops_entry_and_clears_active(self, qapp, mock_state):
         panel = _build_volcengine_panel(mock_state)
@@ -254,6 +277,8 @@ class TestVolcenginePanelVoiceList:
         assert [entry["id"] for entry in settings.volcengine_voice_list] == ["S_def"]
         assert settings.volcengine_voice_id == "S_def"
         assert panel.voice_combo.currentText() == "音色乙"
+        assert panel.current_voice_id.text() == "Speaker ID  S_def"
+        assert panel.remove_voice_btn.isEnabled()
 
     def test_add_voice_makes_it_active_and_notifies(self, qapp, mock_state):
         """新填的音色直接生效并通知重建引擎。"""
@@ -300,6 +325,8 @@ class TestVolcenginePanelVoiceList:
 
         assert panel.voice_combo.currentText() == "我的复刻音色"
         assert panel.voice_label_to_id["我的复刻音色"] == "S_abc"
+        assert panel.new_voice_id.text() == "S_abc"
+        assert panel.new_voice_name.text() == "我的复刻音色"
 
     def test_set_voices_loaded_uses_local_list(self, qapp, mock_state):
         """Volcengine 不联网拉取：忽略传入的网络结果，始终按本地列表重填。"""

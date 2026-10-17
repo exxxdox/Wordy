@@ -120,6 +120,18 @@ def build_settings_stylesheet(font_stack: str | None = None) -> str:
             font-size: 12px;
             border: none;
         }}
+        QLabel#fieldLabel {{
+            color: {TEXT_MUTED};
+            min-width: 72px;
+            font-size: 12px;
+            border: none;
+        }}
+        QLabel#voiceIdValue {{
+            color: {TEXT_MUTED};
+            font-size: 12px;
+            border: none;
+            padding: 1px 2px;
+        }}
         QLabel#settingValue {{
             background: {accent_soft};
             color: {GREEN_ACCENT};
@@ -254,6 +266,15 @@ def build_settings_stylesheet(font_stack: str | None = None) -> str:
             background: {GLASS_SHEEN};
             border: 1px solid transparent;
             color: {TEXT_MUTED};
+        }}
+        QPushButton#dangerButton {{
+            background: transparent;
+            color: {TEXT_MUTED};
+        }}
+        QPushButton#dangerButton:hover {{
+            background: {rgba(TEXT_ERROR, 35)};
+            border-color: {rgba(TEXT_ERROR, 100)};
+            color: {TEXT_ERROR};
         }}
         /* 退出按钮是最次要的动作：默认没有底色，悬停时才浮起一层玻璃。 */
         QPushButton#cancelButton {{

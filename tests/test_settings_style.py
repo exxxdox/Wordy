@@ -40,6 +40,7 @@ class TestBuildSettingsStylesheet:
     def test_contains_button_selectors(self):
         css = build_settings_stylesheet()
         assert "QPushButton" in css
+        assert "QPushButton#dangerButton:hover" in css
 
     def test_apply_button_style_is_removed(self):
         """底部只有退出按钮，样式表不应保留无人使用的应用按钮规则。"""
