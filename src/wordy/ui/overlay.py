@@ -426,21 +426,24 @@ class InputOverlay:
                 self.hide()
 
     def _register_hotkey(self) -> None:
-        self._unregister_hotkey()
+        if not self._unregister_hotkey():
+            raise RuntimeError("旧全局快捷键线程未能停止")
         from wordy.hotkey import NativeHotkeyListener
         hotkey_listener = NativeHotkeyListener(self._cfg.hotkey, self._cfg.name, self._on_global_hotkey)
         self._hotkey_listener = hotkey_listener
         hotkey_listener.start()
 
-    def _unregister_hotkey(self) -> None:
+    def _unregister_hotkey(self) -> bool:
         if self._hotkey_listener is None:
-            return
+            return True
         try:
-            self._hotkey_listener.stop()
+            if not self._hotkey_listener.stop():
+                return False
         except Exception as e:
             logger.warning("注销全局快捷键 %s 失败: %s", self._cfg.name, e)
-        finally:
-            self._hotkey_listener = None
+            return False
+        self._hotkey_listener = None
+        return True
 
     def _on_global_hotkey(self) -> None:
         if self._recording_hotkey:
@@ -851,9 +854,12 @@ class InputOverlay:
             return applied
 
         elif field_name == "mic_input_device":
-            if self.on_audio_route_change:
+            applied = (
                 self.on_audio_route_change({"mic_input_device": value if isinstance(value, str) else None})
+                if self.on_audio_route_change else True
+            )
             self._refresh_mic_listen_status()
+            return applied
 
         elif field_name == "sidetone_enabled":
             if self.on_sidetone_change:

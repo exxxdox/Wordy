@@ -245,13 +245,13 @@ def test_tts_backend_config_fallback(tmp_path: Path):
     s3 = AppSettings.load(config_file=tmp_path / "nonexistent.toml")
     assert s3.tts_backend == DEFAULT_TTS_BACKEND
 
-    # Non-string backend stored as-is (dict doesn't validate types)
+    # Provider backend 不允许跨服务商或未知值。
     cfg3 = tmp_path / "config3.toml"
     s4 = AppSettings.load(config_file=cfg3)
     s4.cartesia_tts_backend = "123"  # type: ignore[assignment]
     s4.flush()
     s5 = AppSettings.load(config_file=cfg3)
-    assert s5.cartesia_tts_backend == "123"
+    assert s5.cartesia_tts_backend != "123"
 
     # Invalid string in old flat format → ignored
     cfg4 = tmp_path / "config4.toml"
@@ -301,11 +301,22 @@ def test_load_missing_file(tmp_path: Path):
 
 
 def test_load_invalid_toml(tmp_path: Path):
-    """AppSettings.load() returns defaults with invalid TOML."""
+    """损坏配置不能被当成缺失文件，避免随后覆盖仍可恢复的内容。"""
     cfg = tmp_path / "bad.toml"
-    cfg.write_text("not valid toml {{[\n", encoding="utf-8")
-    s = AppSettings.load(config_file=cfg)
-    assert s.hotkey == "f6"  # defaults
+    original = "not valid toml {{[\n"
+    cfg.write_text(original, encoding="utf-8")
+    with pytest.raises(RuntimeError, match="无法读取配置文件"):
+        AppSettings.load(config_file=cfg)
+    assert cfg.read_text(encoding="utf-8") == original
+
+
+@pytest.mark.parametrize("field", ["volume", "overlay_opacity"])
+@pytest.mark.parametrize("value", ["nan", "inf", "-inf"])
+def test_load_non_finite_float_uses_default(tmp_path: Path, field: str, value: str):
+    cfg = tmp_path / f"{field}-{value}.toml"
+    cfg.write_text(f"{field} = {value}\n", encoding="utf-8")
+    settings = AppSettings.load(config_file=cfg)
+    assert getattr(settings, field) == getattr(AppSettings(), field)
 
 
 def test_load_non_dict_toml(tmp_path: Path):

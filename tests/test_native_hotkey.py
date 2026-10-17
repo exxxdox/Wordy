@@ -143,11 +143,14 @@ def test_stop_logs_warning_on_join_timeout():
 
     # Check that we get a warning when stopping
     with patch.object(logging.getLogger('wordy.hotkey.native'), 'warning') as mock_warn:
-        listener.stop()
+        assert listener.stop() is False
         assert mock_warn.called
         warning_messages = [call.args[0] for call in mock_warn.call_args_list]
         assert any("did not exit within 2 seconds" in msg for msg in warning_messages)
 
     # Clean up
+    assert listener._thread is fake_thread
+    assert listener._thread_id == 12345
     running_event.clear()
     fake_thread.join(timeout=1)
+    assert listener.stop() is True

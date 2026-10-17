@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from wordy._toml_serializer import _is_inline_table, _toml_value, read_toml, to_toml, write_toml_atomic
+from wordy._toml_serializer import TomlReadError, _is_inline_table, _toml_value, read_toml, to_toml, write_toml_atomic
 
 
 class TestReadToml:
@@ -19,10 +19,11 @@ class TestReadToml:
         p.write_text("", encoding="utf-8")
         assert read_toml(p) == {}
 
-    def test_returns_none_for_invalid_toml(self, tmp_path: Path):
+    def test_raises_for_invalid_toml(self, tmp_path: Path):
         p = tmp_path / "bad.toml"
         p.write_text("{{{", encoding="utf-8")
-        assert read_toml(p) is None
+        with pytest.raises(TomlReadError):
+            read_toml(p)
 
     def test_toml_table_array_parsed_as_dict(self, tmp_path: Path):
         """[[items]] 被 tomllib 解析为 dict（非 list），read_toml 通过。"""

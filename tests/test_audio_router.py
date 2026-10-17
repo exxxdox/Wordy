@@ -3,11 +3,27 @@
 
 """audio_router 模块单元测试。"""
 
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 import pytest
 
 from wordy.audio.router import AudioRouter
+
+
+def test_listen_recovery_journal_restores_and_clears(tmp_path, monkeypatch):
+    import wordy.audio.router as router_module
+    from wordy.audio.listen_policy import ListenPolicyState
+
+    journal = tmp_path / "listen-policy.json"
+    monkeypatch.setattr(router_module, "_journal_path", lambda: journal)
+    original = ListenPolicyState(enabled=True, output_id="render-id")
+    router_module._write_listen_journal("Mic", original)
+
+    with patch("wordy.audio.listen_policy.restore_listen_policy", return_value=True) as restore:
+        assert router_module._recover_listen_journal() is True
+
+    restore.assert_called_once_with("Mic", original)
+    assert not journal.exists()
 
 
 class TestAudioRouter:
@@ -92,8 +108,8 @@ class TestAudioRouter:
         assert router._mic_device == "Old Mic"
         assert router.get_stats().listen_configured is True
 
-    def test_switch_mic_no_rollback_when_new_enable_fails(self):
-        """新设备 _enable_mic_listen 失败时不回滚旧侦听，仅记录错误。"""
+    def test_switch_mic_rolls_back_when_new_enable_fails(self):
+        """新设备启用失败时保留旧选择，并向调用方报告失败。"""
         router = AudioRouter(virtual_output="CABLE Input")
         router._active = True
         router._mic_device = "Old Mic"
@@ -105,12 +121,10 @@ class TestAudioRouter:
         ):
             ok = router.set_mic_device("New Mic")
 
-        # 不因新设备启用失败而返回 False
-        assert ok is True
+        assert ok is False
         disable.assert_called_once_with("Old Mic")
-        enable.assert_called_once_with("New Mic")
-        # _mic_device 已更新为新设备，但侦听未生效
-        assert router._mic_device == "New Mic"
+        assert enable.call_args_list == [call("New Mic"), call("Old Mic")]
+        assert router._mic_device == "Old Mic"
         assert router.get_stats().listen_configured is False
 
     def test_switch_mic_no_op_when_same_device(self):

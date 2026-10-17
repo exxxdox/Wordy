@@ -20,15 +20,13 @@ import wordy.secret
 from wordy.secret import KeyringUnavailableError
 from wordy.routing_controller import RoutingController
 from wordy.tts.constants import (
-    DEFAULT_TTS_BACKEND,
     TTS_API_PROVIDER_VOLCENGINE,
     TTS_BACKEND_CARTESIA_BYTES,
     TTS_BACKEND_CARTESIA_REALTIME,
     TTS_BACKEND_VOLCENGINE_STREAMING,
-    TTS_BACKENDS,
+    TTS_BACKENDS_BY_PROVIDER,
 )
 from wordy.tts.engine import TTSAudioPlayer
-from wordy.tts.registry import resolve_tts_backend
 from wordy.tts_manager import TTSManager
 from wordy.ui.overlay import InputOverlay
 from wordy.ui.tray import TrayApp
@@ -63,7 +61,7 @@ class WordyApp:
     WordyApp 只负责组件装配、UI 回调接线和关机编排。
     """
 
-    def __init__(self, tts_backend: str | None = None):
+    def __init__(self):
         self._settings = AppSettings.load()
 
         # ── 音频播放器 ──────────────────────────────────────────────────
@@ -84,7 +82,7 @@ class WordyApp:
         )
         self.cartesia_api_key = self._load_cartesia_api_key()
         self.volcengine_access_key = self._load_volcengine_access_key()
-        self.tts_backend = self._resolve_active_tts_backend(tts_backend)
+        self.tts_backend = self._resolve_active_tts_backend()
 
         # ── TTS Manager ────────────────────────────────────────────────
         self.tts_manager = TTSManager(
@@ -178,25 +176,24 @@ class WordyApp:
                 return None
             raise RuntimeError("Volcengine access key 读取失败") from exc
 
-    def _resolve_active_tts_backend(self, cli_backend: str | None) -> str:
-        """解析生效的 TTS 后端（CLI > 配置 > 默认）。"""
-        if cli_backend is not None:
-            return resolve_tts_backend(cli_backend)
+    def _resolve_active_tts_backend(self) -> str:
+        """按当前服务商解析已校验的 TTS 后端。"""
+        allowed = TTS_BACKENDS_BY_PROVIDER[self.tts_api_provider]
         if self.tts_api_provider == TTS_API_PROVIDER_VOLCENGINE:
             configured = getattr(
                 self._settings, "volcengine_tts_backend", None
             )
-            if configured and configured in TTS_BACKENDS:
+            if configured and configured in allowed:
                 return configured
-            return TTS_BACKEND_VOLCENGINE_STREAMING
+            return allowed[0]
         configured = getattr(self._settings, "cartesia_tts_backend", None)
-        if configured and configured in TTS_BACKENDS:
+        if configured and configured in allowed:
             return configured
         # 兼容旧配置文件中的旧常量值（如 "cartesia-bytes" → "Cartesia Bytes"）
         fallback = getattr(self._settings, "tts_backend", None)
-        if fallback and fallback in TTS_BACKENDS:
+        if fallback and fallback in allowed:
             return fallback
-        return DEFAULT_TTS_BACKEND
+        return allowed[0]
 
     # ── 音频播放器 ────────────────────────────────────────────────────────
 
@@ -210,7 +207,7 @@ class WordyApp:
 
     def _on_submit(self, text: str) -> None:
         """用户提交文本 → TTSManager 串行播放。"""
-        self.tts_manager.speak(text)
+        self.tts_manager.speak(text, on_error=self._on_chat_wheel_error)
 
     def _on_voice_change(self, voice_id: str, voice_name: str) -> None:
         """音色变更 → 写配置 + 更新引擎。"""
@@ -323,7 +320,10 @@ class WordyApp:
             # QApplication 已创建后才分配轮盘；退出先注销热键，阻止延迟事件重开。
             self._chat_wheel_controller = ChatWheelController(
                 self._settings, self.tts_manager.play_audio_file, self._on_chat_wheel_error,
-                self._on_chat_wheel_playback_finished, self.tts_manager.speak)
+                self._on_chat_wheel_playback_finished,
+                lambda text, done: self.tts_manager.speak(
+                    text, done, self._on_chat_wheel_error
+                ))
             try:
                 self._chat_wheel_controller.start()
             except (ValueError, RuntimeError, OSError) as error:

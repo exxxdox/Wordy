@@ -15,15 +15,19 @@ import tomllib
 from pathlib import Path
 
 
+class TomlReadError(RuntimeError):
+    """现有配置无法读取；调用方不得把它当成缺失文件覆盖。"""
+
+
 def read_toml(path: Path) -> dict[str, object] | None:
-    """读取并校验 TOML 文件，失败返回 None。"""
+    """读取 TOML；只有文件确实不存在时返回 None。"""
     if not path.exists():
         return None
     try:
         with path.open("rb") as f:
             data: object = tomllib.load(f)
-    except (OSError, tomllib.TOMLDecodeError):
-        return None
+    except (OSError, tomllib.TOMLDecodeError) as error:
+        raise TomlReadError(f"无法读取配置文件 {path.name}：{error}") from error
     if not isinstance(data, dict):
         return None
     return {str(k): v for k, v in data.items()}

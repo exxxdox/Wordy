@@ -112,18 +112,25 @@ class SystemAudioRecorder:
 
         self._api = instance
         self._stream = stream
-        self._channels = channels
-        self._rate = rate
-        self._chunks = []
-        self._stop_event.clear()
-        self._started_at = time.monotonic()
-        self._final_elapsed = 0.0
-        self._path = _create_temp_path()
-        self._thread = threading.Thread(
-            target=self._capture, name="ChatWheelRecord", daemon=True,
-        )
-        self._thread.start()
-        _ACTIVE = self
+        try:
+            self._channels = channels
+            self._rate = rate
+            self._chunks = []
+            self._stop_event.clear()
+            self._started_at = time.monotonic()
+            self._final_elapsed = 0.0
+            self._path = _create_temp_path()
+            self._thread = threading.Thread(
+                target=self._capture, name="ChatWheelRecord", daemon=True,
+            )
+            self._thread.start()
+            _ACTIVE = self
+        except Exception as error:
+            # 流已打开后的任何初始化失败都必须释放设备，否则只能靠重启恢复录音。
+            self._thread = None
+            self._release_device()
+            self._discard_path()
+            raise RecordingError(f"无法启动系统声音录制：{error}") from error
 
     def stop(self) -> Path:
         """结束录制并返回临时 WAV；内容不足时抛 ``RecordingError`` 并丢弃临时文件。"""

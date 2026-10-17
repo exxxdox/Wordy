@@ -97,12 +97,14 @@ class _SettingsDialog(QDialog):
         return watched is self or self.isAncestorOf(watched)
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        if not self._owner._handle_dialog_close():
+            event.ignore()
+            return
         if self._application_event_filter_installed:
             app = QApplication.instance()
             if app is not None:
                 app.removeEventFilter(self)
             self._application_event_filter_installed = False
-        self._owner._handle_dialog_close()
         event.accept()
 
     def keyPressEvent(self, event: QKeyEvent) -> None:

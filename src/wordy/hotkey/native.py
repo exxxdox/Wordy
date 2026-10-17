@@ -218,8 +218,8 @@ class NativeHotkeyListener:
             self.stop()
             raise RuntimeError(f"注册全局快捷键 {self.name} 超时")
 
-    def stop(self) -> None:
-        """停止热键消息线程。"""
+    def stop(self) -> bool:
+        """停止热键消息线程；超时保留句柄，让调用方仍可重试。"""
         # 退出由 WM_QUIT 和 join 确认，无读取方的额外停止 Event 不承担同步。
         if self._thread_id and _is_windows():
             try:
@@ -235,8 +235,10 @@ class NativeHotkeyListener:
                     "after posting WM_QUIT. The thread is still running and will "
                     "be left as a daemon thread.", self.name
                 )
+                return False
         self._thread = None
         self._thread_id = 0
+        return True
 
     def _raise_last_error(self, prefix: str) -> None:
         error_code = ctypes.get_last_error()

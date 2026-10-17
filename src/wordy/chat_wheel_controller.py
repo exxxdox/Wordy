@@ -64,12 +64,17 @@ class ChatWheelController(QObject):
             object.__setattr__(self.settings, "chat_wheel_hotkey", previous_hotkey)
             listener.stop()
             raise
+        if previous is not None and not previous.stop():
+            try:
+                self.settings.chat_wheel_hotkey = previous_hotkey
+            except Exception:
+                object.__setattr__(self.settings, "chat_wheel_hotkey", previous_hotkey)
+            listener.stop()
+            raise RuntimeError("旧聊天轮盘快捷键线程未能停止")
         self._listener = listener
         self._binding = binding
         self._key_code = binding[1]
         self.wheel.cancel()
-        if previous is not None:
-            previous.stop()
 
     def _open(self) -> None:
         if self._stopped:
@@ -116,5 +121,5 @@ class ChatWheelController(QObject):
         self._stopped = True
         self.wheel.cancel()
         if self._listener is not None:
-            self._listener.stop()
-            self._listener = None
+            if self._listener.stop():
+                self._listener = None

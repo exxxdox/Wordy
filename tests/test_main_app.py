@@ -522,9 +522,9 @@ def test_on_submit_with_voice_queues_through_executor(app):
     assert len(app.tts_manager._executor.submissions) == 1
     fn, args, kwargs = app.tts_manager._executor.submissions[0]
     assert fn == app.tts_manager._generate_and_play
-    assert args == ("hello world",)
-    assert kwargs == {"engine": app.tts_manager.engine, "ready": app.tts_manager._worker_ready,
-                      "backend": app.tts_manager.tts_backend, "on_finished": None}
+    assert len(args) == 1 and args[0].text == "hello world"
+    assert args[0].engine is app.tts_manager.engine
+    assert kwargs == {}
     # FakeExecutor runs synchronously, so speak was invoked.
     assert app.tts_manager.engine.speak_calls == ["hello world"]
 
@@ -564,7 +564,7 @@ def test_backend_switch_enqueues_old_worker_without_inline_cleanup(app, monkeypa
     old_executor.shutdown = tracked_shutdown  # type: ignore[assignment]
     old_engine.close = tracked_close  # type: ignore[assignment]
 
-    monkeypatch.setattr("wordy.tts_manager.resolve_tts_backend", lambda name: TTS_BACKEND_CARTESIA_REALTIME)
+    monkeypatch.setattr("wordy.tts_manager.resolve_tts_backend", lambda name, provider=None: TTS_BACKEND_CARTESIA_REALTIME)
     monkeypatch.setattr("wordy.tts_manager.create_tts_engine", lambda *a, **kw: new_engine)
 
     observed_queue: queue.Queue = queue.Queue()
@@ -611,7 +611,7 @@ def test_backend_switch_enqueues_old_worker_without_inline_cleanup(app, monkeypa
 def test_backend_switch_submit_after_switch_uses_new_engine_and_executor(app, monkeypatch):
     """After a backend switch, _on_submit must route work to the NEW engine and the NEW executor."""
     new_engine = FakeTTSEngine(voice_id="fake-voice")
-    monkeypatch.setattr("wordy.tts_manager.resolve_tts_backend", lambda name: TTS_BACKEND_CARTESIA_REALTIME)
+    monkeypatch.setattr("wordy.tts_manager.resolve_tts_backend", lambda name, provider=None: TTS_BACKEND_CARTESIA_REALTIME)
     monkeypatch.setattr("wordy.tts_manager.create_tts_engine", lambda *a, **kw: new_engine)
 
     app.tts_manager._janitor_queue = queue.Queue()
@@ -631,9 +631,9 @@ def test_backend_switch_submit_after_switch_uses_new_engine_and_executor(app, mo
     assert len(new_executor.submissions) == 1
     fn, args, kwargs = new_executor.submissions[0]
     assert fn == app.tts_manager._generate_and_play
-    assert args == ("after-switch",)
-    assert kwargs == {"engine": app.tts_manager.engine, "ready": app.tts_manager._worker_ready,
-                      "backend": app.tts_manager.tts_backend, "on_finished": None}
+    assert len(args) == 1 and args[0].text == "after-switch"
+    assert args[0].engine is new_engine
+    assert kwargs == {}
     assert new_engine.speak_calls == ["after-switch"]
 
 
@@ -641,7 +641,7 @@ def test_backend_switch_no_op_when_same_backend(app, monkeypatch):
     """Switching to the same backend should be a no-op and not touch the executor or janitor queue."""
     old_engine = app.tts_manager.engine
     old_executor = app.tts_manager._executor
-    monkeypatch.setattr("wordy.tts_manager.resolve_tts_backend", lambda name: TTS_BACKEND_CARTESIA_BYTES)
+    monkeypatch.setattr("wordy.tts_manager.resolve_tts_backend", lambda name, provider=None: TTS_BACKEND_CARTESIA_BYTES)
 
     observed_queue: queue.Queue = queue.Queue()
     assert hasattr(app.tts_manager, "_janitor_queue"), (
@@ -1543,7 +1543,7 @@ def test_backend_switch_engine_build_failure_does_not_double_retire(app, monkeyp
     def failing_create_worker():
         raise RuntimeError("worker build failed")
 
-    monkeypatch.setattr("wordy.tts_manager.resolve_tts_backend", lambda name: TTS_BACKEND_CARTESIA_REALTIME)
+    monkeypatch.setattr("wordy.tts_manager.resolve_tts_backend", lambda name, provider=None: TTS_BACKEND_CARTESIA_REALTIME)
     monkeypatch.setattr(app.tts_manager, "_create_worker", failing_create_worker)
 
     with pytest.raises(RuntimeError, match="worker build failed"):

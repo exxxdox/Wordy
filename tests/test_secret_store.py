@@ -61,6 +61,11 @@ class TestKeyringSuccessPath:
         assert status.backend == secret_store.STORAGE_NONE
         assert secret_store.load_cartesia_api_key() is None
 
+    def test_delete_failure_is_reported(self, fake_keyring) -> None:
+        fake_keyring.fail_on_delete = True
+        with pytest.raises(secret_store.SecretStoreError, match="delete secret"):
+            secret_store.delete_cartesia_api_key()
+
     def test_api_key_status_reports_key_present(self, fake_keyring) -> None:
         secret_store.save_cartesia_api_key("sk-test-status")
         s = secret_store.get_cartesia_api_key_status()

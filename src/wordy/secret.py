@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import keyring
+from keyring.errors import PasswordDeleteError
 
 SERVICE_NAME = "Wordy"
 CARTESIA_USERNAME = "cartesia_api_key"
@@ -65,12 +66,16 @@ def save_api_key(username: str, value: str) -> StorageStatus:
 
 def delete_api_key(username: str) -> StorageStatus:
     """从 keyring 删除密钥。"""
-    if _keyring_available():
+    available = _keyring_available()
+    if available:
         try:
             keyring.delete_password(SERVICE_NAME, username)
-        except Exception:
+        except PasswordDeleteError:
+            # 删除不存在的凭据已经达到目标；其他后端错误不能伪装成成功。
             pass
-    return StorageStatus(backend=STORAGE_NONE, has_key=False, keyring_available=_keyring_available())
+        except Exception as exc:
+            raise SecretStoreError("Failed to delete secret from keyring") from exc
+    return StorageStatus(backend=STORAGE_NONE, has_key=False, keyring_available=available)
 
 
 def get_api_key_status(username: str) -> dict[str, bool | str]:

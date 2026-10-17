@@ -272,22 +272,30 @@ class SettingsWindow:
         else:
             queue.clear()
 
-    def _handle_dialog_close(self) -> None:
+    def _handle_dialog_close(self) -> bool:
         if self._closing:
-            return
+            return False
         self._closing = True
         try:
             if not self._closed:
-                try:
-                    # 先收起窗口，再由唯一关闭路径保存；避免双重 fsync 延迟关闭反馈。
+                # 预热实例从头到尾没改过配置，丢弃它不值得再写一次盘。
+                if not self._prewarmed:
                     if self.window is not None:
                         self.window.hide()
-                    # 预热实例从头到尾没改过配置，丢弃它不值得再写一次盘。
-                    if not self._prewarmed:
+                    try:
                         self._settings.flush()  # 确保 debounce 写入完成
+                    except Exception as error:
+                        if self.window is not None:
+                            self.window.show()
+                        self.set_status(f"设置保存失败：{error}", TEXT_ERROR)
+                        return False
+                try:
+                    if self.window is not None and self._prewarmed:
+                        self.window.hide()
                     self.on_close()
                 finally:
                     self._closed = True
+            return True
         finally:
             self._closing = False
 
@@ -738,8 +746,15 @@ class SettingsWindow:
 
     def _on_mic_input_selected(self, text: str) -> None:
         device = None if text == self.MIC_NONE_LABEL else (text if text else None)
+        old_device = self._settings.mic_input_device
+        if self.on_field_changed("mic_input_device", device) is False:
+            # 运行态拒绝切换时不能把失败选择写入配置，否则重启后仍会重试坏状态。
+            self.mic_input_combo.blockSignals(True)
+            self.mic_input_combo.setCurrentText(old_device or self.MIC_NONE_LABEL)
+            self.mic_input_combo.blockSignals(False)
+            self.set_status("麦克风侦听切换失败，已保留原设备。", TEXT_ERROR)
+            return
         self._settings.mic_input_device = device  # auto-save
-        self.on_field_changed("mic_input_device", device)
         self._update_mic_listen_status(self._settings, self._state)
 
     def _update_mic_listen_status(self, s: AppSettings, state: SettingsState | None) -> None:

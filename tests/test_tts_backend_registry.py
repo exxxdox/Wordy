@@ -20,7 +20,11 @@ except ImportError:
     sys.modules['requests'] = DummyModule()
 
 from wordy.tts.registry import resolve_tts_backend, create_tts_engine
-from wordy.tts.constants import DEFAULT_TTS_BACKEND
+from wordy.tts.constants import (
+    DEFAULT_TTS_BACKEND,
+    TTS_API_PROVIDER_CARTESIA,
+    TTS_BACKEND_CARTESIA_BYTES,
+)
 from wordy.tts.engine import BackendTTSEngine, TTSAudioPlayer
 
 
@@ -56,6 +60,11 @@ def test_resolve_tts_backend_valid():
     """Test that valid backend returns itself."""
     from wordy.tts.constants import TTS_BACKEND_CARTESIA_BYTES
     assert resolve_tts_backend(TTS_BACKEND_CARTESIA_BYTES) == TTS_BACKEND_CARTESIA_BYTES
+
+
+def test_resolve_tts_backend_rejects_backend_from_other_provider():
+    with pytest.raises(ValueError, match="Cartesia"):
+        resolve_tts_backend(DEFAULT_TTS_BACKEND, TTS_API_PROVIDER_CARTESIA)
 
 
 def test_resolve_tts_backend_invalid_raises():
@@ -97,7 +106,7 @@ def test_create_tts_engine_creates_correct_instance(monkeypatch):
     assert engine.volume == 0.8
 
 
-@pytest.mark.parametrize("api_key, provider_key, expected_key", [(None, None, None), ("fallback", None, "fallback"), ("fallback", "provider", "provider")])
+@pytest.mark.parametrize("api_key, provider_key, expected_key", [(None, None, None), ("cartesia-secret", None, None), ("cartesia-secret", "provider", "provider")])
 def test_create_tts_engine_resolves_default(monkeypatch, api_key, provider_key, expected_key):
     """Test that None backend resolves to default before creation."""
     fake_audio_player = Mock(spec=TTSAudioPlayer)

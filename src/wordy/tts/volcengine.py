@@ -183,6 +183,7 @@ class VolcengineStreamingTTS(BackendTTSEngine):
         )
 
         logger.debug("发送 Volcengine SSE 流式 TTS，文本长度: %d 字符", len(text))
+        response = None
         try:
             response = requests.post(
                 TTS_SSE_URL, json=payload, headers=headers,
@@ -219,6 +220,8 @@ class VolcengineStreamingTTS(BackendTTSEngine):
             logger.debug("Volcengine SSE 完成: %d 音频块, %d bytes", chunk_count, total_bytes)
             return chunk_count > 0
         finally:
+            if response is not None:
+                response.close()
             self.audio_player.close_stream()
 
     def speak(self, text: str) -> bool:

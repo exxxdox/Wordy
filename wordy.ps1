@@ -54,7 +54,8 @@ try {
         'build' {
             $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
             Write-Host '[INFO] Syncing dependencies...'
-            Invoke-Uv sync --group dev
+            # 发布必须严格使用已提交的锁文件，避免 CI 现场重解依赖。
+            Invoke-Uv sync --locked --group dev
 
             # 保留原打包显式导入和资源列表，合并入口不改变发布产物。
             $hiddenImports = @(

@@ -10,15 +10,68 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import os
+import tempfile
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, TypedDict
 
 import sounddevice as sd
 
 from wordy.audio.driver import VBCableDriverManager
+from wordy.paths import config_directory
 
 logger = logging.getLogger(__name__)
+_LISTEN_JOURNAL = "listen_policy_recovery.json"
+
+
+def _journal_path() -> Path:
+    return config_directory() / _LISTEN_JOURNAL
+
+
+def _write_listen_journal(device: str, state: Any) -> None:
+    """修改系统策略前落盘，保证进程异常退出后仍能恢复。"""
+    path = _journal_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(dir=path.parent, prefix=".listen_", suffix=".json")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as file:
+            json.dump({"device": device, "enabled": state.enabled, "output_id": state.output_id}, file)
+            file.flush()
+            os.fsync(file.fileno())
+        os.replace(temporary, path)
+    except Exception:
+        Path(temporary).unlink(missing_ok=True)
+        raise
+
+
+def _clear_listen_journal() -> None:
+    _journal_path().unlink(missing_ok=True)
+
+
+def _recover_listen_journal() -> bool:
+    path = _journal_path()
+    if not path.is_file():
+        return True
+    try:
+        from wordy.audio.listen_policy import ListenPolicyState, restore_listen_policy
+
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        device = raw["device"]
+        enabled = raw["enabled"]
+        output_id = raw.get("output_id")
+        if (not isinstance(device, str) or not isinstance(enabled, bool)
+                or output_id is not None and not isinstance(output_id, str)):
+            raise ValueError("invalid listen recovery journal")
+        state = ListenPolicyState(enabled=enabled, output_id=output_id)
+        if restore_listen_policy(device, state):
+            _clear_listen_journal()
+            return True
+    except Exception:
+        logger.exception("恢复上次异常退出遗留的麦克风侦听状态失败")
+    return False
 
 
 class RouterOutputDevice(TypedDict):
@@ -48,6 +101,7 @@ class AudioRouter:
     """
 
     def __init__(self, virtual_output: str | None = None):
+        _recover_listen_journal()
         self.virtual_output = virtual_output or VBCableDriverManager.get_status().get("output_device_name")
         self._active = False
         self._mic_device: str | None = None
@@ -120,8 +174,15 @@ class AudioRouter:
         if self._active and device_name is not None:
             self._listen_configured = self._enable_mic_listen(device_name)
             if not self._listen_configured:
-                # 不回滚旧侦听——旧设备已正确恢复，新设备只是未开启侦听。
                 logger.error("麦克风被侦听失败，新设备未生效: %s", device_name)
+                if self._listen_original_device == device_name:
+                    # 新设备恢复仍失败时保留其快照，stop() 才能继续重试。
+                    self._listen_configured = True
+                    return False
+                self._mic_device = old
+                if old is not None:
+                    self._listen_configured = self._enable_mic_listen(old)
+                return False
 
         if device_name is not None:
             logger.debug("麦克风侦听已切换: %s → %s", old, device_name)
@@ -132,7 +193,7 @@ class AudioRouter:
     def _enable_mic_listen(self, mic_name: str) -> bool:
         """使用 WASAPI 的 VB-CABLE 名称配置 Windows Core Audio 侦听。"""
         try:
-            from wordy.audio.listen_policy import get_listen_policy, set_listen_policy
+            from wordy.audio.listen_policy import get_listen_policy, restore_listen_policy, set_listen_policy
 
             original_state = get_listen_policy(mic_name)
             if original_state is None:
@@ -144,11 +205,11 @@ class AudioRouter:
                 logger.warning("未找到 Windows WASAPI 的 CABLE Input，无法自动配置麦克风侦听")
                 return False
 
+            _write_listen_journal(mic_name, original_state)
+            self._listen_original_state = original_state
+            self._listen_original_device = mic_name
             target_name = cable_device["name"]
             if set_listen_policy(mic_name, target_name, enabled=True):
-                # 仅在配置成功后记录快照，供 stop/切换设备时精确恢复。
-                self._listen_original_state = original_state
-                self._listen_original_device = mic_name
                 logger.debug("已启用并验证麦克风侦听: %s → %s", mic_name, target_name)
                 return True
 
@@ -157,6 +218,10 @@ class AudioRouter:
                 mic_name,
                 target_name,
             )
+            if restore_listen_policy(mic_name, original_state):
+                _clear_listen_journal()
+                self._listen_original_state = None
+                self._listen_original_device = None
             return False
         except Exception:
             logger.exception("配置麦克风侦听失败")
@@ -183,6 +248,7 @@ class AudioRouter:
                 )
 
             if ok:
+                _clear_listen_journal()
                 self._listen_original_state = None
                 self._listen_original_device = None
             return ok
@@ -248,17 +314,13 @@ class AudioRouter:
             listen_configured=self._listen_configured,
         )
 
-    # 以下方法保留以兼容旧调用方
+    # 兼容旧调用方；生产 UI 不提供虚拟输出切换。
     def set_virtual_output(self, device_name: str | None) -> bool:
         was_running = self._active
         mic_device = self._mic_device
-        # 恢复失败时保留原设备和快照，不能继续重启覆盖恢复依据。
         if not self.stop():
             return False
         self.virtual_output = device_name
         if was_running:
-            # 重启路由时保留当前麦克风，避免更新输出设备后静默丢失侦听。
             return self.start(mic_device=mic_device)
         return True
-
-

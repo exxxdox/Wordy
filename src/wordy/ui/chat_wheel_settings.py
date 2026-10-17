@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
 )
 from shiboken6 import isValid
 
-from wordy.audio.clips import AUDIO_EXTENSIONS, import_audio_clip, remove_audio_clip
+from wordy.audio.clips import AUDIO_EXTENSIONS, decoded_audio_clip, import_audio_clip, remove_audio_clip
 from wordy.audio.recorder import MAX_RECORD_SECONDS, RecordingError, SystemAudioRecorder
 from wordy.config import AppSettings
 from wordy.ui.status_toast import show_status_toast
@@ -369,10 +369,18 @@ class ChatWheelSettings(QWidget):
 
         def run() -> None:
             filename, error = "", ""
+            imported: Path | None = None
             try:
-                filename = import_audio_clip(source, config_file).name
+                imported = import_audio_clip(source, config_file)
+                # 替换旧槽前先完整验证解码，失败时旧音频仍保持可用。
+                if imported.is_file():
+                    with decoded_audio_clip(imported):
+                        pass
+                filename = imported.name
             except Exception as exc:
                 error = str(exc)
+                if imported is not None:
+                    self._remove_unused(imported.name, config_file)
             # 录音临时文件的删除时机由 _finish_import 决定：只有内容既进了托管
             # 目录、槽位又落了盘，才谈得上安全回收。
             try:
@@ -386,7 +394,7 @@ class ChatWheelSettings(QWidget):
             if filename:
                 self._remove_unused(filename, config_file)
             if temporary:
-                self._discard_temporary(str(source))
+                self._keep_temporary(str(source), "设置窗口已关闭，录音未保存")
 
         threading.Thread(target=run, name="ChatWheelImport", daemon=True).start()
 
@@ -504,8 +512,8 @@ class ChatWheelSettings(QWidget):
         if self._closed.is_set():
             if filename:
                 self._remove_unused(filename, self._settings._config_file)
-            # 窗口已关，这份录音不会再被导入，可以连同临时文件一起回收。
-            self._discard_temporary(temporary_source)
+            # 槽位尚未落盘时，临时录音仍是唯一副本，关窗也不能销毁。
+            self._keep_temporary(temporary_source, "设置窗口已关闭，录音未保存")
             return
         if error:
             self._status(f"导入失败：{error}", error=True)

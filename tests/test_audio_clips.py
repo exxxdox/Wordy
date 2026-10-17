@@ -33,25 +33,14 @@ def test_import_keeps_managed_copy_after_source_removed(tmp_path: Path) -> None:
     assert imported.read_bytes() == original
 
 
-@pytest.mark.skipif(os.name != "nt", reason="Windows 硬链接策略")
-def test_windows_import_uses_hard_link(tmp_path: Path) -> None:
+def test_import_uses_independent_copy(tmp_path: Path) -> None:
     source = tmp_path / "clip.wav"
     make_wav(source)
     imported = clips.import_audio_clip(source, tmp_path / "wordy.toml")
-    assert os.path.samefile(source, imported)
-
-
-def test_cross_volume_link_falls_back_to_copy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    source = tmp_path / "clip.wav"
-    make_wav(source)
-
-    def fail_link(*args: object) -> None:
-        raise OSError("cross-device link")
-
-    monkeypatch.setattr(clips.os, "link", fail_link)
-    imported = clips.import_audio_clip(source, tmp_path / "wordy.toml")
-    assert imported.read_bytes() == source.read_bytes()
     assert not os.path.samefile(source, imported)
+    original = imported.read_bytes()
+    source.write_bytes(b"changed")
+    assert imported.read_bytes() == original
 
 
 def test_import_rejects_non_audio_and_missing_source(tmp_path: Path) -> None:

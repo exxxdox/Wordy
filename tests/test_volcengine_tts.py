@@ -109,6 +109,7 @@ class TestVolcengineStreamingTTS:
         engine = self._make_engine()
         result = engine.speak("你好世界")
         assert result is True
+        fake_response.close.assert_called_once_with()
         assert engine.audio_player.write_stream.call_count >= 1  # type: ignore[attr-defined]
 
     def test_sse_endpoint_url(self) -> None:

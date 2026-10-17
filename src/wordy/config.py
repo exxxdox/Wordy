@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import math
 import threading
 from collections.abc import Mapping
 from dataclasses import dataclass, field, fields
@@ -28,6 +29,7 @@ from wordy.tts.constants import (
     DEFAULT_TTS_API_PROVIDER,
     DEFAULT_TTS_BACKEND,
     TTS_API_PROVIDERS,
+    TTS_BACKENDS_BY_PROVIDER,
 )
 from wordy.constants import (
     LOG_LEVELS,
@@ -50,7 +52,19 @@ _cached_config_file: Path | None = None
 # ---------------------------------------------------------------------------
 
 def _clamp(value: float, lo: float, hi: float) -> float:
-    return min(max(float(value), lo), hi)
+    result = float(value)
+    if not math.isfinite(result):
+        raise ValueError("配置数值必须是有限值")
+    return min(max(result, lo), hi)
+
+
+def _parse_clamped(value: object, lo: float, hi: float) -> float | None:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return None
+    try:
+        return _clamp(value, lo, hi)
+    except ValueError:
+        return None
 
 
 def _normalize_voice_entries(raw: object) -> list[dict[str, str]]:
@@ -138,6 +152,7 @@ class AppSettings:
     _loaded: bool = field(default=False, init=False, repr=False)
     _config_file: Path | None = field(default=None, init=False, repr=False)
     _save_timer: threading.Timer | None = field(default=None, init=False, repr=False)
+    _save_error: Exception | None = field(default=None, init=False, repr=False)
     _save_lock: ClassVar[threading.Lock] = threading.Lock()
 
     # 滑块类字段用 debounce，其他字段立即写入
@@ -201,9 +216,12 @@ class AppSettings:
 
     @property
     def cartesia_tts_backend(self) -> str:
-        return str(self.get_provider("Cartesia").get("backend", DEFAULT_TTS_BACKEND))
+        return str(self.get_provider("Cartesia").get("backend", TTS_BACKENDS_BY_PROVIDER["Cartesia"][0]))
     @cartesia_tts_backend.setter
-    def cartesia_tts_backend(self, value: str) -> None: self._set_provider_field("Cartesia", "backend", value)
+    def cartesia_tts_backend(self, value: str) -> None:
+        if value not in TTS_BACKENDS_BY_PROVIDER["Cartesia"]:
+            value = TTS_BACKENDS_BY_PROVIDER["Cartesia"][0]
+        self._set_provider_field("Cartesia", "backend", value)
 
     @property
     def cartesia_api_key_set(self) -> bool:
@@ -241,7 +259,10 @@ class AppSettings:
     def volcengine_tts_backend(self) -> str:
         return str(self.get_provider("Volcengine").get("backend", "Volcengine Streaming"))
     @volcengine_tts_backend.setter
-    def volcengine_tts_backend(self, value: str) -> None: self._set_provider_field("Volcengine", "backend", value)
+    def volcengine_tts_backend(self, value: str) -> None:
+        if value not in TTS_BACKENDS_BY_PROVIDER["Volcengine"]:
+            value = TTS_BACKENDS_BY_PROVIDER["Volcengine"][0]
+        self._set_provider_field("Volcengine", "backend", value)
 
     @property
     def volcengine_access_key_set(self) -> bool:
@@ -281,8 +302,8 @@ class AppSettings:
             return settings
 
         # 逐字段解析
-        _apply_if_present(raw, "volume", settings, _clamp, (MIN_VOLUME, MAX_VOLUME))
-        _apply_if_present(raw, "overlay_opacity", settings, _clamp, (MIN_OVERLAY_OPACITY, MAX_OVERLAY_OPACITY))
+        _apply_if_present(raw, "volume", settings, _parse_clamped, (MIN_VOLUME, MAX_VOLUME))
+        _apply_if_present(raw, "overlay_opacity", settings, _parse_clamped, (MIN_OVERLAY_OPACITY, MAX_OVERLAY_OPACITY))
         # 空字符串表示不显示提示；旧配置缺少字段时保留默认文字。
         _apply_if_present(raw, "overlay_placeholder", settings, lambda v: v if isinstance(v, str) else None)
         # 界面首选字体族。空串是合法值（= 用内置字体栈），别用 _nonempty_str 滤掉。
@@ -322,7 +343,10 @@ class AppSettings:
                         provider_keys += ("voice_id", "voice_name")
                     for k in provider_keys:
                         if k in provider_data:
-                            target[k] = provider_data[k]
+                            value = provider_data[k]
+                            if k == "backend" and value not in TTS_BACKENDS_BY_PROVIDER[provider_name]:
+                                continue
+                            target[k] = value
         # active_tts_provider
         _apply_if_present(raw, "active_tts_provider", settings, lambda v: v if isinstance(v, str) and v in TTS_API_PROVIDERS else None)
         _apply_if_present(raw, "log_level", settings, lambda v: v.strip().upper() if isinstance(v, str) and v.strip().upper() in LOG_LEVELS else None)
@@ -361,12 +385,18 @@ class AppSettings:
         if name in self._CLAMP_RANGES and isinstance(value, (int, float)):
             lo, hi = self._CLAMP_RANGES[name]
             value = _clamp(float(value), lo, hi)
+        old_value = getattr(self, name, None)
         object.__setattr__(self, name, value)
         if self._loaded:
             if name in self._DEBOUNCED_FIELDS:
                 self._debounced_save()
             else:
-                self.save()
+                try:
+                    self.save()
+                except Exception:
+                    # 立即保存失败时内存必须回到磁盘仍代表的旧值。
+                    object.__setattr__(self, name, old_value)
+                    raise
 
 
     # ── 去抖动保存 ────────────────────────────────────────────────────
@@ -390,7 +420,12 @@ class AppSettings:
         """Timer 回调：在独立线程中执行写入。"""
         with self._save_lock:
             self._save_timer = None
-            self._save_to_disk_inner()
+            try:
+                self._save_to_disk_inner()
+                self._save_error = None
+            except Exception as error:
+                # Timer 线程不能操作 Qt；flush 会重试并把持续错误交回 GUI 调用方。
+                self._save_error = error
 
     # ── 持久化 ─────────────────────────────────────────────────────────
 
@@ -403,6 +438,7 @@ class AppSettings:
         file = config_file or self._config_file or USER_CONFIG_FILE
         with self._save_lock:
             self._save_to_disk_inner(file)
+            self._save_error = None
         return file
 
     def _save_to_disk_inner(self, config_file: Path | None = None) -> None:

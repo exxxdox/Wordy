@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
-import os
 from pathlib import Path
 import shutil
 from threading import Event
@@ -25,6 +24,14 @@ def _clips_directory(config_file: Path | None = None) -> Path:
     return Path(config_file).parent / "audio_clips"
 
 
+def _validated_clips_directory(config_file: Path | None = None) -> Path:
+    directory = _clips_directory(config_file)
+    # 托管目录本身不能是 symlink/junction，否则删除槽位可能越过配置目录。
+    if directory.is_symlink() or (hasattr(directory, "is_junction") and directory.is_junction()):
+        raise ValueError("音频托管目录不能是符号链接或 junction")
+    return directory
+
+
 def import_audio_clip(source: str | Path, config_file: Path | None = None) -> Path:
     """托管原文件，Windows 同卷优先硬链接，其他情况复制。"""
     source = Path(source)
@@ -33,18 +40,12 @@ def import_audio_clip(source: str | Path, config_file: Path | None = None) -> Pa
     suffix = source.suffix.lower()
     if suffix not in AUDIO_EXTENSIONS:
         raise ValueError("不支持此音频格式")
-    directory = _clips_directory(config_file)
+    directory = _validated_clips_directory(config_file)
     directory.mkdir(parents=True, exist_ok=True)
     # 不保留外部文件名，避免覆盖同名文件及将路径内容写入托管目录。
     destination = directory / f"{uuid4().hex}{suffix}"
     try:
-        if os.name == "nt":
-            try:
-                os.link(source, destination)
-                return destination
-            except OSError:
-                # 跨卷、文件系统不支持或权限不足时，复制仍能完成用户导入。
-                pass
+        # 托管副本必须独立；硬链接会让外部编辑静默改坏已保存槽位。
         shutil.copy2(source, destination)
     except OSError:
         destination.unlink(missing_ok=True)
@@ -58,7 +59,7 @@ def resolve_audio_clip(filename: str, config_file: Path | None = None) -> Path:
         raise ValueError("无效的音频文件名")
     if Path(filename).suffix.lower() not in AUDIO_EXTENSIONS:
         raise ValueError("不支持此音频格式")
-    directory = _clips_directory(config_file)
+    directory = _validated_clips_directory(config_file)
     path = directory / filename
     # 不允许被篡改的配置或目录符号链接把播放指向托管目录之外。
     if path.resolve().parent != directory.resolve():

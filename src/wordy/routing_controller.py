@@ -140,20 +140,18 @@ class RoutingController:
                 )
                 if not ok:
                     logger.error("麦克风侦听切换失败，请检查设备名称是否正确")
+                    return False
             if "virtual_output_device" in route_config:
                 if not self._router.set_virtual_output(
                     virtual_device if isinstance(virtual_device, str) else None
                 ):
-                    # 输出切换会先停用路由；失败也应恢复本地输出，同时保留恢复快照。
                     if not self._router.is_running():
                         self._disable_routing()
                     logger.error("虚拟输出切换失败，原麦克风状态仍需恢复")
                     return False
                 cable_device = self._router.get_output_device()
                 if cable_device is not None:
-                    self._player.set_output_device(
-                        cast(OutputDeviceSelection, cable_device)
-                    )
+                    self._player.set_output_device(cast(OutputDeviceSelection, cable_device))
                     self._notify_output_device_changed()
             logger.debug("音频侦听配置已更新")
             return True

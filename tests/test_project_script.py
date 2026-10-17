@@ -83,7 +83,7 @@ def test_build_forwards_flags_and_cleans_only_its_artifacts(script_project):
     (root / "keep.txt").write_text("keep")
     result, calls = run_script(script_project, "build", "-Clean", "-NoPause", via_cmd=True)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert calls[0] == "sync --group dev"
+    assert calls[0] == "sync --locked --group dev"
     assert len(calls) == 2
     build = calls[1]
     for expected in ("run python -m PyInstaller", "--onefile", "--windowed", "--clean",
@@ -103,7 +103,7 @@ def test_sync_failure_stops_build_and_invalid_action_never_calls_uv(script_proje
     env["WORDY_TEST_FAIL"] = "sync"
     result, calls = run_script(script_project, "build", "-NoPause")
     assert result.returncode == 23
-    assert calls == ["sync --group dev"]
+    assert calls == ["sync --locked --group dev"]
     log.unlink()
     result, calls = run_script(script_project, "invalid", "-NoPause")
     assert result.returncode != 0

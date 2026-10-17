@@ -276,6 +276,7 @@ def _find_device_id(enumerator: Any, data_flow: int, name: str) -> str | None:
     if not _hresult_succeeded(collection.GetCount(byref(count))):
         return None
 
+    exact_matches: list[str] = []
     partial_matches: list[tuple[str, str]] = []
     for i in range(count.value):
         item = POINTER(IMMDevice)()
@@ -288,12 +289,20 @@ def _find_device_id(enumerator: Any, data_flow: int, name: str) -> str | None:
 
         normalized = _normalize_device_name(friendly_name)
         if normalized == query:
-            return _take_device_id(item)
+            device_id = _take_device_id(item)
+            if device_id:
+                exact_matches.append(device_id)
+            continue
         if query in normalized:
             device_id = _take_device_id(item)
             if device_id:
                 partial_matches.append((friendly_name, device_id))
 
+    if len(exact_matches) == 1:
+        return exact_matches[0]
+    if len(exact_matches) > 1:
+        logger.warning("设备名称完全匹配不唯一: %s", name)
+        return None
     if len(partial_matches) == 1:
         return partial_matches[0][1]
     if len(partial_matches) > 1:

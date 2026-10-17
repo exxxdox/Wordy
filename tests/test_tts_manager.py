@@ -131,6 +131,9 @@ def test_queued_text_keeps_engine_selected_at_submission():
     manager.tts_backend = "Volcengine Streaming"
     manager._worker_ready = None
     manager._executor = MagicMock()
+    manager._speech_lock = threading.Lock()
+    manager._speech_running = False
+    manager._pending_speech = None
     old, new = MagicMock(), MagicMock()
     manager.engine = old
     manager.speak("queued text")
@@ -432,6 +435,10 @@ class TestTTSManagerSwitchBackend:
             manager.switch_backend("Cartesia Bytes")
         assert manager.engine is new_engine
 
+    def test_rejects_backend_from_other_provider(self, manager):
+        with pytest.raises(ValueError, match="Volcengine"):
+            manager.switch_backend("Cartesia Bytes")
+
 
 class TestTTSManagerSwitchProvider:
     """切换服务商。"""
@@ -578,6 +585,61 @@ class TestTTSManagerSpeak:
         operation, *args = manager._executor.submit.call_args.args
         operation(*args, **manager._executor.submit.call_args.kwargs)
         finished.assert_called_once_with()
+
+    def test_speak_reports_false_result_as_error(self, manager, mock_engine):
+        mock_engine.speak.return_value = False
+        error = MagicMock()
+        finished = MagicMock()
+
+        manager.speak("hello", finished, error)
+        operation, *args = manager._executor.submit.call_args.args
+        operation(*args, **manager._executor.submit.call_args.kwargs)
+
+        error.assert_called_once_with("Volcengine Streaming 播放失败：未输出音频")
+        finished.assert_called_once_with()
+
+    def test_speak_reports_exception_as_error(self, manager, mock_engine):
+        mock_engine.speak.side_effect = OSError("网络中断")
+        error = MagicMock()
+
+        manager.speak("hello", None, error)
+        operation, *args = manager._executor.submit.call_args.args
+        operation(*args, **manager._executor.submit.call_args.kwargs)
+
+        error.assert_called_once_with("Volcengine Streaming 播放失败：网络中断")
+
+    def test_speak_keeps_only_latest_pending_job(self, manager, mock_engine):
+        first_finished = MagicMock()
+        replaced_finished = MagicMock()
+        latest_finished = MagicMock()
+
+        manager.speak("first", first_finished)
+        first_operation, first_job = manager._executor.submit.call_args.args
+        manager.speak("replaced", replaced_finished)
+        manager.speak("latest", latest_finished)
+
+        assert manager._executor.submit.call_count == 1
+        replaced_finished.assert_called_once_with()
+
+        first_operation(first_job)
+
+        assert manager._executor.submit.call_count == 2
+        next_operation, next_job = manager._executor.submit.call_args.args
+        next_operation(next_job)
+        assert mock_engine.speak.call_args_list == [
+            (("first",), {}),
+            (("latest",), {}),
+        ]
+        first_finished.assert_called_once_with()
+        latest_finished.assert_called_once_with()
+
+    def test_replaced_callback_can_submit_without_deadlock(self, manager):
+        manager.speak("first")
+        callback = MagicMock(side_effect=lambda: manager.speak("from callback"))
+        manager.speak("replaced", callback)
+        manager.speak("latest")
+
+        callback.assert_called_once_with()
 
     def test_speak_reports_finish_when_it_bails(self, manager, mock_settings):
         """早退也必须回调：设置页的「朗读中…」靠它复位，否则永远挂着。"""

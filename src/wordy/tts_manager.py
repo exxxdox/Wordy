@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from threading import Lock
 from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Callable
 from pathlib import Path
@@ -20,10 +21,8 @@ from queue import SimpleQueue
 from wordy.config import AppSettings
 from wordy.audio.clips import decoded_audio_clip
 from wordy.tts.constants import (
-    DEFAULT_TTS_BACKEND,
     TTS_API_PROVIDER_VOLCENGINE,
-    TTS_BACKEND_VOLCENGINE_STREAMING,
-    TTS_BACKENDS,
+    TTS_BACKENDS_BY_PROVIDER,
 )
 from wordy.tts.engine import BackendTTSEngine, TTSAudioPlayer
 from wordy.tts.registry import create_tts_engine, resolve_tts_backend
@@ -44,6 +43,19 @@ class _TTSWorker:
     # 新旧引擎共用播放器；旧 worker 清理完后才允许后继打开音频流。
     ready: threading.Event | None = None
     next_ready: threading.Event | None = None
+
+
+@dataclass
+class _SpeechJob:
+    """一次朗读及其提交时依赖；待播槽只保留最新一项。"""
+
+    text: str
+    engine: BackendTTSEngine
+    executor: ThreadPoolExecutor
+    ready: threading.Event | None
+    backend: str
+    on_finished: Callable[[], None] | None
+    on_error: Callable[[str], None] | None
 
 
 def _janitor_loop_inner(janitor_queue: SimpleQueue) -> None:
@@ -99,6 +111,9 @@ class TTSManager:
         self._audio_files_stopped = threading.Event()
         # 单次文件播放的取消句柄：让「停止试听」只打断这一次，不牵连后续播放。
         self._clip_cancel: threading.Event | None = None
+        self._speech_lock = Lock()
+        self._speech_running = False
+        self._pending_speech: _SpeechJob | None = None
 
         worker = self._create_worker()
         self.engine = worker.engine
@@ -180,7 +195,7 @@ class TTSManager:
 
     def switch_backend(self, new_backend: str) -> None:
         """切换 TTS 后端模式。"""
-        resolved = resolve_tts_backend(new_backend)
+        resolved = resolve_tts_backend(new_backend, self.tts_api_provider)
         if resolved == self.tts_backend:
             return
         previous = self.tts_backend
@@ -212,18 +227,19 @@ class TTSManager:
 
     def _resolve_backend_for_provider(self) -> str:
         """按当前 provider 解析生效的 backend。"""
+        allowed = TTS_BACKENDS_BY_PROVIDER[self.tts_api_provider]
         if self.tts_api_provider == TTS_API_PROVIDER_VOLCENGINE:
             configured = getattr(self._settings, "volcengine_tts_backend", None)
-            if configured and configured in TTS_BACKENDS:
+            if configured and configured in allowed:
                 return configured
-            return TTS_BACKEND_VOLCENGINE_STREAMING
+            return allowed[0]
         configured = getattr(self._settings, "cartesia_tts_backend", None)
-        if configured and configured in TTS_BACKENDS:
+        if configured and configured in allowed:
             return configured
         fallback = getattr(self._settings, "tts_backend", None)
-        if fallback and fallback in TTS_BACKENDS:
+        if fallback and fallback in allowed:
             return fallback
-        return DEFAULT_TTS_BACKEND
+        return allowed[0]
 
     # ── API Key 更新 ──────────────────────────────────────────────────────
 
@@ -309,7 +325,8 @@ class TTSManager:
 
     # ── 播放/音色列表 ─────────────────────────────────────────────────────
 
-    def speak(self, text: str, on_finished: Callable[[], None] | None = None) -> None:
+    def speak(self, text: str, on_finished: Callable[[], None] | None = None,
+              on_error: Callable[[str], None] | None = None) -> None:
         """提交文本到串行执行器生成并播放。
 
         ``on_finished`` 在朗读结束（含早退、失败）后调用一次。引擎没有取消钩子，
@@ -323,33 +340,66 @@ class TTSManager:
             logger.error("缺少音色配置，请先打开设置，刷新音色列表并选择一个音色。")
             self._notify_finished(on_finished)
             return
-        # 提交时绑定引擎，防止排队文本在服务商切换后串到新的 worker。
+        # 提交时绑定引擎和 executor，服务商切换后待播文本也不会串到新 worker。
+        job = _SpeechJob(text, self.engine, self._executor, self._worker_ready,
+                         self.tts_backend, on_finished, on_error)
+        replaced: _SpeechJob | None = None
+        submit_now = False
+        with self._speech_lock:
+            if self._speech_running:
+                replaced = self._pending_speech
+                self._pending_speech = job
+            else:
+                self._speech_running = True
+                submit_now = True
+        if replaced is not None:
+            # 回调可能再次提交朗读，不能在持有队列锁时调用用户代码。
+            self._notify_finished(replaced.on_finished)
+        if not submit_now:
+            return
+        self._submit_speech(job)
+
+    def _submit_speech(self, job: _SpeechJob) -> None:
+        """提交已绑定 worker 的任务；executor 关闭时也释放队列状态。"""
         try:
-            self._executor.submit(self._generate_and_play, text, engine=self.engine,
-                                  ready=self._worker_ready, backend=self.tts_backend,
-                                  on_finished=on_finished)
+            job.executor.submit(self._generate_and_play, job)
         except RuntimeError as error:
-            # 退出后 executor 已关闭；调用方仍然需要收到完成通知才能复位按钮。
             logger.warning("TTS worker 不可用，文本未提交: %s", error)
-            self._notify_finished(on_finished)
+            self._notify_finished(job.on_finished)
+            self._advance_speech_queue()
 
     @staticmethod
     def _notify_finished(on_finished: Callable[[], None] | None) -> None:
         if on_finished is not None:
             on_finished()
 
-    def _generate_and_play(self, text: str, *, engine: BackendTTSEngine,
-                           ready: threading.Event | None, backend: str,
-                           on_finished: Callable[[], None] | None = None) -> None:
+    def _generate_and_play(self, job: _SpeechJob) -> None:
         """在后台 worker 中生成 TTS 并播放（由 executor 执行）。"""
         try:
-            if ready is not None:
-                ready.wait()
-            engine.speak(text)
+            if job.ready is not None:
+                job.ready.wait()
+            if not job.engine.speak(job.text):
+                message = f"{job.backend} 播放失败：未输出音频"
+                logger.error(message)
+                if job.on_error is not None:
+                    job.on_error(message)
         except Exception as e:
-            logger.error("%s 播放失败: %s", backend, e)
+            message = f"{job.backend} 播放失败：{e}"
+            logger.error(message)
+            if job.on_error is not None:
+                job.on_error(message)
         finally:
-            self._notify_finished(on_finished)
+            self._notify_finished(job.on_finished)
+            self._advance_speech_queue()
+
+    def _advance_speech_queue(self) -> None:
+        with self._speech_lock:
+            next_job = self._pending_speech
+            self._pending_speech = None
+            if next_job is None:
+                self._speech_running = False
+                return
+        self._submit_speech(next_job)
 
     def fetch_voices(self) -> list[dict[str, object]]:
         """获取当前引擎的可用音色列表。"""
