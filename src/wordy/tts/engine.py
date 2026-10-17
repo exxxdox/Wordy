@@ -3,12 +3,37 @@
 
 """TTS 后端引擎抽象。"""
 
+import logging
 from abc import ABC, abstractmethod
 from io import BytesIO
 from threading import Event
 from typing import Protocol
 
+from .constants import SUPPORTED_SAMPLE_RATES
+
+logger = logging.getLogger(__name__)
+
 VoiceInfo = dict[str, object]
+
+
+def resolve_stream_rate(requested: int, device_rate: object) -> int:
+    """把请求采样率对齐到设备原生值，避免 Windows Audio Engine 的 SRC 失真。
+
+    只在引擎确实支持的采样率里采纳设备值——设备默认 96k/192k 时保持请求值，
+    交给 Windows 做 SRC，而不是拿引擎未必支持的采样率去开流。
+    """
+    if (
+        isinstance(device_rate, int)
+        and device_rate != requested
+        and device_rate in SUPPORTED_SAMPLE_RATES
+    ):
+        logger.warning(
+            "设备默认采样率为 %s Hz，请求的 %s Hz 已对齐为设备原生采样率以避免 SRC 失真",
+            device_rate,
+            requested,
+        )
+        return device_rate
+    return requested
 
 
 class TTSAudioPlayer(Protocol):

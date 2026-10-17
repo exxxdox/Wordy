@@ -18,7 +18,7 @@ from websockets.sync.client import ClientConnection
 if TYPE_CHECKING:
     from cartesia.types.websocket_connection_options import WebsocketConnectionOptions
 
-from .engine import BackendTTSEngine, TTSAudioPlayer, VoiceInfo
+from .engine import BackendTTSEngine, TTSAudioPlayer, VoiceInfo, resolve_stream_rate
 
 
 logger = logging.getLogger(__name__)
@@ -33,6 +33,9 @@ REALTIME_PING_INTERVAL_SECONDS = 60
 REALTIME_PING_TIMEOUT_SECONDS = 20
 IDLE_TIMEOUT_CLOSE_CODE = 1000
 IDLE_TIMEOUT_CLOSE_REASON = "connection idle timeout"
+# VB-CABLE 默认内部延迟为 7168 samples，官方要求内部延迟至少为最大客户端
+# buffer 的 3 倍；1024 留出充足余量，再大可能触发 Pull loss / DMA error。
+_STREAM_BUFFER_FRAMES = 1024
 
 
 class LoggingClientConnection(ClientConnection):
@@ -66,14 +69,6 @@ def _wav_output_format(sample_rate: int) -> dict[str, Any]:
     return {
         "container": "wav",
         "encoding": "pcm_s16le",
-        "sample_rate": sample_rate,
-    }
-
-
-def _raw_float_output_format(sample_rate: int) -> dict[str, Any]:
-    return {
-        "container": "raw",
-        "encoding": "pcm_f32le",
         "sample_rate": sample_rate,
     }
 
@@ -257,80 +252,36 @@ class CartesiaRealtimeTTS(CartesiaTTS):
     def _open_audio_stream(self) -> None:
         logger.debug("正在打开 PyAudio 流式输出...")
 
-        # VB-CABLE 虚拟设备 WASAPI 端点对 float32 处理不可靠（驱动层可能
-        # 错当 int16 解析致 PCM 变声）。主动使用 int16 + 让 Cartesia 输出
-        # pcm_s16le，从源头消除格式歧义。非 CABLE 设备维持 float32 优先。
-        device_name = (self.audio_player.output_device_name or "").lower()
-        prefer_int16 = isinstance(device_name, str) and any(
-            kw in device_name for kw in ("cable", "vb-audio")
+        # 固定 int16：bytes 模式回的是 16-bit WAV，Volcengine 固定 pcm_s16le，
+        # 轮盘音频也被解码成 16-bit；而 VB-CABLE 等虚拟设备的 WASAPI 端点对
+        # float32 处理不可靠（驱动层可能错当 int16 解析致 PCM 变声）。
+        # 按配置的设备名分类会漏判——用户把 CABLE Input 设成 Windows 默认设备时
+        # output_device_name 是空串——所以这里不做设备类型判断。
+
+        # 采样率以设备原生值为准：与源采样率不一致时 Windows Audio Engine 会做 SRC。
+        stream_rate = resolve_stream_rate(
+            self.sample_rate, self.audio_player.query_output_device_default_rate()
         )
 
-        # 虚拟设备采样率以 Windows 声音设置中该设备的默认格式为准；
-        # 与源采样率不一致时 Windows Audio Engine 会做 SRC，可能引入失真。
-        # 因此对 CABLE 设备主动匹配其原生采样率。
-        stream_rate = self.sample_rate
-        if prefer_int16:
-            device_rate = self.audio_player.query_output_device_default_rate()
-            if device_rate is not None and device_rate != self.sample_rate:
-                logger.warning(
-                    "CABLE 设备默认采样率为 %s Hz，与 Cartesia 请求的 %s Hz 不匹配，"
-                    "已调整为设备原生采样率以避免 Windows SRC 失真",
-                    device_rate,
-                    self.sample_rate,
-                )
-                stream_rate = device_rate
-
-        # VB-CABLE 默认内部延迟为 7168 samples，官方要求内部延迟至少为
-        # 最大客户端 buffer 的 3 倍。4096 会超过 7168 / 3 的安全上限并可能
-        # 触发 Pull loss / DMA error；1024 仍能提供充足余量。
-        buffer_size = 1024
-
-        primary_format = pyaudio.paInt16 if prefer_int16 else pyaudio.paFloat32
-        if self.audio_player.open_stream(
-            audio_format=primary_format,
+        if not self.audio_player.open_stream(
+            audio_format=pyaudio.paInt16,
             channels=1,
             rate=stream_rate,
-            frames_per_buffer=buffer_size,
+            frames_per_buffer=_STREAM_BUFFER_FRAMES,
         ):
-            stream_config = self.audio_player.get_stream_config()
-            actual_format = stream_config.get("format")
-            actual_rate = stream_config.get("rate")
-            # 记录实际协商的采样率供 Cartesia 请求使用
-            if actual_rate is not None:
-                self.sample_rate = actual_rate
-            if prefer_int16 and actual_format != pyaudio.paInt16:
-                logger.warning(
-                    "CABLE 设备 int16 流打开后实际格式=%s，可能仍会变声",
-                    actual_format,
-                )
-            elif actual_format == pyaudio.paInt16:
-                logger.info(
-                    "已使用 int16 / %s Hz 打开流式输出（CABLE 兼容模式）",
-                    actual_rate,
-                )
-            return
+            # 服务端与本地都按 int16 对齐；换 float32 只会让字节被误解。
+            raise RuntimeError("无法打开 int16 PCM 流式输出")
 
-        # 首选格式失败，尝试备用格式
-        if prefer_int16:
-            logger.warning("CABLE 设备 int16 流打开失败，尝试 float32 兜底")
-            if self.audio_player.open_stream(
-                audio_format=pyaudio.paFloat32,
-                channels=1,
-                rate=stream_rate,
-                frames_per_buffer=buffer_size,
-            ):
-                return
+        stream_config = self.audio_player.get_stream_config()
+        actual_format = stream_config.get("format")
+        actual_rate = stream_config.get("rate")
+        # 记录实际协商的采样率供 Cartesia 请求使用
+        if actual_rate is not None:
+            self.sample_rate = actual_rate
+        if actual_rate is not None and actual_format != pyaudio.paInt16:
+            logger.warning("int16 流打开后实际格式=%s，可能仍会变声", actual_format)
         else:
-            logger.warning("float32 流打开失败，尝试 int16 兜底")
-            if self.audio_player.open_stream(
-                audio_format=pyaudio.paInt16,
-                channels=1,
-                rate=stream_rate,
-                frames_per_buffer=buffer_size,
-            ):
-                return
-
-        raise RuntimeError("无法打开 PyAudio 流式输出")
+            logger.info("已使用 int16 / %s Hz 打开流式输出", actual_rate)
 
     def _open_websocket(self) -> None:
         logger.debug("正在连接 Cartesia realtime websocket...")
@@ -389,14 +340,9 @@ class CartesiaRealtimeTTS(CartesiaTTS):
         if connection is None:
             raise RuntimeError("Cartesia realtime websocket 未建立连接")
 
-        # 根据实际流格式选择 Cartesia 输出编码：paInt16 → pcm_s16le，
-        # paFloat32/其他 → pcm_f32le。避免 float32 PCM 被 CABLE 等
-        # 虚拟设备 WASAPI 端点错当 int16 解析导致变声。
-        stream_config = self.audio_player.get_stream_config()
-        if stream_config.get("format") == pyaudio.paInt16:
-            output_format = _raw_int16_output_format(self.sample_rate)
-        else:
-            output_format = _raw_float_output_format(self.sample_rate)
+        # 流固定按 paInt16 打开，请求编码就必须是 pcm_s16le——
+        # float32 PCM 会被 CABLE 等虚拟设备的 WASAPI 端点错当 int16 解析而变声。
+        output_format = _raw_int16_output_format(self.sample_rate)
 
         context_id = self._new_context_id()
         ctx = connection.context(

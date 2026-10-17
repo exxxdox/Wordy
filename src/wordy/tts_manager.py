@@ -273,11 +273,33 @@ class TTSManager:
         logger.debug("音量已切换为: %.2fx", volume)
 
     def reset_audio_output(self) -> None:
-        """强制 TTS 实时引擎重建音频流（输出设备变更后调用）。"""
+        """强制 TTS 实时引擎重建音频流（输出设备/返听开关变更后调用）。
+
+        调用方在 GUI 线程，而实时引擎的 ``reset_audio_output`` 要抢与 ``speak()``
+        同一把锁——引擎正在朗读时同步执行会把界面卡到整段读完。投递到串行 worker
+        既让出 GUI 线程，又靠 FIFO 保住「先关流、后开流」的顺序。
+        """
         # 交接期间新引擎尚未打开音频流，无需触碰旧 worker 正在使用的播放器。
         if self._worker_ready is not None and not self._worker_ready.is_set():
             return
-        self.engine.reset_audio_output()
+        try:
+            self._executor.submit(
+                self._reset_engine_output, self.engine, self._worker_ready
+            )
+        except RuntimeError as error:
+            # 退出后 executor 已关闭；调用方在 GUI 线程，不能把异常抛回去。
+            logger.warning("TTS worker 不可用，音频流重建已跳过: %s", error)
+
+    def _reset_engine_output(
+        self, engine: BackendTTSEngine, ready: threading.Event | None
+    ) -> None:
+        """在 worker 线程中重建引擎音频流；失败只记日志，不影响后续队列。"""
+        try:
+            if ready is not None:
+                ready.wait()
+            engine.reset_audio_output()
+        except Exception as e:
+            logger.warning("重建 TTS 音频流失败: %s", e)
 
     # ── 播放/音色列表 ─────────────────────────────────────────────────────
 
@@ -362,7 +384,9 @@ class TTSManager:
                 if not self._audio_player.play_wav(str(wav_path), cancel_event=cancel):
                     if cancel.is_set():
                         return
-                    raise RuntimeError("无法打开音频输出设备")
+                    # play_wav 现在对「打不开设备」和「播到一半失败」都返回 False，
+                    # 文案不能再断言是打开失败。
+                    raise RuntimeError("音频输出不可用")
         except InterruptedError:
             return
         except Exception as error:

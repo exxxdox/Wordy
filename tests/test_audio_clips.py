@@ -74,6 +74,40 @@ def test_pcm_wav_uses_existing_file(tmp_path: Path) -> None:
     assert source.exists()
 
 
+@pytest.mark.parametrize("sampwidth", [1, 3])
+def test_non_16bit_pcm_wav_is_decoded_not_passed_through(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sampwidth: int,
+) -> None:
+    """非 16-bit PCM 不能直通：player 的格式回退只改声明不改数据，会写成噪声。
+
+    只断言走向（必须经过解码归一化），不依赖 Qt 实际解码时序——真实解码由
+    ``test_qt_decoder_outputs_pcm_and_removes_temporary_file`` 覆盖。
+    """
+    source = tmp_path / "clip.wav"
+    with wave.open(str(source), "wb") as output:
+        output.setnchannels(1)
+        output.setsampwidth(sampwidth)
+        output.setframerate(48000)
+        output.writeframes(b"\x00" * sampwidth * 480)
+
+    decoded_from: list[Path] = []
+
+    def fake_decode(source_path: Path, destination: Path, cancel_event: object = None) -> None:
+        decoded_from.append(Path(source_path))
+        with wave.open(str(destination), "wb") as output:
+            output.setnchannels(2)
+            output.setsampwidth(2)
+            output.setframerate(48000)
+            output.writeframes(b"\x00\x00" * 480)
+
+    monkeypatch.setattr(clips, "_decode_to_wav", fake_decode)
+
+    with clips.decoded_audio_clip(source) as decoded:
+        assert decoded != source
+
+    assert decoded_from == [source]
+
+
 def test_qt_decoder_outputs_pcm_and_removes_temporary_file(tmp_path: Path, qapp: object) -> None:
     # 使用真实解码器处理容器内容，避免测试依赖外部转码器或下载媒体。
     source = tmp_path / "clip.mp3"

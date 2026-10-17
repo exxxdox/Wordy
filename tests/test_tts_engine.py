@@ -8,7 +8,26 @@ from threading import Event
 
 import pytest
 
-from wordy.tts.engine import BackendTTSEngine, VoiceInfo
+from wordy.tts.engine import BackendTTSEngine, VoiceInfo, resolve_stream_rate
+
+
+class TestResolveStreamRate:
+    """设备原生采样率对齐：避免 Windows Audio Engine 的 SRC 失真。"""
+
+    def test_adopts_common_device_rate(self):
+        assert resolve_stream_rate(48000, 44100) == 44100
+
+    def test_keeps_requested_rate_when_device_matches(self):
+        assert resolve_stream_rate(48000, 48000) == 48000
+
+    def test_keeps_requested_rate_when_device_rate_unknown(self):
+        assert resolve_stream_rate(48000, None) == 48000
+        assert resolve_stream_rate(48000, object()) == 48000
+
+    @pytest.mark.parametrize("device_rate", [88200, 96000, 176400, 192000, 352800])
+    def test_rejects_rates_the_backends_do_not_support(self, device_rate: int):
+        """96k/192k 声卡不能让请求采样率跟着走：引擎未必支持，交给 Windows 做 SRC。"""
+        assert resolve_stream_rate(48000, device_rate) == 48000
 
 
 # ---------------------------------------------------------------------------

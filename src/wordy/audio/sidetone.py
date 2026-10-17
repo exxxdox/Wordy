@@ -12,7 +12,6 @@ from __future__ import annotations
 import logging
 from queue import Full, Queue
 from threading import Event, Thread
-from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 from typing import TYPE_CHECKING, cast
 
@@ -25,6 +24,11 @@ logger = logging.getLogger(__name__)
 _STREAM_QUEUE_BLOCKS = 8
 _STREAM_CLOSE_TIMEOUT_SECONDS = 0.1
 _STREAM_STOP = object()
+
+# 文件播放时等待返听收尾的上限。主输出已经同步播完，正常情况只剩设备缓冲的
+# 一点尾巴；卡死的设备必须在这里放弃等待——调用方是串行 TTS worker，等下去
+# 会把后续所有朗读一起拖住。
+_SIDETONE_TAIL_TIMEOUT_SECONDS = 2.0
 
 
 class SidetoneAudioPlayer:
@@ -46,6 +50,8 @@ class SidetoneAudioPlayer:
         self._sidetone_stream_dead = False
         self._sidetone_queue: Queue[bytes | object] | None = None
         self._sidetone_thread: Thread | None = None
+        # 文件播放的返听尾巴线程；仍在跑时说明上一段返听还没收尾。
+        self._sidetone_tail: Thread | None = None
 
     # ── 开关 ──────────────────────────────────────────────────────────
 
@@ -78,7 +84,11 @@ class SidetoneAudioPlayer:
         device_index: int | None = None,
         cancel_event: Event | None = None,
     ) -> bool:
-        """同时播放主输出和返听；主输出结果决定调用是否成功。"""
+        """同时播放主输出和返听；主输出结果决定调用是否成功。
+
+        主输出在调用线程里同步播完（异常照旧向上传播），返听另起守护线程，
+        只在返回前有界地等它收尾。
+        """
         if not self._needs_sidetone(device_index):
             if cancel_event is None:
                 return self._main.play_wav(wav_path, device_index=device_index)
@@ -86,33 +96,56 @@ class SidetoneAudioPlayer:
                 wav_path, device_index=device_index, cancel_event=cancel_event
             )
 
-        # 两个播放器不能并发消费同一个 BytesIO 游标。
-        sidetone_path = BytesIO(wav_path.getvalue()) if isinstance(wav_path, BytesIO) else wav_path
-
-        def play_main() -> bool:
-            if cancel_event is None:
-                return self._main.play_wav(wav_path, device_index=device_index)
-            return self._main.play_wav(
-                wav_path, device_index=device_index, cancel_event=cancel_event
+        if self._sidetone_tail is not None and self._sidetone_tail.is_alive():
+            # 上一段返听仍在跑（设备落后或卡死）：本次只播主输出，不排队叠加。
+            logger.warning("上一段返听尚未收尾，本次跳过返听")
+        else:
+            # 两个播放器不能并发消费同一个 BytesIO 游标。
+            sidetone_path = (
+                BytesIO(wav_path.getvalue()) if isinstance(wav_path, BytesIO) else wav_path
             )
+            self._sidetone_tail = Thread(
+                target=self._play_sidetone_safe,
+                args=(sidetone_path, cancel_event),
+                name="sidetone-wav",
+                daemon=True,
+            )
+            self._sidetone_tail.start()
 
-        def play_sidetone() -> None:
-            try:
-                if cancel_event is None:
-                    self._sidetone.play_wav(sidetone_path, device_index=None)
-                else:
-                    self._sidetone.play_wav(
-                        sidetone_path, device_index=None, cancel_event=cancel_event
-                    )
-            except Exception:
-                logger.warning("返听 WAV 播放失败", exc_info=True)
-
-        with ThreadPoolExecutor(max_workers=2, thread_name_prefix="sidetone-wav") as executor:
-            main_future = executor.submit(play_main)
-            sidetone_future = executor.submit(play_sidetone)
-            result = main_future.result()
-            sidetone_future.result()
+        try:
+            if cancel_event is None:
+                result = self._main.play_wav(wav_path, device_index=device_index)
+            else:
+                result = self._main.play_wav(
+                    wav_path, device_index=device_index, cancel_event=cancel_event
+                )
+        finally:
+            # 主输出抛异常时也要等返听：调用方（decoded_audio_clip）随后就会删掉
+            # 音源临时文件，返听线程再握着它就是卸载失败加一段仍在响的残音。
+            self._wait_sidetone_tail()
         return result and (cancel_event is None or not cancel_event.is_set())
+
+    def _play_sidetone_safe(self, wav_path: str | BytesIO, cancel_event: Event | None) -> None:
+        """在返听线程中播放；失败只记 warning，不影响主链路。"""
+        try:
+            if cancel_event is None:
+                self._sidetone.play_wav(wav_path, device_index=None)
+            else:
+                self._sidetone.play_wav(wav_path, device_index=None, cancel_event=cancel_event)
+        except Exception:
+            logger.warning("返听 WAV 播放失败", exc_info=True)
+
+    def _wait_sidetone_tail(self) -> None:
+        """只等返听收尾，不等整段；超时即放弃，线程是守护线程自会随进程退出。"""
+        thread = self._sidetone_tail
+        if thread is None:
+            return
+        thread.join(timeout=_SIDETONE_TAIL_TIMEOUT_SECONDS)
+        if thread.is_alive():
+            logger.warning(
+                "返听未在 %s 秒内收尾，本次不再等待（下一段返听会等它结束后再恢复）",
+                _SIDETONE_TAIL_TIMEOUT_SECONDS,
+            )
 
     def open_stream(
         self,

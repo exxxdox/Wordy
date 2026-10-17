@@ -10,7 +10,7 @@ from threading import Barrier, Event, Thread
 from time import perf_counter
 from unittest.mock import MagicMock
 
-from pytest import MonkeyPatch
+from pytest import MonkeyPatch, raises
 
 from wordy.audio.sidetone import SidetoneAudioPlayer
 
@@ -395,6 +395,86 @@ class TestSidetoneAudioPlayer:
         sidetone.play_wav.assert_called_once()
         called_arg = sidetone.play_wav.call_args[0][0]
         assert called_arg.tell() == 0
+
+    def test_play_wav_does_not_wait_forever_for_stuck_sidetone(self, monkeypatch: MonkeyPatch):
+        """返听设备卡死不能占住调用方：TTS worker 是串行的，会拖死后续所有朗读。"""
+        monkeypatch.setattr("wordy.audio.sidetone._SIDETONE_TAIL_TIMEOUT_SECONDS", 0.05)
+        main, sidetone = self._make_players()
+        main.play_wav.return_value = True
+        release = Event()
+        started = Event()
+
+        def stuck(*_args, **_kwargs):
+            started.set()
+            release.wait()
+            return True
+
+        sidetone.play_wav.side_effect = stuck
+        wrapper = SidetoneAudioPlayer(main, sidetone)
+        wrapper.set_sidetone_enabled(True)
+
+        try:
+            began = perf_counter()
+            assert wrapper.play_wav("test.wav") is True
+            elapsed = perf_counter() - began
+            assert started.is_set()  # 返听确实已经开始，只是卡住
+            assert elapsed < 1.0, f"卡住的返听拖住了调用方 {elapsed:.2f}s"
+        finally:
+            release.set()
+            assert wrapper._sidetone_tail is not None
+            wrapper._sidetone_tail.join(1)
+
+    def test_play_wav_waits_for_sidetone_tail_when_main_raises(self):
+        """主输出抛异常也必须等返听：调用方随后就会删掉音源临时文件。"""
+        main, sidetone = self._make_players()
+        main.play_wav.side_effect = RuntimeError("device gone")
+        finished = Event()
+
+        def slow(*_args, **_kwargs):
+            Event().wait(0.05)
+            finished.set()
+            return True
+
+        sidetone.play_wav.side_effect = slow
+        wrapper = SidetoneAudioPlayer(main, sidetone)
+        wrapper.set_sidetone_enabled(True)
+
+        with raises(RuntimeError, match="device gone"):
+            wrapper.play_wav("test.wav")
+        assert finished.is_set()
+
+    def test_play_wav_skips_sidetone_while_previous_tail_is_still_playing(
+        self, monkeypatch: MonkeyPatch,
+    ):
+        """上一段返听还没收尾时不能再排队，否则落后会一直累积。"""
+        monkeypatch.setattr("wordy.audio.sidetone._SIDETONE_TAIL_TIMEOUT_SECONDS", 0.05)
+        main, sidetone = self._make_players()
+        main.play_wav.return_value = True
+        release = Event()
+        started = Event()
+
+        def slow(*_args, **_kwargs):
+            started.set()
+            release.wait()
+            return True
+
+        sidetone.play_wav.side_effect = slow
+        wrapper = SidetoneAudioPlayer(main, sidetone)
+        wrapper.set_sidetone_enabled(True)
+
+        try:
+            assert wrapper.play_wav("first.wav") is True
+            assert started.wait(1)
+            assert wrapper.play_wav("second.wav") is True
+            assert sidetone.play_wav.call_count == 1  # 第二次没有排队
+        finally:
+            release.set()
+            assert wrapper._sidetone_tail is not None
+            wrapper._sidetone_tail.join(1)
+
+        # 收尾完成后返听恢复
+        assert wrapper.play_wav("third.wav") is True
+        assert sidetone.play_wav.call_count == 2
 
     def test_play_wav_sidetone_failure_not_fatal(self):
         main, sidetone = self._make_players()

@@ -503,7 +503,34 @@ class TestTTSManagerVoice:
 
     def test_reset_audio_output(self, manager, mock_engine):
         manager.reset_audio_output()
+        operation, *args = manager._executor.submit.call_args.args
+        operation(*args)
         mock_engine.reset_audio_output.assert_called_once()
+
+    def test_reset_audio_output_defers_to_worker_thread(self, manager, mock_engine):
+        """调用方是 GUI 线程，而实时引擎的 reset 要抢与 speak() 同一把锁。
+
+        同步执行会让「朗读中切换返听/输出设备」把界面卡到本段读完。
+        """
+        manager.reset_audio_output()
+        mock_engine.reset_audio_output.assert_not_called()
+
+    def test_reset_audio_output_skipped_while_worker_hands_over(self, manager, mock_engine):
+        """交接期间新引擎还没打开音频流，不能去关旧 worker 正在用的播放器。"""
+        manager._worker_ready = threading.Event()
+        manager.reset_audio_output()
+        manager._executor.submit.assert_not_called()
+
+    def test_reset_audio_output_survives_closed_executor(self, manager, mock_engine):
+        """退出后 executor 已关闭，reset 只记日志，不向 GUI 抛出。"""
+        manager._executor.submit.side_effect = RuntimeError("cannot schedule new futures")
+        manager.reset_audio_output()
+
+    def test_reset_audio_output_failure_does_not_kill_worker(self, manager, mock_engine):
+        mock_engine.reset_audio_output.side_effect = RuntimeError("device busy")
+        manager.reset_audio_output()
+        operation, *args = manager._executor.submit.call_args.args
+        operation(*args)
 
 
 class TestTTSManagerSpeak:

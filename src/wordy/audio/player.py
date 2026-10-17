@@ -511,8 +511,8 @@ class AudioPlayer:
     def write_stream(self, data: bytes) -> None:
         """向已打开的原始音频流写入音频块。
 
-        调用方（CartesiaRealtimeTTS）已根据流格式选择匹配的 PCM 编码
-        （int16 流 → pcm_s16le，float32 流 → pcm_f32le），此处直接透传。
+        流统一按 paInt16 打开，调用方（CartesiaRealtimeTTS / VolcengineStreamingTTS）
+        也固定请求 pcm_s16le，此处直接透传。
         """
         if self._stream is None:
             raise RuntimeError("音频流尚未打开")
@@ -640,6 +640,9 @@ class AudioPlayer:
             wf.close()
             return False
 
+        # 中途失败必须让调用方看得见：调用方只把 False 当失败上报 UI，
+        # 返回 True 会让「播到一半设备炸了」对用户完全无声。
+        ok = True
         try:
             logger.info("开始播放到 %s...", self.output_device_name or "默认输出设备")
 
@@ -656,8 +659,10 @@ class AudioPlayer:
             logger.debug("播放完成!")
         except KeyboardInterrupt:
             logger.warning("用户中断播放")
+            ok = False
         except Exception as e:
             logger.error("播放错误: %s", e)
+            ok = False
         finally:
             self._close_stream(stream)
             try:
@@ -666,4 +671,4 @@ class AudioPlayer:
                 logger.warning("wave 文件关闭失败: %s", e)
             self._terminate_pyaudio(p)
 
-        return cancel_event is None or not cancel_event.is_set()
+        return ok and (cancel_event is None or not cancel_event.is_set())

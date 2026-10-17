@@ -27,7 +27,7 @@ from wordy.tts.cartesia import (
     _voice_specifier,
     _generation_config,
     _wav_output_format,
-    _raw_float_output_format,
+    _raw_int16_output_format,
     _raise_for_status,
     logger as cartesia_logger,
     DEFAULT_CARTESIA_SAMPLE_RATE,
@@ -164,12 +164,12 @@ def test_wav_output_format():
     }
 
 
-def test_raw_float_output_format():
-    """Test _raw_float_output_format returns correct raw format config."""
-    result = _raw_float_output_format(24000)
+def test_raw_int16_output_format():
+    """Test _raw_int16_output_format returns correct raw format config."""
+    result = _raw_int16_output_format(24000)
     assert result == {
         "container": "raw",
-        "encoding": "pcm_f32le",
+        "encoding": "pcm_s16le",
         "sample_rate": 24000,
     }
 
@@ -515,6 +515,32 @@ class TestRealtimeAudioStream:
             frames_per_buffer=1024,
         )
 
+    def test_default_output_device_still_uses_int16(self):
+        """配置名为空（用户把 CABLE Input 设成 Windows 默认设备）时也必须走 int16。
+
+        之前用配置名判断设备类型，此时 output_device_name 是空串，会退回 float32
+        并被虚拟设备的 WASAPI 端点错当 int16 解析——正是要避免的变声。
+        """
+        from wordy.tts.cartesia import pyaudio
+
+        tts, mock_player = _make_realtime_tts()
+        mock_player.output_device_name = None
+        mock_player.query_output_device_default_rate.return_value = 44100
+        mock_player.get_stream_config.return_value = {
+            "format": pyaudio.paInt16,
+            "rate": 44100,
+        }
+
+        tts._open_audio_stream()
+
+        mock_player.open_stream.assert_called_once_with(
+            audio_format=pyaudio.paInt16,
+            channels=1,
+            rate=44100,
+            frames_per_buffer=1024,
+        )
+        assert tts.sample_rate == 44100
+
 
 class TestSharedRequestArgs:
     """Shared payload construction via CartesiaTTS._build_request_args."""
@@ -574,7 +600,9 @@ class TestSharedRequestArgs:
         realtime_tts = self._make_realtime()
 
         bytes_args = bytes_tts._build_request_args(_wav_output_format(bytes_tts.sample_rate))
-        realtime_args = realtime_tts._build_request_args(_raw_float_output_format(realtime_tts.sample_rate))
+        realtime_args = realtime_tts._build_request_args(
+            _raw_int16_output_format(realtime_tts.sample_rate)
+        )
 
         common_keys = ("model_id", "voice", "language", "generation_config")
         for key in common_keys:
@@ -612,7 +640,10 @@ class TestSharedRequestArgs:
         assert payload["speed"] == "normal"
 
     def test_realtime_context_kwargs_use_shared_args(self):
-        """CartesiaRealtimeTTS._send_and_play_once passes shared args + context_id to connection.context()."""
+        """CartesiaRealtimeTTS._send_and_play_once passes shared args + context_id to connection.context().
+
+        流固定按 paInt16 打开，请求编码就固定 pcm_s16le——不再看流格式分支。
+        """
         from wordy.tts.cartesia import CartesiaRealtimeTTS
 
         mock_player = Mock()
@@ -640,7 +671,7 @@ class TestSharedRequestArgs:
 
         tts._send_and_play_once("hi")
 
-        expected_shared = tts._build_request_args(_raw_float_output_format(tts.sample_rate))
+        expected_shared = tts._build_request_args(_raw_int16_output_format(tts.sample_rate))
         assert captured_kwargs["context_id"].startswith("cartesia-tts-")
         for key, value in expected_shared.items():
             assert captured_kwargs[key] == value

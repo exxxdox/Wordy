@@ -23,6 +23,10 @@ TTS_BACKENDS = (
 )
 DEFAULT_TTS_BACKEND = TTS_BACKEND_VOLCENGINE_STREAMING
 
+# 两个后端都支持的采样率；对齐设备原生采样率时只在这些值里选，
+# 96k/192k 声卡保持请求值，让 Windows Audio Engine 自己做 SRC。
+SUPPORTED_SAMPLE_RATES = frozenset({8000, 16000, 22050, 24000, 32000, 44100, 48000})
+
 # 按服务商分组的生成模式（设置 UI 按 provider 过滤用）
 TTS_BACKENDS_BY_PROVIDER: dict[str, tuple[str, ...]] = {
     TTS_API_PROVIDER_CARTESIA: (TTS_BACKEND_CARTESIA_BYTES, TTS_BACKEND_CARTESIA_REALTIME),

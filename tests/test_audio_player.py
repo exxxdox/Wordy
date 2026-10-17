@@ -826,8 +826,9 @@ def test_play_wav_finally_cleans_up_when_write_raises_midstream(_patch_pyaudio, 
     wav_path = _make_tiny_wav(tmp_path)
     player = AudioPlayer()
 
-    # play_wav swallows generic Exception inside the try/except, so it still returns True
-    assert player.play_wav(str(wav_path)) is True
+    # 中途写失败必须报 False：调用方（TTSManager）只把 False 当失败上报 UI，
+    # 返回 True 会让「播一半设备炸了」对用户完全无声。
+    assert player.play_wav(str(wav_path)) is False
 
     # finally must have stopped + closed the stream and terminated PyAudio exactly once
     assert stream.stop_calls == 1
@@ -849,12 +850,12 @@ def test_play_wav_finally_cleans_up_when_keyboardinterrupt_midstream(_patch_pyau
     wav_path = _make_tiny_wav(tmp_path)
     player = AudioPlayer()
 
-    assert player.play_wav(str(wav_path)) is True
+    # 中断不等于播完：同样按失败上报，避免「播到一半没了」被当成正常结束。
+    assert player.play_wav(str(wav_path)) is False
 
     assert stream.stop_calls == 1
     assert stream.close_calls == 1
     assert pa.terminate_calls == 1
-
 
 
 class FakePartiallyFailingPyAudio(FakePyAudio):

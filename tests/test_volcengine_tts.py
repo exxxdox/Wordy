@@ -115,6 +115,28 @@ class TestVolcengineStreamingTTS:
         assert TTS_SSE_URL == "https://openspeech.bytedance.com/api/v3/tts/unidirectional/sse"
 
 
+def test_device_default_rate_wins_for_non_cable_device():
+    """采样率对齐设备原生值，避免 Windows Audio Engine 的 SRC 失真。
+
+    以前只对 CABLE 设备对齐，普通设备默认 44.1 kHz 时要多经一次 SRC。
+    """
+    from wordy.tts.volcengine import pyaudio
+
+    player = Mock()
+    player.output_device_name = "Speakers"
+    player.query_output_device_default_rate.return_value = 44100
+    player.open_stream.return_value = True
+    player.get_stream_config.return_value = {"format": pyaudio.paInt16, "rate": 44100}
+    engine = VolcengineStreamingTTS(audio_player=player, api_key="key", voice_id="voice")
+
+    engine._open_audio_stream()
+
+    player.open_stream.assert_called_once_with(
+        audio_format=pyaudio.paInt16, channels=1, rate=44100, frames_per_buffer=1024,
+    )
+    assert engine.sample_rate == 44100
+
+
 def test_int16_stream_failure_does_not_play_pcm_as_float32():
     # 其它测试会替换 sys.modules 中的 pyaudio，断言引擎实际持有的依赖常量。
     from wordy.tts.volcengine import pyaudio

@@ -162,14 +162,23 @@ def decoded_audio_clip(source: str | Path, cancel_event: Event | None = None) ->
         is_pcm = False
         try:
             with wave.open(str(source), "rb") as audio:
-                is_pcm = audio.getcomptype() == "NONE" and audio.getnframes() > 0
+                # 只直通 16-bit PCM：player 的格式回退链只改声明不转换数据，
+                # 24-bit/8-bit 源被回退成 paInt16 后会把原始比特流当 16-bit 播成噪声。
+                is_pcm = (
+                    audio.getcomptype() == "NONE"
+                    and audio.getsampwidth() == 2
+                    and audio.getnframes() > 0
+                )
         except (wave.Error, EOFError):
             pass
         if is_pcm:
             yield source
             return
     # 临时磁盘文件让长音频按块解码，避免把整个音频装入 GUI/worker 内存。
-    with TemporaryDirectory(prefix="wordy-clip-") as directory:
+    # ignore_cleanup_errors：返听是独立线程，设备卡死时可能还握着这个文件的句柄，
+    # Windows 上 unlink 会抛 WinError 32。那是清理失败，不是播放失败，不能让它
+    # 冒泡成「音频播放失败」；代价是极端情况下残留一个 %TEMP% 目录。
+    with TemporaryDirectory(prefix="wordy-clip-", ignore_cleanup_errors=True) as directory:
         destination = Path(directory) / "decoded.wav"
         _decode_to_wav(source, destination, cancel_event)
         yield destination

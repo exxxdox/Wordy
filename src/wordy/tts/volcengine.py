@@ -14,7 +14,7 @@ from typing import Any
 import pyaudio
 import requests
 
-from .engine import BackendTTSEngine, TTSAudioPlayer, VoiceInfo
+from .engine import BackendTTSEngine, TTSAudioPlayer, VoiceInfo, resolve_stream_rate
 
 logger = logging.getLogger(__name__)
 
@@ -122,17 +122,11 @@ class VolcengineStreamingTTS(BackendTTSEngine):
         """打开 PyAudio 流式输出。
 
         Volcengine SSE 返回 base64(pcm_s16le)，必须用 paInt16 打开，不能用 float32。
-        仅对 CABLE 设备匹配原生采样率以避免 Windows SRC 失真。
+        采样率对齐设备原生值，避免 Windows SRC 失真。
         """
-        device_name = (self.audio_player.output_device_name or "").lower()
-        is_cable = any(kw in device_name for kw in ("cable", "vb-audio"))
-
-        stream_rate = self.sample_rate
-        if is_cable:
-            device_rate = self.audio_player.query_output_device_default_rate()
-            if device_rate is not None and device_rate != self.sample_rate:
-                logger.warning("CABLE 设备默认采样率为 %s Hz，已调整为设备原生采样率", device_rate)
-                stream_rate = device_rate
+        stream_rate = resolve_stream_rate(
+            self.sample_rate, self.audio_player.query_output_device_default_rate()
+        )
 
         buffer_size = 1024
         # Volcengine 始终返回 pcm_s16le → 必须用 paInt16
