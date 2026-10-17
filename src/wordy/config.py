@@ -313,7 +313,11 @@ class AppSettings:
             for provider_name, provider_data in raw_providers.items():
                 if isinstance(provider_data, dict) and provider_name in settings.tts_providers:
                     target = settings.tts_providers[provider_name]
-                    for k in ("voice_id", "voice_name", "backend", "api_key_set", "api_key_storage"):
+                    # 白名单必须与持久化的 provider 字段保持一致：漏掉的键会被静默丢弃，
+                    # 表现就是「设置里改了、重启后没了」。voice_list 原样搬，读取时由
+                    # volcengine_voice_list 的 getter 统一清洗。
+                    for k in ("voice_id", "voice_name", "backend", "api_key_set",
+                              "api_key_storage", "voice_list"):
                         if k in provider_data:
                             target[k] = provider_data[k]
         # active_tts_provider

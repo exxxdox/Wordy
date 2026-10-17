@@ -490,6 +490,10 @@ def test_volcengine_voice_list_round_trips(tmp_path: Path):
         {"id": "BV001_streaming", "name": "通用女声"},
     ]
     s.flush()
+    # 必须清掉 load() 缓存，否则第二次 load 返回同一实例——等于没验证落盘。
+    # 这条用例最初就是因为漏了这一步才假绿的。
+    wordy.config._cached_settings = None
+    wordy.config._cached_config_file = None
 
     s2 = AppSettings.load(config_file=cfg)
     assert s2.volcengine_voice_list == [
