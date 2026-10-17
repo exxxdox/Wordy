@@ -244,7 +244,14 @@ class CartesiaPanel(_BasePanel):
 
 
 class VolcenginePanel(_BasePanel):
-    """Volcengine TTS 设置面板：API Key + Speaker ID 文本框。"""
+    """Volcengine TTS 设置面板：API Key + 本地维护的音色列表。
+
+    火山引擎没有可枚举音色的 HTTP 接口（``/api/v3/tts/get_voice`` 是单查，
+    且不返回人类可读名称），所以列表由用户手动维护并持久化到配置，
+    名称也由用户填写；这里不发任何网络请求。
+    """
+
+    NONE_VOICE_LABEL = "无（不启用 TTS 音色）"
 
     # ── build ────────────────────────────────────────────────────────
 
@@ -277,18 +284,128 @@ class VolcenginePanel(_BasePanel):
         sec.addWidget(self.api_status)
         parent.addSpacing(12)
 
-        # Speaker ID
+        # 音色切换
         sec2 = self._create_section(parent)
-        sec2.addWidget(self._section_title("Speaker ID"))
-        self.voice_status = self._hint_label("输入火山引擎控制台中的 Speaker ID", TEXT_MUTED)
+        sec2.addWidget(self._section_title("音色"))
+        self.voice_status = self._hint_label("", TEXT_MUTED)
+        # 反馈走浮动弹窗队列；这条原地标签只在面板独立使用时出现。
+        self.voice_status.setVisible(False)
         sec2.addWidget(self.voice_status)
-        self.speaker_input = QLineEdit()
-        self.speaker_input.setPlaceholderText("Speaker ID，如 BV001_streaming")
-        vid = AppSettings.load().volcengine_voice_id
-        if vid:
-            self.speaker_input.setText(vid)
-        self.speaker_input.textChanged.connect(self._on_speaker_changed)
-        sec2.addWidget(self.speaker_input)
+        self.voice_combo = NoWheelComboBox()
+        self.voice_combo.setSizeAdjustPolicy(
+            NoWheelComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+        self.voice_combo.setMinimumContentsLength(16)
+        self.voice_combo.currentTextChanged.connect(self._on_voice_selected)
+        sec2.addWidget(self.voice_combo)
+        self._apply_voice_list(AppSettings.load().volcengine_voice_id)
+        parent.addSpacing(12)
+
+        # 维护列表
+        sec3 = self._create_section(parent)
+        sec3.addWidget(self._section_title("维护音色列表"))
+        sec3.addWidget(self._hint_label(
+            "音色列表保存在本地，不联网查询。填好 Speaker ID 和显示名后点「添加」，"
+            "之后即可在上面的下拉里直接切换。",
+            TEXT_MUTED,
+        ))
+        self.new_voice_id = QLineEdit()
+        self.new_voice_id.setPlaceholderText("Speaker ID，如 S_xxxx 或 BV001_streaming")
+        sec3.addWidget(self.new_voice_id)
+        self.new_voice_name = QLineEdit()
+        self.new_voice_name.setPlaceholderText("显示名称，如 我的复刻音色")
+        sec3.addWidget(self.new_voice_name)
+        list_row = QHBoxLayout()
+        list_row.setContentsMargins(0, 0, 0, 0)
+        list_row.setSpacing(INLINE_GAP)
+        self.add_voice_btn = QPushButton("添加")
+        self.add_voice_btn.setMinimumWidth(BUTTON_MIN_WIDTH)
+        self.add_voice_btn.clicked.connect(self._on_add_voice)
+        list_row.addWidget(self.add_voice_btn)
+        self.remove_voice_btn = QPushButton("删除")
+        self.remove_voice_btn.setMinimumWidth(BUTTON_MIN_WIDTH)
+        self.remove_voice_btn.clicked.connect(self._on_remove_voice)
+        list_row.addWidget(self.remove_voice_btn)
+        list_row.addStretch(1)
+        sec3.addLayout(list_row)
+        self.voice_list_status = self._hint_label("", TEXT_MUTED)
+        self.voice_list_status.setVisible(False)
+        sec3.addWidget(self.voice_list_status)
+
+    # ── 音色列表（纯本地） ────────────────────────────────────────────
+
+    def _apply_voice_list(self, selected_id: str | None) -> None:
+        """用本地维护的列表重填下拉，结构对齐 CartesiaPanel 以便窗口统一读取。"""
+        entries: list[dict[str, object]] = [
+            {"id": entry["id"], "name": entry["name"]}
+            for entry in AppSettings.load().volcengine_voice_list
+        ]
+        maps = build_voice_label_maps(entries, selected_id)
+        self.voice_combo.blockSignals(True)
+        self.voice_combo.clear()
+        self.voice_combo.addItem(self.NONE_VOICE_LABEL)
+        self.voice_combo.addItems(maps.labels)
+        self.voice_combo.setCurrentText(maps.selected_label or self.NONE_VOICE_LABEL)
+        self.voice_combo.blockSignals(False)
+        self.voice_label_to_id = maps.label_to_id
+        self.voice_label_to_name = maps.label_to_name
+
+    def _on_voice_selected(self, label: str) -> None:
+        """下拉切换：写入 AppSettings 并通知 overlay 重建引擎。"""
+        settings = AppSettings.load()
+        if label == self.NONE_VOICE_LABEL:
+            settings.volcengine_voice_id = None
+            settings.volcengine_voice_name = None
+            return
+        voice_id = self.voice_label_to_id.get(label)
+        if not voice_id:
+            return
+        settings.volcengine_voice_id = voice_id
+        settings.volcengine_voice_name = self.voice_label_to_name.get(label, voice_id)
+        if self._on_field_changed is not None:
+            self._on_field_changed("volcengine_voice_id", voice_id)
+
+    def _on_add_voice(self, _checked: bool = False) -> None:
+        """把输入框里的 ID/名称写进列表；同 ID 视为改名而不是新增一条。"""
+        voice_id = self.new_voice_id.text().strip()
+        if not voice_id:
+            self._status(self.voice_list_status, "请先填写 Speaker ID。", TEXT_WARNING)
+            return
+        name = self.new_voice_name.text().strip() or voice_id
+        settings = AppSettings.load()
+        entries = [e for e in settings.volcengine_voice_list if e["id"] != voice_id]
+        entries.append({"id": voice_id, "name": name})
+        settings.volcengine_voice_list = entries
+        # 新录的音色直接生效：用户填完 ID 就是要用它，不必回下拉里再点一次。
+        settings.volcengine_voice_id = voice_id
+        settings.volcengine_voice_name = name
+        self.new_voice_id.clear()
+        self.new_voice_name.clear()
+        self._apply_voice_list(voice_id)
+        self._status(self.voice_list_status, f"已保存音色：{name}", INPUT_TEXT_COLOR)
+        if self._on_field_changed is not None:
+            self._on_field_changed("volcengine_voice_id", voice_id)
+
+    def _on_remove_voice(self, _checked: bool = False) -> None:
+        """删除当前选中的音色（下拉选中项即生效项），随后落到剩下第一条。
+
+        全删光才回到「无」——否则用户切走再回来会发现音色莫名其妙没了。
+        """
+        voice_id = self.voice_label_to_id.get(self.voice_combo.currentText())
+        if not voice_id:
+            self._status(self.voice_list_status, "请先在上面的下拉里选择要删除的音色。", TEXT_WARNING)
+            return
+        settings = AppSettings.load()
+        settings.volcengine_voice_list = [
+            e for e in settings.volcengine_voice_list if e["id"] != voice_id
+        ]
+        remaining = settings.volcengine_voice_list
+        settings.volcengine_voice_id = remaining[0]["id"] if remaining else None
+        settings.volcengine_voice_name = remaining[0]["name"] if remaining else None
+        self._apply_voice_list(settings.volcengine_voice_id)
+        self._status(self.voice_list_status, "已从列表删除。", INPUT_TEXT_COLOR)
+        if self._on_field_changed is not None:
+            self._on_field_changed("volcengine_voice_id", settings.volcengine_voice_id)
 
     # ── handlers ─────────────────────────────────────────────────────
 
@@ -326,25 +443,18 @@ class VolcenginePanel(_BasePanel):
         except Exception as e:
             self._status(self.api_status, f"清除失败：{e}", TEXT_ERROR)
 
-    def _on_speaker_changed(self, text: str) -> None:
-        """Speaker ID 变更：直接写入 AppSettings 并通知 overlay 重建引擎。"""
-        sid = text.strip()
-        s = AppSettings.load()
-        s.volcengine_voice_id = sid if sid else None
-        s.volcengine_voice_name = sid if sid else None
-        if self._on_field_changed is not None:
-            self._on_field_changed("volcengine_voice_id", sid if sid else None)
-
     # ── status ───────────────────────────────────────────────────────
 
     def set_voices_loading(self) -> None:
-        pass
+        """本地列表没有可等待的加载过程，保持空实现以满足窗口的统一调用。"""
 
     def set_voices_error(self, error: Exception | str) -> None:
-        pass
+        """本地列表不会加载失败，保持空实现以满足窗口的统一调用。"""
 
     def set_voices_loaded(self, voices: list[dict], selected_voice_id: str | None) -> list[str]:
-        return []
+        """忽略传入的网络结果——Volcengine 的音色始终来自本地维护的列表。"""
+        self._apply_voice_list(selected_voice_id or AppSettings.load().volcengine_voice_id)
+        return list(self.voice_label_to_id.keys())
 
 
 # ── 面板注册表 ────────────────────────────────────────────────────────

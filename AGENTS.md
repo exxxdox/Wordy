@@ -12,7 +12,7 @@
 
 `AudioPlayer` 每次播放都新建再终止一个 `PyAudio` 实例，而 PortAudio 的初始化计数是**进程级且非原子**的：两个线程并发跑 `Pa_Initialize`/`Pa_Terminate`，会让一个线程把全局设备表释放掉、另一个线程还在读它。症状是 `Pa_GetDeviceCount` 返回垃圾值（实测是一个被截断的指针，如 `-1294395680`）、日志报「没有默认输出设备」，重则原生访问违例**直接段错误**——没有 Python 堆栈，看起来就是「闪退」。
 
-返听（`SidetoneAudioPlayer.play_wav`）用 `ThreadPoolExecutor(max_workers=2)` 同时跑主输出与返听两路播放，正好制造这个并发。因此 `player.py` 用模块级 `_PORTAUDIO_LIFECYCLE_LOCK` 包住每一次 `_new_pyaudio()` 与 `_terminate_pyaudio_locked()`，**只锁生命周期调用、不锁中间的实际播放**（否则一路播放会把另一路整个堵住）。回归用例在 `tests/test_audio_player.py::test_portaudio_lifecycle_is_serialized`：真跑真 PortAudio 会让 pytest 进程本身挂掉，所以它用假实例检测重叠。
+返听（`SidetoneAudioPlayer.play_wav`）主输出在调用线程同步播、返听另起守护线程，两路同时播放，正好制造这个并发。因此 `player.py` 用模块级 `_PORTAUDIO_LIFECYCLE_LOCK` 包住每一次 `_new_pyaudio()` 与 `_terminate_pyaudio_locked()`，**只锁生命周期调用、不锁中间的实际播放**（否则一路播放会把另一路整个堵住）。返听那一路只等固定上限（`_SIDETONE_TAIL_TIMEOUT_SECONDS`）就放手——调用方是串行的 TTS worker，无限等下去会把后续所有朗读一起拖住；上一段返听还没收尾时，本次直接跳过返听而不是排队叠加。回归用例在 `tests/test_audio_player.py::test_portaudio_lifecycle_is_serialized`：真跑真 PortAudio 会让 pytest 进程本身挂掉，所以它用假实例检测重叠。
 
 `pyaudiowpatch`（录音）是另一份静态链接的 PortAudio，有独立的初始化计数，不共用这把锁。
 
@@ -23,6 +23,12 @@
 ## TTS Worker 生命周期
 
 `WordyApp` 在 GUI 线程委托 `TTSManager` 提交操作。任务绑定提交时的引擎；预热和播放共用 worker executor。切换后端/API key 时，janitor 先等待旧任务完成，再关闭旧引擎并释放后继事件。新 worker 可立即接收任务，播放/预热等待旧 worker 清理后才使用共享播放器，避免阻塞 UI 和跨引擎关闭音频流。测试直接访问 `tts_manager`。
+
+## Volcengine 音色列表
+
+**厂商没有可枚举音色的 HTTP 接口**，别去写「拉取音色列表」。`POST /api/v3/tts/get_voice` 是**单查**（入参必填 `speaker_id`），只返回该音色的注册状态与试听音频 `demo_audio`，**没有任何人类可读名称字段**，也没有分页/列表参数；官方「大模型音色列表」文档是静态表格，不是接口。
+
+因此音色列表由用户**手动维护**并持久化在 `AppSettings.volcengine_voice_list`（`[{"id", "name"}]`，读取时由 `_normalize_voice_entries` 清洗：id 必须非空字符串、同 id 留第一条、缺名用 id 兜底——下拉按名称做标签，没名称的条目会被 `build_voice_label_maps` 静默丢掉）。`VolcenginePanel` 只做三件事：下拉快速切换（选中即写 `volcengine_voice_id`/`voice_name` 并通知重建引擎）、添加（同 ID 改名而非新增，且新条目直接生效）、删除（落到剩下第一条，全删光才回「无」）。`set_voices_loaded` 忽略传入的网络结果，始终按本地列表重填。
 
 ## 音频聊天轮盘
 

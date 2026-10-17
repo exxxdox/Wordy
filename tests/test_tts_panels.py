@@ -13,6 +13,7 @@ from wordy.ui.tts_panels import (
     VolcenginePanel,
     _BasePanel,
 )
+from wordy.config import AppSettings
 from wordy.tts.constants import TTS_API_PROVIDER_CARTESIA, TTS_API_PROVIDER_VOLCENGINE
 from wordy.ui.settings import SettingsWindow
 
@@ -119,30 +120,189 @@ class TestCartesiaPanelBuild:
         assert panel.voice_combo.itemText(0) == panel.NONE_VOICE_LABEL
 
 
+# 保住父容器引用：容器一旦被 GC，其子控件的 C++ 对象会一起销毁，
+# 后续断言就变成 "Internal C++ object already deleted"。
+_PANEL_CONTAINERS: list[QWidget] = []
+
+
+def _build_volcengine_panel(mock_state, on_field_changed=None) -> VolcenginePanel:
+    panel = VolcenginePanel()
+    parent = QVBoxLayout()
+    container = QWidget()
+    container.setLayout(parent)
+    panel.build(parent, mock_state, lambda: None, on_field_changed)
+    _PANEL_CONTAINERS.append(container)
+    return panel
+
+
 class TestVolcenginePanelBuild:
     """VolcenginePanel build 方法。"""
 
     def test_build_creates_widgets(self, qapp, mock_state):
-        panel = VolcenginePanel()
-        parent = QVBoxLayout()
-        container = QWidget()
-        container.setLayout(parent)
-
-        panel.build(parent, mock_state, lambda: None)
+        panel = _build_volcengine_panel(mock_state)
 
         assert panel.api_key_input is not None
-        assert panel.speaker_input is not None
         assert panel.save_key_btn is not None
         assert panel.clear_key_btn is not None
+        assert panel.voice_combo is not None
+        assert panel.new_voice_id is not None
+        assert panel.new_voice_name is not None
 
-    def test_speaker_input_placeholder(self, qapp, mock_state):
-        panel = VolcenginePanel()
-        parent = QVBoxLayout()
-        container = QWidget()
-        container.setLayout(parent)
+    def test_voice_id_input_placeholder(self, qapp, mock_state):
+        panel = _build_volcengine_panel(mock_state)
+        assert "Speaker ID" in panel.new_voice_id.placeholderText()
 
-        panel.build(parent, mock_state, lambda: None)
-        assert "Speaker ID" in panel.speaker_input.placeholderText()
+    def test_combo_starts_with_none_entry(self, qapp, mock_state):
+        panel = _build_volcengine_panel(mock_state)
+        assert panel.voice_combo.currentText() == panel.NONE_VOICE_LABEL
+
+
+class TestVolcenginePanelVoiceList:
+    """本地手动维护的音色列表：添加、快速切换、删除。不联网。"""
+
+    def test_add_voice_persists_and_fills_combo(self, qapp, mock_state):
+        panel = _build_volcengine_panel(mock_state)
+        panel.new_voice_id.setText("S_abc")
+        panel.new_voice_name.setText("我的复刻音色")
+
+        panel._on_add_voice()
+
+        assert AppSettings.load().volcengine_voice_list == [
+            {"id": "S_abc", "name": "我的复刻音色"}
+        ]
+        assert panel.voice_combo.currentText() == "我的复刻音色"
+        assert panel.voice_label_to_id["我的复刻音色"] == "S_abc"
+
+    def test_add_voice_with_same_id_updates_in_place(self, qapp, mock_state):
+        """同 ID 重填名称是「改」，不是再插一条。"""
+        panel = _build_volcengine_panel(mock_state)
+        panel.new_voice_id.setText("S_abc")
+        panel.new_voice_name.setText("旧名")
+        panel._on_add_voice()
+        panel.new_voice_id.setText("S_abc")
+        panel.new_voice_name.setText("新名")
+
+        panel._on_add_voice()
+
+        assert AppSettings.load().volcengine_voice_list == [{"id": "S_abc", "name": "新名"}]
+
+    def test_add_voice_without_name_falls_back_to_id(self, qapp, mock_state):
+        panel = _build_volcengine_panel(mock_state)
+        panel.new_voice_id.setText("S_abc")
+        panel.new_voice_name.setText("   ")
+
+        panel._on_add_voice()
+
+        assert panel.voice_label_to_id == {"S_abc": "S_abc"}
+
+    def test_add_voice_without_id_does_nothing(self, qapp, mock_state):
+        panel = _build_volcengine_panel(mock_state)
+        panel.new_voice_id.setText("   ")
+
+        panel._on_add_voice()
+
+        assert AppSettings.load().volcengine_voice_list == []
+
+    def test_selecting_from_combo_makes_voice_active(self, qapp, mock_state):
+        """下拉切换是「快速切换」的入口：写配置 + 通知重建引擎。"""
+        changes: list[tuple[str, object]] = []
+        panel = _build_volcengine_panel(
+            mock_state, lambda field, value: changes.append((field, value))
+        )
+        panel.new_voice_id.setText("S_abc")
+        panel.new_voice_name.setText("我的复刻音色")
+        panel._on_add_voice()
+        panel.voice_combo.setCurrentText(panel.NONE_VOICE_LABEL)
+        changes.clear()
+
+        panel.voice_combo.setCurrentText("我的复刻音色")
+
+        settings = AppSettings.load()
+        assert settings.volcengine_voice_id == "S_abc"
+        assert settings.volcengine_voice_name == "我的复刻音色"
+        assert changes == [("volcengine_voice_id", "S_abc")]
+
+    def test_remove_voice_drops_entry_and_clears_active(self, qapp, mock_state):
+        panel = _build_volcengine_panel(mock_state)
+        panel.new_voice_id.setText("S_abc")
+        panel.new_voice_name.setText("我的复刻音色")
+        panel._on_add_voice()
+        panel.voice_combo.setCurrentText("我的复刻音色")
+
+        panel._on_remove_voice()
+
+        settings = AppSettings.load()
+        assert settings.volcengine_voice_list == []
+        # 删掉的正是生效音色时要一并清空，否则下拉会停在一个不存在的条目上。
+        assert settings.volcengine_voice_id is None
+        assert settings.volcengine_voice_name is None
+        assert panel.voice_combo.currentText() == panel.NONE_VOICE_LABEL
+
+    def test_remove_active_voice_falls_back_to_remaining_entry(self, qapp, mock_state):
+        """删掉生效音色后落到剩下第一条，而不是留下一个空的下拉。"""
+        panel = _build_volcengine_panel(mock_state)
+        for voice_id, name in (("S_abc", "音色甲"), ("S_def", "音色乙")):
+            panel.new_voice_id.setText(voice_id)
+            panel.new_voice_name.setText(name)
+            panel._on_add_voice()
+
+        panel.voice_combo.setCurrentText("音色甲")
+        panel._on_remove_voice()
+
+        settings = AppSettings.load()
+        assert [entry["id"] for entry in settings.volcengine_voice_list] == ["S_def"]
+        assert settings.volcengine_voice_id == "S_def"
+        assert panel.voice_combo.currentText() == "音色乙"
+
+    def test_add_voice_makes_it_active_and_notifies(self, qapp, mock_state):
+        """新填的音色直接生效并通知重建引擎。"""
+        changes: list[tuple[str, object]] = []
+        panel = _build_volcengine_panel(
+            mock_state, lambda field, value: changes.append((field, value))
+        )
+
+        panel.new_voice_id.setText("S_abc")
+        panel.new_voice_name.setText("我的复刻音色")
+        panel._on_add_voice()
+
+        settings = AppSettings.load()
+        assert settings.volcengine_voice_id == "S_abc"
+        assert settings.volcengine_voice_name == "我的复刻音色"
+        assert changes == [("volcengine_voice_id", "S_abc")]
+
+    def test_remove_without_selection_does_nothing(self, qapp, mock_state):
+        """下拉停在「无」（列表有货但当前没选音色）时，删除不能误删别的条目。"""
+        AppSettings.load().volcengine_voice_list = [{"id": "S_abc", "name": "音色甲"}]
+        panel = _build_volcengine_panel(mock_state)
+        assert panel.voice_combo.currentText() == panel.NONE_VOICE_LABEL
+
+        panel._on_remove_voice()
+
+        assert AppSettings.load().volcengine_voice_list == [{"id": "S_abc", "name": "音色甲"}]
+
+    def test_saved_list_repopulates_combo_on_build(self, qapp, mock_state):
+        """重启后下拉必须直接可用，用户不必重新录入。"""
+        s = AppSettings.load()
+        s.volcengine_voice_list = [{"id": "S_abc", "name": "我的复刻音色"}]
+        s.volcengine_voice_id = "S_abc"
+        s.volcengine_voice_name = "我的复刻音色"
+
+        panel = _build_volcengine_panel(mock_state)
+
+        assert panel.voice_combo.currentText() == "我的复刻音色"
+        assert panel.voice_label_to_id["我的复刻音色"] == "S_abc"
+
+    def test_set_voices_loaded_uses_local_list(self, qapp, mock_state):
+        """Volcengine 不联网拉取：忽略传入的网络结果，始终按本地列表重填。"""
+        panel = _build_volcengine_panel(mock_state)
+        panel.new_voice_id.setText("S_abc")
+        panel.new_voice_name.setText("我的复刻音色")
+        panel._on_add_voice()
+
+        labels = panel.set_voices_loaded([], None)
+
+        assert labels == ["我的复刻音色"]
+        assert panel.voice_combo.currentText() == "我的复刻音色"
 
 
 class TestProviderPanelsRegistry:

@@ -53,6 +53,34 @@ def _clamp(value: float, lo: float, hi: float) -> float:
     return min(max(float(value), lo), hi)
 
 
+def _normalize_voice_entries(raw: object) -> list[dict[str, str]]:
+    """把配置里的音色列表收拾成 ``[{"id": ..., "name": ...}]``。
+
+    配置可能被手改或来自旧版本，所以逐条校验：``id`` 必须是非空字符串，
+    同 id 只留第一条；``name`` 缺失或不是字符串时用 id 兜底——下拉列表按名称
+    做标签，没有名称的条目会在 ``build_voice_label_maps`` 里被静默丢掉。
+    """
+    if not isinstance(raw, list):
+        return []
+
+    entries: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        voice_id = item.get("id")
+        if not isinstance(voice_id, str):
+            continue
+        voice_id = voice_id.strip()
+        if not voice_id or voice_id in seen:
+            continue
+        raw_name = item.get("name")
+        name = raw_name.strip() if isinstance(raw_name, str) else ""
+        seen.add(voice_id)
+        entries.append({"id": voice_id, "name": name or voice_id})
+    return entries
+
+
 # ---------------------------------------------------------------------------
 # AppSettings — 统一配置对象
 # ---------------------------------------------------------------------------
@@ -201,6 +229,14 @@ class AppSettings:
         v = self.get_provider("Volcengine").get("voice_name"); return v if isinstance(v, str) else None
     @volcengine_voice_name.setter
     def volcengine_voice_name(self, value: str | None) -> None: self._set_provider_field("Volcengine", "voice_name", value)
+
+    @property
+    def volcengine_voice_list(self) -> list[dict[str, str]]:
+        """用户手动维护的火山引擎音色列表（id + 显示名），纯本地，不联网拉取。"""
+        return _normalize_voice_entries(self.get_provider("Volcengine").get("voice_list"))
+    @volcengine_voice_list.setter
+    def volcengine_voice_list(self, value: list[dict[str, str]]) -> None:
+        self._set_provider_field("Volcengine", "voice_list", _normalize_voice_entries(value))
 
     @property
     def volcengine_tts_backend(self) -> str:

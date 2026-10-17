@@ -481,6 +481,60 @@ def test_fixed_center_config(tmp_path: Path):
 # initial config
 # ---------------------------------------------------------------------------
 
+def test_volcengine_voice_list_round_trips(tmp_path: Path):
+    """手动维护的火山引擎音色列表必须落盘，重启后仍在。"""
+    cfg = tmp_path / "config.toml"
+    s = AppSettings.load(config_file=cfg)
+    s.volcengine_voice_list = [
+        {"id": "S_abc123", "name": "我的复刻音色"},
+        {"id": "BV001_streaming", "name": "通用女声"},
+    ]
+    s.flush()
+
+    s2 = AppSettings.load(config_file=cfg)
+    assert s2.volcengine_voice_list == [
+        {"id": "S_abc123", "name": "我的复刻音色"},
+        {"id": "BV001_streaming", "name": "通用女声"},
+    ]
+
+
+def test_volcengine_voice_list_defaults_to_empty(tmp_path: Path):
+    s = AppSettings.load(config_file=tmp_path / "config.toml")
+    assert s.volcengine_voice_list == []
+
+
+def test_volcengine_voice_list_sanitizes_entries(tmp_path: Path):
+    """配置可被手改：丢掉坏条目，同 ID 只留第一条，缺名用 ID 兜底。
+
+    下拉列表按名称做标签，没有名称的条目会静默消失，所以必须有兜底。
+    """
+    s = AppSettings.load(config_file=tmp_path / "config.toml")
+    s.get_provider("Volcengine")["voice_list"] = [
+        {"id": "S_ok", "name": "好条目"},
+        {"id": "S_ok", "name": "重复 ID"},
+        {"id": "  S_padded  ", "name": "  两边有空格  "},
+        {"id": "S_noname", "name": ""},
+        {"id": "S_badname", "name": 7},
+        {"id": "", "name": "空 ID"},
+        {"id": 5, "name": "非字符串 ID"},
+        "不是字典",
+        None,
+    ]
+
+    assert s.volcengine_voice_list == [
+        {"id": "S_ok", "name": "好条目"},
+        {"id": "S_padded", "name": "两边有空格"},
+        {"id": "S_noname", "name": "S_noname"},
+        {"id": "S_badname", "name": "S_badname"},
+    ]
+
+
+def test_volcengine_voice_list_rejects_non_list(tmp_path: Path):
+    s = AppSettings.load(config_file=tmp_path / "config.toml")
+    s.get_provider("Volcengine")["voice_list"] = "S_abc"
+    assert s.volcengine_voice_list == []
+
+
 def test_load_invalid_voice(tmp_path: Path):
     """AppSettings.load() returns None voice when stored voice_id is invalid."""
     cfg = tmp_path / "config.toml"
