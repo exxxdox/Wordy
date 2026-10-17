@@ -205,7 +205,7 @@ class _WheelPicker(QWidget):
 
 class ChatWheelSettings(QWidget):
     def __init__(self, settings: AppSettings,
-                 on_field_changed: Callable[[str, object], None]):
+                 on_field_changed: Callable[[str, object], bool | None]):
         super().__init__()
         self._settings = settings
         self._on_field_changed = on_field_changed

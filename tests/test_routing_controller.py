@@ -41,6 +41,7 @@ class TestRoutingControllerInit:
         with patch("wordy.routing_controller.VBCableDriverManager.is_installed", return_value=False):
             ctrl = RoutingController(mock_settings, mock_player)
         assert ctrl.is_running is False
+        assert mock_settings.audio_routing_enabled is False
 
     def test_init_with_routing_enabled_and_vb_cable_creates_router(
         self, mock_player, mock_settings,
@@ -70,6 +71,7 @@ class TestRoutingControllerInit:
             MockRouter.return_value.start.return_value = False
             ctrl = RoutingController(mock_settings, mock_player)
             assert ctrl.is_running is False
+            assert mock_settings.audio_routing_enabled is False
 
     def test_init_router_exception_sets_not_running(
         self, mock_player, mock_settings,
@@ -191,6 +193,19 @@ class TestRoutingControllerApplyConfig:
                 "mic_input_device": "Test Mic",
             })
             assert ctrl.is_running is True
+
+    def test_apply_config_enable_reports_router_start_failure(
+        self, mock_player, mock_settings,
+    ):
+        ctrl = RoutingController(mock_settings, mock_player)
+
+        with patch(
+            "wordy.routing_controller.VBCableDriverManager.is_installed",
+            return_value=False,
+        ):
+            assert ctrl.apply_config({"audio_routing_enabled": True}) is False
+
+        assert ctrl.is_running is False
 
     def test_apply_config_mic_device_change_when_running(
         self, mock_player, mock_settings,

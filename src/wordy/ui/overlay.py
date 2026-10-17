@@ -67,7 +67,7 @@ class InputOverlay:
         on_cartesia_api_key_change: Callable[[str | None], None] | None = None,
         on_tts_api_provider_change: Callable[[str], None] | None = None,
         on_volcengine_credentials_change: Callable[[str | None], None] | None = None,
-        on_audio_route_change: Callable[[dict[str, object]], None] | None = None,
+        on_audio_route_change: Callable[[dict[str, object]], bool] | None = None,
         on_sidetone_change: Callable[[bool], None] | None = None,
         on_query_mic_listen_status: Callable[[], bool] | None = None,
         audio_player: object | None = None,
@@ -782,7 +782,7 @@ class InputOverlay:
         if settings is not None:
             settings.set_voices_error(self._voice_fetch_error)
 
-    def _on_settings_field_changed(self, field_name: str, value: object) -> None:
+    def _on_settings_field_changed(self, field_name: str, value: object) -> bool | None:
         """设置变更副作用——持久化已由 AppSettings.__setattr__ 完成，self._cfg 即该单例。"""
         if field_name.startswith("chat_wheel_"):
             if self.on_chat_wheel_change is not None:
@@ -842,9 +842,13 @@ class InputOverlay:
             self._handle_audio_output_change(value)
 
         elif field_name == "audio_routing_enabled":
-            if self.on_audio_route_change:
+            applied = (
                 self.on_audio_route_change({"audio_routing_enabled": bool(value)})
+                if self.on_audio_route_change
+                else not bool(value)
+            )
             self._refresh_mic_listen_status()
+            return applied
 
         elif field_name == "mic_input_device":
             if self.on_audio_route_change:

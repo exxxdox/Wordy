@@ -107,11 +107,12 @@ class _OverlayStub(Protocol):
     try_register_hotkey: Callable[[str, str], bool]
     _try_register_startup_hotkey: Callable[[], bool]
     _finish_record_hotkey: Callable[[object, object], None]
-    _on_settings_field_changed: Callable[[str, object], None]
+    _on_settings_field_changed: Callable[[str, object], bool | None]
     on_voice_change: Callable[[str, str], None] | None
     on_volume_change: Callable[[float], None] | None
     on_tts_backend_change: Callable[[str], None] | None
     on_audio_output_change: Callable[[object], None] | None
+    on_audio_route_change: Callable[[dict[str, object]], bool] | None
     on_cartesia_api_key_change: Callable[[str | None], None] | None
 
 
@@ -414,6 +415,22 @@ def test_apply_audio_callback_payload_none_clears_device(monkeypatch: pytest.Mon
 
     assert len(callback_payloads) == 1
     assert callback_payloads[0] is None
+
+
+def test_audio_routing_callback_result_is_forwarded(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = import_input_overlay_with_stubs(monkeypatch)
+    overlay = _new_apply_overlay(module)
+    payloads: list[dict[str, object]] = []
+
+    def reject_route(payload: dict[str, object]) -> bool:
+        payloads.append(payload)
+        return False
+
+    overlay.on_audio_route_change = reject_route
+    overlay._active_settings_window = lambda: None
+
+    assert overlay._on_settings_field_changed("audio_routing_enabled", True) is False
+    assert payloads == [{"audio_routing_enabled": True}]
 
 
 def test_apply_cartesia_callback_failure_appends_status_and_does_not_raise(monkeypatch: pytest.MonkeyPatch) -> None:

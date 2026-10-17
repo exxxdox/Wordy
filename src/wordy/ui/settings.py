@@ -83,7 +83,7 @@ class SettingsWindow:
 
     def __init__(self, root, state: SettingsState, on_record_hotkey: Callable[[], None],
                  on_refresh_voices: Callable[[], None],
-                 on_field_changed: Callable[[str, object], None],
+                 on_field_changed: Callable[[str, object], bool | None],
                  on_close: Callable[[], None],
                  on_audio_outputs_needed: Callable[[], None] | None = None,
                  prewarm: bool = False):
@@ -662,12 +662,18 @@ class SettingsWindow:
     def _on_audio_route_enabled_changed(self, state: int) -> None:
         enabled = state == Qt.CheckState.Checked.value
         s = self._settings
+        local_output_label = self.audio_output_combo.currentText()
+        # 运行态成功后再落盘；否则下次启动仍会显示一个未生效的开关。
+        if self.on_field_changed("audio_routing_enabled", enabled) is False:
+            was_blocked = self.audio_route_enabled_check.blockSignals(True)
+            self.audio_route_enabled_check.setChecked(s.audio_routing_enabled)
+            self.audio_route_enabled_check.blockSignals(was_blocked)
+            return
         if enabled and not s.audio_routing_enabled:
-            self._local_audio_output_label = self.audio_output_combo.currentText()
+            self._local_audio_output_label = local_output_label
         s.audio_routing_enabled = enabled  # auto-save
         self._sync_audio_output_control(s)
         self._update_mic_listen_status(s, self._state)
-        self.on_field_changed("audio_routing_enabled", enabled)
 
     def _on_sidetone_enabled_changed(self, state: int) -> None:
         enabled = state == Qt.CheckState.Checked.value

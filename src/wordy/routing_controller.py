@@ -49,10 +49,13 @@ class RoutingController:
         s = self._settings
         if not s.audio_routing_enabled:
             return
-        self._try_create_router(
+        router = self._try_create_router(
             virtual_output=s.virtual_output_device,
             mic_device=s.mic_input_device,
         )
+        if router is None:
+            # 保存值必须反映真实运行态，避免启动失败后设置页仍显示已启用。
+            s.audio_routing_enabled = False
 
     def _try_create_router(
         self, *, virtual_output: object, mic_device: object = None
@@ -106,16 +109,15 @@ class RoutingController:
 
     # ── 路由配置变更 ──────────────────────────────────────────────────────
 
-    def apply_config(self, route_config: dict[str, object]) -> None:
-        """音频侦听配置变更回调。"""
+    def apply_config(self, route_config: dict[str, object]) -> bool:
+        """应用音频侦听配置，并返回运行态是否切换成功。"""
         enabled = (
             bool(route_config["audio_routing_enabled"])
             if "audio_routing_enabled" in route_config
             else self._router is not None and self._router.is_running()
         )
         if not enabled:
-            self.stop()
-            return
+            return self.stop()
 
         virtual_device = route_config.get("virtual_output_device")
         mic_device = route_config.get("mic_input_device")
@@ -123,14 +125,14 @@ class RoutingController:
         # 停用后的对象可能仍保存恢复失败的快照；恢复成功后才可重新创建。
         if self._router is not None and not self._router.is_running():
             if not self.stop():
-                return
+                return False
         if self._router is None:
             if mic_device is None:
                 mic_device = self._settings.mic_input_device
-            self._try_create_router(
+            return self._try_create_router(
                 virtual_output=virtual_device,
                 mic_device=mic_device,
-            )
+            ) is not None
         else:
             if "mic_input_device" in route_config:
                 ok = self._router.set_mic_device(
@@ -146,7 +148,7 @@ class RoutingController:
                     if not self._router.is_running():
                         self._disable_routing()
                     logger.error("虚拟输出切换失败，原麦克风状态仍需恢复")
-                    return
+                    return False
                 cable_device = self._router.get_output_device()
                 if cable_device is not None:
                     self._player.set_output_device(
@@ -154,6 +156,7 @@ class RoutingController:
                     )
                     self._notify_output_device_changed()
             logger.debug("音频侦听配置已更新")
+            return True
 
     # ── 输出设备变更（路由运行中只保存，不修改当前设备）──────────────────
 

@@ -98,6 +98,22 @@ def _new_settings_window_with_audio_output(
     )
 
 
+def test_audio_routing_enable_failure_keeps_setting_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from wordy.config import AppSettings
+
+    _, window = _new_settings_window(monkeypatch, vb_cable_installed=True)
+    callback = _field_changed_mock(window)
+    callback.return_value = False
+
+    window.audio_route_enabled_check.setChecked(True)
+
+    assert AppSettings.load().audio_routing_enabled is False
+    assert window.audio_route_enabled_check.isChecked() is False
+    callback.assert_called_once_with("audio_routing_enabled", True)
+
+
 SENTINEL_EXISTING_API_KEY = "sk_existing_DO_NOT_LEAK"
 
 
