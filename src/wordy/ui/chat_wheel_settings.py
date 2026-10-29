@@ -11,8 +11,8 @@ from pathlib import Path
 
 from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import (
-    QColor, QFont, QIcon, QKeySequence, QMouseEvent, QPaintEvent, QPainter,
-    QPainterPath, QPen, QPixmap, QPolygonF, QShowEvent,
+    QColor, QFont, QIcon, QKeySequence, QLinearGradient, QMouseEvent, QPaintEvent, QPainter,
+    QPainterPath, QPen, QPixmap, QPolygonF, QRadialGradient, QShowEvent,
 )
 from PySide6.QtWidgets import (
     QComboBox, QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout, QKeySequenceEdit,
@@ -152,6 +152,23 @@ class _WheelPicker(QWidget):
         painter.drawPath(disc)
         glass.paint_noise(painter, disc)
         glass.paint_edge_glow(painter, disc, QRectF(48, -2, 244, 244), alpha=48)
+        # 与运行轮盘同一套光学：外圈做出顶部受光、底部背光的厚度带。
+        rim = QPainterPath()
+        rim.addEllipse(QRectF(48, -2, 244, 244))
+        rim.addEllipse(outer)
+        rim.setFillRule(Qt.FillRule.OddEvenFill)
+        rim_light = QLinearGradient(QPointF(170, -2), QPointF(170, 242))
+        rim_light.setColorAt(0.0, QColor(255, 255, 255, 64))
+        rim_light.setColorAt(0.5, QColor(255, 255, 255, 20))
+        rim_light.setColorAt(1.0, QColor(0, 0, 0, 150))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(rim_light)
+        painter.drawPath(rim)
+        # 运行轮盘的主光是整盘共享的，缩略图沿用同一束，避免两处观感漂移。
+        sheen = QRadialGradient(center + QPointF(-15, -20), 130)
+        sheen.setColorAt(0.0, QColor(255, 255, 255, 26))
+        sheen.setColorAt(0.55, QColor(255, 255, 255, 6))
+        sheen.setColorAt(1.0, QColor(255, 255, 255, 0))
 
         for index, button in enumerate(self.buttons):
             active = button.isChecked()
@@ -169,9 +186,23 @@ class _WheelPicker(QWidget):
                 painter.setBrush(Qt.BrushStyle.NoBrush)
                 painter.drawPath(path)
             painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(tint(GREEN_ACCENT, 95) if active else
-                             tint(ELEVATED_BG, 250) if highlighted else tint(ELEVATED_BG, 215))
+            base = QColor(GREEN_ACCENT) if active else QColor(ELEVATED_BG)
+            # 扇区同样用中心提亮、外缘压暗的曲面渐变，而不是一块纯色片。
+            face = QRadialGradient(center + QPointF(-15, -20), 130)
+            lit = base.lighter(122)
+            lit.setAlpha(130 if active else 250 if highlighted else 225)
+            shade = base.darker(135)
+            shade.setAlpha(95 if active else 205)
+            face.setColorAt(0.0, lit)
+            face.setColorAt(1.0, shade)
+            painter.setBrush(face)
             painter.drawPath(path)
+            painter.save()
+            painter.setClipPath(path)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(sheen)
+            painter.drawPath(path)
+            painter.restore()
             # 与运行轮盘一致：分隔用居中 1px 细线，避免相邻扇区各自内缩叠出深缝。
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.setPen(QPen(accent if highlighted else tint(TEXT_PRIMARY, 45), 1.0))
@@ -207,9 +238,26 @@ class _WheelPicker(QWidget):
                              center + QPointF((121 if major else 119) * math.cos(angle),
                                               (121 if major else 119) * math.sin(angle)))
 
-        painter.setBrush(tint(WINDOW_BG, 250))
+        # 中心盘沿用运行轮盘的叠层：投影、曲面渐变、倒角弧，缩略图也有层次。
+        painter.setPen(Qt.PenStyle.NoPen)
+        for step, alpha in ((4, 14), (2, 26), (1, 38)):
+            painter.setBrush(QColor(0, 0, 0, alpha))
+            painter.drawEllipse(QRectF(133 - step, 84 - step, 74 + step * 2, 74 + step * 2))
+        hub = QRadialGradient(QPointF(166, 104), 48)
+        hub_inner = QColor(WINDOW_BG).lighter(185)
+        hub_inner.setAlpha(250)
+        hub_outer = QColor(WINDOW_BG)
+        hub_outer.setAlpha(238)
+        hub.setColorAt(0.0, hub_inner)
+        hub.setColorAt(1.0, hub_outer)
+        painter.setBrush(hub)
         painter.setPen(QPen(tint(GREEN_ACCENT, 110), 1))
         painter.drawEllipse(QRectF(133, 83, 74, 74))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.setPen(QPen(tint(TEXT_PRIMARY, 90), 1.5))
+        painter.drawArc(QRectF(135, 85, 70, 70), 50 * 16, 80 * 16)
+        painter.setPen(QPen(QColor(0, 0, 0, 120), 1.5))
+        painter.drawArc(QRectF(135, 85, 70, 70), 230 * 16, 80 * 16)
         # 静态双弧代替运行轮盘的入场扫描：设置页不应有持续动画。
         painter.setPen(QPen(accent, 2))
         painter.drawArc(QRectF(138, 88, 64, 64), 16 * 18, 52 * 16)
