@@ -19,16 +19,35 @@ def isolated_audio_config(monkeypatch, tmp_path):
 
 
 def test_hotkey_is_committed_only_after_registration(qapp):
+    """快捷键与其他设置一样在编辑结束时自动提交，失败回退输入框。"""
     settings = AppSettings()
     changed = Mock()
     panel = ChatWheelSettings(settings, changed)
     panel.hotkey_input.setKeySequence("Ctrl+F8")
-    panel.hotkey_apply.click()
+    panel.hotkey_input.editingFinished.emit()
     changed.assert_called_once_with("chat_wheel_hotkey", "ctrl+f8")
     assert settings.chat_wheel_hotkey == "f8"
     panel.set_hotkey_result("快捷键已被占用")
     assert "占用" in panel.status_label.text()
-    assert panel.hotkey_apply.isEnabled()
+    assert panel.hotkey_input.keySequence().toString().lower() == "f8"
+
+
+def test_unchanged_hotkey_is_not_reapplied(qapp):
+    """失焦也会触发 editingFinished，值没变时不重复注册。"""
+    changed = Mock()
+    panel = ChatWheelSettings(AppSettings(), changed)
+    panel.hotkey_input.editingFinished.emit()
+    changed.assert_not_called()
+
+
+def test_cleared_hotkey_restores_stored_sequence(qapp):
+    """空快捷键不合法，清空后恢复已存值而不是写入空配置。"""
+    changed = Mock()
+    panel = ChatWheelSettings(AppSettings(), changed)
+    panel.hotkey_input.clear()
+    panel.hotkey_input.editingFinished.emit()
+    changed.assert_not_called()
+    assert panel.hotkey_input.keySequence().toString().lower() == "f8"
 
 
 def test_wheel_selection_edits_only_selected_wheel(qapp):
@@ -327,7 +346,7 @@ def test_qt_page_key_name_is_converted_for_native_listener(qapp):
     changed = Mock()
     panel = ChatWheelSettings(AppSettings(), changed)
     panel.hotkey_input.setKeySequence("Ctrl+PgUp")
-    panel.hotkey_apply.click()
+    panel.hotkey_input.editingFinished.emit()
     changed.assert_called_once_with("chat_wheel_hotkey", "ctrl+page up")
 
 

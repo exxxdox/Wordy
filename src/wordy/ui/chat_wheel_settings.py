@@ -247,10 +247,9 @@ class ChatWheelSettings(QWidget):
         self.hotkey_input = QKeySequenceEdit(QKeySequence(settings.chat_wheel_hotkey))
         self.hotkey_input.setMaximumSequenceLength(1)
         self.hotkey_input.setAccessibleName("轮盘全局快捷键")
+        # 与其他设置页一样自动保存：编辑结束（按键组合完成或失焦）即提交。
+        self.hotkey_input.editingFinished.connect(self._apply_hotkey)
         hotkey_row.addWidget(self.hotkey_input, 1)
-        self.hotkey_apply = QPushButton("应用")
-        self.hotkey_apply.clicked.connect(self._apply_hotkey)
-        hotkey_row.addWidget(self.hotkey_apply)
         self.add_wheel_button = QPushButton("新增")
         self.add_wheel_button.clicked.connect(self._add_wheel)
         hotkey_row.addWidget(self.add_wheel_button)
@@ -427,18 +426,24 @@ class ChatWheelSettings(QWidget):
 
     def _apply_hotkey(self) -> None:
         text = self._hotkey_text()
+        stored = str(self._settings.get_wheel(self.wheel_index)["hotkey"]).lower()
         if not text:
-            self._status("请先按下快捷键组合。", error=True)
+            # 空序列不是合法快捷键：恢复已存值，别把空值写进配置后唤不醒轮盘。
+            self.hotkey_input.setKeySequence(self._settings.get_wheel(self.wheel_index)["hotkey"])
+            return
+        # 失焦也会触发 editingFinished，值没变就不再重复注册。
+        if text == stored:
             return
         # 注册成功才保存，避免占用冲突导致下次启动也无法唤醒。
-        self.hotkey_apply.setEnabled(False)
         try:
             self._on_field_changed("chat_wheel_hotkey", (self.wheel_index, text) if self.wheel_index else text)
         except Exception as error:
             self.set_hotkey_result(str(error))
 
     def set_hotkey_result(self, error: str | None) -> None:
-        self.hotkey_apply.setEnabled(True)
+        if error:
+            # 注册失败保留旧配置，输入框同步回退，避免显示的组合并未生效。
+            self.hotkey_input.setKeySequence(self._settings.get_wheel(self.wheel_index)["hotkey"])
         self._status(error or "快捷键已更新。", error=bool(error))
 
     def _choose_file(self, index: int) -> None:
@@ -630,7 +635,6 @@ class ChatWheelSettings(QWidget):
         self.add_wheel_button.setEnabled(not locked)
         self.remove_wheel_button.setEnabled(not locked and self._settings.wheel_count > 1)
         self.hotkey_input.setEnabled(not locked)
-        self.hotkey_apply.setEnabled(not locked)
         for slot in range(8):
             self._refresh_slot(slot)
 
