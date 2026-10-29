@@ -58,6 +58,27 @@ def test_cleared_hotkey_restores_stored_sequence(qapp):
     assert panel.hotkey_input.keySequence().toString().lower() == "f8"
 
 
+def test_wheel_name_can_be_customized_and_cleared(qapp):
+    """轮盘名直接用组合框文本编辑：非空即自定义名，清空回退「轮盘 N」。"""
+    settings = AppSettings()
+    settings.add_wheel("f9")
+    panel = ChatWheelSettings(settings, Mock())
+    assert panel.wheel_combo.itemText(0) == "轮盘 1"
+
+    edit = panel.wheel_combo.lineEdit()
+    assert edit is not None
+    panel.wheel_combo.setEditText("工作")
+    edit.editingFinished.emit()
+    assert settings.get_wheel(0)["name"] == "工作"
+    assert panel.wheel_combo.itemText(0) == "工作"
+
+    panel.wheel_combo.setCurrentIndex(1)
+    panel.wheel_combo.setEditText("")
+    edit.editingFinished.emit()
+    assert settings.get_wheel(1)["name"] == ""
+    assert panel.wheel_combo.itemText(1) == "轮盘 2"
+
+
 def test_wheel_selection_edits_only_selected_wheel(qapp):
     settings = AppSettings()
     settings.add_wheel("f9")

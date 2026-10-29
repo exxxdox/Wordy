@@ -96,6 +96,7 @@ def _normalize_voice_entries(raw: object) -> list[dict[str, str]]:
 
 
 class ChatWheelConfig(TypedDict):
+    name: str
     hotkey: str
     slots: list[str]
     labels: list[str]
@@ -103,8 +104,18 @@ class ChatWheelConfig(TypedDict):
     volumes: list[float]
 
 
-def new_chat_wheel(hotkey: str = "f8") -> ChatWheelConfig:
-    return {"hotkey": hotkey, "slots": [""] * 8, "labels": [""] * 8,
+# 自定义名称是记忆标签，不是数据键：限制长度避免撑破设置页的轮盘选择行。
+WHEEL_NAME_MAX_LENGTH = 20
+
+
+def _parse_wheel_name(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    return value.strip()[:WHEEL_NAME_MAX_LENGTH]
+
+
+def new_chat_wheel(hotkey: str = "f8", name: str = "") -> ChatWheelConfig:
+    return {"name": name, "hotkey": hotkey, "slots": [""] * 8, "labels": [""] * 8,
             "texts": [""] * 8, "volumes": [1.0] * 8}
 
 
@@ -124,6 +135,9 @@ def _parse_chat_wheel(raw: object) -> ChatWheelConfig | None:
     except ValueError:
         return None
     wheel = new_chat_wheel(raw["hotkey"])
+    name = _parse_wheel_name(raw.get("name"))
+    if name is not None:
+        wheel["name"] = name
     for key in ("slots", "labels", "texts"):
         values = raw.get(key)
         if isinstance(values, list):
@@ -151,6 +165,8 @@ class AppSettings:
     hotkey: str = "f6"
     name: str = "F6"  # TOML 持久化 key 为 "name"（非 hotkey_name）
     # 固定八槽与显示名称分开，托管文件改名不影响用户轮盘标签。
+    # 首盘的自定义名称；空字段回退显示「轮盘 1」。
+    chat_wheel_name: str = ""
     chat_wheel_hotkey: str = "f8"
     chat_wheel_slots: list[str] = field(default_factory=lambda: [""] * 8)
     chat_wheel_labels: list[str] = field(default_factory=lambda: [""] * 8)
@@ -215,20 +231,21 @@ class AppSettings:
             raise IndexError("轮盘不存在")
         if index:
             return self.additional_chat_wheels[index - 1]
-        return {"hotkey": self.chat_wheel_hotkey, "slots": self.chat_wheel_slots,
-                "labels": self.chat_wheel_labels, "texts": self.chat_wheel_texts,
-                "volumes": self.chat_wheel_volumes}
+        return {"name": self.chat_wheel_name, "hotkey": self.chat_wheel_hotkey,
+                "slots": self.chat_wheel_slots, "labels": self.chat_wheel_labels,
+                "texts": self.chat_wheel_texts, "volumes": self.chat_wheel_volumes}
 
     def replace_wheels(self, wheels: list[ChatWheelConfig]) -> None:
         if not wheels:
             raise ValueError("至少保留一个轮盘")
         first = wheels[0]
         old = {key: getattr(self, key) for key in (
-            "chat_wheel_hotkey", "chat_wheel_slots", "chat_wheel_labels",
+            "chat_wheel_name", "chat_wheel_hotkey", "chat_wheel_slots", "chat_wheel_labels",
             "chat_wheel_texts", "chat_wheel_volumes", "additional_chat_wheels")}
         try:
             # 首盘和其余轮盘在同一事务写入，删除首盘也不会错位。
-            self.update(chat_wheel_hotkey=first["hotkey"], chat_wheel_slots=first["slots"],
+            self.update(chat_wheel_name=first["name"], chat_wheel_hotkey=first["hotkey"],
+                        chat_wheel_slots=first["slots"],
                         chat_wheel_labels=first["labels"], chat_wheel_texts=first["texts"],
                         chat_wheel_volumes=first["volumes"],
                         additional_chat_wheels=wheels[1:])
@@ -404,6 +421,8 @@ class AppSettings:
         _apply_if_present(raw, "ui_font", settings, lambda v: v.strip() if isinstance(v, str) else None)
         _apply_if_present(raw, "fixed_center", settings, lambda v: v if isinstance(v, bool) else None)
         from wordy.hotkey.native import parse_hotkey
+        # 自定义名称：空串是合法值（回退「轮盘 N」），不能用非空校验滤掉。
+        _apply_if_present(raw, "chat_wheel_name", settings, _parse_wheel_name)
         wheel_hotkey = raw.get("chat_wheel_hotkey")
         if isinstance(wheel_hotkey, str):
             try:

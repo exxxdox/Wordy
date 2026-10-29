@@ -24,7 +24,7 @@ from wordy.audio.clips import (
     AUDIO_EXTENSIONS, decoded_audio_clip, import_audio_clip, remove_audio_clip, resolve_audio_clip,
 )
 from wordy.audio.recorder import MAX_RECORD_SECONDS, RecordingError, SystemAudioRecorder
-from wordy.config import AppSettings
+from wordy.config import AppSettings, WHEEL_NAME_MAX_LENGTH
 from wordy.ui.audio_trim_dialog import AudioTrimDialog
 from wordy.ui.status_toast import show_status_toast
 from wordy.ui import glass
@@ -261,7 +261,17 @@ class ChatWheelSettings(QWidget):
         hotkey_row = QHBoxLayout()
         # 与快捷键共用一行，保留默认窗口内八槽编辑器的空间。
         self.wheel_combo = QComboBox()
-        self.wheel_combo.setAccessibleName("选择轮盘")
+        self.wheel_combo.setAccessibleName("选择或重命名轮盘")
+        # 可编辑下拉框即重命名入口；NoInsert 防止回车把临时输入变成新条目。
+        self.wheel_combo.setEditable(True)
+        self.wheel_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self.wheel_combo.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.wheel_combo.setMinimumContentsLength(10)
+        edit = self.wheel_combo.lineEdit()
+        if edit is not None:
+            edit.setMaxLength(WHEEL_NAME_MAX_LENGTH)
+            edit.editingFinished.connect(self._rename_wheel)
         self.wheel_combo.currentIndexChanged.connect(self._select_wheel)
         hotkey_row.addWidget(self.wheel_combo, 1)
         self.hotkey_input = QKeySequenceEdit(QKeySequence(settings.chat_wheel_hotkey))
@@ -385,15 +395,35 @@ class ChatWheelSettings(QWidget):
         text = text.replace("meta+", "windows+").replace("pgup", "page up").replace("pgdown", "page down")
         return text
 
+    def _wheel_title(self, index: int) -> str:
+        """空名称回退「轮盘 N」，保证下拉框始终有可读标题。"""
+        return self._settings.get_wheel(index)["name"] or f"轮盘 {index + 1}"
+
     def _reload_wheels(self) -> None:
         self.wheel_index = min(self.wheel_index, self._settings.wheel_count - 1)
         self.wheel_combo.blockSignals(True)
         self.wheel_combo.clear()
-        self.wheel_combo.addItems([f"轮盘 {i + 1}" for i in range(self._settings.wheel_count)])
+        self.wheel_combo.addItems([self._wheel_title(i) for i in range(self._settings.wheel_count)])
         self.wheel_combo.setCurrentIndex(self.wheel_index)
         self.wheel_combo.blockSignals(False)
         self.hotkey_input.setKeySequence(QKeySequence(self._settings.get_wheel(self.wheel_index)["hotkey"]))
         self.remove_wheel_button.setEnabled(self._settings.wheel_count > 1)
+
+    def _rename_wheel(self) -> None:
+        """下拉框文本即自定义名称；只在编辑结束时落盘，空名回退默认标题。"""
+        edit = self.wheel_combo.lineEdit()
+        if edit is None or self._busy or self._recording is not None or self._preview_speech:
+            return
+        name = edit.text().strip()[:WHEEL_NAME_MAX_LENGTH]
+        if name != self._settings.get_wheel(self.wheel_index)["name"]:
+            try:
+                self._settings.update_wheel(self.wheel_index, name=name)
+            except Exception as error:
+                self._status(f"保存失败：{error}", error=True)
+        title = self._wheel_title(self.wheel_index)
+        # 逐项刷新而不是重建列表：避免重命名时冲掉用户正要点击的轮盘选择。
+        self.wheel_combo.setItemText(self.wheel_index, title)
+        self.wheel_combo.setEditText(title)
 
     def _select_wheel(self, index: int) -> None:
         # 导入回调只携带槽号；处理完成前锁住轮盘，防止结果写进另一盘。

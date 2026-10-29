@@ -27,6 +27,34 @@ def test_wheel_load_sanitizes_slots_and_invalid_hotkey(tmp_path: Path):
     assert loaded.chat_wheel_slots == ["", "ok.wav"] + [""] * 6
 
 
+def test_wheel_name_round_trip_and_first_wheel_removal(tmp_path):
+    file = tmp_path / "name.toml"
+    settings = AppSettings.load(config_file=file)
+    settings.update_wheel(0, name="工作")
+    settings.add_wheel("f9")
+    settings.update_wheel(1, name="游戏")
+    assert settings.chat_wheel_name == "工作"
+    settings._loaded = False
+    loaded = AppSettings.load(config_file=file)
+    assert loaded.get_wheel(0)["name"] == "工作"
+    assert loaded.get_wheel(1)["name"] == "游戏"
+    loaded.remove_wheel(0)
+    assert loaded.chat_wheel_name == "游戏"
+    assert loaded.get_wheel(0)["name"] == "游戏"
+
+
+def test_wheel_name_load_sanitizes_and_truncates(tmp_path):
+    file = tmp_path / "bad-name.toml"
+    file.write_text('chat_wheel_name = 3\n'
+                    '[[additional_chat_wheels]]\nhotkey="f9"\nname=5\n', encoding="utf-8")
+    loaded = AppSettings.load(config_file=file)
+    assert loaded.chat_wheel_name == ""
+    assert loaded.get_wheel(1)["name"] == ""
+    file.write_text(f'chat_wheel_name = "{"长" * 40}"\n', encoding="utf-8")
+    loaded._loaded = False
+    assert len(AppSettings.load(config_file=file).chat_wheel_name) == 20
+
+
 def test_wheel_defaults_have_eight_independent_slots():
     first, second = AppSettings(), AppSettings()
     first.chat_wheel_slots[0] = "a.wav"
