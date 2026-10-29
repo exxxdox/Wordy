@@ -16,11 +16,13 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import (
     QComboBox, QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout, QKeySequenceEdit,
-    QLabel, QLineEdit, QMessageBox, QPushButton, QSlider, QVBoxLayout, QWidget,
+    QLabel, QLineEdit, QMessageBox, QProgressBar, QPushButton, QSlider, QVBoxLayout, QWidget,
 )
 from shiboken6 import isValid
 
-from wordy.audio.clips import AUDIO_EXTENSIONS, decoded_audio_clip, import_audio_clip, remove_audio_clip
+from wordy.audio.clips import (
+    AUDIO_EXTENSIONS, decoded_audio_clip, import_audio_clip, remove_audio_clip, resolve_audio_clip,
+)
 from wordy.audio.recorder import MAX_RECORD_SECONDS, RecordingError, SystemAudioRecorder
 from wordy.config import AppSettings
 from wordy.ui.audio_trim_dialog import AudioTrimDialog
@@ -244,8 +246,8 @@ class ChatWheelSettings(QWidget):
         self._signals.finished.connect(self._finish_import)
         self.selected_index = 0
         self.wheel_index = 0
-        # 裁剪副本与原录音一起保留，直到槽位成功落盘才能回收原录音。
-        self._recording_sources: dict[str, str] = {}
+        # 截取前的解码会走嵌套事件循环，期间用它锁住动作行防止重入。
+        self._trimming = False
 
         layout = QVBoxLayout(self)
         # 父级页签已有标题和阅读边距，避免重复留白把第八槽挤出默认窗口。
@@ -326,11 +328,24 @@ class ChatWheelSettings(QWidget):
         self.preview_button.setIconSize(QSize(14, 14))
         self.preview_button.clicked.connect(self._toggle_preview)
         action_row.addWidget(self.preview_button)
+        # 截取作用于已保存的音频，不再和录制流程绑定，随时可重裁。
+        self.trim_button = QPushButton("截取")
+        self.trim_button.setIconSize(QSize(14, 14))
+        self.trim_button.clicked.connect(self._trim_slot)
+        action_row.addWidget(self.trim_button)
         self.clear_button = QPushButton("清空")
         self.clear_button.clicked.connect(
             lambda: self._replace_clip(self.selected_index, "", ""))
         action_row.addWidget(self.clear_button)
         layout.addLayout(action_row)
+        # 压缩音频解码期间用不确定进度条表态；平时隐藏，不占纵向空间。
+        self.decode_bar = QProgressBar()
+        self.decode_bar.setRange(0, 0)
+        self.decode_bar.setTextVisible(False)
+        self.decode_bar.setFixedHeight(4)
+        self.decode_bar.setAccessibleName("正在准备截取")
+        self.decode_bar.setVisible(False)
+        layout.addWidget(self.decode_bar)
         self.status_label = QLabel("")
         self.status_label.setWordWrap(True)
         self.status_label.setAccessibleName("轮盘设置状态")
@@ -585,21 +600,39 @@ class ChatWheelSettings(QWidget):
             logger.exception("结束录音失败")
             self._status(f"录音失败：{error}", error=True)
             return
-        try:
-            clip = self._trim_recording(path)
-        except Exception as error:
-            self._keep_temporary(str(path), "截取录音失败")
-            self._status(f"截取失败：{error}；原录音保留在 {path}", error=True)
-            return
-        if clip is None:
-            # 用户明确取消本次录音，旧槽位内容不变。
-            self._discard_temporary(str(path))
-            return
-        if clip != path:
-            self._recording_sources[str(clip)] = str(path)
-        self.import_file(index, clip, label=f"录音 {datetime.now():%H%M%S}", temporary=True)
+        # 录完先整段落盘；需要裁剪时再用「截取」按钮，不再强制中断录制流程。
+        self.import_file(index, path, label=f"录音 {datetime.now():%H%M%S}", temporary=True)
 
-    def _trim_recording(self, path: Path) -> Path | None:
+    def _trim_slot(self) -> None:
+        """截取当前槽位已保存的音频；结果替换该槽，取消则保持原样。"""
+        index = self.selected_index
+        filename = self._settings.get_wheel(self.wheel_index)["slots"][index]
+        if not filename or self._trimming:
+            return
+        # 截取窗口会试听片段，先停掉正在播放的试听。
+        self._stop_preview()
+        # 压缩音频解码会短暂占用 GUI 线程（嵌套事件循环），期间显示进度条并锁住动作行。
+        self._trimming = True
+        self.decode_bar.setVisible(True)
+        self._refresh_all_slots()
+        try:
+            source = resolve_audio_clip(filename, self._settings._config_file)
+            with decoded_audio_clip(source) as decoded:
+                self.decode_bar.setVisible(False)
+                clip = self._open_trim_dialog(decoded)
+        except Exception as error:
+            self._status(f"截取失败：{error}", error=True)
+            return
+        finally:
+            self.decode_bar.setVisible(False)
+            self._trimming = False
+            self._refresh_all_slots()
+        if clip is None:
+            return
+        label = self._settings.get_wheel(self.wheel_index)["labels"][index]
+        self.import_file(index, clip, label=label or filename, temporary=True)
+
+    def _open_trim_dialog(self, path: Path) -> Path | None:
         volume = self._settings.get_wheel(self.wheel_index)["volumes"][self.selected_index]
 
         def play(clip: Path) -> None:
@@ -680,7 +713,6 @@ class ChatWheelSettings(QWidget):
             self._keep_temporary(temporary_source, "槽位保存失败")
             return
         self._discard_temporary(temporary_source)
-        self._discard_temporary(self._recording_sources.pop(temporary_source, ""))
 
     @staticmethod
     def _discard_temporary(path: str) -> None:
@@ -795,8 +827,8 @@ class ChatWheelSettings(QWidget):
 
     def _refresh_slot(self, index: int) -> None:
         recording = index == self._recording
-        # 录制期间锁住全部槽位：录音只能落在开始时的那个槽。
-        busy = index in self._busy or self._recording is not None
+        # 录制或截取解码期间锁住全部槽位：录音只能落在开始时的那个槽。
+        busy = index in self._busy or self._recording is not None or self._trimming
         text = self._settings.get_wheel(self.wheel_index)["texts"][index].strip()
         filled = bool(self._settings.get_wheel(self.wheel_index)["slots"][index] or text)
         label = self._settings.get_wheel(self.wheel_index)["labels"][index].strip()
@@ -813,12 +845,19 @@ class ChatWheelSettings(QWidget):
             self.volume_slider.setValue(volume_percent)
             self.volume_slider.blockSignals(False)
             self.volume_value_label.setText(f"{volume_percent}%")
-        self.volume_slider.setEnabled(filled and not text and not busy and not self._preview_speech)
+        # 只有音频槽能调音量、截取；文字槽走 TTS 音量。
+        audio_available = filled and not text and not busy and not self._preview_speech
+        self.volume_slider.setEnabled(audio_available)
+        # 截取窗口会试听片段，进入时先停掉正在播放的试听，所以播放中也可点。
+        self.trim_button.setEnabled(audio_available)
+        self.trim_button.setAccessibleName(f"截取{SLOT_NAMES[index]}")
         self.choose_button.setEnabled(not busy)
         self.choose_button.setText(
-            "录制中…" if recording else "导入中…" if busy else "导入"
+            "截取中…" if self._trimming else
+            "录制中…" if recording else
+            "导入中…" if busy else "导入"
         )
-        self.record_button.setEnabled(recording or index not in self._busy)
+        self.record_button.setEnabled(recording or not busy)
         self._refresh_record_button()
         if self._preview_speech:
             # 朗读打断不了，完成回调又不带槽号：期间对所有槽禁用，

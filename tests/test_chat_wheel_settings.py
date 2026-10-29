@@ -150,7 +150,7 @@ def test_trim_preview_uses_slot_volume(qapp, monkeypatch, tmp_path):
             pass
 
     monkeypatch.setattr("wordy.ui.chat_wheel_settings.AudioTrimDialog", FakeDialog)
-    assert panel._trim_recording(tmp_path / "original.wav") is None
+    assert panel._open_trim_dialog(tmp_path / "original.wav") is None
     changed.assert_called_once_with("chat_wheel_preview_file", (str(preview), .35))
 
 
@@ -394,7 +394,6 @@ def _recording_panel(monkeypatch, recorder):
     """装好假录音器与就地导入线程的面板，返回 (panel, settings)。"""
     monkeypatch.setattr("wordy.ui.chat_wheel_settings.SystemAudioRecorder", lambda: recorder)
     monkeypatch.setattr("wordy.ui.chat_wheel_settings.threading.Thread", _InlineThread)
-    monkeypatch.setattr(ChatWheelSettings, "_trim_recording", lambda self, path: path)
     monkeypatch.setattr(
         "wordy.ui.chat_wheel_settings.import_audio_clip",
         lambda source, config_file=None: Path("managed.wav"),
@@ -427,42 +426,150 @@ def test_record_button_saves_recording_with_timestamp_label(qapp, monkeypatch, t
     assert panel.choose_button.isEnabled()
 
 
-def test_cancel_trim_keeps_old_slot(qapp, monkeypatch, tmp_path):
+def test_recording_saves_whole_clip_without_trim_dialog(qapp, monkeypatch, tmp_path):
+    """录制结束直接保存整段音频，截取改为按需操作。"""
     source = tmp_path / "recording.wav"
     source.write_bytes(b"pcm")
     panel, settings = _recording_panel(monkeypatch, _FakeRecorder(result=source))
     settings.update(chat_wheel_slots=["old.wav"] + [""] * 7)
-    monkeypatch.setattr(panel, "_trim_recording", lambda path: None)
-    panel._toggle_record()
-    panel._toggle_record()
-    assert settings.chat_wheel_slots[0] == "old.wav"
-    assert not source.exists()
-
-
-def test_trimmed_recording_cleans_both_sources_only_after_save(qapp, monkeypatch, tmp_path):
-    source, clip = tmp_path / "recording.wav", tmp_path / "clip.wav"
-    source.write_bytes(b"original")
-    clip.write_bytes(b"segment")
-    panel, settings = _recording_panel(monkeypatch, _FakeRecorder(result=source))
-    monkeypatch.setattr(panel, "_trim_recording", lambda path: clip)
+    monkeypatch.setattr("wordy.ui.chat_wheel_settings.AudioTrimDialog",
+                        Mock(side_effect=AssertionError("录制后不应打开截取窗口")))
     panel._toggle_record()
     panel._toggle_record()
     assert settings.chat_wheel_slots[0] == "managed.wav"
-    assert not clip.exists()
     assert not source.exists()
 
 
-def test_trimmed_recording_save_failure_retains_both_sources(qapp, monkeypatch, tmp_path):
-    source, clip = tmp_path / "recording.wav", tmp_path / "clip.wav"
-    source.write_bytes(b"original")
+def test_trim_button_opens_dialog_for_saved_audio(qapp, monkeypatch, tmp_path):
+    """「截取」随时对槽位已保存的音频重裁，结果替换该槽。"""
+    from contextlib import contextmanager
+
+    from PySide6.QtWidgets import QDialog
+
+    settings = AppSettings(chat_wheel_slots=["saved.wav"] + [""] * 7)
+    settings.update(chat_wheel_labels=["旧片段"] + [""] * 7)
+    panel = ChatWheelSettings(settings, Mock())
+    source, clip = tmp_path / "saved.wav", tmp_path / "clip.wav"
+    source.write_bytes(b"pcm")
     clip.write_bytes(b"segment")
-    panel, settings = _recording_panel(monkeypatch, _FakeRecorder(result=source))
-    monkeypatch.setattr(panel, "_trim_recording", lambda path: clip)
-    monkeypatch.setattr(AppSettings, "save", Mock(side_effect=OSError("磁盘已满")))
-    panel._toggle_record()
-    panel._toggle_record()
-    assert settings.chat_wheel_slots[0] == ""
-    assert clip.exists() and source.exists()
+    seen: list[Path] = []
+
+    @contextmanager
+    def fake_decoded(path, cancel_event=None):
+        seen.append(path)
+        yield path
+
+    class FakeDialog:
+        def __init__(self, source, parent, *, play_preview, stop_preview):
+            pass
+
+        def exec(self):
+            return QDialog.DialogCode.Accepted
+
+        def take_clip(self):
+            return clip
+
+        def deleteLater(self):
+            pass
+
+    monkeypatch.setattr("wordy.ui.chat_wheel_settings.resolve_audio_clip",
+                        lambda filename, config_file=None: source)
+    monkeypatch.setattr("wordy.ui.chat_wheel_settings.decoded_audio_clip", fake_decoded)
+    monkeypatch.setattr("wordy.ui.chat_wheel_settings.AudioTrimDialog", FakeDialog)
+    imports = Mock()
+    panel.import_file = imports
+
+    panel.trim_button.click()
+
+    assert seen == [source]
+    imports.assert_called_once_with(0, clip, label="旧片段", temporary=True)
+
+
+def test_trim_cancel_leaves_saved_audio_untouched(qapp, monkeypatch, tmp_path):
+    from contextlib import contextmanager
+
+    from PySide6.QtWidgets import QDialog
+
+    settings = AppSettings(chat_wheel_slots=["saved.wav"] + [""] * 7)
+    panel = ChatWheelSettings(settings, Mock())
+    source = tmp_path / "saved.wav"
+    source.write_bytes(b"pcm")
+
+    @contextmanager
+    def fake_decoded(path, cancel_event=None):
+        yield path
+
+    class FakeDialog:
+        def __init__(self, source, parent, *, play_preview, stop_preview):
+            pass
+
+        def exec(self):
+            return QDialog.DialogCode.Rejected
+
+        def deleteLater(self):
+            pass
+
+    monkeypatch.setattr("wordy.ui.chat_wheel_settings.resolve_audio_clip",
+                        lambda filename, config_file=None: source)
+    monkeypatch.setattr("wordy.ui.chat_wheel_settings.decoded_audio_clip", fake_decoded)
+    monkeypatch.setattr("wordy.ui.chat_wheel_settings.AudioTrimDialog", FakeDialog)
+    imports = Mock()
+    panel.import_file = imports
+
+    panel.trim_button.click()
+
+    imports.assert_not_called()
+    assert settings.chat_wheel_slots[0] == "saved.wav"
+
+
+def test_trim_decode_shows_progress_bar_and_locks_actions(qapp, monkeypatch, tmp_path):
+    """解码压缩音频期间显示不确定进度条，并锁住动作行防止重入。"""
+    from contextlib import contextmanager
+
+    from PySide6.QtWidgets import QDialog
+
+    settings = AppSettings(chat_wheel_slots=["saved.wav"] + [""] * 7)
+    panel = ChatWheelSettings(settings, Mock())
+    source = tmp_path / "saved.wav"
+    source.write_bytes(b"pcm")
+    observed: list[tuple[bool, bool]] = []
+
+    @contextmanager
+    def fake_decoded(path, cancel_event=None):
+        observed.append((not panel.decode_bar.isHidden(), panel.trim_button.isEnabled()))
+        yield path
+
+    class FakeDialog:
+        def __init__(self, source, parent, *, play_preview, stop_preview):
+            pass
+
+        def exec(self):
+            return QDialog.DialogCode.Rejected
+
+        def deleteLater(self):
+            pass
+
+    monkeypatch.setattr("wordy.ui.chat_wheel_settings.resolve_audio_clip",
+                        lambda filename, config_file=None: source)
+    monkeypatch.setattr("wordy.ui.chat_wheel_settings.decoded_audio_clip", fake_decoded)
+    monkeypatch.setattr("wordy.ui.chat_wheel_settings.AudioTrimDialog", FakeDialog)
+
+    panel.trim_button.click()
+
+    assert observed == [(True, False)]
+    assert panel.decode_bar.isHidden()
+    assert panel.trim_button.isEnabled()
+
+
+def test_trim_button_only_enabled_for_audio_slots(qapp):
+    settings = AppSettings(chat_wheel_slots=["a.wav"] + [""] * 7,
+                           chat_wheel_texts=["", "文字"] + [""] * 6)
+    panel = ChatWheelSettings(settings, Mock())
+    assert panel.trim_button.isEnabled()
+    panel._select_slot(1)
+    assert not panel.trim_button.isEnabled()
+    panel._select_slot(2)
+    assert not panel.trim_button.isEnabled()
 
 
 def test_slot_names_are_numbers_not_directions(qapp):
@@ -624,7 +731,6 @@ def test_recording_hint_stays_in_place_instead_of_covering_buttons(qapp, monkeyp
     recorder = _FakeRecorder(result=source)
     monkeypatch.setattr("wordy.ui.chat_wheel_settings.SystemAudioRecorder", lambda: recorder)
     monkeypatch.setattr("wordy.ui.chat_wheel_settings.threading.Thread", _InlineThread)
-    monkeypatch.setattr(ChatWheelSettings, "_trim_recording", lambda self, path: path)
     monkeypatch.setattr(
         "wordy.ui.chat_wheel_settings.import_audio_clip",
         lambda path, config_file=None: Path("managed.wav"),
