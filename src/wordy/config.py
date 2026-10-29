@@ -578,6 +578,12 @@ class AppSettings:
         用法: ``settings.update(volume=1.5, hotkey="f9")``
         """
         old_loaded = self._loaded
+        # 保存失败时内存必须回到磁盘仍代表的值，否则界面/引擎会与配置分叉。
+        previous = {
+            key: getattr(self, key)
+            for key in kwargs
+            if not key.startswith("_") and hasattr(self, key)
+        }
         self._loaded = False  # 抑制逐字段 __setattr__ 保存
         try:
             for key, value in kwargs.items():
@@ -589,7 +595,12 @@ class AppSettings:
                 setattr(self, key, value)
         finally:
             self._loaded = old_loaded
-        return self.save(config_file=config_file)
+        try:
+            return self.save(config_file=config_file)
+        except Exception:
+            for key, value in previous.items():
+                object.__setattr__(self, key, value)
+            raise
 
 
 def _inject_key_status(settings: AppSettings) -> None:

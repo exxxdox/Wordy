@@ -12,7 +12,7 @@ from pathlib import Path
 from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import (
     QColor, QFont, QIcon, QKeySequence, QLinearGradient, QMouseEvent, QPaintEvent, QPainter,
-    QPainterPath, QPen, QPixmap, QPolygonF, QRadialGradient, QShowEvent,
+    QPainterPath, QPen, QPixmap, QPolygonF, QRadialGradient,
 )
 from PySide6.QtWidgets import (
     QComboBox, QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout, QKeySequenceEdit,
@@ -416,17 +416,11 @@ class ChatWheelSettings(QWidget):
             self._refresh_slot(index)
         self._select_slot(0)
 
-    def showEvent(self, event: QShowEvent) -> None:
-        # 页签切换只隐藏子控件；仅父设置窗口关闭时放弃尚未提交的导入。
-        self.window().installEventFilter(self)
-        super().showEvent(event)
-
-    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
-        if event.type() == QEvent.Type.Close:
-            self._closed.set()
-            # 采集线程独立于窗口，窗口销毁前不收掉会留下采集流和临时文件。
-            self._cancel_recording()
-        return super().eventFilter(watched, event)
+    def mark_closed(self) -> None:
+        """设置窗口真正关闭后调用；被拒绝的关闭不能提前丢弃后续导入。"""
+        self._closed.set()
+        # 采集线程独立于窗口，窗口销毁前不收掉会留下采集流和临时文件。
+        self._cancel_recording()
 
     def _status(self, text: str, *, error: bool = False) -> None:
         color = TEXT_ERROR if error else GREEN_ACCENT

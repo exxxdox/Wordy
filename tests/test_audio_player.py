@@ -975,6 +975,61 @@ def test_play_wav_scales_pcm_and_saturates_without_changing_source(tmp_path, _pa
     assert source.read_bytes() == original
 
 
+def test_play_wav_resamples_when_stream_falls_back_to_device_rate(monkeypatch, tmp_path):
+    """设备拒绝源采样率时回退流按设备采样率播放，必须重采样而不是变速。"""
+    import wave
+
+    path = tmp_path / "rate.wav"
+    with wave.open(str(path), "wb") as audio:
+        audio.setnchannels(1)
+        audio.setsampwidth(2)
+        audio.setframerate(44100)
+        audio.writeframes(b"\x00\x00" * 441)
+
+    player = AudioPlayer()
+    stream = FakePyAudioStream()
+
+    def fake_open(*_args, **_kwargs):
+        player._last_actual_format = 8
+        player._last_actual_rate = 48000
+        player._last_sample_width = 2
+        player._last_mono_upmix = False
+        return MagicMock(), stream
+
+    monkeypatch.setattr(player, "_open_pyaudio_stream", fake_open)
+
+    assert player.play_wav(str(path)) is True
+    frames = sum(len(block) for block in stream.write_calls) // 2
+    assert frames == 480
+
+
+def test_play_wav_rejects_rate_fallback_for_non_int16_source(monkeypatch, tmp_path):
+    """回退流固定 int16；非 16-bit 源重采样只会变噪声，必须明确失败。"""
+    import wave
+
+    path = tmp_path / "rate8.wav"
+    with wave.open(str(path), "wb") as audio:
+        audio.setnchannels(1)
+        audio.setsampwidth(1)
+        audio.setframerate(44100)
+        audio.writeframes(bytes(range(64)))
+
+    player = AudioPlayer()
+    stream = FakePyAudioStream()
+
+    def fake_open(*_args, **_kwargs):
+        player._last_actual_format = 8
+        player._last_actual_rate = 48000
+        player._last_sample_width = 2
+        player._last_mono_upmix = False
+        return MagicMock(), stream
+
+    monkeypatch.setattr(player, "_open_pyaudio_stream", fake_open)
+
+    assert player.play_wav(str(path)) is False
+    assert stream.write_calls == []
+
+
 @pytest.mark.parametrize("volume", [float("nan"), float("inf"), -0.1, 2.1])
 def test_play_wav_rejects_invalid_volume(volume):
     with pytest.raises(ValueError):

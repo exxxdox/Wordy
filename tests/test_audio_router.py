@@ -10,6 +10,58 @@ import pytest
 from wordy.audio.router import AudioRouter
 
 
+@pytest.fixture(autouse=True)
+def _isolated_journal(tmp_path, monkeypatch):
+    """恢复日志必须落在临时目录，别写进真实用户配置目录。"""
+    import wordy.audio.router as router_module
+    monkeypatch.setattr(router_module, "_journal_path", lambda: tmp_path / "journal.json")
+
+
+def test_enable_refuses_to_overwrite_unrecovered_journal(tmp_path, monkeypatch):
+    """上次恢复没消费完的日志是本机原始状态唯一副本，不能被新接管覆盖。"""
+    import wordy.audio.router as router_module
+    from wordy.audio.listen_policy import ListenPolicyState
+
+    journal = tmp_path / "journal.json"
+    monkeypatch.setattr(router_module, "_journal_path", lambda: journal)
+    journal.write_text("{}", encoding="utf-8")
+    router = AudioRouter(virtual_output="CABLE Input")
+
+    with (
+        patch.object(router, "get_output_device",
+                     return_value={"name": "CABLE Input", "host_api_name": "Windows WASAPI"}),
+        patch("wordy.audio.listen_policy.get_listen_policy",
+              return_value=ListenPolicyState(enabled=False, output_id=None)),
+        patch("wordy.audio.listen_policy.restore_listen_policy", return_value=False),
+    ):
+        assert router._enable_mic_listen("Mic") is False
+
+    assert journal.exists()
+
+
+def test_failed_takeover_keeps_pending_restore(tmp_path, monkeypatch):
+    """写入恢复日志后即视为待恢复；设置与回滚都失败时 stop() 仍要能重试。"""
+    import wordy.audio.router as router_module
+    from wordy.audio.listen_policy import ListenPolicyState
+
+    journal = tmp_path / "journal.json"
+    monkeypatch.setattr(router_module, "_journal_path", lambda: journal)
+    router = AudioRouter(virtual_output="CABLE Input")
+
+    with (
+        patch.object(router, "get_output_device",
+                     return_value={"name": "CABLE Input", "host_api_name": "Windows WASAPI"}),
+        patch("wordy.audio.listen_policy.get_listen_policy",
+              return_value=ListenPolicyState(enabled=False, output_id=None)),
+        patch("wordy.audio.listen_policy.set_listen_policy", return_value=False),
+        patch("wordy.audio.listen_policy.restore_listen_policy", return_value=False),
+    ):
+        assert router._enable_mic_listen("Mic") is False
+
+    assert router._listen_configured is True
+    assert journal.exists()
+
+
 def test_listen_recovery_journal_restores_and_clears(tmp_path, monkeypatch):
     import wordy.audio.router as router_module
     from wordy.audio.listen_policy import ListenPolicyState

@@ -27,6 +27,8 @@ def test_real_players_write_identical_scaled_samples_to_main_and_sidetone(monkey
     original = source.getvalue()
     source.seek(0)
     main = AudioPlayer(output_device={"name": "Virtual output"})
+    # 两个独立设备：显式避免「选中默认设备」判定改变测试意图。
+    monkeypatch.setattr(main, "resolved_device_is_default", lambda: False)
     sidetone = AudioPlayer()
     main_stream, sidetone_stream = MagicMock(), MagicMock()
     monkeypatch.setattr(main, "_open_pyaudio_stream", lambda *a, **kw: (MagicMock(), main_stream))
@@ -42,6 +44,19 @@ def test_real_players_write_identical_scaled_samples_to_main_and_sidetone(monkey
 
 class TestSidetoneAudioPlayer:
     """SidetoneAudioPlayer 包装器测试。"""
+
+    def test_selected_default_device_skips_sidetone(self):
+        """显式选中的设备若就是系统默认，返听会与主输出叠成双声。"""
+        main, sidetone = self._make_players()
+        main.resolved_device_is_default.return_value = True
+        main.play_wav.return_value = True
+        wrapper = SidetoneAudioPlayer(main, sidetone)
+        wrapper.set_sidetone_enabled(True)
+
+        assert wrapper.play_wav("test.wav") is True
+
+        main.play_wav.assert_called_once_with("test.wav", device_index=None, volume=1.0)
+        sidetone.play_wav.assert_not_called()
 
     def test_play_wav_uses_identical_gain_for_both_outputs(self):
         main, sidetone = self._make_players()
@@ -59,6 +74,7 @@ class TestSidetoneAudioPlayer:
         main.output_device_name = "Test Device"
         main.output_device = {"name": "Test Device", "host_api_name": "Windows WASAPI"}
         main.get_stream_config.return_value = {"format": 8, "rate": 48000}
+        main.resolved_device_is_default.return_value = False
         sidetone = MagicMock()
         sidetone.output_device_name = None
         sidetone.get_stream_config.return_value = {"format": 8, "rate": 48000}
@@ -319,9 +335,16 @@ class TestSidetoneAudioPlayer:
         try:
             assert not closing.is_alive()
             main.close_stream.assert_called_once()
+            # 写入线程还活着时绝不能跨线程关同一个流（PortAudio 访问违例）。
+            sidetone.close_stream.assert_not_called()
         finally:
             release.set()
+            worker = wrapper._sidetone_thread
+            if worker is not None:
+                worker.join(1)
             closing.join(1)
+        # 线程退出后由它自己关流，不存在并发关闭。
+        sidetone.close_stream.assert_called_once()
 
     def test_close_stream_keeps_queue_for_worker_that_starts_late(self):
         """短音频关闭时，尚未调度的 worker 仍须消费已提交块。"""
@@ -583,6 +606,7 @@ def test_cancelled_concurrent_playback_returns_false_and_shares_event():
 
     main, sidetone = MagicMock(), MagicMock()
     main.output_device_name = "CABLE Input"
+    main.resolved_device_is_default.return_value = False
     cancelled = Event()
 
     def play_then_cancel(*args, **kwargs):

@@ -339,6 +339,19 @@ def test_settings_window_recording_button_lifecycle(monkeypatch: pytest.MonkeyPa
         window.close()
 
 
+def test_rejected_hotkey_registration_keeps_previous_label(monkeypatch: pytest.MonkeyPatch) -> None:
+    """注册失败时 overlay 已回滚配置并提示原因，设置页不能再显示成功。"""
+    _app, window = _new_settings_window(monkeypatch)
+    try:
+        _field_changed_mock(window).return_value = False
+        before = window.pending_label.text()
+        window.set_recording_started()
+        window.set_record_result("f7", "F7")
+        assert window.pending_label.text() == before
+    finally:
+        window.close()
+
+
 def test_settings_window_escape_during_recording_is_accepted_without_closing(monkeypatch: pytest.MonkeyPatch) -> None:
     close_calls = []
     _app, window = _new_settings_window(monkeypatch, on_close=lambda: close_calls.append("closed"))

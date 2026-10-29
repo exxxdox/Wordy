@@ -21,6 +21,7 @@ from wordy.constants import (
     MIN_OVERLAY_OPACITY, MIN_VOLUME, OVERLAY_OPACITY_STEP, VOLUME_STEP,
 )
 from wordy.tts.constants import (
+    TTS_API_PROVIDER_CARTESIA,
     TTS_API_PROVIDERS,
     TTS_BACKENDS_BY_PROVIDER,
 )
@@ -229,7 +230,9 @@ class SettingsWindow:
         self._recorded_hotkey = hotkey
         self._recorded_hotkey_name = hotkey_name
         # overlay 回调负责 try_register_hotkey，成功则写入 config
-        self.on_field_changed("hotkey", hotkey)
+        if self.on_field_changed("hotkey", hotkey) is False:
+            # 注册失败时 overlay 已回滚配置并显示原因，不能再覆盖成成功提示。
+            return
         self.pending_label.setText(f"当前：{hotkey_name}")
         self.set_status("已录制，快捷键已更新", INPUT_TEXT_COLOR)
 
@@ -292,6 +295,10 @@ class SettingsWindow:
                 try:
                     if self.window is not None and self._prewarmed:
                         self.window.hide()
+                    panel = getattr(self, "chat_wheel_panel", None)
+                    if panel is not None:
+                        # 关闭已生效：轮盘面板此刻才放弃未完成的录音与导入。
+                        panel.mark_closed()
                     self.on_close()
                 finally:
                     self._closed = True
@@ -381,6 +388,11 @@ class SettingsWindow:
             layout.setContentsMargins(0, 12, 0, 0)
             layout.setSpacing(0)
             panel.build(layout, state, self.on_refresh_voices, self.on_field_changed)  # type: ignore[arg-type]
+            if (name == TTS_API_PROVIDER_CARTESIA and state.cartesia_voices_cache
+                    and hasattr(panel, "set_voices_loaded")):
+                # 非激活服务商的面板不会拿到 voices_cache，这里用独立缓存补种。
+                panel.set_voices_loaded(  # type: ignore[attr-defined]
+                    state.cartesia_voices_cache, s.cartesia_voice_id)
             wrapper.setVisible(name == s.active_tts_provider)
             container_layout.addWidget(wrapper)
             self._provider_panel_widgets[name] = wrapper
@@ -750,7 +762,9 @@ class SettingsWindow:
         if self.on_field_changed("mic_input_device", device) is False:
             # 运行态拒绝切换时不能把失败选择写入配置，否则重启后仍会重试坏状态。
             self.mic_input_combo.blockSignals(True)
-            self.mic_input_combo.setCurrentText(old_device or self.MIC_NONE_LABEL)
+            prev_device = old_device if old_device else self.MIC_NONE_LABEL
+            index = self.mic_input_combo.findText(prev_device)
+            self.mic_input_combo.setCurrentIndex(index if index >= 0 else 0)
             self.mic_input_combo.blockSignals(False)
             self.set_status("麦克风侦听切换失败，已保留原设备。", TEXT_ERROR)
             return

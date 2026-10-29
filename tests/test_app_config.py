@@ -386,6 +386,20 @@ def test_update_merges_and_persists(tmp_path: Path):
     assert saved["window_position"] == {"x": 100, "y": 200}
 
 
+def test_update_rolls_back_memory_when_save_fails(tmp_path: Path, monkeypatch):
+    """写盘失败时 update() 不能留下内存已改、磁盘未改的半状态。"""
+    from unittest.mock import MagicMock
+    cfg = tmp_path / "config.toml"
+    s = AppSettings.load(config_file=cfg)
+    s.update(volume=1.5, config_file=cfg)
+    monkeypatch.setattr(AppSettings, "save", MagicMock(side_effect=OSError("disk full")))
+
+    with pytest.raises(OSError, match="disk full"):
+        s.update(volume=0.7)
+
+    assert s.volume == 1.5
+
+
 def test_update_creates_file(tmp_path: Path):
     """AppSettings.update() creates file when it doesn't exist."""
     cfg = tmp_path / "config.toml"

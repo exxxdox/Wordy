@@ -173,6 +173,9 @@ class CartesiaPanel(_BasePanel):
             s = AppSettings.load()
             s.cartesia_voice_id = None
             s.cartesia_voice_name = None
+            # 只清配置不改引擎会让旧音色继续播；必须走与选择音色相同的通知路径。
+            if self._on_field_changed is not None:
+                self._on_field_changed("cartesia_voice_id", None)
             return
         vid = self.voice_label_to_id.get(label)
         vname = self.voice_label_to_name.get(label, label)

@@ -65,28 +65,30 @@ def save_api_key(username: str, value: str) -> StorageStatus:
 
 
 def delete_api_key(username: str) -> StorageStatus:
-    """从 keyring 删除密钥。"""
-    available = _keyring_available()
-    if available:
-        try:
-            keyring.delete_password(SERVICE_NAME, username)
-        except PasswordDeleteError:
-            # 删除不存在的凭据已经达到目标；其他后端错误不能伪装成成功。
-            pass
-        except Exception as exc:
-            raise SecretStoreError("Failed to delete secret from keyring") from exc
-    return StorageStatus(backend=STORAGE_NONE, has_key=False, keyring_available=available)
+    """从 keyring 删除密钥；凭据库不可用时必须如实报错，不能假装删掉了。"""
+    if not _keyring_available():
+        raise KeyringUnavailableError("OS keyring backend is unavailable")
+    try:
+        keyring.delete_password(SERVICE_NAME, username)
+    except PasswordDeleteError:
+        # 删除不存在的凭据已经达到目标；其他后端错误不能伪装成成功。
+        pass
+    except Exception as exc:
+        raise SecretStoreError("Failed to delete secret from keyring") from exc
+    return StorageStatus(backend=STORAGE_NONE, has_key=False, keyring_available=True)
 
 
 def get_api_key_status(username: str) -> dict[str, bool | str]:
-    """查询 keyring 中是否存在密钥。"""
+    """查询 keyring 中是否存在密钥；读取失败要与「没有密钥」区分开。"""
     if not _keyring_available():
-        return {"key_set": False, "storage": STORAGE_NONE}
+        return {"key_set": False, "storage": STORAGE_NONE, "read_error": False}
     try:
         present = keyring.get_password(SERVICE_NAME, username) is not None
     except Exception:
-        present = False
-    return {"key_set": present, "storage": STORAGE_KEYRING if present else STORAGE_NONE}
+        # 凭据服务暂时不可用：不能谎报「没保存」，否则用户会重复录入或误删。
+        return {"key_set": False, "storage": STORAGE_NONE, "read_error": True}
+    return {"key_set": present, "storage": STORAGE_KEYRING if present else STORAGE_NONE,
+            "read_error": False}
 
 
 def normalize_api_key_input(raw: str | None) -> str:
@@ -116,7 +118,8 @@ def delete_cartesia_api_key() -> StorageStatus:
 
 def get_cartesia_api_key_status() -> dict[str, bool | str]:
     s = get_api_key_status(CARTESIA_USERNAME)
-    return {"cartesia_api_key_set": s["key_set"], "cartesia_api_key_storage": s["storage"]}
+    return {"cartesia_api_key_set": s["key_set"], "cartesia_api_key_storage": s["storage"],
+            "cartesia_api_key_read_error": bool(s.get("read_error"))}
 
 
 def load_volcengine_access_key() -> str | None:
@@ -133,4 +136,5 @@ def delete_volcengine_access_key() -> StorageStatus:
 
 def get_volcengine_access_key_status() -> dict[str, bool | str]:
     s = get_api_key_status(VOLCENGINE_USERNAME)
-    return {"volcengine_access_key_set": s["key_set"], "volcengine_access_key_storage": s["storage"]}
+    return {"volcengine_access_key_set": s["key_set"], "volcengine_access_key_storage": s["storage"],
+            "volcengine_access_key_read_error": bool(s.get("read_error"))}

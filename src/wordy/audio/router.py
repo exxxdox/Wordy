@@ -195,6 +195,12 @@ class AudioRouter:
         try:
             from wordy.audio.listen_policy import get_listen_policy, restore_listen_policy, set_listen_policy
 
+            # 上次异常退出遗留的恢复记录必须先消费完，否则覆盖它会永久丢掉
+            # 麦克风原本的侦听状态（恢复记录里只有一份原始值）。
+            if _journal_path().is_file() and not _recover_listen_journal():
+                logger.error("上一次麦克风侦听恢复尚未完成，暂不接管新设备: %s", mic_name)
+                return False
+
             original_state = get_listen_policy(mic_name)
             if original_state is None:
                 logger.warning("无法安全保存麦克风原侦听状态，已跳过自动接管: %s", mic_name)
@@ -208,6 +214,8 @@ class AudioRouter:
             _write_listen_journal(mic_name, original_state)
             self._listen_original_state = original_state
             self._listen_original_device = mic_name
+            # 日志已落盘即视为「已接管」：即使下面设置或回滚失败，stop() 也要能重试恢复。
+            self._listen_configured = True
             target_name = cable_device["name"]
             if set_listen_policy(mic_name, target_name, enabled=True):
                 logger.debug("已启用并验证麦克风侦听: %s → %s", mic_name, target_name)
@@ -222,6 +230,7 @@ class AudioRouter:
                 _clear_listen_journal()
                 self._listen_original_state = None
                 self._listen_original_device = None
+                self._listen_configured = False
             return False
         except Exception:
             logger.exception("配置麦克风侦听失败")

@@ -802,6 +802,8 @@ def test_closing_window_cancels_recording(qapp, monkeypatch, tmp_path):
     panel.record_button.click()
     assert panel._recording == 0
     parent.close()
+    # 真实窗口中由 SettingsWindow 在关闭成功后调用 mark_closed()。
+    panel.mark_closed()
 
     assert recorder.cancelled is True
     assert panel._recording is None
@@ -928,6 +930,8 @@ def test_parent_close_during_import_completes_worker_and_discards_clip(qapp, mon
     panel.import_file(0, Path("音频.wav"))
     assert started.wait(timeout=2)
     parent.close()
+    # 真实窗口中由 SettingsWindow 在关闭成功后调用 mark_closed()。
+    panel.mark_closed()
     release.set()
     workers[0].join(timeout=2)
     assert not workers[0].is_alive()

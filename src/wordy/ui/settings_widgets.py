@@ -106,6 +106,8 @@ class _SettingsDialog(QDialog):
                 app.removeEventFilter(self)
             self._application_event_filter_installed = False
         event.accept()
+        # 对话框以常驻 root 为父；不销毁就会连同整棵控件树永远挂在 root 下。
+        self.deleteLater()
 
     def keyPressEvent(self, event: QKeyEvent) -> None:
         if not self._owner.record_button.isEnabled():

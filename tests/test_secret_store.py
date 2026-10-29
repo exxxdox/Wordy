@@ -95,9 +95,16 @@ class TestKeyringUnavailable:
             secret_store.load_cartesia_api_key()
         assert "SENTINEL" not in str(exc.value)
 
-    def test_delete_does_not_raise_when_keyring_unavailable(self, keyring_unavailable) -> None:
-        status = secret_store.delete_cartesia_api_key()
-        assert status.has_key is False
+    def test_delete_raises_when_keyring_unavailable(self, keyring_unavailable) -> None:
+        """凭据库不可用时不能假装删除成功，否则密钥会在恢复后重新出现。"""
+        with pytest.raises(secret_store.KeyringUnavailableError):
+            secret_store.delete_cartesia_api_key()
+
+    def test_api_key_status_reports_read_error_separately(self, fake_keyring) -> None:
+        fake_keyring.fail_on_get = True
+        s = secret_store.get_cartesia_api_key_status()
+        assert s["cartesia_api_key_set"] is False
+        assert s["cartesia_api_key_read_error"] is True
 
     def test_api_key_status_reports_no_key_when_unavailable(self, keyring_unavailable) -> None:
         s = secret_store.get_cartesia_api_key_status()

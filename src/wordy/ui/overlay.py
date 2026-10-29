@@ -571,6 +571,7 @@ class InputOverlay:
         )
         state = SettingsState(
             voices_cache=self._get_active_voices_cache(),
+            cartesia_voices_cache=list(self._cartesia_voices_cache),
             voices_loading=self._voices_loading,
             # 先显示保存的选择；硬件扫描延后到用户进入音频页，不阻塞设置打开。
             audio_output_devices=[dict(self._cfg.audio_output_device)] if self._cfg.audio_output_device else [],
@@ -804,8 +805,10 @@ class InputOverlay:
                 hotkey_name = settings._recorded_hotkey_name
                 if self.try_register_hotkey(hotkey, hotkey_name):
                     self._cfg.update(hotkey=hotkey, name=hotkey_name)
-                else:
-                    settings.set_hotkey_warning("快捷键注册失败，可能被占用")
+                    return True
+                # 注册失败时配置已回滚，必须让调用方知道不能显示成功。
+                settings.set_hotkey_warning("快捷键注册失败，可能被占用")
+                return False
 
         elif field_name == "volume":
             if self.on_volume_change:

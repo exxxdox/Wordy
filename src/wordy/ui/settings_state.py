@@ -27,6 +27,9 @@ class SettingsState:
 
     # 音色缓存（从 TTS API 拉取，非持久化）
     voices_cache: list[VoiceRecord] = field(default_factory=list)
+    # Cartesia 的网络音色缓存独立保存：切到别的服务商再切回来且刷新失败时，
+    # 仍能显示上次成功拉到的列表，而不是只剩「无」。
+    cartesia_voices_cache: list[VoiceRecord] = field(default_factory=list)
     voices_loading: bool = False
 
     # 密钥存储状态（从 keyring 探测，非持久化）

@@ -120,6 +120,26 @@ class TestCartesiaPanelBuild:
         assert panel.voice_combo.itemText(0) == panel.NONE_VOICE_LABEL
 
 
+    def test_selecting_none_clears_voice_and_notifies_engine(self, qapp, mock_state, monkeypatch):
+        """选「无」必须同时通知引擎，否则旧音色会继续被使用。"""
+        panel = CartesiaPanel()
+        parent = QVBoxLayout()
+        container = QWidget()
+        container.setLayout(parent)
+        changed = MagicMock()
+        panel.build(parent, mock_state, lambda: None, changed)
+        _PANEL_CONTAINERS.append(container)
+        settings = AppSettings()
+        settings._loaded = False
+        settings.cartesia_voice_id = "voice-a"
+        monkeypatch.setattr("wordy.ui.tts_panels.AppSettings.load", lambda **kw: settings)
+
+        panel._on_voice_selected(panel.NONE_VOICE_LABEL)
+
+        assert settings.cartesia_voice_id is None
+        changed.assert_called_once_with("cartesia_voice_id", None)
+
+
 # 保住父容器引用：容器一旦被 GC，其子控件的 C++ 对象会一起销毁，
 # 后续断言就变成 "Internal C++ object already deleted"。
 _PANEL_CONTAINERS: list[QWidget] = []

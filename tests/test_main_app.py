@@ -371,6 +371,21 @@ def test_duplicate_instance_exits_before_logging_or_audio_initialization(monkeyp
     assert events == ["notice"]
 
 
+def test_startup_failure_shows_native_message_and_exits(monkeypatch):
+    """打包版没有 stderr：配置读取/初始化失败必须弹原生提示，不能静默退出。"""
+    import wordy.main as main_mod
+
+    messages: list[str] = []
+    monkeypatch.setattr(main_mod, "acquire_single_instance", lambda: True)
+    monkeypatch.setattr(main_mod, "configure_logging",
+                        MagicMock(side_effect=RuntimeError("bad config")))
+    monkeypatch.setattr(main_mod, "show_native_message", messages.append)
+    with pytest.raises(SystemExit) as excinfo:
+        main_mod.main()
+    assert excinfo.value.code == 1
+    assert messages and "bad config" in messages[0]
+
+
 def test_configure_logging_installs_log_stream_pipeline(monkeypatch):
     """configure_logging must install the in-memory/Qt log stream pipeline for tray UI."""
     import wordy.main as main_mod
@@ -512,6 +527,21 @@ def test_app_uses_fake_executor_not_raw_thread(app):
     """WordyApp must hold a FakeExecutor (i.e. went through factory), not a raw threading object."""
     assert isinstance(app.tts_manager._executor, FakeExecutor)
     assert not isinstance(app.tts_manager._executor, threading.Thread)
+
+
+def test_tts_errors_are_emitted_through_controller_queued_signal(app):
+    """worker 线程的错误不得直接碰 Qt；必须经控制器排队信号回到 GUI 线程。"""
+    emitted: list[str] = []
+    app._chat_wheel_controller = SimpleNamespace(
+        playback_error=SimpleNamespace(emit=emitted.append))
+    manager = MagicMock()
+    app.tts_manager = manager
+
+    app._on_submit("hello")
+
+    on_error = manager.speak.call_args.kwargs["on_error"]
+    on_error("播放失败")
+    assert emitted == ["播放失败"]
 
 
 def test_on_submit_without_voice_does_not_submit_or_speak(app):

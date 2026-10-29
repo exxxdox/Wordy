@@ -15,9 +15,11 @@ from typing import cast
 from wordy.audio.player import AudioPlayer, OutputDeviceSelection
 from wordy.audio.recorder import cancel_active_recording
 from wordy.audio.sidetone import SidetoneAudioPlayer
-from wordy.config import AppSettings
+from wordy.config import AppSettings, USER_CONFIG_FILE
 from wordy.log import install_file_logging, install_log_stream
-from wordy.single_instance import acquire_single_instance, show_duplicate_instance_message
+from wordy.single_instance import (
+    acquire_single_instance, show_duplicate_instance_message, show_native_message,
+)
 import wordy.secret
 from wordy.secret import KeyringUnavailableError
 from wordy.routing_controller import RoutingController
@@ -237,7 +239,19 @@ class WordyApp:
 
     def _on_submit(self, text: str) -> None:
         """用户提交文本 → TTSManager 串行播放。"""
-        self.tts_manager.speak(text, on_error=self._on_chat_wheel_error)
+        self.tts_manager.speak(text, on_error=self._on_tts_error)
+
+    def _on_tts_error(self, message: str) -> None:
+        """TTS worker 线程的错误只能经控制器排队信号回到 GUI 线程。
+
+        ``_on_chat_wheel_error`` 会读控件、必要时还会创建设置窗口，直接在
+        worker 线程调用属于跨线程操作 Qt。
+        """
+        controller = self._chat_wheel_controller
+        if controller is not None:
+            controller.playback_error.emit(message)
+            return
+        logger.warning(message)
 
     def _on_voice_change(self, voice_id: str, voice_name: str) -> None:
         """音色变更 → 写配置 + 更新引擎。"""
@@ -355,7 +369,7 @@ class WordyApp:
                 self._on_chat_wheel_error,
                 self._on_chat_wheel_playback_finished,
                 lambda text, done: self.tts_manager.speak(
-                    text, done, self._on_chat_wheel_error
+                    text, done, self._on_tts_error
                 ))
             try:
                 self._chat_wheel_controller.start()
@@ -385,8 +399,16 @@ def main():
     if not acquire_single_instance():
         show_duplicate_instance_message()
         return
-    configure_logging()
-    app = WordyApp()
+    try:
+        configure_logging()
+        app = WordyApp()
+    except Exception as error:
+        # 打包版没有 stderr，未捕获异常只会让进程静默消失；先给用户可见的提示。
+        logger.exception("Wordy 启动失败")
+        show_native_message(
+            f"Wordy 启动失败：{error}\n\n请检查配置文件：{USER_CONFIG_FILE}"
+        )
+        raise SystemExit(1) from error
     app.run()
 
 

@@ -50,6 +50,10 @@ class SidetoneAudioPlayer:
         self._sidetone_stream_dead = False
         self._sidetone_queue: Queue[bytes | object] | None = None
         self._sidetone_thread: Thread | None = None
+        # 关闭请求：队列满时 STOP 可能送不进去，worker 靠它在当前写入结束后退出。
+        self._sidetone_stop = Event()
+        # 返听流一旦交给 worker 线程，就只能由该线程关闭。
+        self._sidetone_owned = False
         # 文件播放的返听尾巴线程；仍在跑时说明上一段返听还没收尾。
         self._sidetone_tail: Thread | None = None
 
@@ -74,9 +78,17 @@ class SidetoneAudioPlayer:
 
     def _needs_sidetone(self, device_index: int | None) -> bool:
         # 主输出已经使用系统默认设备时，再返听会叠加同一段声音，造成爆音和回声。
-        return self._sidetone_enabled and (
-            device_index is not None or self._main.output_device_name is not None
-        )
+        if not self._sidetone_enabled:
+            return False
+        if device_index is not None:
+            return True
+        if self._main.output_device_name is None:
+            return False
+        # 显式选中的设备也可能就是系统默认设备：只有确实不同才需要第二路。
+        resolves_to_default = getattr(self._main, "resolved_device_is_default", None)
+        if callable(resolves_to_default) and resolves_to_default():
+            return False
+        return True
 
     def play_wav(
         self,
@@ -174,6 +186,13 @@ class SidetoneAudioPlayer:
         if not self._needs_sidetone(device_index):
             self._sidetone_stream_dead = True
             return True
+        # 上一路返听线程仍卡在写入（或正在自行收尾）：此时开新流会与它抢同一个
+        # PortAudio 流，宁可本次只走主输出。
+        draining = self._sidetone_thread
+        if draining is not None and draining.is_alive():
+            self._sidetone_stream_dead = True
+            logger.warning("上一路返听尚未退出，本次只打开主输出")
+            return True
 
         try:
             # 主设备可能回退了格式或采样率，返听必须按实际 PCM 配置打开。
@@ -197,6 +216,7 @@ class SidetoneAudioPlayer:
             logger.warning("返听设备流打开失败", exc_info=True)
 
         if not self._sidetone_stream_dead:
+            self._sidetone_stop.clear()
             queue: Queue[bytes | object] = Queue(maxsize=_STREAM_QUEUE_BLOCKS)
             thread = Thread(
                 target=self._sidetone_write_loop,
@@ -206,6 +226,7 @@ class SidetoneAudioPlayer:
             )
             self._sidetone_queue = queue
             self._sidetone_thread = thread
+            self._sidetone_owned = True
             thread.start()
         return True
 
@@ -224,14 +245,25 @@ class SidetoneAudioPlayer:
 
     def _sidetone_write_loop(self, queue: Queue[bytes | object]) -> None:
         """按顺序消费本次流的队列；关闭时清空实例引用不会丢失待写块。"""
-        while True:
-            item = queue.get()
-            try:
-                if item is _STREAM_STOP:
+        try:
+            while True:
+                item = queue.get()
+                try:
+                    if item is _STREAM_STOP:
+                        return
+                    self._sidetone_write_safe(cast(bytes, item))
+                finally:
+                    queue.task_done()
+                # 队列满时 STOP 送不进来，靠停止标记在当前块写完后退出。
+                if self._sidetone_stop.is_set():
                     return
-                self._sidetone_write_safe(cast(bytes, item))
-            finally:
-                queue.task_done()
+        finally:
+            # 只有本线程在写这个流，由它关闭才是安全的；调用方跨线程关闭会触发
+            # PortAudio 访问违例（与 recorder 的并发关闭约束同一个道理）。
+            try:
+                self._sidetone.close_stream()
+            except Exception:
+                logger.warning("返听流关闭失败", exc_info=True)
 
     def _sidetone_write_safe(self, data: bytes) -> None:
         """在后台线程中执行返听写入，异常时标记流死。"""
@@ -245,22 +277,32 @@ class SidetoneAudioPlayer:
         """关闭流；慢返听最多等待固定时间，不能阻塞退出。"""
         queue, thread = self._sidetone_queue, self._sidetone_thread
         self._sidetone_queue = None
-        self._sidetone_thread = None
+        # 线程仍活着时保留引用：它是流的所有者，后续 open_stream 也要据此跳过返听。
+        self._sidetone_thread = thread if thread is not None and thread.is_alive() else None
         if queue is not None:
             try:
                 queue.put(_STREAM_STOP, timeout=_STREAM_CLOSE_TIMEOUT_SECONDS)
             except Full:
+                # 队列满说明 STOP 进不去；让 worker 写完当前块就退出。
+                self._sidetone_stop.set()
                 self._sidetone_stream_dead = True
         if thread is not None:
             thread.join(timeout=_STREAM_CLOSE_TIMEOUT_SECONDS)
 
         self._main.close_stream()
-        # 开关可能已关闭，但原先打开的返听流仍须释放。
-        if self._sidetone_enabled or thread is not None:
+        # 返听流只在没有活线程时由这里关闭；有活线程就交给 worker 自己收尾，
+        # 绝不在它可能正写入时调用 stop/close/terminate。
+        if thread is not None and thread.is_alive():
+            self._sidetone_stream_dead = True
+            logger.warning("返听线程仍在收尾，返听流交给该线程关闭")
+            return
+        # 有 worker 时流已由它关闭；只有从未启动 worker 的路径才需要这里补关。
+        if not self._sidetone_owned and (self._sidetone_enabled or thread is not None):
             try:
                 self._sidetone.close_stream()
             except Exception:
                 logger.warning("返听流关闭失败", exc_info=True)
+        self._sidetone_owned = False
 
     def get_stream_config(self) -> dict[str, int | None]:
         """返回主设备当前流的实际格式与采样率。"""

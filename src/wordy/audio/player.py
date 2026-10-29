@@ -204,6 +204,25 @@ def _duplicate_mono_to_stereo(data: bytes, sample_width: int) -> bytes:
     return np.repeat(samples, 2).tobytes()
 
 
+def _resample_int16(data: bytes, channels: int, src_rate: int, dst_rate: int) -> bytes:
+    """整段线性重采样 16-bit PCM；仅用于设备拒绝源采样率后的回退。
+
+    回退时流按设备默认采样率打开，若继续写入源采样率的数据会变速变调。
+    片段都很短（TTS/轮盘/录音 ≤60s），整段插值比维护跨块重采样状态更简单。
+    """
+    if not data or src_rate == dst_rate:
+        return data
+    samples = np.frombuffer(data, dtype="<i2").reshape(-1, channels).astype(np.float64)
+    source_frames = samples.shape[0]
+    target_frames = max(1, round(source_frames * dst_rate / src_rate))
+    positions = np.linspace(0.0, source_frames - 1, target_frames)
+    resampled = np.empty((target_frames, channels), dtype=np.float64)
+    for channel in range(channels):
+        resampled[:, channel] = np.interp(
+            positions, np.arange(source_frames), samples[:, channel])
+    return np.clip(np.rint(resampled), -32768, 32767).astype("<i2").tobytes()
+
+
 def _scale_pcm(data: bytes, sample_width: int, volume: float) -> bytes:
     """饱和缩放 PCM，防止放大后整数回绕；8-bit WAV 的零点是 128。"""
     if volume == 1.0:
@@ -555,6 +574,27 @@ class AudioPlayer:
         """
         return {"format": self._stream_format, "rate": self._stream_rate}
 
+    def resolved_device_is_default(self) -> bool:
+        """当前结构化选择是否解析到系统默认输出设备。"""
+        p = None
+        try:
+            p = _new_pyaudio()
+            resolved_index = self._resolve_output_device(p, None)
+            default_index = self._default_output_device_index(p)
+            return (
+                resolved_index is not None
+                and default_index is not None
+                and resolved_index == default_index
+            )
+        except Exception:
+            return False
+        finally:
+            if p is not None:
+                try:
+                    _terminate_pyaudio_locked(p)
+                except Exception:
+                    pass
+
     def query_output_device_default_rate(self) -> int | None:
         """查询当前选定输出设备的默认采样率，失败返回 None。
 
@@ -667,22 +707,46 @@ class AudioPlayer:
             wf.close()
             return False
 
+        actual_rate = self._last_actual_rate or framerate
+        resample = actual_rate != framerate
+        if resample and sample_width != 2:
+            # 回退流固定 int16；其他位深写进去只会是噪声，宁可明确失败。
+            logger.error(
+                "设备采样率 %s Hz 与源 %s Hz 不一致，且源不是 16-bit PCM，已停止播放",
+                actual_rate, framerate,
+            )
+            self._close_stream(stream)
+            wf.close()
+            self._terminate_pyaudio(p)
+            return False
+
         # 中途失败必须让调用方看得见：调用方只把 False 当失败上报 UI，
         # 返回 True 会让「播到一半设备炸了」对用户完全无声。
         ok = True
         try:
             logger.info("开始播放到 %s...", self.output_device_name or "默认输出设备")
 
-            data = wf.readframes(1024)
-            while data:
+            pending = (
+                _resample_int16(wf.readframes(frames), channels, framerate, actual_rate)
+                if resample else b""
+            )
+            data = b""
+            while True:
                 # 退出时在当前小块写入结束后停止，避免等待整个长音频播放完。
                 if cancel_event is not None and cancel_event.is_set():
                     return False
+                if resample:
+                    if not pending:
+                        break
+                    data, pending = pending[:4096], pending[4096:]
+                else:
+                    data = wf.readframes(1024)
+                    if not data:
+                        break
                 if self._last_mono_upmix:
                     data = _duplicate_mono_to_stereo(data, sample_width)
                 data = _scale_pcm(data, sample_width, volume)
-                stream.write(data)  # type: ignore[union-attr]
-                data = wf.readframes(1024)
+                stream.write(data)  # type: ignore
 
             logger.debug("播放完成!")
         except KeyboardInterrupt:
