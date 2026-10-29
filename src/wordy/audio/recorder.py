@@ -28,6 +28,7 @@ TARGET_SAMPLE_RATE = 48000
 TARGET_CHANNELS = 2
 FRAMES_PER_BUFFER = 1024
 _JOIN_TIMEOUT_SECONDS = 2.0
+_CAPTURE_POLL_SECONDS = 0.01
 
 # 无类型桩的二进制模块，声明成 Any 才能同时容纳“缺依赖”的 None 分支。
 _pyaudio: Any = None
@@ -81,6 +82,12 @@ class SystemAudioRecorder:
 
     def start(self) -> None:
         global _ACTIVE
+
+        if _ACTIVE is not None:
+            # 超时的原生读取可能仍持有设备，不能再开第二个实例或回收它的流。
+            if _ACTIVE._thread is not None and _ACTIVE._thread.is_alive():
+                raise RecordingError("上一次录音设备尚未停止，请稍后重试")
+            _ACTIVE.cancel()
 
         api = _pyaudio
         if api is None:
@@ -142,16 +149,13 @@ class SystemAudioRecorder:
 
         self._stop_event.set()
         thread.join(timeout=_JOIN_TIMEOUT_SECONDS)
-        # 线程还卡在 read 上时 WAV 可能没写完，宁可丢弃也不交给调用方一个截断文件。
-        stuck = thread.is_alive()
+        # close/terminate 与原生 read 并发会直接访问违例，超时也必须保留活对象。
+        if thread.is_alive():
+            raise RecordingError("录音设备尚未停止，请稍后重试")
         self._release_device()
         self._thread = None
         if _ACTIVE is self:
             _ACTIVE = None
-        if stuck:
-            self._discard_path()
-            raise RecordingError("录音线程未能及时停止，本次录音已丢弃")
-
         try:
             path = self._write_wav(self._collect_frames())
         except Exception:
@@ -171,6 +175,10 @@ class SystemAudioRecorder:
         if thread is not None:
             self._stop_event.set()
             thread.join(timeout=_JOIN_TIMEOUT_SECONDS)
+            if thread.is_alive():
+                # _ACTIVE 保留所有权，待读取退出后重试取消或下次 start 时再回收。
+                logger.warning("录音线程仍在读取，保留采集流以避免并发关闭")
+                return
             self._thread = None
         self._release_device()
         self._chunks = []
@@ -184,7 +192,12 @@ class SystemAudioRecorder:
         stream = self._stream
         while not self._stop_event.is_set() and time.monotonic() < deadline:
             try:
-                data = stream.read(FRAMES_PER_BUFFER, exception_on_overflow=False)
+                # WASAPI 静音时可能不产生数据包，固定帧数的阻塞 read 会永远等不到停止信号。
+                available = stream.get_read_available()
+                if available <= 0:
+                    self._stop_event.wait(_CAPTURE_POLL_SECONDS)
+                    continue
+                data = stream.read(min(FRAMES_PER_BUFFER, available), exception_on_overflow=False)
             except Exception as error:  # noqa: BLE001 - 设备被拔掉等，按已录内容收尾
                 logger.warning("系统声音采集中断: %s", error)
                 break
@@ -196,6 +209,8 @@ class SystemAudioRecorder:
         chunks, self._chunks = self._chunks, []
         if not chunks:
             self._discard_path()
+            if self._final_elapsed >= MIN_RECORD_SECONDS:
+                raise RecordingError("未录到系统声音，请播放声音后重试")
             raise RecordingError(f"录音太短，请至少录制 {MIN_RECORD_SECONDS:g} 秒")
 
         frames = np.concatenate(chunks)

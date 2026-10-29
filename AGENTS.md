@@ -6,7 +6,7 @@
 
 ## 持久化目录
 
-所有落盘文件集中在 `paths.config_directory()` 返回的同一个目录（目录名固定小写 `wordy`）——配置文件 `config.toml` 与轮盘托管音频 `audio_clips/`（后者从配置文件父目录推导，自动跟随）。`XDG_CONFIG_HOME` 未设置、为空串或给的是相对路径时退回 `~/.config/wordy`（相对路径按 XDG 规范视为无效）。根目录解析刻意放在 `src/wordy/paths.py` 而不是 `config.py`：`config` 有一条契约禁止出现 `os.environ`（防止密钥重新从环境读回来），而路径解析本质上要读环境。录制过程中的临时文件不在这里，走 `%TEMP%`。
+配置和轮盘托管音频集中在 `paths.config_directory()` 返回的同一个目录（目录名固定小写 `wordy`）——配置文件 `config.toml` 与轮盘托管音频 `audio_clips/`（后者从配置文件父目录推导，自动跟随）。`XDG_CONFIG_HOME` 未设置、为空串或给的是相对路径时退回 `~/.config/wordy`（相对路径按 XDG 规范视为无效）。根目录解析刻意放在 `src/wordy/paths.py` 而不是 `config.py`：`config` 有一条契约禁止出现 `os.environ`（防止密钥重新从环境读回来），而路径解析本质上要读环境。录制过程中的临时文件不在这里，走 `%TEMP%`。
 
 ## PortAudio 生命周期
 
@@ -32,7 +32,15 @@
 
 ## 音频聊天轮盘
 
-轮盘默认 F8，独立于输入框快捷键；按住唤醒，八向选择，松开播放，中心/Esc/右键取消；唤出与收起均不移动光标，方向以唤出点为锚点，屏幕边缘钳位只影响窗口。窗口不抢焦点。八槽文件名、名称与快捷键由 `AppSettings` 持久化。槽内容是**互斥**的：`chat_wheel_texts` 非空则该槽朗读这段文字（当前 TTS），否则才播放 `chat_wheel_slots` 里的音频；填文字会按「清空」语义删掉该槽音频，导入/录制音频会清掉该槽文字。三个数组（`chat_wheel_slots` / `chat_wheel_labels` / `chat_wheel_texts`）必须在同一次 `update()` 里写、一起回滚，否则落盘失败会留下错位状态。轮盘的「可选中」判据就是标签非空，所以文字槽必须把文字（或名称）当标签传进 `open_wheel`——`ChatWheel` 没有别的传参通道。朗读**无法打断**（三个引擎的 `engine.speak()` 都阻塞到底且没有取消钩子，`close()` 抢同一把锁），因此文字槽试听时按钮如实显示「朗读中…」并对**所有槽**禁用：完成回调 `playback_finished` 不带槽号，允许期间开新试听会让回调误复位。朗读期间也拒绝开始录音（否则录音会把 TTS 录进去）。设置页的八个槽用数字编号（`音频 1`…`音频 8`）标识，不用方向名——方向概念只属于运行时轮盘的八向选择。试听按钮在播放期间变成「停止」，再点即停止试听；`TTSManager` 的取消句柄是**单次播放**的（`stop_audio_file()`），不能用全局的 `_audio_files_stopped`，否则一次停止会连累后续播放；`shutdown()` 因此必须显式调用 `stop_audio_file()`。播放结束（播完/被停止/失败）经 `ChatWheelController.playback_finished` 排队回 GUI 线程复位按钮，否则「停止」会一直挂着；替换或清空槽位、开始录音都会先停掉试听。音频存于配置目录下的 `audio_clips`（`$XDG_CONFIG_HOME/wordy/audio_clips`），Windows 优先硬链接，失败复制；硬链接共享内容。Qt 解码成临时 PCM WAV，经 `TTSManager` 当前 worker 串行播放并等待交接，复用输出路由与返听，不依赖 TTS 密钥或音色。文件替换/清空先保存配置，再删除未引用托管文件。槽位音频也能直接录制系统声音：`audio/recorder.py` 用 PyAudioWPatch 采默认输出端点的 WASAPI loopback（sounddevice 的 PortAudio 不支持 loopback），采集线程不碰任何 Qt 对象，流按端点 mix format 原样打开（采样率和声道数都不能自选，多声道在下游截前两路），产物归一化成 48000 Hz 双声道 PCM 再走同一条托管导入链路——播放回退链在设备拒绝源采样率时只换 `rate` 不重采样数据，44100 的录音会静默变调。录音临时文件只在内容进了托管目录**且**槽位落了盘之后才删：导入失败或槽位保存失败时必须留着，那是这份音频唯一的副本。录制上限 `MAX_RECORD_SECONDS`（60 秒），设置窗口关闭与 `app.quit()`（`main.py:_stop_background_threads`，Qt 退出不派发 Close）都会丢弃未完成的录音。
+WASAPI 回环在系统静音时可能完全不发数据包，采集循环必须先查 `get_read_available()`，仅按已就绪帧数读取；无数据时用停止事件做短等待，不能固定帧数阻塞读取。`stop()` / `cancel()` 等待超时后禁止对仍在 `read()` 的流执行 `close()` / `terminate()`，否则会原生访问违例。超时保留 `_ACTIVE` 和设备所有权、拒绝新录制，读取线程退出后再安全回收。足够时长但没有收到音频时提示未录到系统声音，不把静音当作读取故障。
+
+每个音频槽独立保存 `volumes`（首盘 `chat_wheel_volumes`），默认 1.0，范围 0.0 到 2.0（0% 到 200%）；文字槽仍由 TTS 音量控制。槽位标题同行的音量滑块在拖动结束时保存，切槽/切盘时恢复对应值；改动从下次播放生效。普通试听、裁剪试听和轮盘正式播放均传递该槽位增益。音量随每次播放提交快照传给主输出与返听，二者逐块使用相同 PCM 增益与饱和限幅，不修改源文件，也不叠乘 TTS 音量。
+
+用户可新增任意数量轮盘，每盘固定八槽、绑定独立快捷键；至少保留一个轮盘。第一盘仍由 `chat_wheel_hotkey/slots/labels/texts` 保存，后续盘存于 `additional_chat_wheels`；通过 `get_wheel`、`update_wheel`、`replace_wheels` 统一访问并原子保存。快捷键不能与输入框或其他轮盘重复，注册/保存失败保持原配置。运行时共用一个轮盘窗口，已有轮盘显示时忽略其他轮盘热键。设置页通过选择器切盘，录制、导入和文字试听期间锁住切盘；清空槽位或删除轮盘后，仅清理全部轮盘都不再引用的音频。
+
+录音结束先打开「截取录音」对话框，按开始/结束秒数试听并保存片段；取消保持原槽位。`audio/trim.py` 按 PCM 帧创建独立 WAV，不修改原录音。片段导入和槽位配置都成功后，才同时删除原录音与裁剪临时文件；失败保留副本。片段试听通过 TTS worker 与控制器排队信号完成，不能从播放线程直接更新 Qt 控件。
+
+首个轮盘默认 F8，独立于输入框快捷键；按住唤醒，八向选择，松开播放，中心/Esc/右键取消；唤出与收起均不移动光标，方向以唤出点为锚点，屏幕边缘钳位只影响窗口。窗口不抢焦点。八槽文件名、名称与快捷键由 `AppSettings` 持久化。槽内容是**互斥**的：`chat_wheel_texts` 非空则该槽朗读这段文字（当前 TTS），否则才播放 `chat_wheel_slots` 里的音频；填文字会按「清空」语义删掉该槽音频，导入/录制音频会清掉该槽文字。三个数组（`chat_wheel_slots` / `chat_wheel_labels` / `chat_wheel_texts`）必须在同一次 `update()` 里写、一起回滚，否则落盘失败会留下错位状态。轮盘的「可选中」判据就是标签非空，所以文字槽必须把文字（或名称）当标签传进 `open_wheel`——`ChatWheel` 没有别的传参通道。朗读**无法打断**（三个引擎的 `engine.speak()` 都阻塞到底且没有取消钩子，`close()` 抢同一把锁），因此文字槽试听时按钮如实显示「朗读中…」并对**所有槽**禁用：完成回调 `playback_finished` 不带槽号，允许期间开新试听会让回调误复位。朗读期间也拒绝开始录音（否则录音会把 TTS 录进去）。设置页的八个槽用数字编号（`音频 1`…`音频 8`）标识，不用方向名——方向概念只属于运行时轮盘的八向选择。试听按钮在播放期间变成「停止」，再点即停止试听；`TTSManager` 的取消句柄是**单次播放**的（`stop_audio_file()`），不能用全局的 `_audio_files_stopped`，否则一次停止会连累后续播放；`shutdown()` 因此必须显式调用 `stop_audio_file()`。播放结束（播完/被停止/失败）经 `ChatWheelController.playback_finished` 排队回 GUI 线程复位按钮，否则「停止」会一直挂着；替换或清空槽位、开始录音都会先停掉试听。音频存于配置目录下的 `audio_clips`（`$XDG_CONFIG_HOME/wordy/audio_clips`），Windows 优先硬链接，失败复制；硬链接共享内容。Qt 解码成临时 PCM WAV，经 `TTSManager` 当前 worker 串行播放并等待交接，复用输出路由与返听，不依赖 TTS 密钥或音色。文件替换/清空先保存配置，再删除未引用托管文件。槽位音频也能直接录制系统声音：`audio/recorder.py` 用 PyAudioWPatch 采默认输出端点的 WASAPI loopback（sounddevice 的 PortAudio 不支持 loopback），采集线程不碰任何 Qt 对象，流按端点 mix format 原样打开（采样率和声道数都不能自选，多声道在下游截前两路），产物归一化成 48000 Hz 双声道 PCM 再走同一条托管导入链路——播放回退链在设备拒绝源采样率时只换 `rate` 不重采样数据，44100 的录音会静默变调。录音临时文件只在内容进了托管目录**且**槽位落了盘之后才删：导入失败或槽位保存失败时必须留着，那是这份音频唯一的副本。录制上限 `MAX_RECORD_SECONDS`（60 秒），设置窗口关闭与 `app.quit()`（`main.py:_stop_background_threads`，Qt 退出不派发 Close）都会丢弃未完成的录音。
 
 ## 设置窗口玻璃外壳
 
@@ -54,3 +62,11 @@
 - **不要用 `adjustSize()` 定尺寸**：控件已可见时布局 `sizeHint` 缓存不更新，第二条更长的反馈会沿用上一条的尺寸导致文字被裁。尺寸按字体度量显式算出（见 `StatusToast.fit_width`）。
 - **悬停判定要核对真实光标**：显示新卡片时 Qt 会给同层卡片补发没配对的 Enter/Leave（光标并不在卡片上），照单全收会把停留时间压成悬停时长。`enterEvent` 用 `_cursor_inside()` 校验，`leaveEvent` 只在真的悬停过后才重新计时。
 - 队列挂在设置窗口（`self.window`）而非页签页，否则会被页签透明度动画一起淡化。
+
+## 日志持久化
+
+仅 `sys.frozen` 打包运行时在 `Path(sys.executable)` 同目录同步写入 UTF-8 `wordy.log`；源码运行保留控制台和内存日志，不创建日志文件。每个文件最多 5 MiB，当前文件加 `wordy.log.1` 到 `wordy.log.4` 共五个，超限轮转并删除最旧备份。按实际 UTF-8 字节计量且禁用 Windows 换行扩展，超长单条记录按字符边界跨文件保存；每次写入立即 flush，不使用后台日志队列。目录不可写时在现有日志流报告错误，不擅自改到其他目录。
+
+## 单实例运行
+
+`main()` 在配置、日志处理器和音频设备初始化前获取 Windows 命名互斥体 `Local\Wordy.SingleInstance`；同一 Windows 会话内已有实例时，新进程直接退出，不创建第二套 UI 或播放链路。互斥体名称不依赖 exe 路径，源码版与不同目录的 exe 共用限制。首实例句柄一直保留到进程终止，由 Windows 自动回收，不能在 `main()` 返回或日志关闭前提前释放。

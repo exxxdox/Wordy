@@ -284,6 +284,13 @@ class InputOverlay:
 
     def try_register_hotkey(self, hotkey: str, name: str) -> bool:
         """只更新运行中的全局快捷键，不保存配置。"""
+        from wordy.hotkey.native import parse_hotkey
+        # 输入框改键也要检查全部轮盘，不能靠 Windows 占用错误间接挡住。
+        binding = parse_hotkey(hotkey)
+        if any(parse_hotkey(self._cfg.get_wheel(i)["hotkey"]) == binding
+               for i in range(self._cfg.wheel_count)):
+            logger.warning("输入框快捷键不能与轮盘快捷键相同")
+            return False
         old_hotkey = self._cfg.hotkey
         old_name = self._cfg.name
         self._unregister_hotkey()

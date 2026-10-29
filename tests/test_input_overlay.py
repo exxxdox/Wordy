@@ -596,3 +596,16 @@ def test_voice_worker_delivers_tokened_results_through_real_qt_signal(monkeypatc
     assert overlay._cartesia_voices_cache == voices
     assert overlay._voices_loading is False
     overlay._signals.deleteLater()
+
+
+def test_input_hotkey_cannot_duplicate_any_wheel(monkeypatch):
+    from unittest.mock import MagicMock
+    from wordy.config import new_chat_wheel
+    module = import_input_overlay_with_stubs(monkeypatch)
+    overlay = _new_hotkey_overlay(module)
+    overlay._cfg.additional_chat_wheels = [new_chat_wheel("ctrl+f9")]
+    unregister = MagicMock()
+    overlay._unregister_hotkey = unregister
+    assert overlay.try_register_hotkey("CTRL+F9", "Ctrl+F9") is False
+    assert overlay._cfg.hotkey == "f6"
+    unregister.assert_not_called()

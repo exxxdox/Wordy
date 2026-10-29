@@ -16,8 +16,12 @@ ring buffer, no signal) works without PySide6 installed.
 from __future__ import annotations
 
 import logging
+import sys
 import threading
 from collections import deque
+from io import TextIOWrapper
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 from typing import Protocol, cast, override
 
 from wordy.qt_lifecycle import safe_qt_call
@@ -30,6 +34,55 @@ DEFAULT_LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
 
 def _default_formatter() -> logging.Formatter:
     return logging.Formatter(DEFAULT_LOG_FORMAT, datefmt=DEFAULT_LOG_DATEFMT)
+
+
+class _RotatingFileHandler(RotatingFileHandler):
+    """按 UTF-8 字节轮转，超长记录跨文件保存而不突破单文件限额。"""
+
+    @override
+    def _open(self) -> TextIOWrapper:
+        # 禁用 Windows 换行扩展，使字节计数与实际文件大小一致。
+        return cast(TextIOWrapper, open(self.baseFilename, self.mode, encoding=self.encoding,
+                                        errors=self.errors, newline=""))
+
+    @override
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            pending = (self.format(record) + self.terminator).encode("utf-8", errors="backslashreplace")
+            while pending:
+                # 分块不能截断 UTF-8 字符，未消费的尾部留给下一个文件。
+                text = pending[:self.maxBytes].decode("utf-8", errors="ignore")
+                consumed = len(text.encode("utf-8"))
+                if self.stream is None:
+                    self.stream = self._open()
+                self.stream.seek(0, 2)
+                if self.stream.tell() + consumed > self.maxBytes:
+                    self.doRollover()
+                self.stream.write(text)
+                self.flush()
+                pending = pending[consumed:]
+        except Exception:
+            self.handleError(record)
+
+
+def install_file_logging(logger: logging.Logger | None = None) -> None:
+    """仅打包程序在 exe 旁同步保存日志：每个 5 MiB，含当前文件共五个。"""
+    if not getattr(sys, "frozen", False):
+        return
+    target = logger if logger is not None else logging.getLogger()
+    filename = Path(sys.executable).resolve().with_name("wordy.log")
+    if any(isinstance(handler, _RotatingFileHandler) and handler.baseFilename == str(filename)
+           for handler in target.handlers):
+        return
+    try:
+        handler = _RotatingFileHandler(filename, maxBytes=5 * 1024 * 1024,
+                                       backupCount=4, encoding="utf-8")
+    except OSError:
+        # exe 目录可能只读，保留内存反馈且不擅自改到其他目录落盘。
+        target.warning("无法写入日志文件 %s", filename, exc_info=True)
+        return
+    handler.setFormatter(_default_formatter())
+    target.addHandler(handler)
 
 
 class MessageSignal(Protocol):

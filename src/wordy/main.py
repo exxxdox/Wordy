@@ -6,6 +6,7 @@
 默认播放到系统默认输出设备。
 """
 
+from pathlib import Path
 import logging
 import os
 import sys
@@ -15,7 +16,8 @@ from wordy.audio.player import AudioPlayer, OutputDeviceSelection
 from wordy.audio.recorder import cancel_active_recording
 from wordy.audio.sidetone import SidetoneAudioPlayer
 from wordy.config import AppSettings
-from wordy.log import install_log_stream
+from wordy.log import install_file_logging, install_log_stream
+from wordy.single_instance import acquire_single_instance
 import wordy.secret
 from wordy.secret import KeyringUnavailableError
 from wordy.routing_controller import RoutingController
@@ -52,6 +54,7 @@ def configure_logging() -> None:
     )
     logging.getLogger().setLevel(log_level)
     install_log_stream()
+    install_file_logging()
 
 
 class WordyApp:
@@ -128,19 +131,46 @@ class WordyApp:
         if controller is None:
             return
         if field == "chat_wheel_preview" and isinstance(value, int):
-            controller.play_slot(value)
+            controller.play_slot(value, 0)
+        elif field == "chat_wheel_preview" and isinstance(value, tuple) and len(value) == 2:
+            wheel_index, slot_index = value
+            if isinstance(wheel_index, int) and isinstance(slot_index, int):
+                controller.play_slot(slot_index, wheel_index)
+        elif field == "chat_wheel_preview_file":
+            if isinstance(value, str):
+                filename, volume = value, 1.0
+            elif (isinstance(value, tuple) and len(value) == 2 and isinstance(value[0], str)
+                  and isinstance(value[1], (int, float)) and not isinstance(value[1], bool)):
+                filename, volume = value[0], float(value[1])
+            else:
+                return
+            # 片段试听也由 worker 完成，复用排队信号避免跨线程操作设置控件。
+            self.tts_manager.play_audio_file(Path(filename), controller.playback_error.emit,
+                                             controller.playback_finished.emit, volume=volume)
         elif field == "chat_wheel_preview_stop":
             # 只打断这一次试听，不触碰全局停止标志。
             self.tts_manager.stop_audio_file()
-        elif field == "chat_wheel_hotkey":
+        elif field in ("chat_wheel_hotkey", "chat_wheel_add", "chat_wheel_remove"):
             error = None
             try:
-                controller.set_hotkey(str(value))
+                if field == "chat_wheel_add":
+                    controller.add_wheel(str(value))
+                elif field == "chat_wheel_remove" and isinstance(value, int):
+                    controller.remove_wheel(value)
+                elif isinstance(value, tuple) and len(value) == 2:
+                    index, key = value
+                    if isinstance(index, int) and isinstance(key, str):
+                        controller.set_hotkey(key, index)
+                else:
+                    controller.set_hotkey(str(value))
             except (ValueError, RuntimeError, OSError) as exc:
                 error = str(exc)
             settings = self.overlay._active_settings_window()
             if settings is not None:
-                settings.chat_wheel_panel.set_hotkey_result(error)
+                if field == "chat_wheel_hotkey":
+                    settings.chat_wheel_panel.set_hotkey_result(error)
+                else:
+                    settings.chat_wheel_panel.set_wheel_result(error)
 
     def _on_chat_wheel_playback_finished(self) -> None:
         """播放结束（播完/被停止/失败）后复位试听按钮；设置窗口没开时无事可做。"""
@@ -319,7 +349,10 @@ class WordyApp:
             self.overlay.prepare_ui()
             # QApplication 已创建后才分配轮盘；退出先注销热键，阻止延迟事件重开。
             self._chat_wheel_controller = ChatWheelController(
-                self._settings, self.tts_manager.play_audio_file, self._on_chat_wheel_error,
+                self._settings,
+                lambda path, error, done, volume: self.tts_manager.play_audio_file(
+                    path, error, done, volume=volume),
+                self._on_chat_wheel_error,
                 self._on_chat_wheel_playback_finished,
                 lambda text, done: self.tts_manager.speak(
                     text, done, self._on_chat_wheel_error
@@ -348,6 +381,9 @@ class WordyApp:
 
 
 def main():
+    # 在配置、文件日志和设备初始化之前拦截重复启动，避免两个进程争用资源。
+    if not acquire_single_instance():
+        return
     configure_logging()
     app = WordyApp()
     app.run()

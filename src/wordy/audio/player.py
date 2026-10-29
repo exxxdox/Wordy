@@ -4,6 +4,7 @@
 """音频设备查找和 WAV 播放。"""
 
 import logging
+import math
 import threading
 import wave
 from threading import Event
@@ -201,6 +202,29 @@ def _duplicate_mono_to_stereo(data: bytes, sample_width: int) -> bytes:
         raise ValueError("单声道 PCM 数据未按采样宽度对齐")
     samples = np.frombuffer(data, dtype=np.dtype((np.void, sample_width)))
     return np.repeat(samples, 2).tobytes()
+
+
+def _scale_pcm(data: bytes, sample_width: int, volume: float) -> bytes:
+    """饱和缩放 PCM，防止放大后整数回绕；8-bit WAV 的零点是 128。"""
+    if volume == 1.0:
+        return data
+    if sample_width == 1:
+        samples = np.frombuffer(data, dtype=np.uint8).astype(np.float64) - 128
+    elif sample_width == 3:
+        packed = np.frombuffer(data, dtype=np.uint8).reshape(-1, 3).astype(np.int32)
+        samples = packed[:, 0] | packed[:, 1] << 8 | packed[:, 2] << 16
+        samples = (samples ^ 0x800000) - 0x800000
+    elif sample_width in (2, 4):
+        samples = np.frombuffer(data, dtype=f"<i{sample_width}")
+    else:
+        raise ValueError("不支持的 PCM 采样宽度")
+    peak = 2 ** (8 * sample_width - 1)
+    scaled = np.clip(samples.astype(np.float64) * volume, -peak, peak - 1)
+    if sample_width == 1:
+        return (np.trunc(scaled) + 128).astype(np.uint8).tobytes()
+    if sample_width == 3:
+        return scaled.astype("<i4").view(np.uint8).reshape(-1, 4)[:, :3].tobytes()
+    return scaled.astype(f"<i{sample_width}").tobytes()
 
 
 class AudioPlayer:
@@ -596,8 +620,11 @@ class AudioPlayer:
         wav_path: str | BytesIO,
         device_index: int | None = None,
         cancel_event: Event | None = None,
+        *, volume: float = 1.0,
     ) -> bool:
         """播放 WAV 文件到指定或匹配到的输出设备。"""
+        if not math.isfinite(volume) or not 0 <= volume <= 2:
+            raise ValueError("音频音量必须在 0 到 2 之间")
         if cancel_event is not None and cancel_event.is_set():
             return False
         try:
@@ -653,6 +680,7 @@ class AudioPlayer:
                     return False
                 if self._last_mono_upmix:
                     data = _duplicate_mono_to_stereo(data, sample_width)
+                data = _scale_pcm(data, sample_width, volume)
                 stream.write(data)  # type: ignore[union-attr]
                 data = wf.readframes(1024)
 

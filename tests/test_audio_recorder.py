@@ -27,7 +27,7 @@ PA_INT16 = 8
 
 
 class _FakeStream:
-    """按脚本吐缓冲；吐完后挂起到录音停止，避免测试与采集线程竞速。"""
+    """按脚本提供可读帧数，静音时没有数据；阻塞读取由专项假流覆盖。"""
 
     def __init__(self, buffers: list[bytes] | None, stop_event: threading.Event,
                  channel_count: int) -> None:
@@ -37,13 +37,28 @@ class _FakeStream:
         self.drained = threading.Event()
         self.stopped = False
         self.closed = False
+        self.read_calls: list[int] = []
+
+    def get_read_available(self) -> int:
+        if self._buffers is None:
+            return 1024
+        if self._buffers:
+            return len(self._buffers[0]) // (2 * self._channel_count)
+        self.drained.set()
+        return 0
 
     def read(self, count: int, exception_on_overflow: bool = True) -> bytes:
+        self.read_calls.append(count)
         self.last_exception_on_overflow = bool(exception_on_overflow)
         if self._buffers is None:
             return b"\x00\x00" * count * self._channel_count
         if self._buffers:
-            return self._buffers.pop(0)
+            # 正常流严格按请求帧数消费，避免大缓冲掩盖越界读取或尾部丢失。
+            size = count * 2 * self._channel_count
+            data, self._buffers[0] = self._buffers[0][:size], self._buffers[0][size:]
+            if not self._buffers[0]:
+                self._buffers.pop(0)
+            return data
         self.drained.set()
         self._stop.wait(timeout=5)
         return b""
@@ -281,6 +296,80 @@ def test_too_short_recording_is_rejected(monkeypatch):
     with pytest.raises(RecordingError, match="太短"):
         recorder.stop()
     assert audio.terminated is True
+
+
+def test_silent_loopback_never_enters_blocking_read(monkeypatch):
+    recorder, audio = _started(monkeypatch, channels=2, buffers=[])
+    assert audio.stream is not None
+    assert audio.stream.drained.wait(timeout=2)
+    recorder.cancel()
+    assert audio.stream.read_calls == []
+    assert audio.stream.closed and audio.terminated
+
+
+def test_capture_reads_only_available_partial_buffer(monkeypatch):
+    recorder, audio = _started(monkeypatch, channels=2, buffers=[_buffer(127, 2)])
+    assert audio.stream is not None
+    assert audio.stream.drained.wait(timeout=2)
+    with pytest.raises(RecordingError, match="太短"):
+        recorder.stop()
+    assert audio.stream.read_calls == [127]
+
+
+def test_silence_after_minimum_duration_reports_missing_system_sound(monkeypatch):
+    recorder, audio = _started(monkeypatch, channels=2, buffers=[])
+    assert audio.stream is not None
+    assert audio.stream.drained.wait(timeout=2)
+    # 不等待真实录音时长：只改变已运行时间，仍走真实采集线程的停止路径。
+    recorder._started_at = time.monotonic() - 1.0
+    with pytest.raises(RecordingError, match="未录到系统声音"):
+        recorder.stop()
+    assert audio.stream.closed and audio.terminated
+
+
+@pytest.mark.parametrize("operation", ["stop", "cancel"])
+def test_stuck_read_keeps_native_stream_alive_until_reader_exits(monkeypatch, operation):
+    recorder = SystemAudioRecorder()
+    audio = _FakePyAudio(recorder._stop_event)
+    entered, release = threading.Event(), threading.Event()
+
+    class BlockedStream(_FakeStream):
+        def get_read_available(self) -> int:
+            return 1024
+
+        def read(self, count: int, exception_on_overflow: bool = True) -> bytes:
+            # 故意不响应 Python 停止事件，模拟异常驱动中的原生阻塞读取。
+            entered.set()
+            release.wait(timeout=5)
+            return b""
+
+    stream = BlockedStream([], recorder._stop_event, 2)
+    monkeypatch.setattr(audio, "open", Mock(return_value=stream))
+    monkeypatch.setattr(recorder_module, "_JOIN_TIMEOUT_SECONDS", .01)
+    _install(monkeypatch, audio)
+    recorder.start()
+    thread = recorder._thread
+    assert thread is not None
+    try:
+        assert entered.wait(timeout=2)
+        if operation == "stop":
+            with pytest.raises(RecordingError, match="未停止"):
+                recorder.stop()
+        else:
+            recorder.cancel()
+        assert thread.is_alive()
+        assert recorder._thread is thread
+        assert recorder._stream is stream and recorder._api is audio
+        assert not stream.stopped and not stream.closed and not audio.terminated
+        assert recorder_module._ACTIVE is recorder
+        with pytest.raises(RecordingError):
+            SystemAudioRecorder().start()
+    finally:
+        release.set()
+        thread.join(timeout=2)
+        recorder.cancel()
+    assert stream.stopped and stream.closed and audio.terminated
+    assert recorder_module._ACTIVE is None
 
 
 def test_cancel_discards_temp_file(monkeypatch):

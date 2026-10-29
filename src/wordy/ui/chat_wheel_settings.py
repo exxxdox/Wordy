@@ -15,19 +15,20 @@ from PySide6.QtGui import (
     QPainterPath, QPen, QShowEvent,
 )
 from PySide6.QtWidgets import (
-    QFileDialog, QHBoxLayout, QKeySequenceEdit,
-    QLabel, QLineEdit, QPushButton, QVBoxLayout, QWidget,
+    QComboBox, QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout, QKeySequenceEdit,
+    QLabel, QLineEdit, QMessageBox, QPushButton, QSlider, QVBoxLayout, QWidget,
 )
 from shiboken6 import isValid
 
 from wordy.audio.clips import AUDIO_EXTENSIONS, decoded_audio_clip, import_audio_clip, remove_audio_clip
 from wordy.audio.recorder import MAX_RECORD_SECONDS, RecordingError, SystemAudioRecorder
 from wordy.config import AppSettings
+from wordy.ui.audio_trim_dialog import AudioTrimDialog
 from wordy.ui.status_toast import show_status_toast
 from wordy.ui import glass
 from wordy.ui.theme import (
     ACCENT_SECONDARY, ELEVATED_BG, GREEN_ACCENT, TEXT_ERROR, TEXT_MUTED, TEXT_PRIMARY,
-    WINDOW_BG, tint,
+    SURFACE_BG, WINDOW_BG, tint,
 )
 
 logger = logging.getLogger(__name__)
@@ -224,6 +225,9 @@ class ChatWheelSettings(QWidget):
         self._signals = _ImportSignals(self)
         self._signals.finished.connect(self._finish_import)
         self.selected_index = 0
+        self.wheel_index = 0
+        # 裁剪副本与原录音一起保留，直到槽位成功落盘才能回收原录音。
+        self._recording_sources: dict[str, str] = {}
 
         layout = QVBoxLayout(self)
         # 父级页签已有标题和阅读边距，避免重复留白把第八槽挤出默认窗口。
@@ -235,9 +239,11 @@ class ChatWheelSettings(QWidget):
         layout.addWidget(hint)
 
         hotkey_row = QHBoxLayout()
-        hotkey_label = QLabel("全局快捷键")
-        hotkey_label.setStyleSheet(f"color: {TEXT_PRIMARY};")
-        hotkey_row.addWidget(hotkey_label)
+        # 与快捷键共用一行，保留默认窗口内八槽编辑器的空间。
+        self.wheel_combo = QComboBox()
+        self.wheel_combo.setAccessibleName("选择轮盘")
+        self.wheel_combo.currentIndexChanged.connect(self._select_wheel)
+        hotkey_row.addWidget(self.wheel_combo, 1)
         self.hotkey_input = QKeySequenceEdit(QKeySequence(settings.chat_wheel_hotkey))
         self.hotkey_input.setMaximumSequenceLength(1)
         self.hotkey_input.setAccessibleName("轮盘全局快捷键")
@@ -245,6 +251,12 @@ class ChatWheelSettings(QWidget):
         self.hotkey_apply = QPushButton("应用")
         self.hotkey_apply.clicked.connect(self._apply_hotkey)
         hotkey_row.addWidget(self.hotkey_apply)
+        self.add_wheel_button = QPushButton("新增")
+        self.add_wheel_button.clicked.connect(self._add_wheel)
+        hotkey_row.addWidget(self.add_wheel_button)
+        self.remove_wheel_button = QPushButton("删除")
+        self.remove_wheel_button.clicked.connect(self._remove_wheel)
+        hotkey_row.addWidget(self.remove_wheel_button)
         layout.addLayout(hotkey_row)
 
         self.wheel_picker = _WheelPicker(self._select_slot)
@@ -253,7 +265,22 @@ class ChatWheelSettings(QWidget):
 
         self.editor_title = QLabel()
         self.editor_title.setObjectName("sectionTitle")
-        layout.addWidget(self.editor_title)
+        # 与槽位标题同行，增加音量控制也不挤占默认窗口的编辑空间。
+        editor_row = QHBoxLayout()
+        editor_row.addWidget(self.editor_title)
+        editor_row.addStretch()
+        editor_row.addWidget(QLabel("音量"))
+        self.volume_slider = QSlider(Qt.Orientation.Horizontal)
+        self.volume_slider.setRange(0, 200)
+        self.volume_slider.setFixedWidth(120)
+        self.volume_slider.setToolTip("音量（下次播放生效）")
+        self.volume_slider.valueChanged.connect(self._volume_changed)
+        self.volume_slider.sliderReleased.connect(self._save_volume)
+        editor_row.addWidget(self.volume_slider)
+        self.volume_value_label = QLabel("100%")
+        self.volume_value_label.setMinimumWidth(42)
+        editor_row.addWidget(self.volume_value_label)
+        layout.addLayout(editor_row)
         # 名称与朗读文字同行分栏：轮盘页纵向余量为 0，再占一行就会顶出滚动条。
         inputs_row = QHBoxLayout()
         inputs_row.setSpacing(6)
@@ -292,6 +319,7 @@ class ChatWheelSettings(QWidget):
         self.status_label.setVisible(False)
         layout.addWidget(self.status_label)
         layout.addStretch()
+        self._reload_wheels()
         for index in range(8):
             self._refresh_slot(index)
         self._select_slot(0)
@@ -331,17 +359,81 @@ class ChatWheelSettings(QWidget):
         self.status_label.setStyleSheet(f"color: {color};")
         self.status_label.setVisible(True)
 
-    def _apply_hotkey(self) -> None:
-        text = self.hotkey_input.keySequence().toString(QKeySequence.SequenceFormat.PortableText).lower()
+    def _hotkey_text(self, control: QKeySequenceEdit | None = None) -> str:
+        text = (control or self.hotkey_input).keySequence().toString(QKeySequence.SequenceFormat.PortableText).lower()
         # Qt 使用缩写名称，Win32 解析器使用 keyboard 风格的完整名称。
         text = text.replace("meta+", "windows+").replace("pgup", "page up").replace("pgdown", "page down")
+        return text
+
+    def _reload_wheels(self) -> None:
+        self.wheel_index = min(self.wheel_index, self._settings.wheel_count - 1)
+        self.wheel_combo.blockSignals(True)
+        self.wheel_combo.clear()
+        self.wheel_combo.addItems([f"轮盘 {i + 1}" for i in range(self._settings.wheel_count)])
+        self.wheel_combo.setCurrentIndex(self.wheel_index)
+        self.wheel_combo.blockSignals(False)
+        self.hotkey_input.setKeySequence(QKeySequence(self._settings.get_wheel(self.wheel_index)["hotkey"]))
+        self.remove_wheel_button.setEnabled(self._settings.wheel_count > 1)
+
+    def _select_wheel(self, index: int) -> None:
+        # 导入回调只携带槽号；处理完成前锁住轮盘，防止结果写进另一盘。
+        if index < 0 or self._busy or self._recording is not None or self._preview_speech:
+            return
+        self._stop_preview()
+        self.wheel_index = index
+        self._reload_wheels()
+        self._refresh_all_slots()
+        self._select_slot(0)
+
+    def _add_wheel(self) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("新增轮盘")
+        dialog.setObjectName("newWheelDialog")
+        dialog.setStyleSheet(f"QDialog#newWheelDialog {{ background: {SURFACE_BG}; }}")
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(QLabel("新轮盘快捷键"))
+        hotkey = QKeySequenceEdit()
+        hotkey.setMaximumSequenceLength(1)
+        hotkey.setAccessibleName("新轮盘快捷键")
+        layout.addWidget(hotkey)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("新增")
+        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("取消")
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        try:
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                text = self._hotkey_text(hotkey)
+                if text:
+                    self._on_field_changed("chat_wheel_add", text)
+                else:
+                    self._status("请先输入新轮盘的快捷键。", error=True)
+        finally:
+            dialog.deleteLater()
+
+    def _remove_wheel(self) -> None:
+        if QMessageBox.question(self, "删除轮盘", "删除此轮盘及其八个槽位？") != QMessageBox.StandardButton.Yes:
+            return
+        self._stop_preview()
+        self._on_field_changed("chat_wheel_remove", self.wheel_index)
+
+    def set_wheel_result(self, error: str | None) -> None:
+        if not error:
+            self._reload_wheels()
+            self._refresh_all_slots()
+            self._select_slot(0)
+        self._status(error or "轮盘已更新。", error=bool(error))
+
+    def _apply_hotkey(self) -> None:
+        text = self._hotkey_text()
         if not text:
             self._status("请先按下快捷键组合。", error=True)
             return
         # 注册成功才保存，避免占用冲突导致下次启动也无法唤醒。
         self.hotkey_apply.setEnabled(False)
         try:
-            self._on_field_changed("chat_wheel_hotkey", text)
+            self._on_field_changed("chat_wheel_hotkey", (self.wheel_index, text) if self.wheel_index else text)
         except Exception as error:
             self.set_hotkey_result(str(error))
 
@@ -361,7 +453,7 @@ class ChatWheelSettings(QWidget):
         if index in self._busy:
             return
         self._busy.add(index)
-        self._refresh_slot(index)
+        self._refresh_all_slots()
         self._status(f"正在导入{SLOT_NAMES[index]}…")
         config_file = self._settings._config_file
         signals = self._signals
@@ -403,13 +495,13 @@ class ChatWheelSettings(QWidget):
             self._stop_preview()
             return
         index = self.selected_index
-        text = self._settings.chat_wheel_texts[index].strip()
-        if not (text or self._settings.chat_wheel_slots[index]):
+        text = self._settings.get_wheel(self.wheel_index)["texts"][index].strip()
+        if not (text or self._settings.get_wheel(self.wheel_index)["slots"][index]):
             return
         self._previewing = True
         self._preview_speech = bool(text)
         self._refresh_all_slots()
-        self._on_field_changed("chat_wheel_preview", index)
+        self._on_field_changed("chat_wheel_preview", (self.wheel_index, index) if self.wheel_index else index)
 
     def _stop_preview(self) -> None:
         if not self._previewing:
@@ -468,8 +560,38 @@ class ChatWheelSettings(QWidget):
             logger.exception("结束录音失败")
             self._status(f"录音失败：{error}", error=True)
             return
-        # 时间戳让八个槽在轮盘上互相分得清，用户仍可随时改名。
-        self.import_file(index, path, label=f"录音 {datetime.now():%H%M%S}", temporary=True)
+        try:
+            clip = self._trim_recording(path)
+        except Exception as error:
+            self._keep_temporary(str(path), "截取录音失败")
+            self._status(f"截取失败：{error}；原录音保留在 {path}", error=True)
+            return
+        if clip is None:
+            # 用户明确取消本次录音，旧槽位内容不变。
+            self._discard_temporary(str(path))
+            return
+        if clip != path:
+            self._recording_sources[str(clip)] = str(path)
+        self.import_file(index, clip, label=f"录音 {datetime.now():%H%M%S}", temporary=True)
+
+    def _trim_recording(self, path: Path) -> Path | None:
+        volume = self._settings.get_wheel(self.wheel_index)["volumes"][self.selected_index]
+
+        def play(clip: Path) -> None:
+            self._on_field_changed("chat_wheel_preview_file", (str(clip), volume))
+
+        def stop() -> None:
+            self._on_field_changed("chat_wheel_preview_stop", 0)
+
+        dialog = AudioTrimDialog(
+            path, self, play_preview=play, stop_preview=stop,
+        )
+        try:
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                return dialog.take_clip()
+            return None
+        finally:
+            dialog.deleteLater()
 
     def _cancel_recording(self) -> None:
         """丢弃进行中的录音；采集线程不碰 Qt，可以在这里安全收尾。"""
@@ -503,12 +625,19 @@ class ChatWheelSettings(QWidget):
         )
 
     def _refresh_all_slots(self) -> None:
+        locked = bool(self._busy) or self._recording is not None or self._preview_speech
+        self.wheel_combo.setEnabled(not locked)
+        self.add_wheel_button.setEnabled(not locked)
+        self.remove_wheel_button.setEnabled(not locked and self._settings.wheel_count > 1)
+        self.hotkey_input.setEnabled(not locked)
+        self.hotkey_apply.setEnabled(not locked)
         for slot in range(8):
             self._refresh_slot(slot)
 
     def _finish_import(self, index: int, filename: str, label: str, error: str,
                        temporary_source: str = "") -> None:
         self._busy.discard(index)
+        self._refresh_all_slots()
         if self._closed.is_set():
             if filename:
                 self._remove_unused(filename, self._settings._config_file)
@@ -525,6 +654,7 @@ class ChatWheelSettings(QWidget):
             self._keep_temporary(temporary_source, "槽位保存失败")
             return
         self._discard_temporary(temporary_source)
+        self._discard_temporary(self._recording_sources.pop(temporary_source, ""))
 
     @staticmethod
     def _discard_temporary(path: str) -> None:
@@ -546,26 +676,22 @@ class ChatWheelSettings(QWidget):
         """写入一个槽的全部内容：音频文件名、名称、朗读文字互斥共存。"""
         # 被替换/清空的片段可能正在试听，先停掉再动文件。
         self._stop_preview()
-        old_slots = list(self._settings.chat_wheel_slots)
-        old_labels = list(self._settings.chat_wheel_labels)
-        old_texts = list(self._settings.chat_wheel_texts)
+        old_slots = list(self._settings.get_wheel(self.wheel_index)["slots"])
+        old_labels = list(self._settings.get_wheel(self.wheel_index)["labels"])
+        old_texts = list(self._settings.get_wheel(self.wheel_index)["texts"])
         slots, labels, texts = list(old_slots), list(old_labels), list(old_texts)
         slots[index], labels[index], texts[index] = filename, label[:40], text[:200]
         try:
-            self._settings.update(chat_wheel_slots=slots, chat_wheel_labels=labels,
-                                  chat_wheel_texts=texts)
+            self._settings.update_wheel(self.wheel_index, slots=slots, labels=labels, texts=texts)
         except Exception as error:
-            # update 会先更改内存；落盘失败必须把三个数组一起恢复，才能安全删除导入副本。
-            object.__setattr__(self._settings, "chat_wheel_slots", old_slots)
-            object.__setattr__(self._settings, "chat_wheel_labels", old_labels)
-            object.__setattr__(self._settings, "chat_wheel_texts", old_texts)
             self._status(f"保存失败：{error}", error=True)
             self._refresh_slot(index)
             return False
         self._refresh_slot(index)
         self._status("文字已保存。" if text else "音频已保存。" if filename else "音频已清空。")
         old = old_slots[index]
-        if old and old not in slots:
+        if old and not any(old in self._settings.get_wheel(i)["slots"]
+                           for i in range(self._settings.wheel_count)):
             self._remove_unused(old, self._settings._config_file)
         return True
 
@@ -578,16 +704,15 @@ class ChatWheelSettings(QWidget):
 
     def _save_label(self) -> None:
         index = self.selected_index
-        old_labels = list(self._settings.chat_wheel_labels)
+        old_labels = list(self._settings.get_wheel(self.wheel_index)["labels"])
         labels = list(old_labels)
         text = self.label_input.text().strip()
         if labels[index] == text:
             return
         labels[index] = text
         try:
-            self._settings.update(chat_wheel_labels=labels)
+            self._settings.update_wheel(self.wheel_index, labels=labels)
         except Exception as error:
-            object.__setattr__(self._settings, "chat_wheel_labels", old_labels)
             self.label_input.setText(old_labels[index])
             self._status(f"保存失败：{error}", error=True)
             return
@@ -598,10 +723,32 @@ class ChatWheelSettings(QWidget):
         index = self.selected_index
         text = self.text_input.text().strip()[:200]
         # 失焦也会触发本回调；内容没变就直接返回，否则点一下输入框再点走就会删掉音频。
-        if self._settings.chat_wheel_texts[index] == text:
+        if self._settings.get_wheel(self.wheel_index)["texts"][index] == text:
             return
         # 名称沿用已存的值：输入框里可能还有没提交的编辑。
-        self._replace_clip(index, "", self._settings.chat_wheel_labels[index], text)
+        self._replace_clip(index, "", self._settings.get_wheel(self.wheel_index)["labels"][index], text)
+
+    def _volume_changed(self, value: int) -> None:
+        self.volume_value_label.setText(f"{value}%")
+        # 拖动只更新显示，释放后保存一次；键盘和点击轨道的调整立即保存。
+        if not self.volume_slider.isSliderDown():
+            self._save_volume()
+
+    def _save_volume(self) -> None:
+        config = self._settings.get_wheel(self.wheel_index)
+        index = self.selected_index
+        if not config["slots"][index] or config["texts"][index] or self._recording is not None or index in self._busy:
+            return
+        volumes = list(config["volumes"])
+        volume = self.volume_slider.value() / 100
+        if volumes[index] == volume:
+            return
+        volumes[index] = volume
+        try:
+            self._settings.update_wheel(self.wheel_index, volumes=volumes)
+        except Exception as error:
+            self._refresh_slot(index)
+            self._status(f"保存失败：{error}", error=True)
 
     def _select_slot(self, index: int) -> None:
         self.selected_index = index
@@ -617,21 +764,30 @@ class ChatWheelSettings(QWidget):
         self.text_input.setAccessibleName(f"{SLOT_NAMES[index]}朗读文字")
         self.choose_button.setAccessibleName(f"选择{SLOT_NAMES[index]}")
         self.clear_button.setAccessibleName(f"清空{SLOT_NAMES[index]}")
+        self.volume_slider.setAccessibleName(f"{SLOT_NAMES[index]}音量")
         self._refresh_slot(index)
 
     def _refresh_slot(self, index: int) -> None:
         recording = index == self._recording
         # 录制期间锁住全部槽位：录音只能落在开始时的那个槽。
         busy = index in self._busy or self._recording is not None
-        text = self._settings.chat_wheel_texts[index].strip()
-        filled = bool(self._settings.chat_wheel_slots[index] or text)
-        label = self._settings.chat_wheel_labels[index].strip()
+        text = self._settings.get_wheel(self.wheel_index)["texts"][index].strip()
+        filled = bool(self._settings.get_wheel(self.wheel_index)["slots"][index] or text)
+        label = self._settings.get_wheel(self.wheel_index)["labels"][index].strip()
         self.slot_buttons[index].setText(label or text or "未设置")
         self.slot_buttons[index].setEnabled(not busy)
         if index != self.selected_index:
             return
         self.label_input.setText(label)
         self.text_input.setText(text)
+        # 播放结束也会刷新面板，不能覆盖尚未释放滑块的待保存选择。
+        if not self.volume_slider.isSliderDown():
+            self.volume_slider.blockSignals(True)
+            volume_percent = round(self._settings.get_wheel(self.wheel_index)["volumes"][index] * 100)
+            self.volume_slider.setValue(volume_percent)
+            self.volume_slider.blockSignals(False)
+            self.volume_value_label.setText(f"{volume_percent}%")
+        self.volume_slider.setEnabled(filled and not text and not busy and not self._preview_speech)
         self.choose_button.setEnabled(not busy)
         self.choose_button.setText(
             "录制中…" if recording else "导入中…" if busy else "选择文件"

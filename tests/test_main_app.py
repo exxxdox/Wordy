@@ -8,6 +8,7 @@ from __future__ import annotations
 import queue
 import sys
 import threading
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 from typing import Any, Callable, cast
@@ -348,13 +349,25 @@ def test_calling_main_directly_does_not_hard_exit(monkeypatch):
         def run(self) -> None:
             events.append("app.run")
 
+    monkeypatch.setattr(main_mod, "acquire_single_instance", lambda: events.append("acquire") or True)
     monkeypatch.setattr(main_mod, "configure_logging", lambda: events.append("configure_logging"))
     monkeypatch.setattr(main_mod, "WordyApp", lambda: FakeApp())
     monkeypatch.setattr(main_mod.os, "_exit", lambda code: events.append(f"exit:{code}"))
 
     main_mod.main()
 
-    assert events == ["configure_logging", "app.run"]
+    assert events == ["acquire", "configure_logging", "app.run"]
+
+
+def test_duplicate_instance_exits_before_logging_or_audio_initialization(monkeypatch):
+    import wordy.main as main_mod
+
+    events: list[str] = []
+    monkeypatch.setattr(main_mod, "acquire_single_instance", lambda: False)
+    monkeypatch.setattr(main_mod, "configure_logging", lambda: events.append("logging"))
+    monkeypatch.setattr(main_mod, "WordyApp", lambda: events.append("app"))
+    main_mod.main()
+    assert events == []
 
 
 def test_configure_logging_installs_log_stream_pipeline(monkeypatch):
@@ -362,17 +375,20 @@ def test_configure_logging_installs_log_stream_pipeline(monkeypatch):
     import wordy.main as main_mod
 
     install_calls: list[None] = []
+    file_calls: list[None] = []
 
     def fake_install_log_stream() -> None:
         install_calls.append(None)
 
     monkeypatch.setattr(main_mod, "install_log_stream", fake_install_log_stream, raising=False)
+    monkeypatch.setattr(main_mod, "install_file_logging", lambda: file_calls.append(None))
     main_mod.configure_logging()
 
     assert install_calls == [None], (
         "configure_logging must call install_log_stream() so tray logs receive the "
         "RingBufferQtHandler-backed stream pipeline"
     )
+    assert file_calls == [None]
 
 
 def test_run_prepares_overlay_tray_hook_and_disposes_tray_before_overlay_run(app, monkeypatch):
@@ -1599,3 +1615,14 @@ def test_voice_fetch_callback_captures_engine_instead_of_following_manager(app):
     app.tts_manager.engine = FakeTTSEngine(voice_id="other")
     app.tts_manager.engine.fetch_voices_result = [{"id": "other", "name": "Other"}]
     assert fetch() == original.fetch_voices_result
+
+
+@pytest.mark.parametrize("payload, volume", [("clip.wav", 1.0), (("clip.wav", 0.35), 0.35)])
+def test_recording_preview_forwards_slot_volume_through_queued_signals(app, monkeypatch, payload, volume):
+    controller = MagicMock()
+    app._chat_wheel_controller = controller
+    playback = MagicMock()
+    monkeypatch.setattr(app.tts_manager, "play_audio_file", playback)
+    app._on_chat_wheel_change("chat_wheel_preview_file", payload)
+    playback.assert_called_once_with(Path("clip.wav"), controller.playback_error.emit,
+                                     controller.playback_finished.emit, volume=volume)

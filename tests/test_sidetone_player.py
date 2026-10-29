@@ -15,8 +15,42 @@ from pytest import MonkeyPatch, raises
 from wordy.audio.sidetone import SidetoneAudioPlayer
 
 
+def test_real_players_write_identical_scaled_samples_to_main_and_sidetone(monkeypatch):
+    import struct
+    import wave
+    from wordy.audio.player import AudioPlayer
+
+    source = BytesIO()
+    with wave.open(source, "wb") as audio:
+        audio.setparams((2, 2, 48000, 0, "NONE", "not compressed"))
+        audio.writeframes(struct.pack("<4h", 20000, -20000, 1000, -1000))
+    original = source.getvalue()
+    source.seek(0)
+    main = AudioPlayer(output_device={"name": "Virtual output"})
+    sidetone = AudioPlayer()
+    main_stream, sidetone_stream = MagicMock(), MagicMock()
+    monkeypatch.setattr(main, "_open_pyaudio_stream", lambda *a, **kw: (MagicMock(), main_stream))
+    monkeypatch.setattr(sidetone, "_open_pyaudio_stream", lambda *a, **kw: (MagicMock(), sidetone_stream))
+    player = SidetoneAudioPlayer(main, sidetone)
+    player.set_sidetone_enabled(True)
+    assert player.play_wav(source, volume=.5)
+    expected = struct.pack("<4h", 10000, -10000, 500, -500)
+    assert main_stream.write.call_args.args[0] == expected
+    assert sidetone_stream.write.call_args.args[0] == expected
+    assert source.getvalue() == original
+
+
 class TestSidetoneAudioPlayer:
     """SidetoneAudioPlayer 包装器测试。"""
+
+    def test_play_wav_uses_identical_gain_for_both_outputs(self):
+        main, sidetone = self._make_players()
+        main.play_wav.return_value = True
+        wrapper = SidetoneAudioPlayer(main, sidetone)
+        wrapper.set_sidetone_enabled(True)
+        assert wrapper.play_wav("test.wav", device_index=3, volume=0.35)
+        main.play_wav.assert_called_once_with("test.wav", device_index=3, volume=0.35)
+        sidetone.play_wav.assert_called_once_with("test.wav", device_index=None, volume=0.35)
 
     @staticmethod
     def _make_players():
@@ -332,7 +366,7 @@ class TestSidetoneAudioPlayer:
         wrapper = SidetoneAudioPlayer(main, sidetone)
         result = wrapper.play_wav("test.wav")
         assert result is True
-        main.play_wav.assert_called_once_with("test.wav", device_index=None)
+        main.play_wav.assert_called_once_with("test.wav", device_index=None, volume=1.0)
         sidetone.play_wav.assert_not_called()
 
     def test_play_wav_enabled_calls_both(self):
@@ -343,8 +377,8 @@ class TestSidetoneAudioPlayer:
         wrapper.set_sidetone_enabled(True)
         result = wrapper.play_wav("test.wav", device_index=3)
         assert result is True
-        main.play_wav.assert_called_once_with("test.wav", device_index=3)
-        sidetone.play_wav.assert_called_once_with("test.wav", device_index=None)
+        main.play_wav.assert_called_once_with("test.wav", device_index=3, volume=1.0)
+        sidetone.play_wav.assert_called_once_with("test.wav", device_index=None, volume=1.0)
 
     def test_play_wav_starts_main_and_sidetone_concurrently_and_waits_for_both(self):
         main, sidetone = self._make_players()
@@ -559,7 +593,7 @@ def test_cancelled_concurrent_playback_returns_false_and_shares_event():
     wrapper = SidetoneAudioPlayer(main, sidetone)
     wrapper.set_sidetone_enabled(True)
     assert wrapper.play_wav("test.wav", cancel_event=cancelled) is False
-    main.play_wav.assert_called_once_with("test.wav", device_index=None, cancel_event=cancelled)
+    main.play_wav.assert_called_once_with("test.wav", device_index=None, cancel_event=cancelled, volume=1.0)
     sidetone.play_wav.assert_called_once_with(
-        "test.wav", device_index=None, cancel_event=cancelled
+        "test.wav", device_index=None, cancel_event=cancelled, volume=1.0
     )

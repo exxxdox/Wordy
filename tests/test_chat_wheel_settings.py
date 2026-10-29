@@ -31,6 +31,139 @@ def test_hotkey_is_committed_only_after_registration(qapp):
     assert panel.hotkey_apply.isEnabled()
 
 
+def test_wheel_selection_edits_only_selected_wheel(qapp):
+    settings = AppSettings()
+    settings.add_wheel("f9")
+    panel = ChatWheelSettings(settings, Mock())
+    panel.wheel_combo.setCurrentIndex(1)
+    panel.text_input.setText("第二轮盘")
+    panel._save_text()
+    assert settings.get_wheel(1)["texts"][0] == "第二轮盘"
+    assert settings.chat_wheel_texts[0] == ""
+    assert panel.hotkey_input.keySequence().toString().lower() == "f9"
+
+
+def test_audio_volume_is_independent_for_each_slot_and_wheel(qapp):
+    settings = AppSettings(chat_wheel_slots=["shared.wav"] * 8)
+    settings.add_wheel("f9")
+    settings.update_wheel(1, slots=["shared.wav"] * 8)
+    panel = ChatWheelSettings(settings, Mock())
+    assert panel.volume_slider.value() == 100
+    panel.volume_slider.setValue(40)
+    assert settings.get_wheel(0)["volumes"][:2] == [0.4, 1.0]
+    panel._select_slot(1)
+    assert panel.volume_slider.value() == 100
+    panel.volume_slider.setValue(160)
+    panel._select_wheel(1)
+    assert panel.volume_slider.value() == 100
+    panel.volume_slider.setValue(0)
+    panel._select_wheel(0)
+    assert panel.volume_slider.value() == 40
+    assert settings.get_wheel(1)["volumes"][0] == 0
+    assert panel.volume_value_label.text() == "40%"
+
+
+def test_volume_save_failure_restores_slider_and_configuration(qapp, monkeypatch):
+    settings = AppSettings(chat_wheel_slots=["audio.wav"] + [""] * 7)
+    panel = ChatWheelSettings(settings, Mock())
+    monkeypatch.setattr(AppSettings, "save", Mock(side_effect=OSError("磁盘已满")))
+    panel.volume_slider.setValue(50)
+    assert settings.get_wheel(0)["volumes"][0] == 1
+    assert panel.volume_slider.value() == 100
+    assert panel.volume_value_label.text() == "100%"
+
+
+def test_dragging_volume_saves_once_on_release(qapp, monkeypatch):
+    settings = AppSettings(chat_wheel_slots=["audio.wav"] + [""] * 7)
+    panel = ChatWheelSettings(settings, Mock())
+    save = Mock(wraps=settings.save)
+    monkeypatch.setattr(settings, "save", save)
+    panel.volume_slider.setSliderDown(True)
+    panel.volume_slider.setValue(70)
+    panel.volume_slider.setValue(30)
+    assert panel.volume_value_label.text() == "30%"
+    assert settings.get_wheel(0)["volumes"][0] == 1
+    save.assert_not_called()
+    panel.volume_slider.setSliderDown(False)
+    assert settings.get_wheel(0)["volumes"][0] == .3
+    save.assert_called_once()
+
+
+def test_playback_finish_does_not_reset_volume_being_dragged(qapp):
+    settings = AppSettings(chat_wheel_slots=["audio.wav"] + [""] * 7)
+    panel = ChatWheelSettings(settings, Mock())
+    panel._toggle_preview()
+    panel.volume_slider.setSliderDown(True)
+    panel.volume_slider.setValue(30)
+    panel.set_preview_playing(False)
+    assert panel.volume_slider.value() == 30
+    assert panel.volume_value_label.text() == "30%"
+    panel.volume_slider.setSliderDown(False)
+    assert settings.get_wheel(0)["volumes"][0] == .3
+
+
+def test_trim_preview_uses_slot_volume(qapp, monkeypatch, tmp_path):
+    from PySide6.QtWidgets import QDialog
+
+    settings = AppSettings(chat_wheel_slots=["audio.wav"] + [""] * 7)
+    settings.update_wheel(0, volumes=[.35] + [1.] * 7)
+    changed = Mock()
+    panel = ChatWheelSettings(settings, changed)
+    preview = tmp_path / "preview.wav"
+
+    class FakeDialog:
+        def __init__(self, source, parent, *, play_preview, stop_preview):
+            self.play = play_preview
+
+        def exec(self):
+            self.play(preview)
+            return QDialog.DialogCode.Rejected
+
+        def deleteLater(self):
+            pass
+
+    monkeypatch.setattr("wordy.ui.chat_wheel_settings.AudioTrimDialog", FakeDialog)
+    assert panel._trim_recording(tmp_path / "original.wav") is None
+    changed.assert_called_once_with("chat_wheel_preview_file", (str(preview), .35))
+
+
+def test_volume_control_only_edits_available_audio(qapp):
+    settings = AppSettings(chat_wheel_slots=["audio.wav"] + [""] * 7,
+                           chat_wheel_texts=["", "文字"] + [""] * 6)
+    panel = ChatWheelSettings(settings, Mock())
+    assert panel.volume_slider.isEnabled()
+    panel._select_slot(1)
+    assert not panel.volume_slider.isEnabled()
+    panel._select_slot(2)
+    assert not panel.volume_slider.isEnabled()
+    panel._select_slot(0)
+    panel._recording = 0
+    panel._refresh_all_slots()
+    assert not panel.volume_slider.isEnabled()
+
+
+def test_wheel_switch_is_locked_during_import(qapp):
+    settings = AppSettings()
+    settings.add_wheel("f9")
+    panel = ChatWheelSettings(settings, Mock())
+    panel._busy.add(0)
+    panel._refresh_all_slots()
+    assert not panel.wheel_combo.isEnabled()
+    panel._select_wheel(1)
+    assert panel.wheel_index == 0
+
+
+def test_unused_audio_is_retained_when_another_wheel_references_it(qapp, monkeypatch):
+    settings = AppSettings(chat_wheel_slots=["shared.wav"] + [""] * 7)
+    settings.add_wheel("f9")
+    settings.update_wheel(1, slots=["shared.wav"] + [""] * 7)
+    cleanup = Mock()
+    monkeypatch.setattr("wordy.ui.chat_wheel_settings.remove_audio_clip", cleanup)
+    panel = ChatWheelSettings(settings, Mock())
+    assert panel._replace_clip(0, "", "")
+    cleanup.assert_not_called()
+
+
 def test_import_feedback_goes_to_host_queue(qapp, monkeypatch):
     """挂进设置窗口后，轮盘导入的反馈走浮动弹窗而不是原地标签。"""
     from PySide6.QtWidgets import QVBoxLayout, QWidget
@@ -234,6 +367,7 @@ def _recording_panel(monkeypatch, recorder):
     """装好假录音器与就地导入线程的面板，返回 (panel, settings)。"""
     monkeypatch.setattr("wordy.ui.chat_wheel_settings.SystemAudioRecorder", lambda: recorder)
     monkeypatch.setattr("wordy.ui.chat_wheel_settings.threading.Thread", _InlineThread)
+    monkeypatch.setattr(ChatWheelSettings, "_trim_recording", lambda self, path: path)
     monkeypatch.setattr(
         "wordy.ui.chat_wheel_settings.import_audio_clip",
         lambda source, config_file=None: Path("managed.wav"),
@@ -264,6 +398,44 @@ def test_record_button_saves_recording_with_timestamp_label(qapp, monkeypatch, t
     assert settings.chat_wheel_labels[0].startswith("录音 ")
     assert not source.exists(), "录音临时文件必须在导入后删除"
     assert panel.choose_button.isEnabled()
+
+
+def test_cancel_trim_keeps_old_slot(qapp, monkeypatch, tmp_path):
+    source = tmp_path / "recording.wav"
+    source.write_bytes(b"pcm")
+    panel, settings = _recording_panel(monkeypatch, _FakeRecorder(result=source))
+    settings.update(chat_wheel_slots=["old.wav"] + [""] * 7)
+    monkeypatch.setattr(panel, "_trim_recording", lambda path: None)
+    panel._toggle_record()
+    panel._toggle_record()
+    assert settings.chat_wheel_slots[0] == "old.wav"
+    assert not source.exists()
+
+
+def test_trimmed_recording_cleans_both_sources_only_after_save(qapp, monkeypatch, tmp_path):
+    source, clip = tmp_path / "recording.wav", tmp_path / "clip.wav"
+    source.write_bytes(b"original")
+    clip.write_bytes(b"segment")
+    panel, settings = _recording_panel(monkeypatch, _FakeRecorder(result=source))
+    monkeypatch.setattr(panel, "_trim_recording", lambda path: clip)
+    panel._toggle_record()
+    panel._toggle_record()
+    assert settings.chat_wheel_slots[0] == "managed.wav"
+    assert not clip.exists()
+    assert not source.exists()
+
+
+def test_trimmed_recording_save_failure_retains_both_sources(qapp, monkeypatch, tmp_path):
+    source, clip = tmp_path / "recording.wav", tmp_path / "clip.wav"
+    source.write_bytes(b"original")
+    clip.write_bytes(b"segment")
+    panel, settings = _recording_panel(monkeypatch, _FakeRecorder(result=source))
+    monkeypatch.setattr(panel, "_trim_recording", lambda path: clip)
+    monkeypatch.setattr(AppSettings, "save", Mock(side_effect=OSError("磁盘已满")))
+    panel._toggle_record()
+    panel._toggle_record()
+    assert settings.chat_wheel_slots[0] == ""
+    assert clip.exists() and source.exists()
 
 
 def test_slot_names_are_numbers_not_directions(qapp):
@@ -425,6 +597,7 @@ def test_recording_hint_stays_in_place_instead_of_covering_buttons(qapp, monkeyp
     recorder = _FakeRecorder(result=source)
     monkeypatch.setattr("wordy.ui.chat_wheel_settings.SystemAudioRecorder", lambda: recorder)
     monkeypatch.setattr("wordy.ui.chat_wheel_settings.threading.Thread", _InlineThread)
+    monkeypatch.setattr(ChatWheelSettings, "_trim_recording", lambda self, path: path)
     monkeypatch.setattr(
         "wordy.ui.chat_wheel_settings.import_audio_clip",
         lambda path, config_file=None: Path("managed.wav"),

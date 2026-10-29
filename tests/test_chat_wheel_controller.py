@@ -1,5 +1,6 @@
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+from typing import cast
 
 import pytest
 
@@ -149,3 +150,140 @@ def test_failed_hotkey_save_rolls_back_memory_and_keeps_listener(qapp, tmp_path:
         old.stop.assert_not_called()
         replacement.stop.assert_called_once()
         controller.stop()
+
+
+def test_second_wheel_binding_selects_its_own_text(qapp, tmp_path):
+    settings = AppSettings.load(config_file=tmp_path / "multi.toml")
+    speak = MagicMock()
+    with patch("wordy.chat_wheel_controller.NativeHotkeyListener", side_effect=lambda *args: MagicMock()) as factory:
+        controller = ChatWheelController(settings, MagicMock(), MagicMock(), speak_text=speak)
+        controller.start()
+        controller.add_wheel("f9")
+        settings.update_wheel(1, texts=["second"] + [""] * 7)
+        factory.call_args.args[2]()
+        qapp.processEvents()
+        controller.play_slot(0)
+        assert speak.call_args.args[0] == "second"
+        with pytest.raises(ValueError):
+            controller.set_hotkey("F8", 1)
+        controller.stop()
+
+
+def test_add_wheel_registration_failure_keeps_previous_wheels(qapp, tmp_path):
+    settings = AppSettings.load(config_file=tmp_path / "failure.toml")
+    with patch("wordy.chat_wheel_controller.NativeHotkeyListener") as factory:
+        controller = ChatWheelController(settings, MagicMock(), MagicMock())
+        controller.start()
+        original = factory.return_value
+        failed = MagicMock()
+        failed.start.side_effect = RuntimeError("occupied")
+        factory.return_value = failed
+        with pytest.raises(RuntimeError, match="occupied"):
+            controller.add_wheel("f9")
+        assert settings.wheel_count == 1
+        original.stop.assert_not_called()
+        failed.stop.assert_called_once()
+        controller.stop()
+
+
+def test_remove_first_wheel_keeps_remaining_binding_and_correct_content(qapp, tmp_path):
+    settings = AppSettings.load(config_file=tmp_path / "remove.toml")
+    speak = MagicMock()
+    with patch("wordy.chat_wheel_controller.NativeHotkeyListener", side_effect=lambda *args: MagicMock()) as factory:
+        controller = ChatWheelController(settings, MagicMock(), MagicMock(), speak_text=speak)
+        controller.start()
+        controller.add_wheel("f9")
+        callback = factory.call_args.args[2]
+        settings.update_wheel(1, texts=["remaining"] + [""] * 7)
+        controller.remove_wheel(0)
+        assert settings.wheel_count == 1
+        assert settings.chat_wheel_hotkey == "f9"
+        callback()
+        qapp.processEvents()
+        controller.play_slot(0)
+        assert speak.call_args.args[0] == "remaining"
+        with pytest.raises(ValueError, match="至少"):
+            controller.remove_wheel(0)
+        controller.stop()
+
+
+def test_remove_wheel_save_failure_keeps_binding(qapp, tmp_path, monkeypatch):
+    settings = AppSettings.load(config_file=tmp_path / "remove-fail.toml")
+    with patch("wordy.chat_wheel_controller.NativeHotkeyListener", side_effect=lambda *args: MagicMock()) as factory:
+        controller = ChatWheelController(settings, MagicMock(), MagicMock())
+        controller.start()
+        controller.add_wheel("f9")
+        listeners = list(controller._listeners.values())
+        monkeypatch.setattr(AppSettings, "save", MagicMock(side_effect=OSError("disk full")))
+        with pytest.raises(OSError):
+            controller.remove_wheel(1)
+        assert settings.wheel_count == 2
+        for listener in listeners:
+            cast(MagicMock, listener.stop).assert_not_called()
+        controller.stop()
+
+
+def test_old_binding_stop_failure_restores_config(qapp, tmp_path):
+    settings = AppSettings.load(config_file=tmp_path / "stop-fail.toml")
+    with patch("wordy.chat_wheel_controller.NativeHotkeyListener", side_effect=lambda *args: MagicMock()):
+        controller = ChatWheelController(settings, MagicMock(), MagicMock())
+        controller.start()
+        listener = next(iter(controller._listeners.values()))
+        cast(MagicMock, listener.stop).return_value = False
+        with pytest.raises(RuntimeError, match="未能停止"):
+            controller.set_hotkey("f9")
+        assert settings.chat_wheel_hotkey == "f8"
+        assert len(controller._listeners) == 1
+        cast(MagicMock, listener.stop).return_value = True
+        controller.stop()
+
+
+def test_remove_wheel_deletes_only_unreferenced_clips(qapp, tmp_path):
+    settings = AppSettings.load(config_file=tmp_path / "clips.toml")
+    directory = tmp_path / "audio_clips"
+    directory.mkdir()
+    for filename in ("shared.wav", "removed.wav"):
+        (directory / filename).write_bytes(b"audio")
+    settings.update_wheel(0, slots=["shared.wav"] + [""] * 7)
+    with patch("wordy.chat_wheel_controller.NativeHotkeyListener", side_effect=lambda *args: MagicMock()):
+        controller = ChatWheelController(settings, MagicMock(), MagicMock())
+        controller.start()
+        controller.add_wheel("f9")
+        settings.update_wheel(1, slots=["shared.wav", "removed.wav"] + [""] * 6)
+        controller.remove_wheel(1)
+        assert (directory / "shared.wav").is_file()
+        assert not (directory / "removed.wav").exists()
+        controller.stop()
+
+
+def test_other_wheel_hotkey_does_not_change_visible_wheel_target(qapp, tmp_path):
+    settings = AppSettings.load(config_file=tmp_path / "visible.toml")
+    settings.add_wheel("f9")
+    settings.update_wheel(0, texts=["first"] + [""] * 7)
+    settings.update_wheel(1, texts=["second"] + [""] * 7)
+    speak = MagicMock()
+    controller = ChatWheelController(settings, MagicMock(), MagicMock(), speak_text=speak)
+    controller._open("f8")
+    controller._open("f9")
+    controller.play_slot(0)
+    assert speak.call_args.args[0] == "first"
+    assert controller.wheel._labels[0] == "first"
+    controller.stop()
+
+
+def test_audio_slot_passes_its_own_wheel_volume_to_playback(qapp, tmp_path):
+    settings = AppSettings.load(config_file=tmp_path / "gain.toml")
+    settings.add_wheel("f9")
+    directory = tmp_path / "audio_clips"
+    directory.mkdir()
+    (directory / "clip.wav").write_bytes(b"audio")
+    for wheel, volume in ((0, 0.25), (1, 1.5)):
+        settings.update_wheel(wheel, slots=["clip.wav"] + [""] * 7,
+                              volumes=[volume] + [1.0] * 7)
+    playback = MagicMock()
+    controller = ChatWheelController(settings, playback, MagicMock())
+    controller.play_slot(0, 0)
+    assert playback.call_args.args[3] == 0.25
+    controller.play_slot(0, 1)
+    assert playback.call_args.args[3] == 1.5
+    controller.stop()

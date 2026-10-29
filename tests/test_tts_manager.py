@@ -40,6 +40,21 @@ def test_audio_file_waits_for_worker_handoff_without_voice(manager, mock_player,
     manager.shutdown()
 
 
+def test_audio_file_uses_volume_captured_at_submission(manager, mock_player, monkeypatch):
+    from contextlib import contextmanager
+
+    @contextmanager
+    def decoded(path, cancel_event):
+        yield path
+    monkeypatch.setattr("wordy.tts_manager.decoded_audio_clip", decoded)
+    manager.play_audio_file(Path("clip.wav"), volume=0.35)
+    operation, *args = manager.executor.submit.call_args.args
+    manager._settings.volume = 1.7
+    operation(*args)
+    assert mock_player.play_wav.call_args.kwargs["volume"] == 0.35
+    manager.shutdown()
+
+
 def test_audio_file_reports_failed_output(manager, mock_player, monkeypatch):
     from contextlib import contextmanager
     @contextmanager

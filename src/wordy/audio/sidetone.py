@@ -83,17 +83,19 @@ class SidetoneAudioPlayer:
         wav_path: str | BytesIO,
         device_index: int | None = None,
         cancel_event: Event | None = None,
+        *, volume: float = 1.0,
     ) -> bool:
         """同时播放主输出和返听；主输出结果决定调用是否成功。
 
         主输出在调用线程里同步播完（异常照旧向上传播），返听另起守护线程，
         只在返回前有界地等它收尾。
         """
+        # 两路绑定同一次播放的增益，不能读取会被后续槽位覆盖的共享音量。
         if not self._needs_sidetone(device_index):
             if cancel_event is None:
-                return self._main.play_wav(wav_path, device_index=device_index)
+                return self._main.play_wav(wav_path, device_index=device_index, volume=volume)
             return self._main.play_wav(
-                wav_path, device_index=device_index, cancel_event=cancel_event
+                wav_path, device_index=device_index, cancel_event=cancel_event, volume=volume
             )
 
         if self._sidetone_tail is not None and self._sidetone_tail.is_alive():
@@ -106,7 +108,7 @@ class SidetoneAudioPlayer:
             )
             self._sidetone_tail = Thread(
                 target=self._play_sidetone_safe,
-                args=(sidetone_path, cancel_event),
+                args=(sidetone_path, cancel_event, volume),
                 name="sidetone-wav",
                 daemon=True,
             )
@@ -114,10 +116,10 @@ class SidetoneAudioPlayer:
 
         try:
             if cancel_event is None:
-                result = self._main.play_wav(wav_path, device_index=device_index)
+                result = self._main.play_wav(wav_path, device_index=device_index, volume=volume)
             else:
                 result = self._main.play_wav(
-                    wav_path, device_index=device_index, cancel_event=cancel_event
+                    wav_path, device_index=device_index, cancel_event=cancel_event, volume=volume
                 )
         finally:
             # 主输出抛异常时也要等返听：调用方（decoded_audio_clip）随后就会删掉
@@ -125,13 +127,13 @@ class SidetoneAudioPlayer:
             self._wait_sidetone_tail()
         return result and (cancel_event is None or not cancel_event.is_set())
 
-    def _play_sidetone_safe(self, wav_path: str | BytesIO, cancel_event: Event | None) -> None:
+    def _play_sidetone_safe(self, wav_path: str | BytesIO, cancel_event: Event | None, volume: float) -> None:
         """在返听线程中播放；失败只记 warning，不影响主链路。"""
         try:
             if cancel_event is None:
-                self._sidetone.play_wav(wav_path, device_index=None)
+                self._sidetone.play_wav(wav_path, device_index=None, volume=volume)
             else:
-                self._sidetone.play_wav(wav_path, device_index=None, cancel_event=cancel_event)
+                self._sidetone.play_wav(wav_path, device_index=None, cancel_event=cancel_event, volume=volume)
         except Exception:
             logger.warning("返听 WAV 播放失败", exc_info=True)
 

@@ -54,3 +54,60 @@ def test_wheel_arrays_are_independent():
     settings.chat_wheel_texts[0] = "朗读我"
     assert settings.chat_wheel_slots == [""] * 8
     assert settings.chat_wheel_labels == [""] * 8
+
+
+def test_multiple_wheels_round_trip_and_isolated_slots(tmp_path):
+    settings = AppSettings.load(config_file=tmp_path / "multi.toml")
+    index = settings.add_wheel("ctrl+f9")
+    settings.update_wheel(index, texts=["second"] + [""] * 7)
+    assert settings.get_wheel(0)["texts"] == [""] * 8
+    settings._loaded = False
+    loaded = AppSettings.load(config_file=tmp_path / "multi.toml")
+    assert loaded.wheel_count == 2
+    assert loaded.get_wheel(1)["hotkey"] == "ctrl+f9"
+    assert loaded.get_wheel(1)["texts"][0] == "second"
+
+
+def test_multiple_wheels_save_failure_restores_all(tmp_path, monkeypatch):
+    from unittest.mock import MagicMock
+    import pytest
+    settings = AppSettings.load(config_file=tmp_path / "fail.toml")
+    monkeypatch.setattr(AppSettings, "save", MagicMock(side_effect=OSError("disk full")))
+    with pytest.raises(OSError):
+        settings.add_wheel("f9")
+    assert settings.wheel_count == 1
+
+
+def test_slot_volumes_round_trip_across_wheels_and_first_removal(tmp_path):
+    file = tmp_path / "volume.toml"
+    settings = AppSettings.load(config_file=file)
+    settings.add_wheel("f9")
+    settings.update_wheel(0, volumes=[0.0, 0.5] + [1.0] * 6)
+    settings.update_wheel(1, volumes=[1.5] + [1.0] * 7)
+    settings._loaded = False
+    settings = AppSettings.load(config_file=file)
+    assert settings.get_wheel(0)["volumes"] == [0.0, 0.5] + [1.0] * 6
+    assert settings.get_wheel(1)["volumes"][0] == 1.5
+    settings.remove_wheel(0)
+    assert settings.chat_wheel_volumes == [1.5] + [1.0] * 7
+
+
+def test_slot_volume_load_sanitizes_and_pads(tmp_path):
+    file = tmp_path / "bad-volume.toml"
+    file.write_text('chat_wheel_volumes = [0, -1, 5, nan, inf, "bad", true]\n'
+                    '[[additional_chat_wheels]]\nhotkey="f9"\nvolumes=[0.25, nan]\n', encoding="utf-8")
+    settings = AppSettings.load(config_file=file)
+    assert settings.chat_wheel_volumes == [0.0, 0.0, 2.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    assert settings.get_wheel(1)["volumes"] == [0.25] + [1.0] * 7
+
+
+def test_slot_volume_save_failure_restores_all_wheels(tmp_path, monkeypatch):
+    from unittest.mock import MagicMock
+    import pytest
+    settings = AppSettings.load(config_file=tmp_path / "volume-fail.toml")
+    settings.add_wheel("f9")
+    monkeypatch.setattr(AppSettings, "save", MagicMock(side_effect=OSError("disk full")))
+    with pytest.raises(OSError):
+        settings.update_wheel(1, volumes=[0.2] * 8)
+    assert settings.get_wheel(0)["volumes"] == [1.0] * 8
+    assert settings.get_wheel(1)["volumes"] == [1.0] * 8

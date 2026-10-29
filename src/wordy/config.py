@@ -18,7 +18,7 @@ import threading
 from collections.abc import Mapping
 from dataclasses import dataclass, field, fields
 from pathlib import Path
-from typing import ClassVar
+from typing import ClassVar, TypedDict
 
 import wordy.secret
 from wordy._toml_serializer import read_toml, write_toml_atomic
@@ -95,6 +95,46 @@ def _normalize_voice_entries(raw: object) -> list[dict[str, str]]:
     return entries
 
 
+class ChatWheelConfig(TypedDict):
+    hotkey: str
+    slots: list[str]
+    labels: list[str]
+    texts: list[str]
+    volumes: list[float]
+
+
+def new_chat_wheel(hotkey: str = "f8") -> ChatWheelConfig:
+    return {"hotkey": hotkey, "slots": [""] * 8, "labels": [""] * 8,
+            "texts": [""] * 8, "volumes": [1.0] * 8}
+
+
+def _parse_wheel_volumes(raw: object) -> list[float]:
+    # 手改配置中的非法增益回到原音量，缺少的槽位不能误变成静音。
+    values = raw[:8] if isinstance(raw, list) else []
+    clean = [_parse_clamped(value, 0.0, 2.0) for value in values]
+    return [value if value is not None else 1.0 for value in clean] + [1.0] * (8 - len(clean))
+
+
+def _parse_chat_wheel(raw: object) -> ChatWheelConfig | None:
+    if not isinstance(raw, dict) or not isinstance(raw.get("hotkey"), str):
+        return None
+    from wordy.hotkey.native import parse_hotkey
+    try:
+        parse_hotkey(raw["hotkey"])
+    except ValueError:
+        return None
+    wheel = new_chat_wheel(raw["hotkey"])
+    for key in ("slots", "labels", "texts"):
+        values = raw.get(key)
+        if isinstance(values, list):
+            clean = [value if isinstance(value, str) and (key != "slots" or
+                     not any(c in value for c in ("/", "\\", ":")) and value not in (".", ".."))
+                     else "" for value in values[:8]]
+            wheel[key] = clean + [""] * (8 - len(clean))
+    wheel["volumes"] = _parse_wheel_volumes(raw.get("volumes"))
+    return wheel
+
+
 # ---------------------------------------------------------------------------
 # AppSettings — 统一配置对象
 # ---------------------------------------------------------------------------
@@ -116,6 +156,8 @@ class AppSettings:
     chat_wheel_labels: list[str] = field(default_factory=lambda: [""] * 8)
     # 与文件名互斥：非空则选中该槽时用当前 TTS 朗读这段文字，而不是播放音频。
     chat_wheel_texts: list[str] = field(default_factory=lambda: [""] * 8)
+    chat_wheel_volumes: list[float] = field(default_factory=lambda: [1.0] * 8)
+    additional_chat_wheels: list[ChatWheelConfig] = field(default_factory=list)
     volume: float = 1.0
     overlay_opacity: float = 1.0
     overlay_placeholder: str = "Hello World~"
@@ -163,6 +205,58 @@ class AppSettings:
         "volume": (MIN_VOLUME, MAX_VOLUME),
         "overlay_opacity": (MIN_OVERLAY_OPACITY, MAX_OVERLAY_OPACITY),
     }
+
+    @property
+    def wheel_count(self) -> int:
+        return 1 + len(self.additional_chat_wheels)
+
+    def get_wheel(self, index: int) -> ChatWheelConfig:
+        if not 0 <= index < self.wheel_count:
+            raise IndexError("轮盘不存在")
+        if index:
+            return self.additional_chat_wheels[index - 1]
+        return {"hotkey": self.chat_wheel_hotkey, "slots": self.chat_wheel_slots,
+                "labels": self.chat_wheel_labels, "texts": self.chat_wheel_texts,
+                "volumes": self.chat_wheel_volumes}
+
+    def replace_wheels(self, wheels: list[ChatWheelConfig]) -> None:
+        if not wheels:
+            raise ValueError("至少保留一个轮盘")
+        first = wheels[0]
+        old = {key: getattr(self, key) for key in (
+            "chat_wheel_hotkey", "chat_wheel_slots", "chat_wheel_labels",
+            "chat_wheel_texts", "chat_wheel_volumes", "additional_chat_wheels")}
+        try:
+            # 首盘和其余轮盘在同一事务写入，删除首盘也不会错位。
+            self.update(chat_wheel_hotkey=first["hotkey"], chat_wheel_slots=first["slots"],
+                        chat_wheel_labels=first["labels"], chat_wheel_texts=first["texts"],
+                        chat_wheel_volumes=first["volumes"],
+                        additional_chat_wheels=wheels[1:])
+        except Exception:
+            for key, value in old.items():
+                object.__setattr__(self, key, value)
+            raise
+
+    def update_wheel(self, index: int, **values: object) -> None:
+        self.get_wheel(index)
+        wheels = [dict(self.get_wheel(i)) for i in range(self.wheel_count)]
+        wheels[index].update(values)
+        parsed = [_parse_chat_wheel(wheel) for wheel in wheels]
+        if any(wheel is None for wheel in parsed):
+            raise ValueError("轮盘配置无效")
+        self.replace_wheels([wheel for wheel in parsed if wheel is not None])
+
+    def add_wheel(self, hotkey: str) -> int:
+        wheels = [self.get_wheel(i) for i in range(self.wheel_count)]
+        wheel = _parse_chat_wheel(new_chat_wheel(hotkey))
+        if wheel is None:
+            raise ValueError("轮盘快捷键无效")
+        self.replace_wheels(wheels + [wheel])
+        return len(wheels)
+
+    def remove_wheel(self, index: int) -> None:
+        self.get_wheel(index)
+        self.replace_wheels([self.get_wheel(i) for i in range(self.wheel_count) if i != index])
 
     # ── ProviderConfig ────────────────────────────────────────────────
 
@@ -326,6 +420,12 @@ class AppSettings:
                          ("/" not in v and "\\" not in v and ":" not in v and v not in (".", "..")))
                          else "" for v in values[:8]]
                 setattr(settings, key, clean + [""] * (8 - len(clean)))
+
+        settings.chat_wheel_volumes = _parse_wheel_volumes(raw.get("chat_wheel_volumes"))
+        raw_wheels = raw.get("additional_chat_wheels")
+        if isinstance(raw_wheels, list):
+            settings.additional_chat_wheels = [wheel for item in raw_wheels
+                                               if (wheel := _parse_chat_wheel(item)) is not None]
 
         # 结构化 tts_providers
         raw_providers = raw.get("tts_providers")

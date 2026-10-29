@@ -406,7 +406,7 @@ class TTSManager:
         return self.engine.fetch_voices()
 
     def play_audio_file(self, path: Path, on_error: Callable[[str], None] | None = None,
-                        on_finished: Callable[[], None] | None = None) -> None:
+                        on_finished: Callable[[], None] | None = None, *, volume: float = 1.0) -> None:
         """本地文件与 TTS 共用串行 worker，不要求密钥或音色。"""
         # 新播放顶掉旧播放，避免连点两次后两条音频叠在一起。
         self.stop_audio_file()
@@ -414,7 +414,7 @@ class TTSManager:
         self._clip_cancel = cancel
         if not self._audio_files_stopped.is_set():
             self._executor.submit(self._play_audio_file, path, self.engine, self._worker_ready,
-                                  on_error, cancel, on_finished)
+                                  on_error, volume, cancel, on_finished)
 
     def stop_audio_file(self) -> None:
         """打断当前文件播放；没有正在播放的片段时什么也不做。
@@ -427,6 +427,7 @@ class TTSManager:
 
     def _play_audio_file(self, path: Path, engine: BackendTTSEngine,
                          ready: threading.Event | None, on_error: Callable[[str], None] | None,
+                         volume: float,
                          cancel: threading.Event,
                          on_finished: Callable[[], None] | None) -> None:
         try:
@@ -437,7 +438,8 @@ class TTSManager:
             # reset 会立即重开实时流；关闭引擎才真正释放设备，下次 speak 自动连接。
             engine.close()
             with decoded_audio_clip(path, cancel) as wav_path:
-                if not self._audio_player.play_wav(str(wav_path), cancel_event=cancel):
+                # 按提交时的槽位音量播放，避免排队期间切槽或调音串到其他音频。
+                if not self._audio_player.play_wav(str(wav_path), cancel_event=cancel, volume=volume):
                     if cancel.is_set():
                         return
                     # play_wav 现在对「打不开设备」和「播到一半失败」都返回 False，

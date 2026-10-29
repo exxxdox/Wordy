@@ -87,6 +87,7 @@ class FakePyAudio:
             8: 2,   # paInt16
             16: 1,  # paInt8
             32: 1,  # paUInt8
+            24: 3,  # fake get_format_from_width(3)
         }[audio_format]
 
     def open(self, **kwargs):
@@ -951,3 +952,30 @@ def test_play_wav_cancellation_closes_output_after_current_chunk(tmp_path, _patc
     assert len(stream.write_calls) == 1
     assert stream.close_calls == 1
     assert _patch_pyaudio.terminate_calls == 1
+
+
+@pytest.mark.parametrize("sample_width", [1, 2, 3, 4])
+@pytest.mark.parametrize("volume", [0.0, 0.5, 2.0])
+def test_play_wav_scales_pcm_and_saturates_without_changing_source(tmp_path, _patch_pyaudio, sample_width, volume):
+    import wave
+
+    peak = 2 ** (8 * sample_width - 1)
+    samples = [0, peak // 2, -peak // 2, peak - 1, -peak]
+    def encode(values):
+        return b"".join((value + 128).to_bytes(1, "little") if sample_width == 1
+                        else value.to_bytes(sample_width, "little", signed=True) for value in values)
+    source = tmp_path / "gain.wav"
+    with wave.open(str(source), "wb") as audio:
+        audio.setparams((1, sample_width, 48000, 0, "NONE", "not compressed"))
+        audio.writeframes(encode(samples))
+    original = source.read_bytes()
+    assert AudioPlayer().play_wav(str(source), volume=volume)
+    expected = [max(-peak, min(peak - 1, int(sample * volume))) for sample in samples]
+    assert b"".join(_patch_pyaudio._stream.write_calls) == encode(expected)
+    assert source.read_bytes() == original
+
+
+@pytest.mark.parametrize("volume", [float("nan"), float("inf"), -0.1, 2.1])
+def test_play_wav_rejects_invalid_volume(volume):
+    with pytest.raises(ValueError):
+        AudioPlayer().play_wav("unused.wav", volume=volume)
