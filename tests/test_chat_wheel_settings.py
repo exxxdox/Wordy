@@ -721,44 +721,6 @@ def test_recording_is_refused_while_speaking(qapp, monkeypatch):
     assert "朗读" in panel.status_label.text()
 
 
-def test_recording_hint_stays_in_place_instead_of_covering_buttons(qapp, monkeypatch):
-    """录制中指引走原地标签：浮动弹窗锚在页脚上沿，正好盖住动作行的按钮。"""
-    from PySide6.QtWidgets import QVBoxLayout, QWidget
-
-    from wordy.ui.status_toast import StatusToastQueue
-
-    source = Path("unused.wav")
-    recorder = _FakeRecorder(result=source)
-    monkeypatch.setattr("wordy.ui.chat_wheel_settings.SystemAudioRecorder", lambda: recorder)
-    monkeypatch.setattr("wordy.ui.chat_wheel_settings.threading.Thread", _InlineThread)
-    monkeypatch.setattr(
-        "wordy.ui.chat_wheel_settings.import_audio_clip",
-        lambda path, config_file=None: Path("managed.wav"),
-    )
-    host = QWidget()
-    host.resize(420, 400)
-    queue = StatusToastQueue(host)
-    container = QWidget(host)
-    layout = QVBoxLayout(container)
-    panel = ChatWheelSettings(AppSettings(), Mock())
-    layout.addWidget(panel)
-    host.show()
-    qapp.processEvents()
-
-    try:
-        panel.record_button.click()
-
-        assert queue.texts() == [], "录制中指引不应占用浮动弹窗"
-        assert panel.status_label.isVisible()
-        assert "再次点击" in panel.status_label.text()
-
-        panel.record_button.click()
-
-        assert not panel.status_label.isVisible(), "录音结束后指引要收起"
-    finally:
-        host.close()
-
-
 def test_recording_start_failure_reports_reason(qapp, monkeypatch):
     from wordy.audio.recorder import RecordingError
 
@@ -905,11 +867,6 @@ def test_real_settings_window_wheel_fits_default_width(qapp, fake_keyring):
         assert isinstance(scroll, QScrollArea)
         assert scroll.horizontalScrollBar().maximum() == 0
         assert panel.clear_button.geometry().right() < panel.width()
-        assert scroll.verticalScrollBar().maximum() == 0
-        # 录制指引显示时也要留在默认尺寸内，不能把页面顶出视口。
-        panel._hint("正在录制上音频，再次点击「停止」即可结束。")
-        qapp.processEvents()
-        assert scroll.horizontalScrollBar().maximum() == 0
         assert scroll.verticalScrollBar().maximum() == 0
         # 名称与朗读文字同行的两个输入框不能把面板撑宽。
         panel.text_input.setText("这是一段很长的朗读文字" * 10)

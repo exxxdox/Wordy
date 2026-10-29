@@ -370,20 +370,6 @@ class ChatWheelSettings(QWidget):
             self._cancel_recording()
         return super().eventFilter(watched, event)
 
-    def _hint(self, text: str) -> None:
-        """长期停留的状态说明写原地标签，不走浮动队列。
-
-        浮动弹窗锚在页脚上沿、向上生长，而本页的动作行就在页脚正上方；
-        弹窗不仅遮住按钮，自身还会吃掉点击，录制中就没法再点「停止」。
-        """
-        self.status_label.setText(text)
-        self.status_label.setStyleSheet(f"color: {GREEN_ACCENT};")
-        self.status_label.setVisible(True)
-
-    def _clear_hint(self) -> None:
-        self.status_label.clear()
-        self.status_label.setVisible(False)
-
     def _status(self, text: str, *, error: bool = False) -> None:
         color = TEXT_ERROR if error else GREEN_ACCENT
         # 宿主窗口存在时用浮动弹窗，反馈不再长期停在页面固定位置。
@@ -583,14 +569,12 @@ class ChatWheelSettings(QWidget):
         self._recording = index
         self._record_timer.start()
         self._refresh_all_slots()
-        self._hint(f"正在录制{SLOT_NAMES[index]}，再次点击「停止」即可结束。")
 
     def _finish_recording(self) -> None:
         index, recorder = self._recording, self._recorder
         self._record_timer.stop()
         self._recording = None
         self._recorder = None
-        self._clear_hint()
         self._refresh_all_slots()
         if index is None or recorder is None:
             return
@@ -656,7 +640,6 @@ class ChatWheelSettings(QWidget):
         self._record_timer.stop()
         recorder, self._recorder = self._recorder, None
         self._recording = None
-        self._clear_hint()
         if recorder is not None:
             recorder.cancel()
 
