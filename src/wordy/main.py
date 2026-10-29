@@ -17,7 +17,7 @@ from wordy.audio.recorder import cancel_active_recording
 from wordy.audio.sidetone import SidetoneAudioPlayer
 from wordy.config import AppSettings
 from wordy.log import install_file_logging, install_log_stream
-from wordy.single_instance import acquire_single_instance
+from wordy.single_instance import acquire_single_instance, show_duplicate_instance_message
 import wordy.secret
 from wordy.secret import KeyringUnavailableError
 from wordy.routing_controller import RoutingController
@@ -383,6 +383,7 @@ class WordyApp:
 def main():
     # 在配置、文件日志和设备初始化之前拦截重复启动，避免两个进程争用资源。
     if not acquire_single_instance():
+        show_duplicate_instance_message()
         return
     configure_logging()
     app = WordyApp()

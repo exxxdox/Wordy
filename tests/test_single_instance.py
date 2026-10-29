@@ -46,6 +46,14 @@ def test_mutex_failure_does_not_allow_startup(kernel32, monkeypatch):
     assert instance_module._instance_handle is None
 
 
+def test_duplicate_notice_uses_native_information_dialog(kernel32):
+    instance_module.show_duplicate_instance_message()
+    kernel32.MessageBoxW.assert_called_once_with(
+        None, "Wordy 已在运行，请勿重复启动。", "Wordy", 0x00010040,
+    )
+    kernel32.CreateMutexW.assert_not_called()
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows named mutex")
 def test_real_process_rejects_duplicate_and_releases_after_forced_exit(tmp_path):
     # 使用独立名字，不占用用户正在运行的 Wordy 的真实互斥体。

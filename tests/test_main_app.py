@@ -364,10 +364,11 @@ def test_duplicate_instance_exits_before_logging_or_audio_initialization(monkeyp
 
     events: list[str] = []
     monkeypatch.setattr(main_mod, "acquire_single_instance", lambda: False)
+    monkeypatch.setattr(main_mod, "show_duplicate_instance_message", lambda: events.append("notice"))
     monkeypatch.setattr(main_mod, "configure_logging", lambda: events.append("logging"))
     monkeypatch.setattr(main_mod, "WordyApp", lambda: events.append("app"))
     main_mod.main()
-    assert events == []
+    assert events == ["notice"]
 
 
 def test_configure_logging_installs_log_stream_pipeline(monkeypatch):

@@ -7,6 +7,15 @@ _MUTEX_NAME = r"Local\Wordy.SingleInstance"
 _instance_handle: int | None = None
 
 
+def show_duplicate_instance_message() -> None:
+    # 启动拦截发生在 QApplication 创建前，使用原生弹窗避免初始化第二套 UI。
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    user32.MessageBoxW.argtypes = [wintypes.HWND, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.UINT]
+    user32.MessageBoxW.restype = ctypes.c_int
+    # MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND，确保重复启动提示在前台可见。
+    user32.MessageBoxW(None, "Wordy 已在运行，请勿重复启动。", "Wordy", 0x00010040)
+
+
 def acquire_single_instance() -> bool:
     """首实例保留句柄到进程结束，系统同时负责异常退出后的回收。"""
     global _instance_handle
