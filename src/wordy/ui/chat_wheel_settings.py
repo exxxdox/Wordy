@@ -9,10 +9,10 @@ from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QRectF, Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import (
-    QColor, QFont, QKeySequence, QMouseEvent, QPaintEvent, QPainter,
-    QPainterPath, QPen, QShowEvent,
+    QColor, QFont, QIcon, QKeySequence, QMouseEvent, QPaintEvent, QPainter,
+    QPainterPath, QPen, QPixmap, QPolygonF, QShowEvent,
 )
 from PySide6.QtWidgets import (
     QComboBox, QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout, QKeySequenceEdit,
@@ -35,6 +35,24 @@ logger = logging.getLogger(__name__)
 # 槽位用数字编号标识：方向名（上/右上…）既指不明确，又和运行时轮盘的方向概念重名。
 SLOT_NAMES = tuple(f"音频 {index}" for index in range(1, 9))
 RECORD_TICK_MS = 200
+
+
+def _action_icon(shape: str, color: str) -> QIcon:
+    """动作按钮的小图标：QSS 的 color 不会给 QIcon 着色，只能自绘定色。"""
+    pixmap = QPixmap(14, 14)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(QColor(color))
+    if shape == "play":
+        painter.drawPolygon(QPolygonF([QPointF(2.5, 1.5), QPointF(12, 7), QPointF(2.5, 12.5)]))
+    elif shape == "stop":
+        painter.drawRoundedRect(QRectF(2.5, 2.5, 9, 9), 1.5, 1.5)
+    else:
+        painter.drawEllipse(QPointF(7, 7), 5, 5)
+    painter.end()
+    return QIcon(pixmap)
 
 
 class _ImportSignals(QObject):
@@ -296,14 +314,16 @@ class ChatWheelSettings(QWidget):
         inputs_row.addWidget(self.text_input, 1)
         layout.addLayout(inputs_row)
         action_row = QHBoxLayout()
-        self.choose_button = QPushButton("选择文件")
+        self.choose_button = QPushButton("导入")
         self.choose_button.clicked.connect(lambda: self._choose_file(self.selected_index))
         action_row.addWidget(self.choose_button, 1)
         # 文案保持两字，动作行必须留在同一行里：加行高会顶掉滚动区契约。
         self.record_button = QPushButton("录制")
+        self.record_button.setIconSize(QSize(14, 14))
         self.record_button.clicked.connect(self._toggle_record)
         action_row.addWidget(self.record_button)
         self.preview_button = QPushButton("试听")
+        self.preview_button.setIconSize(QSize(14, 14))
         self.preview_button.clicked.connect(self._toggle_preview)
         action_row.addWidget(self.preview_button)
         self.clear_button = QPushButton("清空")
@@ -624,6 +644,8 @@ class ChatWheelSettings(QWidget):
         elapsed = int(recorder.elapsed_seconds) if recording is not None and recorder else 0
         text = f"停止 {elapsed}s" if recording is not None else "录制"
         self.record_button.setText(text)
+        self.record_button.setIcon(
+            _action_icon("stop" if recording is not None else "record", TEXT_ERROR))
         slot_name = SLOT_NAMES[recording if recording is not None else self.selected_index]
         self.record_button.setAccessibleName(
             f"停止录制{slot_name}" if recording else f"录制{slot_name}"
@@ -794,7 +816,7 @@ class ChatWheelSettings(QWidget):
         self.volume_slider.setEnabled(filled and not text and not busy and not self._preview_speech)
         self.choose_button.setEnabled(not busy)
         self.choose_button.setText(
-            "录制中…" if recording else "导入中…" if busy else "选择文件"
+            "录制中…" if recording else "导入中…" if busy else "导入"
         )
         self.record_button.setEnabled(recording or index not in self._busy)
         self._refresh_record_button()
@@ -803,11 +825,16 @@ class ChatWheelSettings(QWidget):
             # 否则回调会把之后新开的试听误复位。
             self.preview_button.setEnabled(False)
             self.preview_button.setText("朗读中…")
+            self.preview_button.setIcon(_action_icon("play", TEXT_MUTED))
             self.preview_button.setAccessibleName(f"正在朗读{SLOT_NAMES[index]}")
         else:
             # 试听中按钮必须始终可点，否则一旦别的槽忙起来「停止」就点不动了。
             self.preview_button.setEnabled((filled and not busy) or self._previewing)
             self.preview_button.setText("停止" if self._previewing else "试听")
+            # 播放中换成停止方块，和「停止」文案一起表意。
+            self.preview_button.setIcon(
+                _action_icon("stop" if self._previewing else "play",
+                             TEXT_PRIMARY if self._previewing else GREEN_ACCENT))
             self.preview_button.setAccessibleName(
                 f"停止试听{SLOT_NAMES[index]}" if self._previewing else f"试听{SLOT_NAMES[index]}"
             )

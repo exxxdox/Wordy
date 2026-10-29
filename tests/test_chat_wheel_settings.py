@@ -32,6 +32,14 @@ def test_hotkey_is_committed_only_after_registration(qapp):
     assert panel.hotkey_input.keySequence().toString().lower() == "f8"
 
 
+def test_action_buttons_use_short_text_and_icons(qapp):
+    """动作行用短文案与图标表态：导入不再写「选择文件」，录制/试听带图。"""
+    panel = ChatWheelSettings(AppSettings(chat_wheel_slots=["clip.wav"] * 8), Mock())
+    assert panel.choose_button.text() == "导入"
+    assert not panel.record_button.icon().isNull()
+    assert not panel.preview_button.icon().isNull()
+
+
 def test_unchanged_hotkey_is_not_reapplied(qapp):
     """失焦也会触发 editingFinished，值没变时不重复注册。"""
     changed = Mock()
