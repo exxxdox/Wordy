@@ -149,6 +149,76 @@ def test_speech_interrupts_playing_audio_clip(manager, mock_player):
     manager.shutdown()
 
 
+def test_speech_registers_playback_token_on_shared_player(manager, mock_player):
+    """朗读与片段共用播放器：每次播放都要登记自己的取消句柄，由播放层兜底。"""
+    manager.speak("hi")
+    operation, *args = manager.executor.submit.call_args.args
+    operation(*args)
+
+    begin = mock_player.begin_playback.call_args
+    end = mock_player.end_playback.call_args
+    assert begin is not None and end is not None
+    assert begin.args[0] is end.args[0]
+    assert begin.args[0] is args[0].cancel
+    manager.shutdown()
+
+
+def test_stop_speech_still_works_after_queue_promotion(manager, mock_engine):
+    """从待播槽续播的任务同样要登记取消句柄，否则第二次打断会落空。"""
+    speaking = threading.Event()
+
+    def speak(_text: str, cancel_event: threading.Event) -> bool:
+        speaking.set()
+        return not cancel_event.wait(3)
+
+    mock_engine.speak.side_effect = speak
+
+    manager.speak("第一句")
+    operation, *args = manager.executor.submit.call_args.args
+    first = threading.Thread(target=operation, args=args, daemon=True)
+    first.start()
+    try:
+        assert speaking.wait(2)
+        # 第一句还在跑：先停，再提交第二句；第二句只能进待播槽。
+        manager.stop_speech()
+        speaking.clear()
+        manager.speak("第二句")
+
+        first.join(2)
+        assert not first.is_alive()
+        assert manager.executor.submit.call_count == 2
+        second_operation, *second_args = manager.executor.submit.call_args.args
+        assert manager._speech_cancel is second_args[0].cancel
+
+        second = threading.Thread(target=second_operation, args=second_args, daemon=True)
+        second.start()
+        assert speaking.wait(2)
+        # 第二次打断必须命中刚续播的第二句。
+        manager.stop_speech()
+        second.join(2)
+        assert not second.is_alive()
+    finally:
+        manager.shutdown()
+
+
+def test_audio_file_registers_playback_token(manager, mock_player, monkeypatch):
+    from contextlib import contextmanager
+
+    @contextmanager
+    def decoded(path, cancel_event):
+        yield path
+
+    monkeypatch.setattr("wordy.tts_manager.decoded_audio_clip", decoded)
+    manager.play_audio_file(Path("clip.wav"))
+    operation, *args = manager.executor.submit.call_args.args
+    operation(*args)
+
+    cancel = mock_player.play_wav.call_args.kwargs["cancel_event"]
+    mock_player.begin_playback.assert_called_once_with(cancel)
+    mock_player.end_playback.assert_called_once_with(cancel)
+    manager.shutdown()
+
+
 def test_audio_file_reports_finish_on_success_and_failure(manager, mock_player, mock_engine):
     """播完和播放失败都要回调，否则设置页的「停止」按钮会一直挂着。"""
     finished = MagicMock()
@@ -212,6 +282,7 @@ def test_queued_text_keeps_engine_selected_at_submission():
     manager._pending_speech = None
     manager._speech_cancel = None
     manager._clip_cancel = None
+    manager._audio_player = MagicMock()
     old, new = MagicMock(), MagicMock()
     manager.engine = old
     manager.speak("queued text")

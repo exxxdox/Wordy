@@ -407,6 +407,8 @@ class TTSManager:
             # 排队等待旧引擎交接期间也可能已被停止，置位后不必再开口。
             if job.cancel.is_set():
                 return
+            # 播放层兜底：引擎即使漏查取消位，write_stream 也会被这道令牌截断。
+            self._audio_player.begin_playback(job.cancel)
             if not job.engine.speak(job.text, job.cancel):
                 # 被取消不是失败：引擎按约定返回 False 表示「没播完」。
                 if job.cancel.is_set():
@@ -423,6 +425,7 @@ class TTSManager:
             if job.on_error is not None:
                 job.on_error(message)
         finally:
+            self._audio_player.end_playback(job.cancel)
             with self._speech_lock:
                 if self._speech_cancel is job.cancel:
                     self._speech_cancel = None
@@ -436,6 +439,9 @@ class TTSManager:
             if next_job is None:
                 self._speech_running = False
                 return
+            # 续播的任务也是「当前朗读」：不登记句柄，下一次 stop_speech 就落空，
+            # 表现为只能打断第一次，之后每句话都要等前一句播完。
+            self._speech_cancel = next_job.cancel
         self._submit_speech(next_job)
 
     def fetch_voices(self) -> list[dict[str, object]]:
@@ -477,6 +483,7 @@ class TTSManager:
                 return
             # reset 会立即重开实时流；关闭引擎才真正释放设备，下次 speak 自动连接。
             engine.close()
+            self._audio_player.begin_playback(cancel)
             with decoded_audio_clip(path, cancel) as wav_path:
                 # 按提交时的槽位音量播放，避免排队期间切槽或调音串到其他音频。
                 progress: dict[str, Any] = {"on_progress": on_progress} if on_progress is not None else {}
@@ -493,6 +500,7 @@ class TTSManager:
             if on_error is not None:
                 on_error(f"音频播放失败：{error}")
         finally:
+            self._audio_player.end_playback(cancel)
             if self._clip_cancel is cancel:
                 self._clip_cancel = None
             # 播完、被打断、失败都要回调，否则设置页的「停止」按钮会一直挂着。

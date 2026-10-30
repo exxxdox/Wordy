@@ -272,6 +272,10 @@ class AudioPlayer:
         self._last_actual_rate: int | None = None
         self._last_mono_upmix = False
         self._last_sample_width: int | None = None
+        # 当前播放的取消句柄（播放层最后一道闸）：引擎或调用方忘了自检时，
+        # write_stream/play_wav 也会在这里停下，保证任何来源的播放都可被打断。
+        self._playback_lock = threading.Lock()
+        self._playback_cancel: Event | None = None
 
     @property
     def output_device_name(self) -> str | None:
@@ -553,14 +557,40 @@ class AudioPlayer:
                     self.output_device_name or "系统默认设备")
         return True
 
+    def begin_playback(self, cancel_event: Event) -> None:
+        """登记本次播放的取消句柄；之后的 write_stream/play_wav 都会检查它。
+
+        播放是串行的，所以播放器只需记住当前那一个句柄。只做协作取消：
+        置位后在下次写入前停下，不跨线程关流（会和 PortAudio 生命周期竞争）。
+        """
+        with self._playback_lock:
+            self._playback_cancel = cancel_event
+
+    def end_playback(self, cancel_event: Event) -> None:
+        """注销本次播放句柄；已被后继播放替换时不覆盖新句柄。"""
+        with self._playback_lock:
+            if self._playback_cancel is cancel_event:
+                self._playback_cancel = None
+
+    def _playback_interrupted(self, cancel_event: Event | None = None) -> bool:
+        """本次播放是否已取消：显式句柄或播放层登记的令牌任一置位即算。"""
+        token = self._playback_cancel
+        return bool(
+            (cancel_event is not None and cancel_event.is_set())
+            or (token is not None and token.is_set())
+        )
+
     def write_stream(self, data: bytes) -> None:
         """向已打开的原始音频流写入音频块。
 
         流统一按 paInt16 打开，调用方（CartesiaRealtimeTTS / VolcengineStreamingTTS）
-        也固定请求 pcm_s16le，此处直接透传。
+        也固定请求 pcm_s16le，此处直接透传。取消令牌置位时抛 InterruptedError，
+        让引擎的写入循环连同网络读取一起收尾。
         """
         if self._stream is None:
             raise RuntimeError("音频流尚未打开")
+        if self._playback_interrupted():
+            raise InterruptedError("播放已取消")
 
         if self._stream_mono_upmix:
             if self._stream_sample_width is None:
@@ -668,7 +698,7 @@ class AudioPlayer:
         """播放 WAV 文件到指定或匹配到的输出设备。"""
         if not math.isfinite(volume) or not 0 <= volume <= 2:
             raise ValueError("音频音量必须在 0 到 2 之间")
-        if cancel_event is not None and cancel_event.is_set():
+        if self._playback_interrupted(cancel_event):
             return False
         try:
             wf = wave.open(wav_path, "rb")
@@ -735,11 +765,11 @@ class AudioPlayer:
             )
             data = b""
             submitted = 0.0
-            if on_progress is not None and not (cancel_event is not None and cancel_event.is_set()):
+            if on_progress is not None and not self._playback_interrupted(cancel_event):
                 on_progress(0.0)
             while True:
                 # 退出时在当前小块写入结束后停止，避免等待整个长音频播放完。
-                if cancel_event is not None and cancel_event.is_set():
+                if self._playback_interrupted(cancel_event):
                     return False
                 if resample:
                     if not pending:
@@ -756,7 +786,7 @@ class AudioPlayer:
                 stream.write(data)  # type: ignore
                 # 已提交帧只估计主输出进度，不把设备缓冲当作精确 DAC 时钟。
                 submitted += output_frames / actual_rate
-                if on_progress is not None and not (cancel_event is not None and cancel_event.is_set()):
+                if on_progress is not None and not self._playback_interrupted(cancel_event):
                     on_progress(min(duration, submitted))
 
             logger.debug("播放完成!")
@@ -774,4 +804,4 @@ class AudioPlayer:
                 logger.warning("wave 文件关闭失败: %s", e)
             self._terminate_pyaudio(p)
 
-        return ok and (cancel_event is None or not cancel_event.is_set())
+        return ok and not self._playback_interrupted(cancel_event)

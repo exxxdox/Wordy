@@ -94,6 +94,8 @@ driver.py(VBCableDriverManager) → config.py(AppSettings) → main.py(生命周
 
 返听（`SidetoneAudioPlayer.play_wav`）主输出在调用线程同步播、返听另起守护线程，两路同时播放，正好制造这个并发。因此 `player.py` 用模块级 `_PORTAUDIO_LIFECYCLE_LOCK` 包住每一次 `_new_pyaudio()` 与 `_terminate_pyaudio_locked()`，**只锁生命周期调用、不锁中间的实际播放**（否则一路播放会把另一路整个堵住）。返听那一路只等固定上限（`_SIDETONE_TAIL_TIMEOUT_SECONDS`）就放手——调用方是串行的 TTS worker，无限等下去会把后续所有朗读一起拖住；上一段返听还没收尾时，本次直接跳过返听而不是排队叠加。回归用例在 `tests/test_audio_player.py::test_portaudio_lifecycle_is_serialized`：真跑真 PortAudio 会让 pytest 进程本身挂掉，所以它用假实例检测重叠。
 
+取消统一收口在播放层：`TTSManager` 每次播放（文字朗读或本地片段）都调用 `AudioPlayer.begin_playback(cancel_event)` 登记单次令牌，`write_stream` 命中令牌抛 `InterruptedError`、`play_wav` 直接返回 False，播放结束再 `end_playback`。引擎里的取消自检仍是快路径，播放层是兜底——新引擎忘了查取消位也不会继续往设备写。令牌同样只能协作取消，不能跨线程关流；Cartesia realtime 捕获 `InterruptedError` 后仍要调 `ctx.cancel()`，否则该上下文在 SDK 里泄漏。
+
 `pyaudiowpatch`（录音）是另一份静态链接的 PortAudio，有独立的初始化计数，不共用这把锁。
 
 ## 关机顺序

@@ -374,22 +374,27 @@ class CartesiaRealtimeTTS(CartesiaTTS):
         # 流式写入：收到 chunk 立即写入，不做缓冲。
         # 对 CABLE 等虚拟设备可能因 chunk 间隔产生轻微间隙；
         # 介意延迟的用户可切换 bytes 模式。
-        for response in ctx.receive():
-            if cancel_event is not None and cancel_event.is_set():
-                # 必须在 worker 线程里取消：websockets 同步连接不允许另一线程并发 send。
-                self._cancel_context(ctx)
-                return False
-            if response.type == "chunk" and response.audio:
-                logger.debug(
-                    "Received audio chunk (%s bytes, context_id=%s)",
-                    len(response.audio), response.context_id,
-                )
-                self.audio_player.write_stream(response.audio)
-            elif response.type == "error":
-                message = getattr(response, "message", "") or getattr(response, "title", "")
-                raise RuntimeError(f"Cartesia realtime 返回错误: {message}")
-            elif response.type == "done":
-                break
+        try:
+            for response in ctx.receive():
+                if cancel_event is not None and cancel_event.is_set():
+                    # 必须在 worker 线程里取消：websockets 同步连接不允许另一线程并发 send。
+                    self._cancel_context(ctx)
+                    return False
+                if response.type == "chunk" and response.audio:
+                    logger.debug(
+                        "Received audio chunk (%s bytes, context_id=%s)",
+                        len(response.audio), response.context_id,
+                    )
+                    self.audio_player.write_stream(response.audio)
+                elif response.type == "error":
+                    message = getattr(response, "message", "") or getattr(response, "title", "")
+                    raise RuntimeError(f"Cartesia realtime 返回错误: {message}")
+                elif response.type == "done":
+                    break
+        except InterruptedError:
+            # 播放层令牌兜底取消写入时也要通知服务端，否则这个 context 的队列会泄漏。
+            self._cancel_context(ctx)
+            return False
         return True
 
     def speak(self, text: str, cancel_event: threading.Event | None = None) -> bool:

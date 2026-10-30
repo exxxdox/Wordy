@@ -59,6 +59,12 @@ class _DummyAudioPlayer:
     ) -> bool:
         return True
 
+    def begin_playback(self, cancel_event: Event) -> None:
+        pass
+
+    def end_playback(self, cancel_event: Event) -> None:
+        pass
+
     def write_stream(self, data: bytes) -> None:
         pass
 
