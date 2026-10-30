@@ -1,41 +1,26 @@
 # Wordy
 
-常驻热键输入 → TTS 生成 → 播放。支持通过 Windows 原生“侦听此设备”和 VB-CABLE，将 TTS 与麦克风输出到同一虚拟设备。
+<img width="1112" height="148" alt="overlay" src="https://github.com/user-attachments/assets/a7ffc412-692c-49af-9385-2e19d31bd91e" />
+
+
+常驻热键输入 → TTS 生成 → 播放：支持通过 Windows 原生“侦听此设备”和 VB-CABLE，将 TTS 与麦克风输出到同一虚拟设备。
+快捷键聊天轮盘：将指定音频或录制电脑声音输入到VB-CABLE。
 
 ## 环境要求
 
-- **uv**（Python 包管理器，[安装指南](#安装-uv)）
 - Windows 10/11
 - VB-CABLE（可选，[音频侦听](#音频侦听vb-cable) 功能需要）
 
-## 快速开始
+## 支持
 
-```powershell
-# 1. 初始化环境（自动安装 Python 3.12 + 依赖）
-.\wordy.ps1 init
+TTS服务商：
++ Volcengine
++ Cartesia
 
-# 2. 运行
-.\wordy.ps1 dev
-```
-
-首次运行 `wordy.ps1 init` 时，uv 自动下载 Python 3.12、创建 `.venv`、安装全部依赖。再次运行会同步依赖变更。
-
-`wordy.ps1` 不带参数时默认启动应用。保留的 `dev.cmd` 也可双击启动，或转发参数（例如 `dev.cmd build -Clean -NoPause`）。
-
-```powershell
-# 打包为 dist/Wordy.exe
-.\wordy.ps1 build -Clean -NoPause
-```
-
-`init` 和 `build` 默认结束后等待回车，自动化执行时加 `-NoPause`；`-Clean` 清理 PyInstaller 缓存。初始化时，仅在 `.python-version` 不存在时使用 `-PythonVersion`（默认 `3.12`）固定版本。
-
-## 安装 uv
-
-```powershell
-powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
-```
-
-或参考 [uv 官方安装文档](https://docs.astral.sh/uv/getting-started/installation/)。
+聊天轮盘：
++ 音频导入
++ 电脑语音录制
++ 音频片段截取
 
 ## 音频侦听（VB-CABLE）
 
@@ -70,7 +55,28 @@ uv add <package>
 uv add --dev <dev-package>
 ```
 
-## 项目结构
+### 快速开始
+
+```powershell
+# 1. 初始化环境（自动安装 Python 3.12 + 依赖）
+.\wordy.ps1 init
+
+# 2. 运行
+.\wordy.ps1 dev
+```
+
+首次运行 `wordy.ps1 init` 时，uv 自动下载 Python 3.12、创建 `.venv`、安装全部依赖。再次运行会同步依赖变更。
+
+`wordy.ps1` 不带参数时默认启动应用。保留的 `dev.cmd` 也可双击启动，或转发参数（例如 `dev.cmd build -Clean -NoPause`）。
+
+```powershell
+# 打包为 dist/Wordy.exe
+.\wordy.ps1 build -Clean -NoPause
+```
+
+`init` 和 `build` 默认结束后等待回车，自动化执行时加 `-NoPause`；`-Clean` 清理 PyInstaller 缓存。初始化时，仅在 `.python-version` 不存在时使用 `-PythonVersion`（默认 `3.12`）固定版本。
+
+### 项目结构
 
 | 文件 | 说明 |
 |------|------|
@@ -84,7 +90,7 @@ uv add --dev <dev-package>
 | `src/wordy/config.py` | 配置持久化 |
 | `pyproject.toml` | 项目元数据与依赖声明 |
 
-## 技术栈
+### 技术栈
 
 - **Python 3.12**（uv 管理，`.python-version` 锁定）
 - **TTS**: Cartesia API
