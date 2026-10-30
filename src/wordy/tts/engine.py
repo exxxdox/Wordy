@@ -3,6 +3,8 @@
 
 """TTS 后端引擎抽象。"""
 
+
+from collections.abc import Callable
 import logging
 from abc import ABC, abstractmethod
 from io import BytesIO
@@ -42,7 +44,7 @@ class TTSAudioPlayer(Protocol):
     output_device_name: str | None
 
     def play_wav(self, wav_path: str | BytesIO, device_index: int | None = None,
-                 cancel_event: Event | None = None, *, volume: float = 1.0) -> bool:
+                 cancel_event: Event | None = None, *, volume: float = 1.0, on_progress: Callable[[float], None] | None = None) -> bool:
         """播放 WAV 音频。"""
         ...
 

@@ -60,6 +60,8 @@ def _action_icon(shape: str, color: str) -> QIcon:
 class _ImportSignals(QObject):
     # index, filename, label, error, 录音临时文件路径（非录音导入为空串）
     finished = Signal(int, str, str, str, str)
+    preview_finished = Signal(str)
+    preview_progress = Signal(str, float)
 
 
 class _WheelPicker(QWidget):
@@ -172,9 +174,12 @@ class ChatWheelSettings(QWidget):
         self._record_timer.timeout.connect(self._tick_recording)
         self._signals = _ImportSignals(self)
         self._signals.finished.connect(self._finish_import)
+        self._signals.preview_finished.connect(self._trim_preview_finished)
+        self._signals.preview_progress.connect(self._trim_preview_progress)
         self.selected_index = 0
         self.wheel_index = 0
         # 截取前的解码会走嵌套事件循环，期间用它锁住动作行防止重入。
+        self._trim_dialog: AudioTrimDialog | None = None
         self._trimming = False
 
         layout = QVBoxLayout(self)
@@ -590,11 +595,33 @@ class ChatWheelSettings(QWidget):
         label = self._settings.get_wheel(self.wheel_index)["labels"][index]
         self.import_file(index, clip, label=label or filename, temporary=True)
 
+    def _trim_preview_progress(self, filename: str, seconds: float) -> None:
+        if self._trim_dialog is not None:
+            self._trim_dialog.preview_progress(filename, seconds)
+
+    def _trim_preview_finished(self, filename: str) -> None:
+        if self._trim_dialog is not None:
+            self._trim_dialog.preview_finished(filename)
+
     def _open_trim_dialog(self, path: Path) -> Path | None:
         volume = self._settings.get_wheel(self.wheel_index)["volumes"][self.selected_index]
 
         def play(clip: Path) -> None:
-            self._on_field_changed("chat_wheel_preview_file", (str(clip), volume))
+            signals = self._signals
+
+            def finished() -> None:
+                try:
+                    signals.preview_finished.emit(str(clip))
+                except RuntimeError:
+                    pass  # 设置窗口已销毁，无需再复位试听控件。
+
+            def progress(seconds: float) -> None:
+                try:
+                    signals.preview_progress.emit(str(clip), seconds)
+                except RuntimeError:
+                    pass  # 窗口销毁后忽略迟到的音频进度。
+
+            self._on_field_changed("chat_wheel_preview_file", (str(clip), volume, finished, progress))
 
         def stop() -> None:
             self._on_field_changed("chat_wheel_preview_stop", 0)
@@ -602,11 +629,13 @@ class ChatWheelSettings(QWidget):
         dialog = AudioTrimDialog(
             path, self, play_preview=play, stop_preview=stop,
         )
+        self._trim_dialog = dialog
         try:
             if dialog.exec() == QDialog.DialogCode.Accepted:
                 return dialog.take_clip()
             return None
         finally:
+            self._trim_dialog = None
             dialog.deleteLater()
 
     def _cancel_recording(self) -> None:

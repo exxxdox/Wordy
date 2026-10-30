@@ -172,7 +172,9 @@ def test_trim_preview_uses_slot_volume(qapp, monkeypatch, tmp_path):
 
     monkeypatch.setattr("wordy.ui.chat_wheel_settings.AudioTrimDialog", FakeDialog)
     assert panel._open_trim_dialog(tmp_path / "original.wav") is None
-    changed.assert_called_once_with("chat_wheel_preview_file", (str(preview), .35))
+    assert changed.call_args.args[0] == "chat_wheel_preview_file"
+    assert changed.call_args.args[1][:2] == (str(preview), .35)
+    assert callable(changed.call_args.args[1][2])
 
 
 def test_volume_control_only_edits_available_audio(qapp):

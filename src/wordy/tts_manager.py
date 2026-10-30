@@ -13,6 +13,7 @@ import logging
 import threading
 from threading import Lock
 from concurrent.futures import ThreadPoolExecutor
+from typing import Any
 from collections.abc import Callable
 from pathlib import Path
 from dataclasses import dataclass
@@ -406,15 +407,17 @@ class TTSManager:
         return self.engine.fetch_voices()
 
     def play_audio_file(self, path: Path, on_error: Callable[[str], None] | None = None,
-                        on_finished: Callable[[], None] | None = None, *, volume: float = 1.0) -> None:
+                        on_finished: Callable[[], None] | None = None, *, volume: float = 1.0,
+                        on_progress: Callable[[float], None] | None = None) -> None:
         """本地文件与 TTS 共用串行 worker，不要求密钥或音色。"""
         # 新播放顶掉旧播放，避免连点两次后两条音频叠在一起。
         self.stop_audio_file()
         cancel = threading.Event()
         self._clip_cancel = cancel
         if not self._audio_files_stopped.is_set():
+            progress: dict[str, Any] = {"on_progress": on_progress} if on_progress is not None else {}
             self._executor.submit(self._play_audio_file, path, self.engine, self._worker_ready,
-                                  on_error, volume, cancel, on_finished)
+                                  on_error, volume, cancel, on_finished, **progress)
 
     def stop_audio_file(self) -> None:
         """打断当前文件播放；没有正在播放的片段时什么也不做。
@@ -429,7 +432,8 @@ class TTSManager:
                          ready: threading.Event | None, on_error: Callable[[str], None] | None,
                          volume: float,
                          cancel: threading.Event,
-                         on_finished: Callable[[], None] | None) -> None:
+                         on_finished: Callable[[], None] | None,
+                         on_progress: Callable[[float], None] | None = None) -> None:
         try:
             if ready is not None:
                 ready.wait()
@@ -439,7 +443,8 @@ class TTSManager:
             engine.close()
             with decoded_audio_clip(path, cancel) as wav_path:
                 # 按提交时的槽位音量播放，避免排队期间切槽或调音串到其他音频。
-                if not self._audio_player.play_wav(str(wav_path), cancel_event=cancel, volume=volume):
+                progress: dict[str, Any] = {"on_progress": on_progress} if on_progress is not None else {}
+                if not self._audio_player.play_wav(str(wav_path), cancel_event=cancel, volume=volume, **progress):
                     if cancel.is_set():
                         return
                     # play_wav 现在对「打不开设备」和「播到一半失败」都返回 False，

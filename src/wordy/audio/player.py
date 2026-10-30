@@ -3,6 +3,8 @@
 
 """音频设备查找和 WAV 播放。"""
 
+
+from collections.abc import Callable
 import logging
 import math
 import threading
@@ -661,6 +663,7 @@ class AudioPlayer:
         device_index: int | None = None,
         cancel_event: Event | None = None,
         *, volume: float = 1.0,
+        on_progress: Callable[[float], None] | None = None,
     ) -> bool:
         """播放 WAV 文件到指定或匹配到的输出设备。"""
         if not math.isfinite(volume) or not 0 <= volume <= 2:
@@ -731,6 +734,9 @@ class AudioPlayer:
                 if resample else b""
             )
             data = b""
+            submitted = 0.0
+            if on_progress is not None and not (cancel_event is not None and cancel_event.is_set()):
+                on_progress(0.0)
             while True:
                 # 退出时在当前小块写入结束后停止，避免等待整个长音频播放完。
                 if cancel_event is not None and cancel_event.is_set():
@@ -743,10 +749,15 @@ class AudioPlayer:
                     data = wf.readframes(1024)
                     if not data:
                         break
+                output_frames = len(data) // (channels * sample_width)
                 if self._last_mono_upmix:
                     data = _duplicate_mono_to_stereo(data, sample_width)
                 data = _scale_pcm(data, sample_width, volume)
                 stream.write(data)  # type: ignore
+                # 已提交帧只估计主输出进度，不把设备缓冲当作精确 DAC 时钟。
+                submitted += output_frames / actual_rate
+                if on_progress is not None and not (cancel_event is not None and cancel_event.is_set()):
+                    on_progress(min(duration, submitted))
 
             logger.debug("播放完成!")
         except KeyboardInterrupt:

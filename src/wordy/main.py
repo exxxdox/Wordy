@@ -6,6 +6,7 @@
 默认播放到系统默认输出设备。
 """
 
+from collections.abc import Callable
 from pathlib import Path
 import logging
 import os
@@ -139,16 +140,30 @@ class WordyApp:
             if isinstance(wheel_index, int) and isinstance(slot_index, int):
                 controller.play_slot(slot_index, wheel_index)
         elif field == "chat_wheel_preview_file":
+            on_finished = controller.playback_finished.emit
+            on_progress: Callable[[float], None] | None = None
             if isinstance(value, str):
                 filename, volume = value, 1.0
-            elif (isinstance(value, tuple) and len(value) == 2 and isinstance(value[0], str)
+            elif (isinstance(value, tuple) and len(value) in (2, 3, 4) and isinstance(value[0], str)
                   and isinstance(value[1], (int, float)) and not isinstance(value[1], bool)):
                 filename, volume = value[0], float(value[1])
+                if len(value) >= 3:
+                    if not callable(value[2]):
+                        return
+                    on_finished = cast(Callable[[], None], value[2])
+                if len(value) == 4:
+                    if not callable(value[3]):
+                        return
+                    on_progress = cast(Callable[[float], None], value[3])
             else:
                 return
             # 片段试听也由 worker 完成，复用排队信号避免跨线程操作设置控件。
-            self.tts_manager.play_audio_file(Path(filename), controller.playback_error.emit,
-                                             controller.playback_finished.emit, volume=volume)
+            if on_progress is not None:
+                self.tts_manager.play_audio_file(Path(filename), controller.playback_error.emit,
+                                                 on_finished, volume=volume, on_progress=on_progress)
+            else:
+                self.tts_manager.play_audio_file(Path(filename), controller.playback_error.emit,
+                                                 on_finished, volume=volume)
         elif field == "chat_wheel_preview_stop":
             # 只打断这一次试听，不触碰全局停止标志。
             self.tts_manager.stop_audio_file()

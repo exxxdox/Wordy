@@ -1657,3 +1657,14 @@ def test_recording_preview_forwards_slot_volume_through_queued_signals(app, monk
     app._on_chat_wheel_change("chat_wheel_preview_file", payload)
     playback.assert_called_once_with(Path("clip.wav"), controller.playback_error.emit,
                                      controller.playback_finished.emit, volume=volume)
+
+
+def test_trim_preview_forwards_scoped_progress_and_completion(app, monkeypatch):
+    controller = MagicMock()
+    app._chat_wheel_controller = controller
+    playback = MagicMock()
+    finished, progress = MagicMock(), MagicMock()
+    monkeypatch.setattr(app.tts_manager, "play_audio_file", playback)
+    app._on_chat_wheel_change("chat_wheel_preview_file", ("clip.wav", .35, finished, progress))
+    playback.assert_called_once_with(Path("clip.wav"), controller.playback_error.emit,
+                                     finished, volume=.35, on_progress=progress)
