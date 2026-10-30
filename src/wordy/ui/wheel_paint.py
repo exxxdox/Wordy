@@ -84,7 +84,8 @@ def _paint_game_wheel(painter: QPainter, labels: list[str], selected_index: int 
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
     center = QPointF(270, 270)
     outer = QRectF(14, 14, 512, 512)
-    inner = QRectF(190, 190, 160, 160)
+    # 扇面内沿紧跟圆环外沿（62px），否则中间会露出一圈透明空隙。
+    inner = QRectF(208, 208, 124, 124)
     strengths = [
         (highlights[index] if highlights is not None else float(index == selected_index))
         if label or editing else 0.0
@@ -98,15 +99,20 @@ def _paint_game_wheel(painter: QPainter, labels: list[str], selected_index: int 
         path.arcMoveTo(outer, angle)
         path.arcTo(outer, angle, -45)
         end = math.radians(angle - 45)
-        path.lineTo(center + QPointF(80 * math.cos(end), -80 * math.sin(end)))
+        path.lineTo(center + QPointF(62 * math.cos(end), -62 * math.sin(end)))
         path.arcTo(inner, angle - 45, 45)
         path.closeSubpath()
-        level = round(20 + 225 * strength)
+        # 黑白相间：偶数槽亮、奇数槽暗，低透明度让游戏画面继续透出。
+        dark = index % 2 != 0
+        base_tone = 12 if dark else 222
+        tone = round(base_tone + (235 - base_tone) * strength)
+        base_alpha = 78 if dark else 12
+        inner_alpha = round(base_alpha + (144 - base_alpha) * strength)
         face = QRadialGradient(center, 256)
-        face.setColorAt(0.0, QColor(level, level, level, round(64 + 80 * strength)))
-        face.setColorAt(0.35, QColor(level, level, level, round(64 + 80 * strength)))
-        face.setColorAt(0.82, QColor(level, level, level, round(32 + 55 * strength)))
-        face.setColorAt(1.0, QColor(level, level, level, 0))
+        face.setColorAt(0.0, QColor(tone, tone, tone, inner_alpha))
+        face.setColorAt(0.35, QColor(tone, tone, tone, inner_alpha))
+        face.setColorAt(0.82, QColor(tone, tone, tone, round(inner_alpha * 0.6)))
+        face.setColorAt(1.0, QColor(tone, tone, tone, 0))
         painter.setBrush(face)
         painter.drawPath(path)
 
@@ -134,6 +140,11 @@ def _paint_game_wheel(painter: QPainter, labels: list[str], selected_index: int 
         glass.paint_lifted_text(painter, rect, Qt.AlignmentFlag.AlignCenter, text, color,
                                 opacity=painter.opacity())
 
+    # 选择方向偏移先算出来：金属圆钮与圆环高光共用同一个方向。
+    offset = QPointF()
+    for index, strength in enumerate(strengths):
+        radians = math.radians(90 - index * 45)
+        offset += QPointF(math.cos(radians), -math.sin(radians)) * (28 * strength)
     # 指向角只属于当前有效选择；不沿动画残影画旧方向，也不常驻多角底座。
     if selected_index is not None and (labels[selected_index] or editing):
         painter.save()
@@ -151,34 +162,50 @@ def _paint_game_wheel(painter: QPainter, labels: list[str], selected_index: int 
         painter.setPen(QPen(QColor(0, 0, 0, 85), 2))
         painter.drawPath(pointer)
         painter.restore()
-    ring = QLinearGradient(QPointF(270, 194), QPointF(270, 346))
+    # 圆环按整盘比例缩小到 62px，整体轮盘尺寸不变，中心留出更多游戏画面。
+    ring_rect = QRectF(208, 208, 124, 124)
+    ring = QLinearGradient(QPointF(270, 208), QPointF(270, 332))
     ring.setColorAt(0, QColor(220, 225, 225))
     ring.setColorAt(0.5, QColor(115, 126, 131))
     ring.setColorAt(1, QColor(177, 187, 190))
     painter.setBrush(ring)
     painter.setPen(QPen(QColor(225, 232, 232), 1.2))
-    painter.drawEllipse(QRectF(194, 194, 152, 152))
-    bowl = QRadialGradient(QPointF(254, 240), 110)
+    painter.drawEllipse(ring_rect)
+
+    # 高光随选择方向沿圆环移动，hover 到某一项时环上直接亮出对应位置。
+    reach = math.hypot(offset.x(), offset.y())
+    if reach > 0.5:
+        unit = offset / reach
+        spot = center + unit * 58
+        glow = QRadialGradient(spot, 34)
+        glow.setColorAt(0.0, QColor(255, 255, 255, round(180 * min(1.0, reach / 28))))
+        glow.setColorAt(1.0, QColor(255, 255, 255, 0))
+        clip = QPainterPath()
+        clip.addEllipse(ring_rect)
+        painter.save()
+        # 只让高光落在圆环带上，不越过内圈糊到中心碗里。
+        painter.setClipPath(clip, Qt.ClipOperation.IntersectClip)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(glow)
+        painter.drawEllipse(spot, 34, 34)
+        painter.restore()
+    bowl = QRadialGradient(QPointF(258, 245), 88)
     bowl.setColorAt(0, QColor(65, 75, 83))
     bowl.setColorAt(1, QColor(19, 27, 33))
     painter.setBrush(bowl)
     painter.setPen(QPen(QColor(180, 190, 192), 1.5))
-    painter.drawEllipse(QRectF(207, 207, 126, 126))
-    offset = QPointF()
-    for index, strength in enumerate(strengths):
-        radians = math.radians(90 - index * 45)
-        offset += QPointF(math.cos(radians), -math.sin(radians)) * (34 * strength)
+    painter.drawEllipse(QRectF(219, 219, 102, 102))
     knob = center + offset
-    cap = QRadialGradient(knob + QPointF(-7, -10), 29)
+    cap = QRadialGradient(knob + QPointF(-6, -8), 23)
     cap.setColorAt(0, QColor(207, 216, 219))
     cap.setColorAt(0.36, QColor(112, 126, 137))
     cap.setColorAt(0.65, QColor(55, 67, 76))
     cap.setColorAt(1, QColor(17, 25, 32))
     painter.setPen(Qt.PenStyle.NoPen)
     painter.setBrush(QColor(0, 0, 0, 90))
-    painter.drawEllipse(knob + QPointF(1, 3), 22, 22)
+    painter.drawEllipse(knob + QPointF(1, 3), 18, 18)
     painter.setBrush(cap)
-    painter.drawEllipse(knob, 21, 21)
+    painter.drawEllipse(knob, 17, 17)
     painter.restore()
 
 

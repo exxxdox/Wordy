@@ -23,9 +23,10 @@ def _render(labels, selected, *, highlights=None, opacity=1.0, editing=False):
 def test_game_wheel_is_translucent_and_highlights_direction(qapp):
     labels = ["谢谢", "别激动", "是不是亮瞎了", "我后悔了", "能缓一缓了", "这游戏太难玩", "我的锅", "很好"]
     idle = _render(labels, None)
-    selected = _render(labels, 2)
+    selected = _render(labels, 1)
     # 扇区本身保持透明；选中是浅色扇面，不是蓝色实心圆盘。
-    sample = (410, 285)
+    # 取奇数槽取样：偶数槽本身已是亮色，选中靠透明度提升，色差不明显。
+    sample = (369, 171)
     assert 0 < selected.pixelColor(*sample).alpha() < 180
     assert selected.pixelColor(*sample).red() > idle.pixelColor(*sample).red() + 80
     assert selected.pixelColor(0, 0).alpha() == 0
@@ -61,6 +62,36 @@ def test_game_wheel_side_names_clear_metal_base_and_match_preview(qapp, monkeypa
         assert calls[2][0].left() > 366
         assert calls[6][0].right() < 174
         assert calls[2][1] == "是不是亮瞎了"
+
+
+def test_game_wheel_center_ring_is_compact_and_seals_gap(qapp):
+    image = _render(["Audio"] * 8, None)
+    # 圆环半径缩到 62px；环外 70px 处应是扇面，不能留透明空隙。
+    assert image.pixelColor(270, 200).alpha() > 0
+    assert image.pixelColor(270, 200).alpha() < 200
+    assert image.pixelColor(270, 270).alpha() == 255
+
+
+def test_game_wheel_sectors_alternate_black_and_white(qapp):
+    image = _render(["Audio"] * 8, None)
+    for index in range(8):
+        angle = math.radians(90 - index * 45)
+        x, y = round(270 + 150 * math.cos(angle)), round(270 - 150 * math.sin(angle))
+        color = image.pixelColor(x, y)
+        # 背景仍透出：不透明扇面被禁止；相邻槽一明一暗，偶数槽亮。
+        assert 0 < color.alpha() < 180
+        assert (color.red() > 180) if index % 2 == 0 else (color.red() < 80)
+
+
+def test_game_wheel_ring_highlight_follows_selection(qapp):
+    labels = ["Audio"] * 8
+    idle = _render(labels, None)
+    right = _render(labels, 2)
+    left = _render(labels, 6)
+    # 圆环带上的高光随选中方向移动：右侧选中时右环更亮，左环与空闲一致。
+    assert right.pixelColor(326, 270).red() > idle.pixelColor(326, 270).red() + 30
+    assert left.pixelColor(214, 270).red() > idle.pixelColor(214, 270).red() + 30
+    assert abs(right.pixelColor(214, 270).red() - idle.pixelColor(214, 270).red()) < 20
 
 
 @pytest.mark.parametrize("selected", [None, *range(8)])
