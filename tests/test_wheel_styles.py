@@ -40,6 +40,17 @@ def test_all_styles_keep_numbers_and_selection_feedback(qapp, monkeypatch, style
     assert "点击编辑" in texts if editing else "松开播放" in texts
 
 
+@pytest.mark.parametrize("style", ["classic", "glass", "petals", "game"])
+def test_long_slot_labels_cap_at_ten_chars(qapp, monkeypatch, style):
+    texts = []
+    monkeypatch.setattr(wheel_paint.glass, "paint_lifted_text",
+                        lambda painter, rect, flags, text, color, **options: texts.append(text))
+    label = "零一二三四五六七八九十甲乙丙"
+    _render(style, None, labels=[label] * 8)
+    # 所有样式统一：最多 10 个字符，超出用 ... 省略。
+    assert label[:10] + "..." in texts
+
+
 def test_petals_have_clear_gaps_while_glass_remains_a_disc(qapp):
     petals = _render("petals")
     glass = _render("glass")

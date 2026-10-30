@@ -94,6 +94,19 @@ def test_game_wheel_ring_highlight_follows_selection(qapp):
     assert abs(right.pixelColor(214, 270).red() - idle.pixelColor(214, 270).red()) < 20
 
 
+def test_game_wheel_hover_keeps_ten_char_label(qapp, monkeypatch):
+    texts = []
+    monkeypatch.setattr(wheel_paint.glass, "paint_lifted_text",
+                        lambda painter, rect, flags, text, color, **options: texts.append(text))
+    label = "零一二三四五六七八九"
+    _render([label] * 8, None)
+    assert label in texts
+    texts.clear()
+    # 左上槽 hover 放大字号后不能反而省略：贴边槽按外侧对齐，向内侧伸。
+    _render([label] * 8, 7, highlights=[0, 0, 0, 0, 0, 0, 0, 1])
+    assert label in texts
+
+
 @pytest.mark.parametrize("selected", [None, *range(8)])
 def test_game_wheel_has_only_one_selected_pointer(qapp, selected):
     image = _render(["Audio"] * 8, selected)

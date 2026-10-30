@@ -45,6 +45,38 @@ class WheelHover(QVariantAnimation):
                        for i, start in enumerate(self._start)]
 
 
+MAX_WHEEL_TEXT_CHARS = 10
+
+
+def _wheel_label_text(label: str) -> str:
+    """轮盘文字最多 10 个字符，超出省略为 ...；不改动槽位保存的内容。"""
+    if len(label) <= MAX_WHEEL_TEXT_CHARS:
+        return label
+    return label[:MAX_WHEEL_TEXT_CHARS] + "..."
+
+
+def _fit_wheel_text(painter: QPainter, rect: QRectF, label: str,
+                    alignment: Qt.AlignmentFlag = Qt.AlignmentFlag.AlignCenter
+                    | Qt.TextFlag.TextDontClip) -> str:
+    """文字允许横向溢出扇区，只按轮盘画面宽度做最后一步省略，避免贴边硬切。"""
+    if alignment & Qt.AlignmentFlag.AlignLeft:
+        limit = 540 - rect.left() - 8
+    elif alignment & Qt.AlignmentFlag.AlignRight:
+        limit = rect.right() - 8
+    else:
+        center_x = rect.center().x()
+        limit = 2 * min(center_x, 540 - center_x) - 12
+    limit = max(60, round(limit))
+    text = _wheel_label_text(label)
+    if painter.fontMetrics().horizontalAdvance(text) > limit:
+        text = painter.fontMetrics().elidedText(text, Qt.TextElideMode.ElideRight, limit)
+    return text
+
+
+# 文本框只定锚点：不裁掉溢出的文字，横向延伸仍能看出属于哪个扇区。
+WHEEL_TEXT_ALIGN = Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextDontClip
+
+
 def _paint_wheel_shadow(painter: QPainter, disc: QPainterPath) -> None:
     """连续衰减的外侧投影，不让黑影透过半透明盘体。"""
     bounds = disc.boundingRect().adjusted(-18, -18, 18, 18).translated(0, 3)
@@ -130,14 +162,21 @@ def _paint_game_wheel(painter: QPainter, labels: list[str], selected_index: int 
         font.setPixelSize(round(22 + 4 * strength))
         painter.setFont(font)
         rect = text_rects[index]
-        text = painter.fontMetrics().elidedText(label or "—", Qt.TextElideMode.ElideRight,
-                                               round(rect.width() - 4))
+        # 左右两列贴边槽位朝窗口内侧对齐：hover 放大字号时向内侧伸展，
+        # 不会因为居中超出窗口又被重新省略成更短的文字。
+        if rect.center().x() < 270:
+            align = Qt.AlignmentFlag.AlignLeft | Qt.TextFlag.TextDontClip
+        elif rect.center().x() > 270:
+            align = Qt.AlignmentFlag.AlignRight | Qt.TextFlag.TextDontClip
+        else:
+            align = WHEEL_TEXT_ALIGN
+        text = _fit_wheel_text(painter, rect, label or "—", align)
         # 游戏画面亮暗变化大：已有名称始终用实白，薄黑字缘和下移阴影共同保住对比。
         color = QColor(255, 255, 255, 255 if label else round(90 + 165 * strength))
         painter.setPen(QColor(0, 0, 0, 220))
         for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 2)):
-            painter.drawText(rect.translated(dx, dy), Qt.AlignmentFlag.AlignCenter, text)
-        glass.paint_lifted_text(painter, rect, Qt.AlignmentFlag.AlignCenter, text, color,
+            painter.drawText(rect.translated(dx, dy), align, text)
+        glass.paint_lifted_text(painter, rect, align, text, color,
                                 opacity=painter.opacity())
 
     # 选择方向偏移先算出来：金属圆钮与圆环高光共用同一个方向。
@@ -300,9 +339,9 @@ def _paint_modern_wheel(painter: QPainter, labels: list[str], selected_index: in
         font.setPixelSize(25 if editing else 19)
         font.setWeight(QFont.Weight.DemiBold)
         painter.setFont(font)
-        text = painter.fontMetrics().elidedText(label or "—", Qt.TextElideMode.ElideRight, 124)
-        glass.paint_lifted_text(painter, QRectF(text_center.x() - 64, text_center.y() - 4, 128, 34),
-                                Qt.AlignmentFlag.AlignCenter, text,
+        label_rect = QRectF(text_center.x() - 64, text_center.y() - 4, 128, 34)
+        text = _fit_wheel_text(painter, label_rect, label or "—")
+        glass.paint_lifted_text(painter, label_rect, WHEEL_TEXT_ALIGN, text,
                                 QColor(TEXT_PRIMARY) if label or selected else QColor(TEXT_MUTED))
 
     # 方向弧跟随同一份动画强度，不在换槽时突然跳亮。
@@ -322,7 +361,7 @@ def _paint_modern_wheel(painter: QPainter, labels: list[str], selected_index: in
     painter.setBrush(hub)
     painter.setPen(QPen(QColor(255, 255, 255, 65), 1.2))
     painter.drawEllipse(QRectF(194, 194, 152, 152))
-    title = labels[selected_index] if selected_index is not None and labels[selected_index] else ""
+    title = _wheel_label_text(labels[selected_index]) if selected_index is not None and labels[selected_index] else ""
     font = QFont("Microsoft YaHei UI")
     font.setPixelSize(25 if editing else 19)
     font.setWeight(QFont.Weight.DemiBold)
@@ -440,11 +479,12 @@ def _paint_classic_wheel(painter: QPainter, labels: list[str], selected_index: i
             QColor(TEXT_PRIMARY) if selected or label else QColor(TEXT_MUTED),
         )
         painter.setFont(QFont("Microsoft YaHei UI", 10 if not editing else 14, QFont.Weight.DemiBold))
-        text = painter.fontMetrics().elidedText(label or "—", Qt.TextElideMode.ElideRight, 116)
+        label_rect = QRectF(text_center.x() - 62, text_center.y() - 6, 124, 34)
+        text = _fit_wheel_text(painter, label_rect, label or "—")
         glass.paint_lifted_text(
             painter,
-            QRectF(text_center.x() - 62, text_center.y() - 6, 124, 34),
-            Qt.AlignmentFlag.AlignCenter,
+            label_rect,
+            WHEEL_TEXT_ALIGN,
             text,
             QColor(TEXT_PRIMARY) if label else QColor(TEXT_MUTED),
         )
@@ -485,7 +525,7 @@ def _paint_classic_wheel(painter: QPainter, labels: list[str], selected_index: i
     has_selection = selected_index is not None and bool(labels[selected_index])
     painter.setFont(QFont("Microsoft YaHei UI", 10 if not editing else 14, QFont.Weight.DemiBold))
     # 中心补足扇区省略的名称，最多两行，超长第二行仍保留省略号。
-    title = labels[selected_index] if selected_index is not None and has_selection else ""
+    title = _wheel_label_text(labels[selected_index]) if selected_index is not None and has_selection else ""
     metrics = painter.fontMetrics()
     split = 0
     while split < len(title) and metrics.horizontalAdvance(title[:split + 1]) <= 112:
