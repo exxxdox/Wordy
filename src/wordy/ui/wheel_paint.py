@@ -45,6 +45,25 @@ class WheelHover(QVariantAnimation):
                        for i, start in enumerate(self._start)]
 
 
+def _paint_wheel_shadow(painter: QPainter, disc: QPainterPath) -> None:
+    """连续衰减的外侧投影，不让黑影透过半透明盘体。"""
+    bounds = disc.boundingRect().adjusted(-18, -18, 18, 18).translated(0, 3)
+    shadow = QPainterPath()
+    shadow.addEllipse(bounds)
+    gradient = QRadialGradient(bounds.center(), bounds.width() / 2)
+    gradient.setColorAt(0.0, QColor(0, 0, 0, 60))
+    gradient.setColorAt(0.90, QColor(0, 0, 0, 60))
+    gradient.setColorAt(0.93, QColor(0, 0, 0, 45))
+    gradient.setColorAt(0.96, QColor(0, 0, 0, 16))
+    gradient.setColorAt(1.0, QColor(0, 0, 0, 0))
+    painter.save()
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(gradient)
+    # 挖掉盘体而非叠黑实心圆；外沿在窗口余量内降到全透明，避免硬圈与裁切。
+    painter.drawPath(shadow.subtracted(disc))
+    painter.restore()
+
+
 def paint_wheel(painter: QPainter, labels: list[str], selected_index: int | None,
                 *, editing: bool = False, highlights: list[float] | None = None) -> None:
     """统一盘体样式；缩略图仅提高字级并使用编辑提示。"""
@@ -58,12 +77,7 @@ def paint_wheel(painter: QPainter, labels: list[str], selected_index: int | None
     # 过透的材质会让槽位文字在游戏画面上读不清。
     disc = QPainterPath()
     disc.addEllipse(QRectF(24, 24, 492, 492))
-    # 盘体先落投影：窗口四周 24px 余量正好容纳，越贴近盘边越实，
-    # 并整体下移一点交代高度；游戏画面亮暗不定，影要比贴桌面的输入框更明显。
-    painter.setPen(Qt.PenStyle.NoPen)
-    for spread in range(18, -1, -3):
-        painter.setBrush(QColor(0, 0, 0, 15))
-        painter.drawEllipse(QRectF(24 - spread, 29 - spread, 492 + spread * 2, 492 + spread * 2))
+    _paint_wheel_shadow(painter, disc)
     painter.setPen(Qt.PenStyle.NoPen)
     painter.setBrush(tint(WINDOW_BG, 165))
     painter.drawPath(disc)
@@ -78,7 +92,8 @@ def paint_wheel(painter: QPainter, labels: list[str], selected_index: int | None
     rim_light = QLinearGradient(QPointF(270, 24), QPointF(270, 516))
     rim_light.setColorAt(0.0, QColor(255, 255, 255, 64))
     rim_light.setColorAt(0.5, QColor(255, 255, 255, 20))
-    rim_light.setColorAt(1.0, QColor(0, 0, 0, 150))
+    # 底缘只交代厚度，避免与外侧投影叠成一条厚黑带。
+    rim_light.setColorAt(1.0, QColor(0, 0, 0, 65))
     painter.setPen(Qt.PenStyle.NoPen)
     painter.setBrush(rim_light)
     painter.drawPath(rim)
@@ -163,7 +178,7 @@ def paint_wheel(painter: QPainter, labels: list[str], selected_index: int | None
     painter.setBrush(Qt.BrushStyle.NoBrush)
     painter.setPen(QPen(tint(TEXT_PRIMARY, 70), 2))
     painter.drawArc(QRectF(26, 26, 488, 488), 45 * 16, 90 * 16)
-    painter.setPen(QPen(QColor(0, 0, 0, 110), 2))
+    painter.setPen(QPen(QColor(0, 0, 0, 55), 1))
     painter.drawArc(QRectF(26, 26, 488, 488), 225 * 16, 90 * 16)
     # 中心盘是叠在扇区上的第二层玻璃：先压一圈投影，再用渐变起鼓。
     painter.setPen(Qt.PenStyle.NoPen)
