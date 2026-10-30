@@ -952,7 +952,8 @@ def test_picker_uses_shared_wheel_painter(qapp, monkeypatch):
     picker.buttons[2].setText("音频 3\nExample")
     picker.buttons[2].setChecked(True)
     picker.grab()
-    assert calls[-1] == (["", "", "Example", "", "", "", "", ""], 2, {"editing": True})
+    assert calls[-1][:2] == (["", "", "Example", "", "", "", "", ""], 2)
+    assert calls[-1][2]["editing"] is True
     picker._hovered_index = 0
     picker.grab()
     assert calls[-1][1] == 0

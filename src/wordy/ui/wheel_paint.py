@@ -3,14 +3,50 @@
 from __future__ import annotations
 
 import math
-from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtCore import QEasingCurve, QPointF, QRectF, Qt, QVariantAnimation
 from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPen, QRadialGradient
+from PySide6.QtWidgets import QWidget
 from wordy.ui import glass
 from wordy.ui.theme import ACCENT_SECONDARY, ELEVATED_BG, GREEN_ACCENT, TEXT_MUTED, TEXT_PRIMARY, WINDOW_BG, tint
 
 
+class WheelHover(QVariantAnimation):
+    """高亮从当前画面续接，快速扫过时不积压动画。"""
+
+    def __init__(self, widget: QWidget) -> None:
+        super().__init__(widget)
+        self.values = [0.0] * 8
+        self._start = self.values.copy()
+        self._target: int | None = None
+        self.setDuration(90)
+        self.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self.setStartValue(0.0)
+        self.setEndValue(1.0)
+        self.valueChanged.connect(self._advance)
+        self.valueChanged.connect(lambda _value: widget.update())
+
+    def reset(self) -> None:
+        self.stop()
+        self.values = [0.0] * 8
+        self._start = self.values.copy()
+        self._target = None
+
+    def select(self, index: int | None) -> None:
+        if index == self._target:
+            return
+        self.stop()
+        self._start = self.values.copy()
+        self._target = index
+        self.setCurrentTime(0)
+        self.start()
+
+    def _advance(self, value: float) -> None:
+        self.values = [start + (float(i == self._target) - start) * value
+                       for i, start in enumerate(self._start)]
+
+
 def paint_wheel(painter: QPainter, labels: list[str], selected_index: int | None,
-                *, editing: bool = False) -> None:
+                *, editing: bool = False, highlights: list[float] | None = None) -> None:
     """统一盘体样式；缩略图仅提高字级并使用编辑提示。"""
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
     center = QPointF(270, 270)
@@ -55,6 +91,7 @@ def paint_wheel(painter: QPainter, labels: list[str], selected_index: int | None
 
     for index, label in enumerate(labels):
         selected = index == selected_index and (bool(label) or editing)
+        strength = highlights[index] if highlights is not None else float(selected)
         angle = 112.5 - index * 45
         path = QPainterPath()
         path.arcMoveTo(outer, angle - 1)
@@ -63,20 +100,23 @@ def paint_wheel(painter: QPainter, labels: list[str], selected_index: int | None
         path.lineTo(center + QPointF(80 * math.cos(end), -80 * math.sin(end)))
         path.arcTo(inner, angle - 44, 43)
         path.closeSubpath()
-        if selected:
+        if strength > 0:
             # 双层光晕表达选中，不额外改变扇区几何。
             for width, alpha in ((14, 22), (8, 40)):
-                painter.setPen(QPen(tint(GREEN_ACCENT, alpha), width))
+                painter.setPen(QPen(tint(GREEN_ACCENT, round(alpha * strength)), width))
                 painter.setBrush(Qt.BrushStyle.NoBrush)
                 painter.drawPath(path)
         painter.setPen(Qt.PenStyle.NoPen)
-        base = QColor(GREEN_ACCENT) if selected else QColor(ELEVATED_BG)
+        normal = QColor(ELEVATED_BG)
+        base = QColor(*(round(a + (b - a) * strength) for a, b in zip(
+            (normal.red(), normal.green(), normal.blue()),
+            (accent.red(), accent.green(), accent.blue()))))
         # 扇区不再是纯色片：主光在左上，中心提亮、外缘压暗，才有起鼓的曲面感。
         face = QRadialGradient(center + QPointF(-30, -40), 260)
         lit = base.lighter(122)
-        lit.setAlpha(235 if selected else 225 if label else 100)
+        lit.setAlpha(round((225 if label else 100) * (1 - strength) + 235 * strength))
         shade = base.darker(135)
-        shade.setAlpha(175 if selected else 200 if label else 90)
+        shade.setAlpha(round((200 if label else 90) * (1 - strength) + 175 * strength))
         face.setColorAt(0.0, lit)
         face.setColorAt(1.0, shade)
         painter.setBrush(face)

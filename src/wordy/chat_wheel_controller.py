@@ -106,7 +106,7 @@ class ChatWheelController(QObject):
 
     def _open(self, hotkey: str = "") -> None:
         # 当前显示内容与松键播放目标必须一致，按住期间忽略另一轮盘热键。
-        if self._stopped or self.wheel.isVisible():
+        if self._stopped or self.wheel.is_active():
             return
         index = 0
         if hotkey:

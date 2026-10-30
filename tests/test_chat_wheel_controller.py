@@ -287,3 +287,21 @@ def test_audio_slot_passes_its_own_wheel_volume_to_playback(qapp, tmp_path):
     controller.play_slot(0, 1)
     assert playback.call_args.args[3] == 1.5
     controller.stop()
+
+
+def test_controller_accepts_new_hotkey_during_visual_fade(qapp, tmp_path):
+    settings = AppSettings.load(config_file=tmp_path / "fade.toml")
+    settings.add_wheel("f9")
+    controller = ChatWheelController(settings, MagicMock(), MagicMock())
+    try:
+        controller._open("f8")
+        controller.wheel._fade.setCurrentTime(120)
+        controller.wheel.dismiss()
+        assert controller.wheel.isVisible()
+        controller._open("f9")
+        assert controller._active_wheel == 1
+        assert controller.wheel.is_active()
+        controller.wheel._fade.setCurrentTime(120)
+        assert controller.wheel.is_active()
+    finally:
+        controller.stop()

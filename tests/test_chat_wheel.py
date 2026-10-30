@@ -30,7 +30,7 @@ def test_release_plays_selected_slot_and_hides(qapp, monkeypatch):
     monkeypatch.setattr(chat_wheel, "_key_down", lambda _: False)
     wheel._poll()
     assert selected == [2]
-    assert not wheel.isVisible()
+    assert not wheel.is_active()
     assert not wheel._timer.isActive()
 
 
@@ -45,7 +45,7 @@ def test_empty_slot_and_center_cancel(qapp, monkeypatch, labels, point):
     monkeypatch.setattr(chat_wheel, "_key_down", lambda _: False)
     wheel._poll()
     assert selected == []
-    assert not wheel.isVisible()
+    assert not wheel.is_active()
 
 
 @pytest.mark.parametrize("cancel_key", [0x1B, 0x02])
@@ -56,7 +56,7 @@ def test_global_escape_and_right_button_cancel(qapp, monkeypatch, cancel_key):
     monkeypatch.setattr(chat_wheel, "_key_down", lambda key: key == cancel_key)
     wheel._poll()
     assert selected == []
-    assert not wheel.isVisible()
+    assert not wheel.is_active()
 
 
 def test_wheel_preserves_game_focus_and_normalizes_slots(qapp):
@@ -91,7 +91,7 @@ def test_stationary_cursor_at_screen_edge_never_selects(qapp, monkeypatch):
     wheel.open_wheel(["Audio"] * 8, 0x56)
     wheel._poll()
     assert selected == []
-    assert not wheel.isVisible()
+    assert not wheel.is_active()
 
 
 @pytest.mark.parametrize("origin", [QPoint(30, 40), QPoint(-1800, 900), QPoint(3500, -200)])
@@ -129,7 +129,7 @@ def test_mouse_move_uses_global_anchor_but_click_uses_visible_sector(qapp, monke
                        Qt.MouseButton.LeftButton, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier)
     wheel.mousePressEvent(click)
     assert selected == [4]
-    assert not wheel.isVisible()
+    assert not wheel.is_active()
 
 
 @pytest.mark.parametrize("origin", [QPoint(20, 20), QPoint(520, 20), QPoint(20, 520), QPoint(520, 520)])

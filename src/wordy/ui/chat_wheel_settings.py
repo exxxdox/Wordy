@@ -27,7 +27,7 @@ from wordy.audio.recorder import MAX_RECORD_SECONDS, RecordingError, SystemAudio
 from wordy.config import AppSettings, WHEEL_NAME_MAX_LENGTH
 from wordy.ui.audio_trim_dialog import AudioTrimDialog
 from wordy.ui.status_toast import show_status_toast
-from wordy.ui.wheel_paint import paint_wheel
+from wordy.ui.wheel_paint import WheelHover, paint_wheel
 from wordy.ui.theme import (
     GREEN_ACCENT, TEXT_ERROR, TEXT_MUTED, TEXT_PRIMARY,
     SURFACE_BG,
@@ -69,6 +69,7 @@ class _WheelPicker(QWidget):
         super().__init__()
         self._on_select = on_select
         self._hovered_index: int | None = None
+        self._hover_animation = WheelHover(self)
         self.setFixedSize(400, 400)
         self.setMouseTracking(True)
         self.buttons: list[QPushButton] = []
@@ -145,7 +146,9 @@ class _WheelPicker(QWidget):
         focused = next((i for i, button in enumerate(self.buttons) if button.hasFocus()), None)
         checked = next((i for i, button in enumerate(self.buttons) if button.isChecked()), None)
         selected = focused if focused is not None else self._hovered_index
-        paint_wheel(painter, labels, selected if selected is not None else checked, editing=True)
+        selected = selected if selected is not None else checked
+        self._hover_animation.select(selected)
+        paint_wheel(painter, labels, selected, editing=True, highlights=self._hover_animation.values)
         painter.end()
 
 
