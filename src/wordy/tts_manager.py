@@ -335,8 +335,9 @@ class TTSManager:
               on_error: Callable[[str], None] | None = None) -> None:
         """提交文本到串行执行器生成并播放。
 
-        ``on_finished`` 在朗读结束（含早退、失败）后调用一次。引擎没有取消钩子，
-        所以这里只报完成，不提供中断。
+        ``on_finished`` 在朗读结束（含早退、失败、被取消）后调用一次。
+        朗读与本地音频共用串行 worker：新朗读先停掉正在播的片段，否则要整段
+        播完才轮到文字（音频槽开播同样会先停朗读，见 ``ChatWheelController``）。
         """
         if not text.strip():
             logger.warning("提交文本为空，已忽略。")
@@ -346,6 +347,8 @@ class TTSManager:
             logger.error("缺少音色配置，请先打开设置，刷新音色列表并选择一个音色。")
             self._notify_finished(on_finished)
             return
+        # 文字也要能打断音频槽：不先停片段，新朗读会排队等它整段播完。
+        self.stop_audio_file()
         # 提交时绑定引擎和 executor，服务商切换后待播文本也不会串到新 worker。
         job = _SpeechJob(text, self.engine, self._executor, self._worker_ready,
                          self.tts_backend, on_finished, on_error)

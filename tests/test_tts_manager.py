@@ -136,6 +136,19 @@ def test_stop_speech_drops_pending_text(manager, mock_engine):
     assert manager.executor.submit.call_count == 1
 
 
+def test_speech_interrupts_playing_audio_clip(manager, mock_player):
+    """文字与音频共用串行 worker：新朗读必须先停掉正在播的片段，否则排队等整段。"""
+    manager.play_audio_file(Path("clip.wav"))
+    _operation, *args = manager.executor.submit.call_args.args
+    clip_cancel = args[-2]
+    assert not clip_cancel.is_set()
+
+    manager.speak("马上到")
+
+    assert clip_cancel.is_set()
+    manager.shutdown()
+
+
 def test_audio_file_reports_finish_on_success_and_failure(manager, mock_player, mock_engine):
     """播完和播放失败都要回调，否则设置页的「停止」按钮会一直挂着。"""
     finished = MagicMock()
@@ -198,6 +211,7 @@ def test_queued_text_keeps_engine_selected_at_submission():
     manager._speech_running = False
     manager._pending_speech = None
     manager._speech_cancel = None
+    manager._clip_cancel = None
     old, new = MagicMock(), MagicMock()
     manager.engine = old
     manager.speak("queued text")
