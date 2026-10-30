@@ -7,11 +7,11 @@ from __future__ import annotations
 
 from typing import Callable
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtGui import QFont, QFontDatabase, QIcon
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFontComboBox, QFrame, QHBoxLayout, QLabel,
-    QLineEdit, QPushButton, QScrollArea, QSlider, QStyle, QTabWidget, QVBoxLayout,
+    QLineEdit, QPushButton, QScrollArea, QSizePolicy, QSlider, QStyle, QTabWidget, QVBoxLayout,
     QWidget,
 )
 
@@ -73,6 +73,21 @@ def _font_is_usable(family: str) -> bool:
     中，但 DirectWrite 建不出字面，Qt 会一路失败并刷日志——选它等于没选。
     """
     return bool(family) and QFontDatabase.isSmoothlyScalable(family)
+
+
+class _HintLabel(QLabel):
+    """固定宽表单中的说明以实际换行高度为下限。"""
+
+    def setText(self, text: str) -> None:
+        super().setText(text)
+        self.setMinimumHeight(self.heightForWidth(self.width()))
+
+    def event(self, event: QEvent) -> bool:
+        result = super().event(event)
+        if event.type() in (QEvent.Type.Resize, QEvent.Type.FontChange, QEvent.Type.StyleChange):
+            # Qt 默认最小高度仅保留一行，收窄或换字体后必须重新保护全部文字。
+            self.setMinimumHeight(self.heightForWidth(self.width()))
+        return result
 
 
 class SettingsWindow:
@@ -346,6 +361,9 @@ class SettingsWindow:
         self._build_placeholder_section(input_column, s)
         self._add_inner_gap(input_column)
         self._build_volume_section(input_column, s)
+        # 日志等级属于本机显示偏好，与本地设置集中管理。
+        self._add_inner_gap(input_column)
+        self._build_log_level_section(input_column, s)
         self._build_ui_font_section(display_column, s)
         self._add_inner_gap(display_column)
         self._build_opacity_section(display_column, s)
@@ -400,22 +418,12 @@ class SettingsWindow:
         voice_column.addWidget(self._tts_provider_container)
         tts_layout.addStretch(1)
 
-        # 4. 日志
+        # 4. 聊天轮盘
         # 独立页保留八槽完整编辑空间，不挤占原有音频路由设置。
         wheel_layout = self._create_tab_page(tab_widget, "聊天轮盘")
         self.chat_wheel_panel = ChatWheelSettings(s, self.on_field_changed)
         wheel_layout.addWidget(self.chat_wheel_panel)
         wheel_layout.addStretch(1)
-
-        log_layout = self._create_tab_page(tab_widget, "日志")
-        # 日志只有一个选项，限制阅读宽度，不为填满屏幕增加无用内容。
-        log_form = QWidget()
-        log_form.setMaximumWidth(520)
-        log_form_layout = QVBoxLayout(log_form)
-        log_form_layout.setContentsMargins(0, 0, 0, 0)
-        self._build_log_level_section(log_form_layout, s)
-        log_layout.addWidget(log_form)
-        log_layout.addStretch(1)
 
         footer = QWidget()
         footer.setObjectName("settingsFooter")
@@ -583,6 +591,9 @@ class SettingsWindow:
 
     def _build_volume_section(self, parent_layout: QVBoxLayout, s: AppSettings) -> None:
         section = self._create_section(parent_layout)
+        form = section.parentWidget()
+        if form is not None:
+            form.setFixedWidth(300)
         header = QHBoxLayout()
         header.setContentsMargins(0, 0, 0, 0)
         header.addWidget(self._section_title("朗读音量"))
@@ -591,6 +602,7 @@ class SettingsWindow:
         header.addWidget(self.volume_value_label, 0, Qt.AlignmentFlag.AlignRight)
         section.addLayout(header)
         self.volume_slider = NoWheelSlider(Qt.Orientation.Horizontal)
+        self.volume_slider.setMaximumWidth(300)
         self.volume_slider.setRange(0, self._volume_to_slider(MAX_VOLUME))
         self.volume_slider.setSingleStep(1)
         self.volume_slider.setPageStep(max(1, int(0.25 / VOLUME_STEP)))
@@ -601,6 +613,9 @@ class SettingsWindow:
 
     def _build_opacity_section(self, parent_layout: QVBoxLayout, s: AppSettings) -> None:
         section = self._create_section(parent_layout)
+        form = section.parentWidget()
+        if form is not None:
+            form.setFixedWidth(300)
         header = QHBoxLayout()
         header.setContentsMargins(0, 0, 0, 0)
         # 此值是背景 alpha：百分比越低越透明，明确名称避免把 100% 理解为全透明。
@@ -610,6 +625,7 @@ class SettingsWindow:
         header.addWidget(self.opacity_value_label, 0, Qt.AlignmentFlag.AlignRight)
         section.addLayout(header)
         self.opacity_slider = NoWheelSlider(Qt.Orientation.Horizontal)
+        self.opacity_slider.setMaximumWidth(300)
         self.opacity_slider.setRange(0, self._opacity_to_slider(MAX_OVERLAY_OPACITY))
         self.opacity_slider.setSingleStep(1)
         self.opacity_slider.setPageStep(max(1, int(0.10 / OVERLAY_OPACITY_STEP)))
@@ -647,7 +663,7 @@ class SettingsWindow:
         if not state.vb_cable_installed:
             self.vb_cable_install_button = QPushButton("下载并安装 VB-CABLE")
             self.vb_cable_install_button.clicked.connect(self._on_open_vb_cable_download)
-            section.addWidget(self.vb_cable_install_button)
+            section.addWidget(self.vb_cable_install_button, 0, Qt.AlignmentFlag.AlignLeft)
 
         # 启用开关
         self.audio_route_enabled_check = CheckmarkCheckBox("启用音频侦听")
@@ -825,8 +841,9 @@ class SettingsWindow:
 
     def _build_log_level_section(self, parent_layout: QVBoxLayout, s: AppSettings) -> None:
         section = self._create_section(parent_layout)
-        section.addWidget(self._section_title("显示等级"))
+        section.addWidget(self._section_title("日志等级"))
         self.log_level_combo = NoWheelComboBox()
+        self.log_level_combo.setMaximumWidth(220)
         self.log_level_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContentsOnFirstShow)
         self.log_level_combo.setMinimumContentsLength(24)
         self.log_level_combo.view().setTextElideMode(Qt.TextElideMode.ElideRight)
@@ -1031,10 +1048,13 @@ class SettingsWindow:
         return columns[0], columns[1]
 
     def _create_section(self, parent_layout: QVBoxLayout) -> QVBoxLayout:
-        section = QVBoxLayout()
+        # 宽屏保留列间留白，表单以阅读宽度呈现，不随列宽无限拉伸。
+        form = QWidget()
+        form.setFixedWidth(340)
+        section = QVBoxLayout(form)
         section.setContentsMargins(0, 0, 0, 0)
         section.setSpacing(10)
-        parent_layout.addLayout(section)
+        parent_layout.addWidget(form, 0, Qt.AlignmentFlag.AlignLeft)
         return section
 
     def _create_tab_page(self, tab_widget: QTabWidget, title: str) -> QVBoxLayout:
@@ -1054,7 +1074,6 @@ class SettingsWindow:
             "音频侦听": ("声音与路由", "选择播放设备，控制侦听与返听。"),
             "TTS 设置": ("语音生成", "选择服务商，配置密钥与音色。"),
             "聊天轮盘": ("音频轮盘", "选择八个音频，用全局快捷键随时播放。"),
-            "日志": ("运行日志", "调整日志详细程度，便于排查问题。"),
         }
         heading, description = page_titles[title]
         heading_label = QLabel(heading)
@@ -1082,11 +1101,14 @@ class SettingsWindow:
         return label
 
     def _hint_label(self, text: str, color: str) -> QLabel:
-        label = QLabel(text)
+        label = _HintLabel(text)
         label.setObjectName("hintLabel")
         label.setProperty("textColor", color)
         label.setStyleSheet(f"color: {color};")
         label.setWordWrap(True)
+        # 说明文字不能被布局压到单行高度，否则窄表单中的换行内容会被截断。
+        label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+        label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         return label
 
     def _set_label(self, label: QLabel, text: str, color: str) -> None:

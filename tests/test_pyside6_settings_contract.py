@@ -588,9 +588,12 @@ def test_settings_compact_width_keeps_navigation_and_forms_visible(monkeypatch: 
         assert tabs is not None
         bar = tabs.tabBar()
         assert not bar.expanding()
-        # 新增轮盘页后日志索引会变化，按标题验证短标签而非绑定固定索引。
-        log_index = next(i for i in range(tabs.count()) if tabs.tabText(i) == "日志")
-        assert bar.tabRect(log_index).width() < bar.tabRect(0).width()
+        assert [tabs.tabText(i) for i in range(tabs.count())] == [
+            "本地设置", "音频侦听", "TTS 设置", "聊天轮盘",
+        ]
+        local_page = tabs.widget(0)
+        assert local_page is not None
+        assert local_page.isAncestorOf(settings.log_level_combo)
         # 默认宽屏下所有页面完整展示；服务商切换不得撑出纵向滚动。
         for provider in ("Cartesia", "Volcengine"):
             settings.tts_api_combo.setCurrentText(provider)
@@ -662,11 +665,17 @@ def test_local_setting_headers_share_the_same_right_edge(monkeypatch: pytest.Mon
     try:
         _dialog(window).show()
         app.processEvents()
-        # 同列的操作和值右对齐；显示列独立使用右侧空间。
-        assert window.record_button.geometry().right() == window.volume_value_label.geometry().right()
-        assert window.opacity_value_label.geometry().right() > window.volume_value_label.geometry().right()
-        assert window.opacity_slider.geometry().left() == window.ui_font_combo.geometry().left()
-        assert window.opacity_slider.geometry().left() > window.volume_slider.geometry().right()
+        # 控件按阅读宽度收紧，跨分组的位置统一映射到窗口坐标比较。
+        dialog = _dialog(window)
+        volume_position = window.volume_slider.mapTo(dialog, window.volume_slider.rect().topLeft())
+        opacity_position = window.opacity_slider.mapTo(dialog, window.opacity_slider.rect().topLeft())
+        font_position = window.ui_font_combo.mapTo(dialog, window.ui_font_combo.rect().topLeft())
+        assert opacity_position.x() == font_position.x()
+        assert opacity_position.x() > volume_position.x() + window.volume_slider.width()
+        assert window.volume_slider.width() <= 300
+        assert window.opacity_slider.width() <= 300
+        assert window.ui_font_combo.width() <= 340
+        assert window.placeholder_input.width() <= 340
     finally:
         window.close()
 
@@ -1003,5 +1012,28 @@ def test_settings_window_output_devices_error_displays_warning_status_and_only_d
         assert TEXT_WARNING in stylesheet, (
             f"audio output status label must use TEXT_WARNING color, got {stylesheet!r}"
         )
+    finally:
+        window.close()
+
+
+def test_wrapped_setting_hints_fit_their_actual_width(monkeypatch):
+    from PySide6.QtWidgets import QLabel, QTabWidget
+    app, window = _new_settings_window(monkeypatch)
+    try:
+        dialog = _dialog(window)
+        dialog.show()
+        tabs = dialog.findChild(QTabWidget, "settingsTabs")
+        assert tabs is not None
+        # 长字体反馈也必须换行，不挤压到下一个设置分组。
+        window._set_label(window.ui_font_hint, "当前字体不可用，将使用内置字体。" * 4, "#999999")
+        for index in (0, 1, 2):
+            tabs.setCurrentIndex(index)
+            app.processEvents()
+            app.processEvents()
+            page = tabs.widget(index)
+            assert page is not None
+            for label in page.findChildren(QLabel):
+                if label.isVisible() and label.wordWrap():
+                    assert label.height() >= label.heightForWidth(label.width()), label.text()
     finally:
         window.close()

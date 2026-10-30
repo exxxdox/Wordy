@@ -278,11 +278,11 @@ def test_wheel_selects_slot_and_shows_only_its_editor(qapp):
 def test_wheel_sector_hit_test_matches_runtime_directions(qapp):
     panel = ChatWheelSettings(AppSettings(), Mock())
 
-    assert panel.wheel_picker._slot_at(QPoint(170, 40)) == 0
-    assert panel.wheel_picker._slot_at(QPoint(300, 170)) == 2
-    assert panel.wheel_picker._slot_at(QPoint(170, 300)) == 4
-    assert panel.wheel_picker._slot_at(QPoint(40, 170)) == 6
-    assert panel.wheel_picker._slot_at(QPoint(170, 170)) is None
+    assert panel.wheel_picker._slot_at(QPoint(200, 50)) == 0
+    assert panel.wheel_picker._slot_at(QPoint(350, 200)) == 2
+    assert panel.wheel_picker._slot_at(QPoint(200, 350)) == 4
+    assert panel.wheel_picker._slot_at(QPoint(50, 200)) == 6
+    assert panel.wheel_picker._slot_at(QPoint(200, 200)) is None
 
 
 def test_selected_sector_survives_mouse_leaving(qapp):
@@ -290,7 +290,7 @@ def test_selected_sector_survives_mouse_leaving(qapp):
     panel.show()
     qapp.processEvents()
 
-    QTest.mouseClick(panel.wheel_picker, Qt.MouseButton.LeftButton, pos=QPoint(300, 170))
+    QTest.mouseClick(panel.wheel_picker, Qt.MouseButton.LeftButton, pos=QPoint(350, 200))
     QTest.mouseMove(panel.label_input, QPoint(4, 4))
     qapp.processEvents()
 
@@ -956,8 +956,8 @@ def test_picker_uses_shared_wheel_painter(qapp, monkeypatch):
     picker._hovered_index = 0
     picker.grab()
     assert calls[-1][1] == 0
-    assert picker.width() == picker.height() == 340
+    assert picker.width() == picker.height() == 400
     assert picker._slot_at(picker.buttons[0].geometry().center()) == 0
-    assert picker._slot_at(QPoint(170, 119)) == 0
-    assert picker._slot_at(QPoint(170, 121)) is None
+    assert picker._slot_at(QPoint(200, 140)) == 0
+    assert picker._slot_at(QPoint(200, 142)) is None
     picker.close()

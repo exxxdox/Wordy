@@ -135,6 +135,7 @@ class CartesiaPanel(_BasePanel):
         # 音色与刷新按钮同行；按有限字符宽度布局，长名称留在下拉列表中完整查看。
         self.voice_combo.setSizeAdjustPolicy(NoWheelComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         self.voice_combo.setMinimumContentsLength(16)
+        self.voice_combo.setMaximumWidth(320)
         self.voice_combo.currentTextChanged.connect(self._on_voice_selected)
         voice_row.addWidget(self.voice_combo, 1)
         self.refresh_btn = QPushButton("刷新音色列表")
@@ -304,6 +305,7 @@ class VolcenginePanel(_BasePanel):
             NoWheelComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
         )
         self.voice_combo.setMinimumContentsLength(16)
+        self.voice_combo.setMaximumWidth(320)
         self.voice_combo.currentTextChanged.connect(self._on_voice_selected)
         current_row.addWidget(self.voice_combo, 1)
         self.remove_voice_btn = QPushButton("删除当前")

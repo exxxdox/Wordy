@@ -69,7 +69,7 @@ class _WheelPicker(QWidget):
         super().__init__()
         self._on_select = on_select
         self._hovered_index: int | None = None
-        self.setFixedSize(340, 340)
+        self.setFixedSize(400, 400)
         self.setMouseTracking(True)
         self.buttons: list[QPushButton] = []
         for index in range(8):
@@ -82,9 +82,9 @@ class _WheelPicker(QWidget):
             button.setFixedSize(88, 44)
             # 焦点按钮跟随放大后的槽位中心，确保键盘导航滚动到正确位置。
             angle = math.radians(90 - index * 45)
-            radius = 158 * 340 / 540
-            button.move(round(170 + radius * math.cos(angle) - 44),
-                        round(170 - radius * math.sin(angle) - 22))
+            radius = 158 * 400 / 540
+            button.move(round(200 + radius * math.cos(angle) - 44),
+                        round(200 - radius * math.sin(angle) - 22))
             button.clicked.connect(lambda _checked=False, i=index: on_select(i))
             button.installEventFilter(self)
             self.buttons.append(button)
@@ -107,10 +107,10 @@ class _WheelPicker(QWidget):
 
     @staticmethod
     def _slot_at(point: QPoint) -> int | None:
-        dx, dy = point.x() - 170, point.y() - 170
+        dx, dy = point.x() - 200, point.y() - 200
         distance = math.hypot(dx, dy)
         # 命中范围跟随共享盘体的 80/232 半径及缩放比例。
-        if distance < 80 * 340 / 540 or distance > 232 * 340 / 540:
+        if distance < 80 * 400 / 540 or distance > 232 * 400 / 540:
             return None
         angle = math.degrees(math.atan2(dx, -dy)) % 360
         return int((angle + 22.5) % 360 // 45)
@@ -139,7 +139,7 @@ class _WheelPicker(QWidget):
     def paintEvent(self, _event: QPaintEvent) -> None:
         painter = QPainter(self)
         # 与运行轮盘共用盘体，缩放到设置页；编辑交互仍由透明按钮承接。
-        painter.scale(340 / 540, 340 / 540)
+        painter.scale(400 / 540, 400 / 540)
         labels = [button.text().split("\n", 1)[-1] for button in self.buttons]
         labels = ["" if label == "未设置" else label for label in labels]
         focused = next((i for i, button in enumerate(self.buttons) if button.hasFocus()), None)
@@ -200,20 +200,23 @@ class ChatWheelSettings(QWidget):
             edit.setMaxLength(WHEEL_NAME_MAX_LENGTH)
             edit.editingFinished.connect(self._rename_wheel)
         self.wheel_combo.currentIndexChanged.connect(self._select_wheel)
-        hotkey_row.addWidget(self.wheel_combo, 1)
+        self.wheel_combo.setFixedWidth(220)
+        hotkey_row.addWidget(self.wheel_combo)
         self.hotkey_input = QKeySequenceEdit(QKeySequence(settings.chat_wheel_hotkey))
         self.hotkey_input.setMaximumSequenceLength(1)
         self.hotkey_input.setAccessibleName("轮盘全局快捷键")
         # 与其他设置页一样自动保存：编辑结束（按键组合完成或失焦）即提交。
         self.hotkey_input.editingFinished.connect(self._apply_hotkey)
         hotkey_row.addWidget(QLabel("快捷键"))
-        hotkey_row.addWidget(self.hotkey_input, 1)
+        self.hotkey_input.setFixedWidth(160)
+        hotkey_row.addWidget(self.hotkey_input)
         self.add_wheel_button = QPushButton("新增")
         self.add_wheel_button.clicked.connect(self._add_wheel)
         hotkey_row.addWidget(self.add_wheel_button)
         self.remove_wheel_button = QPushButton("删除")
         self.remove_wheel_button.clicked.connect(self._remove_wheel)
         hotkey_row.addWidget(self.remove_wheel_button)
+        hotkey_row.addStretch(1)
         layout.addLayout(hotkey_row)
 
         self.wheel_picker = _WheelPicker(self._select_slot)
@@ -239,6 +242,7 @@ class ChatWheelSettings(QWidget):
         self.volume_slider = QSlider(Qt.Orientation.Horizontal)
         self.volume_slider.setRange(0, 200)
         self.volume_slider.setMinimumWidth(120)
+        self.volume_slider.setMaximumWidth(280)
         self.volume_slider.setToolTip("音量（下次播放生效）")
         self.volume_slider.valueChanged.connect(self._volume_changed)
         self.volume_slider.sliderReleased.connect(self._save_volume)
@@ -246,16 +250,19 @@ class ChatWheelSettings(QWidget):
         self.volume_value_label = QLabel("100%")
         self.volume_value_label.setMinimumWidth(42)
         editor_row.addWidget(self.volume_value_label)
+        editor_row.addStretch(1)
         editor_layout.addSpacing(4)
         editor_layout.addLayout(editor_row)
         editor_layout.addWidget(QLabel("名称"))
         self.label_input = QLineEdit()
+        self.label_input.setMaximumWidth(340)
         self.label_input.setPlaceholderText("名称")
         self.label_input.setMaxLength(40)
         self.label_input.editingFinished.connect(self._save_label)
         editor_layout.addWidget(self.label_input)
         editor_layout.addWidget(QLabel("朗读文字"))
         self.text_input = QLineEdit()
+        self.text_input.setMaximumWidth(520)
         self.text_input.setPlaceholderText("或输入要朗读的文字")
         # 朗读走单 worker 执行器且无法打断，太长会卡住后续播放与轮盘。
         self.text_input.setMaxLength(200)
@@ -266,7 +273,7 @@ class ChatWheelSettings(QWidget):
         action_row.setSpacing(8)
         self.choose_button = QPushButton("导入")
         self.choose_button.clicked.connect(lambda: self._choose_file(self.selected_index))
-        action_row.addWidget(self.choose_button, 1)
+        action_row.addWidget(self.choose_button)
         # 动作按钮保持同一行，便于在选槽后直接操作。
         self.record_button = QPushButton("录制")
         self.record_button.setIconSize(QSize(14, 14))
@@ -285,6 +292,7 @@ class ChatWheelSettings(QWidget):
         self.clear_button.clicked.connect(
             lambda: self._replace_clip(self.selected_index, "", ""))
         action_row.addWidget(self.clear_button)
+        action_row.addStretch(1)
         editor_layout.addLayout(action_row)
         # 压缩音频解码期间用不确定进度条表态；平时隐藏，不占纵向空间。
         self.decode_bar = QProgressBar()
