@@ -41,6 +41,7 @@ from wordy.constants import (
 
 _USER_CONFIG_FILE: Path = config_directory() / "config.toml"
 USER_CONFIG_FILE: Path = _USER_CONFIG_FILE  # 测试 monkeypatch 使用
+CHAT_WHEEL_STYLES = ("classic", "glass", "petals")
 
 # load() 缓存：同一配置文件多次调用复用同一实例，避免重复磁盘 I/O
 _cached_settings: AppSettings | None = None
@@ -168,6 +169,8 @@ class AppSettings:
     # 首盘的自定义名称；空字段回退显示「轮盘 1」。
     chat_wheel_name: str = ""
     chat_wheel_hotkey: str = "f8"
+    # 全部轮盘共用外观；缺省保留原有样式，不因升级改变用户视觉习惯。
+    chat_wheel_style: str = "classic"
     chat_wheel_slots: list[str] = field(default_factory=lambda: [""] * 8)
     chat_wheel_labels: list[str] = field(default_factory=lambda: [""] * 8)
     # 与文件名互斥：非空则选中该槽时用当前 TTS 朗读这段文字，而不是播放音频。
@@ -423,6 +426,8 @@ class AppSettings:
         from wordy.hotkey.native import parse_hotkey
         # 自定义名称：空串是合法值（回退「轮盘 N」），不能用非空校验滤掉。
         _apply_if_present(raw, "chat_wheel_name", settings, _parse_wheel_name)
+        # 读取与直接赋值共用 __setattr__ 校验，未知或损坏的样式回退原有外观。
+        setattr(settings, "chat_wheel_style", raw.get("chat_wheel_style", "classic"))
         wheel_hotkey = raw.get("chat_wheel_hotkey")
         if isinstance(wheel_hotkey, str):
             try:
@@ -500,6 +505,8 @@ class AppSettings:
         if name.startswith("_"):
             object.__setattr__(self, name, value)
             return
+        if name == "chat_wheel_style" and (not isinstance(value, str) or value not in CHAT_WHEEL_STYLES):
+            value = "classic"
         # float 范围字段：clamp
         if name in self._CLAMP_RANGES and isinstance(value, (int, float)):
             lo, hi = self._CLAMP_RANGES[name]

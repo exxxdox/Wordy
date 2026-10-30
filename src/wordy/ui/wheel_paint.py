@@ -65,7 +65,153 @@ def _paint_wheel_shadow(painter: QPainter, disc: QPainterPath) -> None:
 
 
 def paint_wheel(painter: QPainter, labels: list[str], selected_index: int | None,
-                *, editing: bool = False, highlights: list[float] | None = None) -> None:
+                *, editing: bool = False, highlights: list[float] | None = None,
+                style: str = "classic") -> None:
+    """预览与运行时统一分派；旧配置和未知样式保持经典外观。"""
+    if style in ("glass", "petals"):
+        _paint_modern_wheel(painter, labels, selected_index, editing=editing,
+                            highlights=highlights, petals=style == "petals")
+    else:
+        _paint_classic_wheel(painter, labels, selected_index, editing=editing, highlights=highlights)
+
+
+def _modern_sector(index: int, petals: bool) -> QPainterPath:
+    """圆角与缝隙只改变轮廓，八向命中仍由原有轮盘交互负责。"""
+    center = QPointF(270, 270)
+    start, end = 112.5 - index * 45, 67.5 - index * 45
+    outer_radius, inner_radius = (242, 88) if petals else (246, 80)
+    outer = QRectF(270 - outer_radius, 270 - outer_radius, outer_radius * 2, outer_radius * 2)
+    inner = QRectF(270 - inner_radius, 270 - inner_radius, inner_radius * 2, inner_radius * 2)
+
+    def point(radius: float, angle: float) -> QPointF:
+        radians = math.radians(angle)
+        return center + QPointF(radius * math.cos(radians), -radius * math.sin(radians))
+
+    path = QPainterPath()
+    if not petals:
+        path.arcMoveTo(outer, start)
+        path.arcTo(outer, start, -45)
+        path.lineTo(point(inner_radius, end))
+        path.arcTo(inner, end, 45)
+    else:
+        # 径向两端分别留近似 3px 缝隙，再用二次曲线收圆四角。
+        outer_gap, inner_gap = 0.7, 1.9
+        outer_corner, inner_corner = 1.9, 5.2
+        path.arcMoveTo(outer, start - outer_gap - outer_corner)
+        path.arcTo(outer, start - outer_gap - outer_corner, -45 + 2 * (outer_gap + outer_corner))
+        path.quadTo(point(outer_radius, end + outer_gap), point(outer_radius - 8, end + outer_gap))
+        path.lineTo(point(inner_radius + 8, end + inner_gap))
+        path.quadTo(point(inner_radius, end + inner_gap), point(inner_radius, end + inner_gap + inner_corner))
+        path.arcTo(inner, end + inner_gap + inner_corner, 45 - 2 * (inner_gap + inner_corner))
+        path.quadTo(point(inner_radius, start - inner_gap), point(inner_radius + 8, start - inner_gap))
+        path.lineTo(point(outer_radius - 8, start - outer_gap))
+        path.quadTo(point(outer_radius, start - outer_gap), point(outer_radius, start - outer_gap - outer_corner))
+    path.closeSubpath()
+    return path
+
+
+def _paint_modern_wheel(painter: QPainter, labels: list[str], selected_index: int | None,
+                        *, editing: bool, highlights: list[float] | None, petals: bool) -> None:
+    """轻薄整盘与独立花瓣共用字级、中心反馈和高亮动画。"""
+    painter.save()
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    center = QPointF(270, 270)
+    disc = QPainterPath()
+    disc.addEllipse(QRectF(24, 24, 492, 492))
+    _paint_wheel_shadow(painter, disc)
+    accent = QColor(GREEN_ACCENT)
+    if not petals:
+        # 轻薄玻璃靠微弱外缘建立整体轮廓，不沿用经典样式的厚外环。
+        base = QLinearGradient(QPointF(100, 24), QPointF(430, 516))
+        base.setColorAt(0, QColor(46, 48, 53, 230))
+        base.setColorAt(1, QColor(28, 29, 33, 235))
+        painter.setPen(QPen(QColor(255, 255, 255, 65), 1))
+        painter.setBrush(base)
+        painter.drawPath(disc)
+
+    for index, label in enumerate(labels):
+        selected = index == selected_index and (bool(label) or editing)
+        strength = highlights[index] if highlights is not None else float(selected)
+        path = _modern_sector(index, petals)
+        normal = QColor(39, 40, 44)
+        # 整盘保留克制的蓝色透染；花瓣用更清晰的独立蓝面交代选中。
+        mix = strength * (1.0 if petals else 0.38)
+        color = QColor(*(round(a + (b - a) * mix) for a, b in zip(
+            (normal.red(), normal.green(), normal.blue()),
+            (accent.red(), accent.green(), accent.blue()))))
+        # 左上柔光穿过整盘；花瓣选中时保留原蓝，避免提亮成粉蓝色。
+        face = QRadialGradient(QPointF(170, 140), 460)
+        top = color.lighter(round(155 - (45 if petals else 0) * strength))
+        bottom = color.darker(120)
+        alpha = 240 if label or editing else 185
+        top.setAlpha(alpha)
+        bottom.setAlpha(alpha)
+        face.setColorAt(0, top)
+        face.setColorAt(1, bottom)
+        edge = QColor(255, 255, 255, 45 if label else 22)
+        if strength > 0:
+            edge = QColor(80, 170, 255, round(45 + 130 * strength))
+        painter.setPen(QPen(edge, 1.3 if petals else 0.8))
+        painter.setBrush(face)
+        painter.drawPath(path)
+        radians = math.radians(90 - index * 45)
+        text_center = center + QPointF(164 * math.cos(radians), -164 * math.sin(radians))
+        font = QFont("Segoe UI")
+        font.setPixelSize(17 if editing else 13)
+        painter.setFont(font)
+        glass.paint_lifted_text(painter, QRectF(text_center.x() - 54, text_center.y() - 28, 108, 20),
+                                Qt.AlignmentFlag.AlignCenter, f"0{index + 1}",
+                                QColor(TEXT_PRIMARY) if selected else QColor(TEXT_MUTED))
+        font = QFont("Microsoft YaHei UI")
+        font.setPixelSize(25 if editing else 19)
+        font.setWeight(QFont.Weight.DemiBold)
+        painter.setFont(font)
+        text = painter.fontMetrics().elidedText(label or "—", Qt.TextElideMode.ElideRight, 124)
+        glass.paint_lifted_text(painter, QRectF(text_center.x() - 64, text_center.y() - 4, 128, 34),
+                                Qt.AlignmentFlag.AlignCenter, text,
+                                QColor(TEXT_PRIMARY) if label or selected else QColor(TEXT_MUTED))
+
+    # 方向弧跟随同一份动画强度，不在换槽时突然跳亮。
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    for index in range(len(labels)):
+        strength = highlights[index] if highlights is not None else float(
+            index == selected_index and (bool(labels[index]) or editing))
+        if strength > 0:
+            painter.setPen(QPen(tint(GREEN_ACCENT, round(255 * strength)), 4,
+                                Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+            painter.drawArc(QRectF(27, 27, 486, 486),
+                            int((90 - index * 45 - 14) * 16), 28 * 16)
+
+    hub = QRadialGradient(QPointF(248, 240), 110)
+    hub.setColorAt(0, QColor(42, 43, 47, 250))
+    hub.setColorAt(1, QColor(24, 25, 29, 250))
+    painter.setBrush(hub)
+    painter.setPen(QPen(QColor(255, 255, 255, 65), 1.2))
+    painter.drawEllipse(QRectF(194, 194, 152, 152))
+    title = labels[selected_index] if selected_index is not None and labels[selected_index] else ""
+    font = QFont("Microsoft YaHei UI")
+    font.setPixelSize(25 if editing else 19)
+    font.setWeight(QFont.Weight.DemiBold)
+    painter.setFont(font)
+    metrics = painter.fontMetrics()
+    split = 0
+    while split < len(title) and metrics.horizontalAdvance(title[:split + 1]) <= 116:
+        split += 1
+    lines = [title] if split == len(title) else [title[:split], metrics.elidedText(
+        title[split:], Qt.TextElideMode.ElideRight, 116)]
+    for row, text in enumerate(lines):
+        glass.paint_lifted_text(painter, QRectF(210, 230 + row * 24 if len(lines) > 1 else 243, 120, 26),
+                                Qt.AlignmentFlag.AlignCenter, text, QColor(TEXT_PRIMARY))
+    font.setPixelSize(17 if editing else 13)
+    font.setWeight(QFont.Weight.Normal)
+    painter.setFont(font)
+    glass.paint_lifted_text(painter, QRectF(205, 286, 130, 23), Qt.AlignmentFlag.AlignCenter,
+                            "点击编辑" if editing else "松开播放" if title else "移回取消", QColor(TEXT_MUTED))
+    painter.restore()
+
+
+def _paint_classic_wheel(painter: QPainter, labels: list[str], selected_index: int | None,
+                          *, editing: bool = False, highlights: list[float] | None = None) -> None:
     """统一盘体样式；缩略图仅提高字级并使用编辑提示。"""
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
     center = QPointF(270, 270)

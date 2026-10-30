@@ -24,9 +24,10 @@ from wordy.audio.clips import (
     AUDIO_EXTENSIONS, decoded_audio_clip, import_audio_clip, remove_audio_clip, resolve_audio_clip,
 )
 from wordy.audio.recorder import MAX_RECORD_SECONDS, RecordingError, SystemAudioRecorder
-from wordy.config import AppSettings, WHEEL_NAME_MAX_LENGTH
+from wordy.config import AppSettings, CHAT_WHEEL_STYLES, WHEEL_NAME_MAX_LENGTH
 from wordy.ui.audio_trim_dialog import AudioTrimDialog
 from wordy.ui.status_toast import show_status_toast
+from wordy.ui.settings_widgets import NoWheelComboBox
 from wordy.ui.wheel_paint import WheelHover, paint_wheel
 from wordy.ui.theme import (
     GREEN_ACCENT, TEXT_ERROR, TEXT_MUTED, TEXT_PRIMARY,
@@ -72,6 +73,7 @@ class _WheelPicker(QWidget):
         self._on_select = on_select
         self._hovered_index: int | None = None
         self._hover_animation = WheelHover(self)
+        self.wheel_style = "classic"
         self.setFixedSize(400, 400)
         self.setMouseTracking(True)
         self.buttons: list[QPushButton] = []
@@ -150,7 +152,8 @@ class _WheelPicker(QWidget):
         selected = focused if focused is not None else self._hovered_index
         selected = selected if selected is not None else checked
         self._hover_animation.select(selected)
-        paint_wheel(painter, labels, selected, editing=True, highlights=self._hover_animation.values)
+        paint_wheel(painter, labels, selected, editing=True, highlights=self._hover_animation.values,
+                    style=self.wheel_style)
         painter.end()
 
 
@@ -222,9 +225,21 @@ class ChatWheelSettings(QWidget):
         self.remove_wheel_button.clicked.connect(self._remove_wheel)
         hotkey_row.addWidget(self.remove_wheel_button)
         hotkey_row.addStretch(1)
+        hotkey_row.addWidget(QLabel("样式"))
+        self.style_combo = NoWheelComboBox()
+        self.style_combo.setAccessibleName("轮盘样式")
+        self.style_combo.setToolTip("所有轮盘共用此样式")
+        for style, title in zip(CHAT_WHEEL_STYLES, ("经典玻璃", "轻薄玻璃", "悬浮花瓣")):
+            self.style_combo.addItem(title, style)
+        self.style_combo.setFixedWidth(136)
+        self.style_combo.setCurrentIndex(self.style_combo.findData(settings.chat_wheel_style))
+        hotkey_row.addWidget(self.style_combo)
         layout.addLayout(hotkey_row)
 
         self.wheel_picker = _WheelPicker(self._select_slot)
+        self.wheel_picker.wheel_style = settings.chat_wheel_style
+        # 初始赋值后再监听，打开设置不会落盘；切换只改外观，不重建槽位控件。
+        self.style_combo.currentIndexChanged.connect(self._select_style)
         self.slot_buttons = self.wheel_picker.buttons
         # 预览保持运行轮盘的材质与比例，编辑区利用新增宽度独立呈现字段。
         body = QHBoxLayout()
@@ -345,6 +360,23 @@ class ChatWheelSettings(QWidget):
     def _wheel_title(self, index: int) -> str:
         """空名称回退「轮盘 N」，保证下拉框始终有可读标题。"""
         return self._settings.get_wheel(index)["name"] or f"轮盘 {index + 1}"
+
+    def _select_style(self, index: int) -> None:
+        style = self.style_combo.itemData(index)
+        if style not in CHAT_WHEEL_STYLES:
+            return
+        try:
+            # 先原子保存再换预览，失败时不能让显示与下次唤出的样式分叉。
+            self._settings.update(chat_wheel_style=style)
+        except Exception as error:
+            self.style_combo.blockSignals(True)
+            self.style_combo.setCurrentIndex(self.style_combo.findData(self._settings.chat_wheel_style))
+            self.style_combo.blockSignals(False)
+            self._status(f"保存失败：{error}", error=True)
+            return
+        self.wheel_picker.wheel_style = self._settings.chat_wheel_style
+        self.wheel_picker.update()
+        self._on_field_changed("chat_wheel_style", self._settings.chat_wheel_style)
 
     def _reload_wheels(self) -> None:
         self.wheel_index = min(self.wheel_index, self._settings.wheel_count - 1)

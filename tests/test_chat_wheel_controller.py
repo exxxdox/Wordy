@@ -53,6 +53,20 @@ def test_pending_hotkey_after_stop_does_not_reopen(qapp, tmp_path: Path):
     assert not controller.wheel.isVisible()
 
 
+def test_each_open_uses_latest_global_wheel_style(qapp, tmp_path: Path):
+    settings = AppSettings.load(config_file=tmp_path / "style.toml")
+    controller = ChatWheelController(settings, MagicMock(), MagicMock())
+    try:
+        # 已显示的一轮保留提交快照；重新唤出才读取用户最新选择。
+        for style in ("classic", "glass", "petals", "classic"):
+            settings.update(chat_wheel_style=style)
+            controller._open()
+            assert controller.wheel._style == style
+            controller.wheel.cancel()
+    finally:
+        controller.stop()
+
+
 def _text_controller(tmp_path: Path, **texts_labels: list[str]):
     settings = AppSettings.load(config_file=tmp_path / "config.toml")
     settings.update(

@@ -20,18 +20,36 @@ def test_direction_and_center_deadzone(qapp, point, expected):
     assert wheel._slot_at(point) == expected
 
 
-def test_release_plays_selected_slot_and_hides(qapp, monkeypatch):
+@pytest.mark.parametrize("style", ["classic", "glass", "petals"])
+def test_release_plays_selected_slot_and_hides(qapp, monkeypatch, style):
     selected: list[int] = []
     origin = QPoint(600, 600)
     monkeypatch.setattr(chat_wheel.QCursor, "pos", lambda: origin)
     wheel = ChatWheel(selected.append)
-    wheel.open_wheel(["Audio"] * 8, 0x56)
+    wheel.open_wheel(["Audio"] * 8, 0x56, style=style)
     monkeypatch.setattr(chat_wheel.QCursor, "pos", lambda: origin + QPoint(160, 0))
     monkeypatch.setattr(chat_wheel, "_key_down", lambda _: False)
     wheel._poll()
     assert selected == [2]
     assert not wheel.is_active()
     assert not wheel._timer.isActive()
+
+
+def test_runtime_painter_receives_style_and_legacy_open_uses_classic(qapp, monkeypatch):
+    styles = []
+    monkeypatch.setattr(chat_wheel, "paint_wheel",
+                        lambda *args, **kwargs: styles.append(kwargs["style"]))
+    wheel = ChatWheel(lambda _: None)
+    try:
+        wheel.open_wheel(["Audio"], style="petals")
+        wheel.grab()
+        assert styles[-1] == "petals"
+        wheel.cancel()
+        wheel.open_wheel(["Audio"])
+        wheel.grab()
+        assert styles[-1] == "classic"
+    finally:
+        wheel.cancel()
 
 
 @pytest.mark.parametrize("labels, point", [([""] * 8, QPoint(430, 270)), (["Audio"] * 8, QPoint(270, 270))])

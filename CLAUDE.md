@@ -16,6 +16,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 轮盘动画仅影响显示：唤出120ms淡入、收起90ms淡出、两处高亮共用90ms过渡。松键立即提交播放；淡出时停止接收选择，允许新一轮热键立即重开；控制器停止时直接关闭并终止动画。
 
+轮盘样式由全局 `chat_wheel_style` 保存：`classic`（经典玻璃，默认保留原样）、`glass`（轻薄玻璃）、`petals`（悬浮花瓣），所有轮盘共用；无效值回退经典。设置页切换时先原子保存再更新预览，失败恢复选择；运行时每次唤出读取样式快照，下一次唤出跟随新选择。三种样式统一由 `wheel_paint.paint_wheel` 绘制；花瓣缝隙和圆角仅影响显示，不改变八向选择、中心取消或松键播放。
+
 ## 脚本入口
 
 `wordy.ps1` 统一提供 `init`（初始化）、`dev`（启动，默认）和 `build`（打包）。`dev.cmd` 保留为参数转发入口；发布工作流使用 `wordy.ps1 build -Clean -NoPause`。

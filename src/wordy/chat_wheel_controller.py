@@ -125,7 +125,9 @@ class ChatWheelController(QObject):
                 config["slots"], config["labels"], config["texts"],
             )
         ]
-        self.wheel.open_wheel(labels, parse_hotkey(config["hotkey"])[1])
+        # 全局外观在唤出时读取，所有轮盘随设置同步且不必重建热键监听器。
+        self.wheel.open_wheel(labels, parse_hotkey(config["hotkey"])[1],
+                              style=self.settings.chat_wheel_style)
 
     def play_slot(self, index: int, wheel_index: int | None = None) -> None:
         if self._stopped or not 0 <= index < 8:

@@ -1,7 +1,63 @@
 from pathlib import Path
 
+import pytest
+
 from wordy.config import AppSettings
 from wordy._toml_serializer import read_toml
+
+
+def test_wheel_style_defaults_to_classic_for_missing_setting(tmp_path):
+    file = tmp_path / "old-config.toml"
+    file.write_text('chat_wheel_hotkey = "f9"\n', encoding="utf-8")
+    assert AppSettings().chat_wheel_style == "classic"
+    assert AppSettings.load(config_file=file).chat_wheel_style == "classic"
+
+
+@pytest.mark.parametrize("style", ["classic", "glass", "petals"])
+def test_wheel_style_round_trip_and_direct_assignment(tmp_path, style):
+    from wordy.config import CHAT_WHEEL_STYLES
+
+    assert CHAT_WHEEL_STYLES == ("classic", "glass", "petals")
+    file = tmp_path / "style.toml"
+    settings = AppSettings.load(config_file=file)
+    settings.chat_wheel_style = style
+    raw = read_toml(file)
+    assert raw is not None
+    assert raw["chat_wheel_style"] == style
+    settings._loaded = False
+    assert AppSettings.load(config_file=file).chat_wheel_style == style
+
+
+@pytest.mark.parametrize("raw_value", ['"unknown"', '""', "42", "true", "[]", "{}"])
+def test_wheel_style_load_rejects_invalid_values(tmp_path, raw_value):
+    file = tmp_path / "invalid-style.toml"
+    file.write_text(f"chat_wheel_style = {raw_value}\n", encoding="utf-8")
+    assert AppSettings.load(config_file=file).chat_wheel_style == "classic"
+
+
+@pytest.mark.parametrize("value", ["unknown", "", None, 42, True, [], {}])
+def test_wheel_style_update_normalizes_invalid_values(tmp_path, value):
+    settings = AppSettings.load(config_file=tmp_path / "style-update.toml")
+    settings.update(chat_wheel_style="glass")
+    settings.update(chat_wheel_style=value)
+    assert settings.chat_wheel_style == "classic"
+    setattr(settings, "chat_wheel_style", value)
+    assert settings.chat_wheel_style == "classic"
+
+
+@pytest.mark.parametrize("direct_assignment", [False, True])
+def test_wheel_style_save_failure_restores_previous_value(tmp_path, monkeypatch, direct_assignment):
+    from unittest.mock import Mock
+
+    settings = AppSettings.load(config_file=tmp_path / "style-fail.toml")
+    settings.update(chat_wheel_style="glass")
+    monkeypatch.setattr(AppSettings, "save", Mock(side_effect=OSError("disk full")))
+    with pytest.raises(OSError):
+        if direct_assignment:
+            settings.chat_wheel_style = "petals"
+        else:
+            settings.update(chat_wheel_style="petals")
+    assert settings.chat_wheel_style == "glass"
 
 
 def test_wheel_settings_round_trip(tmp_path: Path):

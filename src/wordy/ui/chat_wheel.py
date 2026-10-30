@@ -40,6 +40,7 @@ class ChatWheel(QWidget):
         self.setWindowTitle("Wordy · 音频轮盘")
         self._on_select = on_select
         self._labels = [""] * 8
+        self._style = "classic"
         self._selected: int | None = None
         self._key_code: int | None = None
         self._origin: QPoint | None = None
@@ -54,7 +55,8 @@ class ChatWheel(QWidget):
         self._fade.valueChanged.connect(self._set_opacity)
         self._fade.finished.connect(self._fade_finished)
 
-    def open_wheel(self, labels: list[str], key_code: int | None = None) -> None:
+    def open_wheel(self, labels: list[str], key_code: int | None = None,
+                   *, style: str = "classic") -> None:
         if self.is_active():
             return
         was_closing = self._closing
@@ -65,6 +67,8 @@ class ChatWheel(QWidget):
             self._opacity = 0.0
         self._hover_animation.reset()
         self._labels = [(label.strip() if label else "") for label in (labels + [""] * 8)[:8]]
+        # 每轮唤出固定外观快照，样式切换不干扰正在进行的选择与松键播放。
+        self._style = style
         self._selected = None
         self._key_code = key_code
         position = QCursor.pos()
@@ -188,7 +192,8 @@ class ChatWheel(QWidget):
         painter.setOpacity(self._opacity)
         self._hover_animation.select(
             self._selected if self._selected is not None and self._labels[self._selected] else None)
-        paint_wheel(painter, self._labels, self._selected, highlights=self._hover_animation.values)
+        paint_wheel(painter, self._labels, self._selected,
+                    highlights=self._hover_animation.values, style=self._style)
         center = QPointF(270, 270)
         accent = QColor(GREEN_ACCENT)
         # 钳位只移动盘体：标出真实取消区，避免把视觉中心误认为手势起点。
