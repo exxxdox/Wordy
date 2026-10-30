@@ -4,6 +4,7 @@
 
 
 常驻热键输入 → TTS 生成 → 播放：支持通过 Windows 原生“侦听此设备”和 VB-CABLE，将 TTS 与麦克风输出到同一虚拟设备。
+
 快捷键聊天轮盘：将指定音频或录制电脑声音输入到VB-CABLE。
 
 ## 环境要求
@@ -11,29 +12,32 @@
 - Windows 10/11
 - VB-CABLE（可选，[音频侦听](#音频侦听vb-cable) 功能需要）
 
-## 支持
+## 功能介绍
 
-TTS服务商：
+### 外部依赖
+
+TTS服务商支持：
 + Volcengine
 + Cartesia
 
-聊天轮盘：
+### 聊天轮盘音频
+
 + 音频导入
 + 电脑语音录制
 + 音频片段截取
 
-## 音频侦听（VB-CABLE）
+### 音频侦听（VB-CABLE）
 
 音频侦听将 TTS 直接输出到 CABLE Input，并让 Windows 把选定麦克风侦听到同一端点。其他应用选择 CABLE Output 即可接收两路声音。Wordy 不采集麦克风，也不维护软件混音流。
 
-### 安装 VB-CABLE
+#### 安装 VB-CABLE
 
 1. 前往 <https://vb-audio.com/Cable/>
 2. 下载 `VBCABLE_Driver_Pack45.zip`
 3. 解压后右键 `VBCABLE_Setup_x64.exe` → 以管理员身份运行
 4. 重启电脑
 
-### 启用音频侦听
+#### 启用音频侦听
 
 1. 启动应用后打开设置 → **音频侦听** 选项卡
 2. 勾选"启用音频侦听"
