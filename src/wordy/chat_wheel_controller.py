@@ -25,11 +25,13 @@ class ChatWheelController(QObject):
                      [Path, Callable[[str], None], Callable[[], None], float], None],
                  on_error: Callable[[str], None],
                  on_finished: Callable[[], None] | None = None,
-                 speak_text: Callable[[str, Callable[[], None]], None] | None = None):
+                 speak_text: Callable[[str, Callable[[], None]], None] | None = None,
+                 stop_text: Callable[[], None] | None = None):
         super().__init__()
         self.settings = settings
         self._play_file = play_file
         self._speak_text = speak_text
+        self._stop_text = stop_text
         self._listeners: dict[tuple[int, int], NativeHotkeyListener] = {}
         self._active_wheel = 0
         self._stopped = False
@@ -140,6 +142,8 @@ class ChatWheelController(QObject):
         text = config["texts"][index].strip()
         if text:
             if self._speak_text is not None:
+                # 新选择打断上一段朗读：引擎只能协作取消，由 worker 自行收尾。
+                self._stop_speaking()
                 self._speak_text(text, self.playback_finished.emit)
             return
         filename = config["slots"][index]
@@ -157,9 +161,15 @@ class ChatWheelController(QObject):
         if not file.is_file():
             self.playback_error.emit("音频文件已丢失，请重新选择文件")
             return
+        # 文字朗读占着串行 worker，不先停掉音频要等整段读完才出声。
+        self._stop_speaking()
         # 每次提交绑定该槽的增益，切换槽位不会改变已经排队的音频。
         self._play_file(file, self.playback_error.emit, self.playback_finished.emit,
                         config["volumes"][index])
+
+    def _stop_speaking(self) -> None:
+        if self._stop_text is not None:
+            self._stop_text()
 
     def stop(self) -> None:
         self._stopped = True

@@ -28,7 +28,9 @@ from wordy.config import AppSettings, CHAT_WHEEL_STYLES, WHEEL_NAME_MAX_LENGTH
 from wordy.ui.audio_trim_dialog import AudioTrimDialog
 from wordy.ui.status_toast import show_status_toast
 from wordy.ui.settings_widgets import NoWheelComboBox
-from wordy.ui.wheel_paint import WheelHover, paint_wheel
+from wordy.ui.wheel_paint import (
+    WHEEL_CANVAS_HEIGHT, WHEEL_CANVAS_WIDTH, WheelHover, paint_wheel,
+)
 from wordy.ui.theme import (
     GREEN_ACCENT, TEXT_ERROR, TEXT_MUTED, TEXT_PRIMARY,
     SURFACE_BG,
@@ -38,6 +40,11 @@ logger = logging.getLogger(__name__)
 # 槽位用数字编号标识：方向名（上/右上…）既指不明确，又和运行时轮盘的方向概念重名。
 SLOT_NAMES = tuple(f"音频 {index}" for index in range(1, 9))
 RECORD_TICK_MS = 200
+# 预览把整块轮盘画布等比缩进 400×400：按画布宽缩放，上下留白居中，
+# 与运行轮盘保持同一比例（含左右给贴边名称的透明余量）。
+_PREVIEW_SIZE = 400
+_PREVIEW_SCALE = _PREVIEW_SIZE / WHEEL_CANVAS_WIDTH
+_PREVIEW_TOP = (_PREVIEW_SIZE - WHEEL_CANVAS_HEIGHT * _PREVIEW_SCALE) / 2
 
 
 def _action_icon(shape: str, color: str) -> QIcon:
@@ -74,6 +81,7 @@ class _WheelPicker(QWidget):
         self._hovered_index: int | None = None
         self._hover_animation = WheelHover(self)
         self.wheel_style = "classic"
+        # 预览整体等比缩进 400×400：画布比盘体宽，按画布宽缩放让左右余量也完整显示。
         self.setFixedSize(400, 400)
         self.setMouseTracking(True)
         self.buttons: list[QPushButton] = []
@@ -87,7 +95,7 @@ class _WheelPicker(QWidget):
             button.setFixedSize(88, 44)
             # 焦点按钮跟随放大后的槽位中心，确保键盘导航滚动到正确位置。
             angle = math.radians(90 - index * 45)
-            radius = 158 * 400 / 540
+            radius = 158 * _PREVIEW_SCALE
             button.move(round(200 + radius * math.cos(angle) - 44),
                         round(200 - radius * math.sin(angle) - 22))
             button.clicked.connect(lambda _checked=False, i=index: on_select(i))
@@ -115,7 +123,7 @@ class _WheelPicker(QWidget):
         dx, dy = point.x() - 200, point.y() - 200
         distance = math.hypot(dx, dy)
         # 命中范围跟随共享盘体的 80/232 半径及缩放比例。
-        if distance < 80 * 400 / 540 or distance > 232 * 400 / 540:
+        if distance < 80 * _PREVIEW_SCALE or distance > 232 * _PREVIEW_SCALE:
             return None
         angle = math.degrees(math.atan2(dx, -dy)) % 360
         return int((angle + 22.5) % 360 // 45)
@@ -143,8 +151,9 @@ class _WheelPicker(QWidget):
 
     def paintEvent(self, _event: QPaintEvent) -> None:
         painter = QPainter(self)
-        # 与运行轮盘共用盘体，缩放到设置页；编辑交互仍由透明按钮承接。
-        painter.scale(400 / 540, 400 / 540)
+        # 与运行轮盘共用盘体，按画布宽缩放到设置页；编辑交互仍由透明按钮承接。
+        painter.translate(0, _PREVIEW_TOP)
+        painter.scale(_PREVIEW_SCALE, _PREVIEW_SCALE)
         labels = [button.text().split("\n", 1)[-1] for button in self.buttons]
         labels = ["" if label == "未设置" else label for label in labels]
         focused = next((i for i, button in enumerate(self.buttons) if button.hasFocus()), None)
@@ -170,8 +179,10 @@ class ChatWheelSettings(QWidget):
         self._recorder: SystemAudioRecorder | None = None
         # 试听是否正在播放：由主程序在播放结束时回调复位。
         self._previewing = False
-        # 正在朗读文字（而非播放音频）。朗读打断不了，按钮如实显示「朗读中…」。
+        # 正在朗读文字（而非播放音频）。朗读可打断，按钮显示「停止」。
         self._preview_speech = False
+        # 空槽没有内容可推断类型，用用户最后一次选择的模式；有内容时类型由内容决定。
+        self._empty_mode = "audio"
         self._record_timer = QTimer(self)
         self._record_timer.setInterval(RECORD_TICK_MS)
         self._record_timer.timeout.connect(self._tick_recording)
@@ -257,9 +268,25 @@ class ChatWheelSettings(QWidget):
         self.editor_title = QLabel()
         self.editor_title.setObjectName("sectionTitle")
         editor_layout.addWidget(self.editor_title)
+        # 槽内容二选一：类型由内容决定，选择器把它显式化，切换即换内容类型。
+        mode_row = QHBoxLayout()
+        mode_row.setSpacing(6)
+        self.audio_mode_button = QPushButton("音频")
+        self.text_mode_button = QPushButton("文字")
+        for mode_button in (self.audio_mode_button, self.text_mode_button):
+            mode_button.setCheckable(True)
+            mode_button.setObjectName("slotModeButton")
+        self.audio_mode_button.clicked.connect(lambda: self._switch_slot_mode("audio"))
+        self.text_mode_button.clicked.connect(lambda: self._switch_slot_mode("text"))
+        mode_row.addWidget(QLabel("内容"))
+        mode_row.addWidget(self.audio_mode_button)
+        mode_row.addWidget(self.text_mode_button)
+        mode_row.addStretch(1)
+        editor_layout.addLayout(mode_row)
         # 音量独立成行，名称与朗读文字各占一行，避免宽屏下字段挤在一起。
         editor_row = QHBoxLayout()
-        editor_row.addWidget(QLabel("音量"))
+        self.volume_label = QLabel("音量")
+        editor_row.addWidget(self.volume_label)
         self.volume_slider = QSlider(Qt.Orientation.Horizontal)
         self.volume_slider.setRange(0, 200)
         self.volume_slider.setMinimumWidth(120)
@@ -282,11 +309,12 @@ class ChatWheelSettings(QWidget):
         self.label_input.setMaxLength(40)
         self.label_input.editingFinished.connect(self._save_label)
         editor_layout.addWidget(self.label_input)
-        editor_layout.addWidget(QLabel("朗读文字"))
+        self.text_label = QLabel("朗读文字")
+        editor_layout.addWidget(self.text_label)
         self.text_input = QLineEdit()
         self.text_input.setMaximumWidth(520)
-        self.text_input.setPlaceholderText("或输入要朗读的文字")
-        # 朗读走单 worker 执行器且无法打断，太长会卡住后续播放与轮盘。
+        self.text_input.setPlaceholderText("输入要朗读的文字")
+        # 朗读走单 worker 执行器，太长会拖住后续播放与轮盘（可打断但会占住队列）。
         self.text_input.setMaxLength(200)
         self.text_input.editingFinished.connect(self._save_text)
         editor_layout.addWidget(self.text_input)
@@ -543,7 +571,9 @@ class ChatWheelSettings(QWidget):
         if not self._previewing:
             return
         if self._preview_speech:
-            # 朗读无法打断，也没有可发的取消信号；等播放结束回调复位。
+            # 朗读已可打断：发同一个停止信号，由主程序置取消位。
+            # 面板状态仍锁定到完成回调——回调不带槽号，提前放开会把新试听误复位。
+            self._on_field_changed("chat_wheel_preview_stop", self.selected_index)
             return
         self._previewing = False
         self._refresh_all_slots()
@@ -763,7 +793,8 @@ class ChatWheelSettings(QWidget):
             self._refresh_slot(index)
             return False
         self._refresh_slot(index)
-        self._status("文字已保存。" if text else "音频已保存。" if filename else "音频已清空。")
+        # 清空时两种内容都没了，说「音频已清空」在文字槽切换类型时会误导。
+        self._status("文字已保存。" if text else "音频已保存。" if filename else "槽位已清空。")
         old = old_slots[index]
         if old and not any(old in self._settings.get_wheel(i)["slots"]
                            for i in range(self._settings.wheel_count)):
@@ -796,6 +827,9 @@ class ChatWheelSettings(QWidget):
     def _save_text(self) -> None:
         """把该槽内容换成一段朗读文字（文件名一并清空，与「清空」同一语义）。"""
         index = self.selected_index
+        # 切到音频模式会隐藏文字框，隐藏引发的 editingFinished 不能把刚换上的音频又清掉。
+        if self.text_input.isHidden():
+            return
         text = self.text_input.text().strip()[:200]
         # 失焦也会触发本回调；内容没变就直接返回，否则点一下输入框再点走就会删掉音频。
         if self._settings.get_wheel(self.wheel_index)["texts"][index] == text:
@@ -825,8 +859,45 @@ class ChatWheelSettings(QWidget):
             self._refresh_slot(index)
             self._status(f"保存失败：{error}", error=True)
 
+    def _slot_mode(self, index: int) -> str:
+        """槽内容类型：有内容时由内容决定，空槽跟随用户最后选择的模式。"""
+        config = self._settings.get_wheel(self.wheel_index)
+        if config["texts"][index].strip():
+            return "text"
+        if config["slots"][index]:
+            return "audio"
+        return self._empty_mode
+
+    def _switch_slot_mode(self, mode: str) -> None:
+        """切换槽的内容类型；一个槽只存一种内容，换类型必须清掉另一类。
+
+        音频是录制/导入的产物，删了找不回，有音频时先确认；文字短且可重打，
+        按「导入音频清空文字」的既有语义直接清掉。
+        """
+        index = self.selected_index
+        if self._slot_mode(index) == mode:
+            self._refresh_slot(index)  # 点已选中的可勾选按钮会取消勾选，刷回来
+            return
+        config = self._settings.get_wheel(self.wheel_index)
+        if mode == "text" and config["slots"][index]:
+            confirmed = QMessageBox.question(self, "切换为文字", "切换为文字会删除该槽音频，继续？")
+            if confirmed != QMessageBox.StandardButton.Yes:
+                self._refresh_slot(index)
+                return
+        has_content = bool(config["slots"][index] or config["texts"][index].strip())
+        self._empty_mode = mode
+        if has_content:
+            if not self._replace_clip(index, "", config["labels"][index], ""):
+                return
+        else:
+            self._refresh_slot(index)
+        if mode == "text":
+            self.text_input.setFocus()
+
     def _select_slot(self, index: int) -> None:
         self.selected_index = index
+        # 空槽的编辑意图跟着槽走，切槽后回到默认的音频模式。
+        self._empty_mode = "audio"
         for button_index, button in enumerate(self.slot_buttons):
             selected = button_index == index
             button.setChecked(selected)
@@ -855,6 +926,18 @@ class ChatWheelSettings(QWidget):
             return
         self.label_input.setText(label)
         self.text_input.setText(text)
+        # 内容类型决定显示哪一套编辑控件；两种入口同时出现正是「分不清槽类型」的来源。
+        is_text = self._slot_mode(index) == "text"
+        self.volume_label.setVisible(not is_text)
+        self.volume_slider.setVisible(not is_text)
+        self.volume_value_label.setVisible(not is_text)
+        self.text_label.setVisible(is_text)
+        self.text_input.setVisible(is_text)
+        # 切换类型会清空一类内容，忙碌或朗读中都不允许。
+        for mode_button in (self.audio_mode_button, self.text_mode_button):
+            mode_button.setEnabled(not busy and not self._preview_speech)
+        self.audio_mode_button.setChecked(not is_text)
+        self.text_mode_button.setChecked(is_text)
         # 播放结束也会刷新面板，不能覆盖尚未释放滑块的待保存选择。
         if not self.volume_slider.isSliderDown():
             self.volume_slider.blockSignals(True)
@@ -874,15 +957,18 @@ class ChatWheelSettings(QWidget):
             "录制中…" if recording else
             "导入中…" if busy else "导入"
         )
+        # 导入/录制/截取只属于音频槽；文字槽只保留试听与清空。
+        for audio_button in (self.choose_button, self.record_button, self.trim_button):
+            audio_button.setVisible(not is_text)
         self.record_button.setEnabled(recording or not busy)
         self._refresh_record_button()
         if self._preview_speech:
-            # 朗读打断不了，完成回调又不带槽号：期间对所有槽禁用，
+            # 朗读可打断，按钮就是「停止」；其余槽位仍锁到完成回调，
             # 否则回调会把之后新开的试听误复位。
-            self.preview_button.setEnabled(False)
-            self.preview_button.setText("朗读中…")
-            self.preview_button.setIcon(_action_icon("play", TEXT_MUTED))
-            self.preview_button.setAccessibleName(f"正在朗读{SLOT_NAMES[index]}")
+            self.preview_button.setEnabled(True)
+            self.preview_button.setText("停止")
+            self.preview_button.setIcon(_action_icon("stop", TEXT_PRIMARY))
+            self.preview_button.setAccessibleName(f"停止朗读{SLOT_NAMES[index]}")
         else:
             # 试听中按钮必须始终可点，否则一旦别的槽忙起来「停止」就点不动了。
             self.preview_button.setEnabled((filled and not busy) or self._previewing)

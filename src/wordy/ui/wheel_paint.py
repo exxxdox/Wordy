@@ -45,6 +45,13 @@ class WheelHover(QVariantAnimation):
                        for i, start in enumerate(self._start)]
 
 
+# 盘体仍是 540×540，左右各加 47px 透明画布：贴边的居中名称在 hover 放大字号后
+# 仍能完整落在窗口内，而不是被窗口边缘挤回省略号（10 个汉字 × 26px 需 260px，
+# 正左右槽文字框中心距盘心 181px，634 宽刚好给出 260px 空间）。
+WHEEL_CANVAS_HEIGHT = 540
+WHEEL_CANVAS_PAD = 47
+WHEEL_CANVAS_WIDTH = WHEEL_CANVAS_HEIGHT + WHEEL_CANVAS_PAD * 2
+
 MAX_WHEEL_TEXT_CHARS = 10
 
 
@@ -55,17 +62,16 @@ def _wheel_label_text(label: str) -> str:
     return label[:MAX_WHEEL_TEXT_CHARS] + "..."
 
 
-def _fit_wheel_text(painter: QPainter, rect: QRectF, label: str,
-                    alignment: Qt.AlignmentFlag = Qt.AlignmentFlag.AlignCenter
-                    | Qt.TextFlag.TextDontClip) -> str:
-    """文字允许横向溢出扇区，只按轮盘画面宽度做最后一步省略，避免贴边硬切。"""
-    if alignment & Qt.AlignmentFlag.AlignLeft:
-        limit = 540 - rect.left() - 8
-    elif alignment & Qt.AlignmentFlag.AlignRight:
-        limit = rect.right() - 8
-    else:
-        center_x = rect.center().x()
-        limit = 2 * min(center_x, 540 - center_x) - 12
+def _fit_wheel_text(painter: QPainter, rect: QRectF, label: str) -> str:
+    """文字允许横向溢出扇区，只按轮盘画面宽度做最后一步省略，避免贴边硬切。
+
+    rect 用盘体本地坐标（540 空间），左右两侧各还有 WHEEL_CANVAS_PAD 的透明余量，
+    所以居中文字的可用宽度按「盘心到画布边缘」计算，贴边槽位也不会被提前省略。
+    """
+    center_x = rect.center().x()
+    left_room = center_x + WHEEL_CANVAS_PAD
+    right_room = WHEEL_CANVAS_HEIGHT - center_x + WHEEL_CANVAS_PAD
+    limit = 2 * min(left_room, right_room) - 12
     limit = max(60, round(limit))
     text = _wheel_label_text(label)
     if painter.fontMetrics().horizontalAdvance(text) > limit:
@@ -99,14 +105,23 @@ def _paint_wheel_shadow(painter: QPainter, disc: QPainterPath) -> None:
 def paint_wheel(painter: QPainter, labels: list[str], selected_index: int | None,
                 *, editing: bool = False, highlights: list[float] | None = None,
                 style: str = "classic") -> None:
-    """预览与运行时统一分派；旧配置和未知样式保持经典外观。"""
-    if style == "game":
-        _paint_game_wheel(painter, labels, selected_index, editing=editing, highlights=highlights)
-    elif style in ("glass", "petals"):
-        _paint_modern_wheel(painter, labels, selected_index, editing=editing,
-                            highlights=highlights, petals=style == "petals")
-    else:
-        _paint_classic_wheel(painter, labels, selected_index, editing=editing, highlights=highlights)
+    """预览与运行时统一分派；旧配置和未知样式保持经典外观。
+
+    画布尺寸为 WHEEL_CANVAS_WIDTH×WHEEL_CANVAS_HEIGHT：盘体居中，左右各留
+    WHEEL_CANVAS_PAD 透明余量给贴边名称。各样式内部仍用 540 本地坐标。
+    """
+    painter.save()
+    painter.translate(WHEEL_CANVAS_PAD, 0)
+    try:
+        if style == "game":
+            _paint_game_wheel(painter, labels, selected_index, editing=editing, highlights=highlights)
+        elif style in ("glass", "petals"):
+            _paint_modern_wheel(painter, labels, selected_index, editing=editing,
+                                highlights=highlights, petals=style == "petals")
+        else:
+            _paint_classic_wheel(painter, labels, selected_index, editing=editing, highlights=highlights)
+    finally:
+        painter.restore()
 
 
 def _paint_game_wheel(painter: QPainter, labels: list[str], selected_index: int | None,
@@ -162,15 +177,9 @@ def _paint_game_wheel(painter: QPainter, labels: list[str], selected_index: int 
         font.setPixelSize(round(22 + 4 * strength))
         painter.setFont(font)
         rect = text_rects[index]
-        # 左右两列贴边槽位朝窗口内侧对齐：hover 放大字号时向内侧伸展，
-        # 不会因为居中超出窗口又被重新省略成更短的文字。
-        if rect.center().x() < 270:
-            align = Qt.AlignmentFlag.AlignLeft | Qt.TextFlag.TextDontClip
-        elif rect.center().x() > 270:
-            align = Qt.AlignmentFlag.AlignRight | Qt.TextFlag.TextDontClip
-        else:
-            align = WHEEL_TEXT_ALIGN
-        text = _fit_wheel_text(painter, rect, label or "—", align)
+        # 画布已经留出贴边余量，名称恢复居中：hover 放大也不会被窗口边缘挤短。
+        align = WHEEL_TEXT_ALIGN
+        text = _fit_wheel_text(painter, rect, label or "—")
         # 游戏画面亮暗变化大：已有名称始终用实白，薄黑字缘和下移阴影共同保住对比。
         color = QColor(255, 255, 255, 255 if label else round(90 + 165 * strength))
         painter.setPen(QColor(0, 0, 0, 220))

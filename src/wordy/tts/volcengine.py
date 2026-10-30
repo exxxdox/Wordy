@@ -170,8 +170,8 @@ class VolcengineStreamingTTS(BackendTTSEngine):
             return _decode_base64_audio(data), False
         return None, False
 
-    def _send_and_play(self, text: str) -> bool:
-        """发送 SSE 请求并流式播放返回的音频块。"""
+    def _send_and_play(self, text: str, cancel_event: threading.Event | None = None) -> bool:
+        """发送 SSE 请求并流式播放返回的音频块；取消时停止写入并关闭流。"""
         _ensure_volcengine_config(self.api_key, self.voice_id)
 
         self._open_audio_stream()
@@ -195,6 +195,10 @@ class VolcengineStreamingTTS(BackendTTSEngine):
             total_bytes = 0
 
             for raw_line in response.iter_lines(decode_unicode=True):
+                # 取消在 SSE 行循环里自检：iter_lines 阻塞等待下一行，只能等下一块到达。
+                if cancel_event is not None and cancel_event.is_set():
+                    logger.debug("Volcengine 朗读已取消，停止读取 SSE")
+                    break
                 if raw_line is None:
                     continue
                 line: str = raw_line if isinstance(raw_line, str) else raw_line.decode("utf-8")
@@ -211,23 +215,29 @@ class VolcengineStreamingTTS(BackendTTSEngine):
                     sample_bytes = 2  # 16-bit = 2 bytes/sample
                     sub_size = WRITE_CHUNK_FRAMES * sample_bytes
                     for offset in range(0, len(pcm_bytes), sub_size):
+                        # 子块之间也要查：单个大 chunk 会拆成上百次阻塞写入（每次约 21ms）。
+                        if cancel_event is not None and cancel_event.is_set():
+                            break
                         sub = pcm_bytes[offset:offset + sub_size]
                         self.audio_player.write_stream(sub)
+                    if cancel_event is not None and cancel_event.is_set():
+                        break
                     logger.debug("Volcengine chunk #%d: %d bytes → %d sub-chunks",
                                  chunk_count, len(pcm_bytes),
                                  (len(pcm_bytes) + sub_size - 1) // sub_size)
 
             logger.debug("Volcengine SSE 完成: %d 音频块, %d bytes", chunk_count, total_bytes)
-            return chunk_count > 0
+            # 取消后不再把「已写了半段」算成播放成功。
+            return chunk_count > 0 and not (cancel_event is not None and cancel_event.is_set())
         finally:
             if response is not None:
                 response.close()
             self.audio_player.close_stream()
 
-    def speak(self, text: str) -> bool:
+    def speak(self, text: str, cancel_event: threading.Event | None = None) -> bool:
         """流式生成并播放输入文本。"""
         with self._stream_lock:
-            return self._send_and_play(text)
+            return self._send_and_play(text, cancel_event)
 
     def reset_audio_output(self) -> None:
         """输出设备变更时无需特殊处理——每次 speak() 都会重开流。"""

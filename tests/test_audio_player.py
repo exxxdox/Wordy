@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from io import BytesIO
+from threading import Event
 from typing import Callable, cast
 from unittest.mock import MagicMock
 
@@ -538,6 +539,35 @@ def test_default_stream_keeps_mono_pcm_unchanged(_patch_pyaudio):
 
     assert _patch_pyaudio.open_calls[-1]["channels"] == 1
     assert _patch_pyaudio._stream.write_calls == [b"\x01\x02\x03\x04"]
+
+
+def test_write_stream_stops_when_playback_token_is_cancelled(_patch_pyaudio):
+    """音频层是最后一道闸：令牌作废后即使引擎忘了自检，也不能再写设备。"""
+    player = AudioPlayer()
+    assert player.open_stream(audio_format=8, channels=1, rate=48000) is True
+    token = Event()
+    player.begin_playback(token)
+
+    token.set()
+    with pytest.raises(InterruptedError):
+        player.write_stream(b"\x01\x02")
+    assert _patch_pyaudio._stream.write_calls == []
+
+    # 播放结束注销令牌后，同一个流仍可正常写入。
+    player.end_playback(token)
+    player.write_stream(b"\x01\x02")
+    assert _patch_pyaudio._stream.write_calls == [b"\x01\x02"]
+
+
+def test_play_wav_honours_playback_token_without_explicit_event(_patch_pyaudio):
+    """令牌是播放层的统一取消来源；调用方不传 cancel_event 也能被打断。"""
+    player = AudioPlayer()
+    token = Event()
+    player.begin_playback(token)
+    token.set()
+
+    assert player.play_wav(BytesIO(b"")) is False
+    assert _patch_pyaudio.open_calls == []
 
 
 def test_close_stream_terminates_pyaudio_and_clears_ref(_patch_pyaudio):

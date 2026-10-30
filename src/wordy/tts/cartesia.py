@@ -201,10 +201,15 @@ class CartesiaBytesTTS(CartesiaTTS):
         logger.debug("收到 Cartesia bytes 音频: %s bytes", len(response.content))
         return response.content
 
-    def speak(self, text: str) -> bool:
+    def speak(self, text: str, cancel_event: threading.Event | None = None) -> bool:
         """生成完整 WAV bytes 后播放。"""
+        if cancel_event is not None and cancel_event.is_set():
+            return False
+        # generate() 是整段阻塞的 HTTP 请求，无法中途取消；至少取消后不再开播。
         wav_bytes = self.generate(text)
-        return self.audio_player.play_wav(BytesIO(wav_bytes))
+        if cancel_event is not None and cancel_event.is_set():
+            return False
+        return self.audio_player.play_wav(BytesIO(wav_bytes), cancel_event=cancel_event)
 
 
 class CartesiaRealtimeTTS(CartesiaTTS):
@@ -332,7 +337,19 @@ class CartesiaRealtimeTTS(CartesiaTTS):
     def _is_idle_timeout_close(self, close_code: int | None, close_reason: str) -> bool:
         return close_code == IDLE_TIMEOUT_CLOSE_CODE and close_reason == IDLE_TIMEOUT_CLOSE_REASON
 
-    def _send_and_play_once(self, text: str) -> bool:
+    @staticmethod
+    def _cancel_context(ctx: Any) -> None:
+        """向服务端取消本段生成，并释放该上下文的接收队列。
+
+        不取消会让服务端继续合成；而 receive() 没走到 done 时队列不会出队，
+        每段被取消的朗读都会漏一个注册项。
+        """
+        try:
+            ctx.cancel()
+        except Exception as e:
+            logger.warning("取消 Cartesia realtime 上下文失败: %s", e)
+
+    def _send_and_play_once(self, text: str, cancel_event: threading.Event | None = None) -> bool:
         if self._connection is None:
             self.connect()
 
@@ -357,27 +374,36 @@ class CartesiaRealtimeTTS(CartesiaTTS):
         # 流式写入：收到 chunk 立即写入，不做缓冲。
         # 对 CABLE 等虚拟设备可能因 chunk 间隔产生轻微间隙；
         # 介意延迟的用户可切换 bytes 模式。
-        for response in ctx.receive():
-            if response.type == "chunk" and response.audio:
-                logger.debug(
-                    "Received audio chunk (%s bytes, context_id=%s)",
-                    len(response.audio), response.context_id,
-                )
-                self.audio_player.write_stream(response.audio)
-            elif response.type == "error":
-                message = getattr(response, "message", "") or getattr(response, "title", "")
-                raise RuntimeError(f"Cartesia realtime 返回错误: {message}")
-            elif response.type == "done":
-                break
+        try:
+            for response in ctx.receive():
+                if cancel_event is not None and cancel_event.is_set():
+                    # 必须在 worker 线程里取消：websockets 同步连接不允许另一线程并发 send。
+                    self._cancel_context(ctx)
+                    return False
+                if response.type == "chunk" and response.audio:
+                    logger.debug(
+                        "Received audio chunk (%s bytes, context_id=%s)",
+                        len(response.audio), response.context_id,
+                    )
+                    self.audio_player.write_stream(response.audio)
+                elif response.type == "error":
+                    message = getattr(response, "message", "") or getattr(response, "title", "")
+                    raise RuntimeError(f"Cartesia realtime 返回错误: {message}")
+                elif response.type == "done":
+                    break
+        except InterruptedError:
+            # 播放层令牌兜底取消写入时也要通知服务端，否则这个 context 的队列会泄漏。
+            self._cancel_context(ctx)
+            return False
         return True
 
-    def speak(self, text: str) -> bool:
+    def speak(self, text: str, cancel_event: threading.Event | None = None) -> bool:
         """在已有 websocket 连接上发送单段文本并流式播放返回音频。"""
         from websockets.exceptions import ConnectionClosed
 
         with self._lock:
             try:
-                return self._send_and_play_once(text)
+                return self._send_and_play_once(text, cancel_event)
             except ConnectionClosed as e:
                 close_code = e.rcvd.code if e.rcvd is not None else None
                 close_reason = e.rcvd.reason if e.rcvd is not None else ""
@@ -387,7 +413,7 @@ class CartesiaRealtimeTTS(CartesiaTTS):
                 self._close_websocket()
                 if should_retry:
                     logger.warning("检测到 Cartesia idle timeout，重新连接后重发本次文本")
-                    return self._send_and_play_once(text)
+                    return self._send_and_play_once(text, cancel_event)
 
                 raise
             except TimeoutError:

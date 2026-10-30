@@ -8,12 +8,16 @@ from wordy.ui import chat_wheel, wheel_paint
 from wordy.ui.chat_wheel import ChatWheel
 
 
+# 画布 634×540：盘心在 (317, 270)，左右 47px 余量给贴边名称。
+_CENTER = QPoint(wheel_paint.WHEEL_CANVAS_WIDTH // 2, wheel_paint.WHEEL_CANVAS_HEIGHT // 2)
+
+
 @pytest.mark.parametrize("point, expected", [
-    (QPoint(270, 110), 0), (QPoint(390, 150), 1),
-    (QPoint(430, 270), 2), (QPoint(390, 390), 3),
-    (QPoint(270, 430), 4), (QPoint(150, 390), 5),
-    (QPoint(110, 270), 6), (QPoint(150, 150), 7),
-    (QPoint(270, 270), None), (QPoint(290, 270), None),
+    (QPoint(317, 110), 0), (QPoint(437, 150), 1),
+    (QPoint(477, 270), 2), (QPoint(437, 390), 3),
+    (QPoint(317, 430), 4), (QPoint(197, 390), 5),
+    (QPoint(157, 270), 6), (QPoint(197, 150), 7),
+    (QPoint(317, 270), None), (QPoint(337, 270), None),
 ])
 def test_direction_and_center_deadzone(qapp, point, expected):
     wheel = ChatWheel(lambda _: None)
@@ -52,14 +56,14 @@ def test_runtime_painter_receives_style_and_legacy_open_uses_classic(qapp, monke
         wheel.cancel()
 
 
-@pytest.mark.parametrize("labels, point", [([""] * 8, QPoint(430, 270)), (["Audio"] * 8, QPoint(270, 270))])
+@pytest.mark.parametrize("labels, point", [([""] * 8, QPoint(477, 270)), (["Audio"] * 8, QPoint(317, 270))])
 def test_empty_slot_and_center_cancel(qapp, monkeypatch, labels, point):
     selected: list[int] = []
     origin = QPoint(600, 600)
     monkeypatch.setattr(chat_wheel.QCursor, "pos", lambda: origin)
     wheel = ChatWheel(selected.append)
     wheel.open_wheel(labels, 0x56)
-    monkeypatch.setattr(chat_wheel.QCursor, "pos", lambda: origin + point - QPoint(270, 270))
+    monkeypatch.setattr(chat_wheel.QCursor, "pos", lambda: origin + point - _CENTER)
     monkeypatch.setattr(chat_wheel, "_key_down", lambda _: False)
     wheel._poll()
     assert selected == []
@@ -137,7 +141,7 @@ def test_mouse_move_uses_global_anchor_but_click_uses_visible_sector(qapp, monke
     wheel = ChatWheel(selected.append)
     wheel.open_wheel(["Audio"] * 8)
     # 局部位置朝下、相对唤出点全局位置朝右，证明移动未误用窗口映射。
-    local = QPointF(270, 430)
+    local = QPointF(317, 430)
     global_position = QPointF(origin + QPoint(160, 0))
     move = QMouseEvent(QEvent.Type.MouseMove, local, global_position,
                       Qt.MouseButton.NoButton, Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier)
@@ -184,7 +188,8 @@ def test_wheel_numbers_stay_readable_without_brand_or_ticks(qapp, monkeypatch, e
     texts = {}
     monkeypatch.setattr(wheel_paint.glass, "paint_lifted_text",
                         lambda painter, rect, flags, text, color: texts.update({text: color}))
-    image = QImage(540, 540, QImage.Format.Format_ARGB32_Premultiplied)
+    image = QImage(wheel_paint.WHEEL_CANVAS_WIDTH, wheel_paint.WHEEL_CANVAS_HEIGHT,
+                   QImage.Format.Format_ARGB32_Premultiplied)
     image.fill(Qt.GlobalColor.transparent)
     painter = QPainter(image)
     wheel_paint.paint_wheel(painter, ["Audio"] + [""] * 7, 0, editing=editing)

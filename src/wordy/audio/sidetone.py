@@ -79,6 +79,13 @@ class SidetoneAudioPlayer:
 
     # ── TTSAudioPlayer 协议方法 ──────────────────────────────────────
 
+    def begin_playback(self, cancel_event: Event) -> None:
+        """取消令牌只认一份：主播放器登记，返听由同一句柄驱动停止。"""
+        self._main.begin_playback(cancel_event)
+
+    def end_playback(self, cancel_event: Event) -> None:
+        self._main.end_playback(cancel_event)
+
     def _needs_sidetone(self, device_index: int | None) -> bool:
         # 主输出已经使用系统默认设备时，再返听会叠加同一段声音，造成爆音和回声。
         if not self._sidetone_enabled:

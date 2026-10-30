@@ -88,6 +88,137 @@ def test_stop_audio_file_interrupts_current_clip(manager, mock_player):
     manager.shutdown()
 
 
+def test_stop_speech_interrupts_running_text(manager, mock_engine):
+    """停止朗读靠取消位让引擎自退；被打断不算失败，完成回调照常发出。"""
+    started = threading.Event()
+
+    def speak(_text, cancel_event=None):
+        assert isinstance(cancel_event, threading.Event)
+        started.set()
+        # 模拟引擎里阻塞的写入循环：等到取消才返回。
+        return not cancel_event.wait(2)
+
+    mock_engine.speak.side_effect = speak
+    finished, error = MagicMock(), MagicMock()
+    manager.speak("马上到", finished, error)
+    operation, *args = manager.executor.submit.call_args.args
+    thread = threading.Thread(target=operation, args=args)
+    thread.start()
+    try:
+        assert started.wait(2)
+        manager.stop_speech()
+    finally:
+        thread.join(2)
+    assert not thread.is_alive()
+    finished.assert_called_once_with()
+    error.assert_not_called()
+    manager.shutdown()
+
+
+def test_stop_speech_drops_pending_text(manager, mock_engine):
+    """排队中的待读文本不再提交，但它的完成回调必须补发。"""
+    release = threading.Event()
+    mock_engine.speak.side_effect = lambda _text, cancel_event=None: release.wait(2) or True
+    running_finished, pending_finished = MagicMock(), MagicMock()
+    manager.speak("第一句", running_finished)
+    operation, *args = manager.executor.submit.call_args.args
+    thread = threading.Thread(target=operation, args=args)
+    thread.start()
+    try:
+        manager.speak("第二句", pending_finished)
+        manager.stop_speech()
+        pending_finished.assert_called_once_with()
+    finally:
+        release.set()
+        thread.join(2)
+        manager.shutdown()
+    # 第二句从未进入 executor，worker 只收到第一次提交。
+    assert manager.executor.submit.call_count == 1
+
+
+def test_speech_interrupts_playing_audio_clip(manager, mock_player):
+    """文字与音频共用串行 worker：新朗读必须先停掉正在播的片段，否则排队等整段。"""
+    manager.play_audio_file(Path("clip.wav"))
+    _operation, *args = manager.executor.submit.call_args.args
+    clip_cancel = args[-2]
+    assert not clip_cancel.is_set()
+
+    manager.speak("马上到")
+
+    assert clip_cancel.is_set()
+    manager.shutdown()
+
+
+def test_speech_registers_playback_token_on_shared_player(manager, mock_player):
+    """朗读与片段共用播放器：每次播放都要登记自己的取消句柄，由播放层兜底。"""
+    manager.speak("hi")
+    operation, *args = manager.executor.submit.call_args.args
+    operation(*args)
+
+    begin = mock_player.begin_playback.call_args
+    end = mock_player.end_playback.call_args
+    assert begin is not None and end is not None
+    assert begin.args[0] is end.args[0]
+    assert begin.args[0] is args[0].cancel
+    manager.shutdown()
+
+
+def test_stop_speech_still_works_after_queue_promotion(manager, mock_engine):
+    """从待播槽续播的任务同样要登记取消句柄，否则第二次打断会落空。"""
+    speaking = threading.Event()
+
+    def speak(_text: str, cancel_event: threading.Event) -> bool:
+        speaking.set()
+        return not cancel_event.wait(3)
+
+    mock_engine.speak.side_effect = speak
+
+    manager.speak("第一句")
+    operation, *args = manager.executor.submit.call_args.args
+    first = threading.Thread(target=operation, args=args, daemon=True)
+    first.start()
+    try:
+        assert speaking.wait(2)
+        # 第一句还在跑：先停，再提交第二句；第二句只能进待播槽。
+        manager.stop_speech()
+        speaking.clear()
+        manager.speak("第二句")
+
+        first.join(2)
+        assert not first.is_alive()
+        assert manager.executor.submit.call_count == 2
+        second_operation, *second_args = manager.executor.submit.call_args.args
+        assert manager._speech_cancel is second_args[0].cancel
+
+        second = threading.Thread(target=second_operation, args=second_args, daemon=True)
+        second.start()
+        assert speaking.wait(2)
+        # 第二次打断必须命中刚续播的第二句。
+        manager.stop_speech()
+        second.join(2)
+        assert not second.is_alive()
+    finally:
+        manager.shutdown()
+
+
+def test_audio_file_registers_playback_token(manager, mock_player, monkeypatch):
+    from contextlib import contextmanager
+
+    @contextmanager
+    def decoded(path, cancel_event):
+        yield path
+
+    monkeypatch.setattr("wordy.tts_manager.decoded_audio_clip", decoded)
+    manager.play_audio_file(Path("clip.wav"))
+    operation, *args = manager.executor.submit.call_args.args
+    operation(*args)
+
+    cancel = mock_player.play_wav.call_args.kwargs["cancel_event"]
+    mock_player.begin_playback.assert_called_once_with(cancel)
+    mock_player.end_playback.assert_called_once_with(cancel)
+    manager.shutdown()
+
+
 def test_audio_file_reports_finish_on_success_and_failure(manager, mock_player, mock_engine):
     """播完和播放失败都要回调，否则设置页的「停止」按钮会一直挂着。"""
     finished = MagicMock()
@@ -149,6 +280,9 @@ def test_queued_text_keeps_engine_selected_at_submission():
     manager._speech_lock = threading.Lock()
     manager._speech_running = False
     manager._pending_speech = None
+    manager._speech_cancel = None
+    manager._clip_cancel = None
+    manager._audio_player = MagicMock()
     old, new = MagicMock(), MagicMock()
     manager.engine = old
     manager.speak("queued text")
@@ -156,7 +290,9 @@ def test_queued_text_keeps_engine_selected_at_submission():
     kwargs = manager._executor.submit.call_args.kwargs
     manager.engine = new
     operation(*args, **kwargs)
-    old.speak.assert_called_once_with("queued text")
+    # 第二个参数是该次朗读的取消句柄，每次提交都是新事件。
+    assert old.speak.call_args.args[0] == "queued text"
+    assert isinstance(old.speak.call_args.args[1], threading.Event)
     new.speak.assert_not_called()
 
 
@@ -167,7 +303,7 @@ def test_new_worker_waits_for_retired_engine_close(manager, mock_engine, monkeyp
         assert release.wait(2)
     mock_engine.close.side_effect = close_old
     new_engine, executor = MagicMock(), MagicMock()
-    new_engine.speak.side_effect = lambda _text: playback.set()
+    new_engine.speak.side_effect = lambda *_args: playback.set()
     monkeypatch.setattr(manager, "_create_worker", lambda: _TTSWorker(executor, new_engine))
     manager._rebuild_worker("test switch", lambda: None)
     assert closing.wait(2)
@@ -591,7 +727,9 @@ class TestTTSManagerSpeak:
         operation, *args = manager._executor.submit.call_args.args
         operation(*args, **manager._executor.submit.call_args.kwargs)
         finished.assert_called_once_with()
-        mock_engine.speak.assert_called_once_with("hello")
+        # 第二个参数是这次朗读的取消句柄。
+        assert mock_engine.speak.call_args.args[0] == "hello"
+        assert isinstance(mock_engine.speak.call_args.args[1], threading.Event)
 
     def test_speak_reports_finish_on_engine_error(self, manager, mock_settings, mock_engine):
         mock_engine.speak.side_effect = OSError("网络中断")
@@ -641,10 +779,7 @@ class TestTTSManagerSpeak:
         assert manager._executor.submit.call_count == 2
         next_operation, next_job = manager._executor.submit.call_args.args
         next_operation(next_job)
-        assert mock_engine.speak.call_args_list == [
-            (("first",), {}),
-            (("latest",), {}),
-        ]
+        assert [call.args[0] for call in mock_engine.speak.call_args_list] == ["first", "latest"]
         first_finished.assert_called_once_with()
         latest_finished.assert_called_once_with()
 

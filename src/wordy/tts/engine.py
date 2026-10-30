@@ -59,8 +59,16 @@ class TTSAudioPlayer(Protocol):
         """打开流式音频输出。"""
         ...
 
+    def begin_playback(self, cancel_event: Event) -> None:
+        """登记本次播放的取消句柄；播放层据此在写入前拦截已取消的音频。"""
+        ...
+
+    def end_playback(self, cancel_event: Event) -> None:
+        """注销本次播放的取消句柄。"""
+        ...
+
     def write_stream(self, data: bytes) -> None:
-        """写入流式音频数据。"""
+        """写入流式音频数据；播放已取消时抛 InterruptedError。"""
         ...
 
     def close_stream(self) -> None:
@@ -107,6 +115,10 @@ class BackendTTSEngine(ABC):
         ...
 
     @abstractmethod
-    def speak(self, text: str) -> bool:
-        """生成并播放输入文本。"""
+    def speak(self, text: str, cancel_event: Event | None = None) -> bool:
+        """生成并播放输入文本；``cancel_event`` 置位时尽快停止。
+
+        引擎只能协作式取消：由播放线程在写入循环里自检，不做跨线程关闭音频流
+        （那会和 PortAudio 生命周期竞争，直接原生访问违例）。
+        """
         ...

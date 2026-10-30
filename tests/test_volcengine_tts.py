@@ -112,6 +112,32 @@ class TestVolcengineStreamingTTS:
         fake_response.close.assert_called_once_with()
         assert engine.audio_player.write_stream.call_count >= 1  # type: ignore[attr-defined]
 
+    def test_speak_stops_writing_when_cancelled(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """取消后立刻停止写入剩余音频块，并按「未播完」返回。"""
+        import base64
+        import threading
+
+        audio_b64 = base64.b64encode(b"\x00\x01" * 100).decode()
+        sse_lines = [json.dumps({"code": 0, "message": "", "data": audio_b64})] * 3
+        sse_lines.append(json.dumps({"code": 20000000, "message": "ok"}))
+
+        def _fake_iter_lines(decode_unicode=True):  # noqa: ARG001
+            yield from sse_lines
+
+        fake_response = Mock()
+        fake_response.status_code = 200
+        fake_response.iter_lines = _fake_iter_lines
+        monkeypatch.setattr("requests.post", lambda *a, **kw: fake_response)
+
+        engine = self._make_engine()
+        cancel = threading.Event()
+        # 第一块写完即取消：后续 SSE 行和子块都不该再进入播放。
+        engine.audio_player.write_stream.side_effect = lambda _data: cancel.set()  # type: ignore[attr-defined]
+
+        assert engine.speak("你好世界", cancel) is False
+        assert engine.audio_player.write_stream.call_count == 1  # type: ignore[attr-defined]
+        assert engine.audio_player.close_stream.call_count == 1  # type: ignore[attr-defined]
+
     def test_sse_endpoint_url(self) -> None:
         assert TTS_SSE_URL == "https://openspeech.bytedance.com/api/v3/tts/unidirectional/sse"
 

@@ -59,6 +59,12 @@ class _DummyAudioPlayer:
     ) -> bool:
         return True
 
+    def begin_playback(self, cancel_event: Event) -> None:
+        pass
+
+    def end_playback(self, cancel_event: Event) -> None:
+        pass
+
     def write_stream(self, data: bytes) -> None:
         pass
 
@@ -78,7 +84,7 @@ class _ConcreteEngine(BackendTTSEngine):
     def fetch_voices(self) -> list[VoiceInfo]:
         return [{"id": "v1", "name": "Alice"}]
 
-    def speak(self, text: str) -> bool:
+    def speak(self, text: str, cancel_event: Event | None = None) -> bool:
         return len(text) > 0
 
 

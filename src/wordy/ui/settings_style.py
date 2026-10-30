@@ -269,6 +269,12 @@ def build_settings_stylesheet(font_stack: str | None = None) -> str:
             border: 1px solid transparent;
             color: {TEXT_MUTED};
         }}
+        /* 槽内容类型用成对按钮表达：选中项用强调描边，避免和普通动作按钮混淆。 */
+        QPushButton#slotModeButton:checked {{
+            background: {GLASS_FILL_STRONG};
+            border: 1px solid {accent_ring};
+            color: {TEXT_PRIMARY};
+        }}
         QPushButton#dangerButton {{
             background: transparent;
             color: {TEXT_MUTED};

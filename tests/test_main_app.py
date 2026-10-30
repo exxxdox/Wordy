@@ -86,7 +86,7 @@ class FakeTTSEngine(BackendTTSEngine):
     def fetch_voices(self) -> list[dict]:
         return self.fetch_voices_result
 
-    def speak(self, text: str) -> bool:
+    def speak(self, text: str, cancel_event: threading.Event | None = None) -> bool:
         self.speak_calls.append(text)
         return True
 
@@ -574,6 +574,29 @@ def test_on_submit_with_voice_queues_through_executor(app):
     assert kwargs == {}
     # FakeExecutor runs synchronously, so speak was invoked.
     assert app.tts_manager.engine.speak_calls == ["hello world"]
+
+
+def test_on_submit_interrupts_previous_speech(app, monkeypatch):
+    """输入框新提交视为打断：旧朗读（含轮盘文字槽）不能把新内容顶在队尾。"""
+    stop = MagicMock()
+    monkeypatch.setattr(app.tts_manager, "stop_speech", stop)
+
+    app._on_submit("hi")
+
+    stop.assert_called_once_with()
+
+
+def test_preview_stop_interrupts_audio_and_speech(app, monkeypatch):
+    """试听停止信号对音频和文字都发一次；空转时两者都是 no-op。"""
+    app._chat_wheel_controller = MagicMock()
+    audio_stop, speech_stop = MagicMock(), MagicMock()
+    monkeypatch.setattr(app.tts_manager, "stop_audio_file", audio_stop)
+    monkeypatch.setattr(app.tts_manager, "stop_speech", speech_stop)
+
+    app._on_chat_wheel_change("chat_wheel_preview_stop", 0)
+
+    audio_stop.assert_called_once_with()
+    speech_stop.assert_called_once_with()
 
 
 def test_on_submit_does_not_spawn_raw_daemon_thread(app, monkeypatch):
