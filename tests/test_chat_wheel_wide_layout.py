@@ -18,7 +18,7 @@ def test_wide_wheel_places_editor_beside_preview(qapp):
     assert panel.wheel_picker.width() == panel.wheel_picker.height() == 400
     assert panel.wheel_combo.width() == 220
     assert panel.hotkey_input.width() == 160
-    assert panel.label_input.width() <= 340
+    assert panel.label_input.width() == panel.text_input.width()
     assert panel.volume_slider.width() <= 280
     assert panel.choose_button.width() < 120
     panel.close()

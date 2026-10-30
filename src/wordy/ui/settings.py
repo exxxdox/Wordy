@@ -55,10 +55,6 @@ DIALOG_MIN_HEIGHT = 636
 CONTENT_MARGIN = 36
 SECTION_GAP = 28
 INLINE_GAP = 10
-# 卡片内边距：带描边的容器里，内容要留出呼吸位，否则贴到框线上。
-# 不能再大——窄窗口（DIALOG_MIN_WIDTH）下 TTS 页的最小宽度余量只剩 26px，
-# 每加 2px 内边距就吃掉 4px，14px 就会溢出并触发横向裁切。数值同 INLINE_GAP。
-CARD_PADDING = 10
 BUTTON_GAP = 16
 BUTTON_MIN_WIDTH = 88
 # 录制结果改由浮动弹窗呈现，原地提示回到中性指引。
@@ -384,7 +380,8 @@ class SettingsWindow:
         route_layout.addStretch(1)
 
         tts_layout = self._create_tab_page(tab_widget, "TTS 设置")
-        provider_column, voice_column = self._create_columns(tts_layout)
+        # 服务商选择较短，给密钥和音色表单更多横向空间。
+        provider_column, voice_column = self._create_columns(tts_layout, (2, 3))
         self._build_tts_api_section(provider_column, s)
         self._add_inner_gap(provider_column)
         self._build_backend_section(provider_column, s)
@@ -392,8 +389,8 @@ class SettingsWindow:
         self._tts_provider_container = QFrame()
         self._tts_provider_container.setObjectName("ttsProviderContainer")
         container_layout = QVBoxLayout(self._tts_provider_container)
-        # 服务商配置保留内边距，避免输入控件压住原有玻璃边框。
-        container_layout.setContentsMargins(CARD_PADDING, 16, CARD_PADDING, 16)
+        # 以轻分隔线划分配置区，标题与左栏顶端对齐，不再套一层卡片。
+        container_layout.setContentsMargins(16, 0, 0, 0)
         container_layout.setSpacing(0)
 
         # 各 provider 面板
@@ -512,17 +509,17 @@ class SettingsWindow:
 
     def _build_hotkey_section(self, parent_layout: QVBoxLayout, s: AppSettings) -> None:
         section = self._create_section(parent_layout)
+        section.addWidget(self._section_title("全局快捷键"))
         header = QHBoxLayout()
         header.setContentsMargins(0, 0, 0, 0)
-        header.addWidget(self._section_title("全局快捷键"), 1)
         # 当前值只显示一次，避免重复信息挤占表单空间。
         self.pending_label = self._body_label(f"当前：{s.name}", INPUT_TEXT_COLOR, True)
+        header.addWidget(self.pending_label, 1)
         self.record_status_label = self._hint_label(RECORD_HINT, TEXT_MUTED)
         self.record_button = QPushButton("录制快捷键")
         self.record_button.clicked.connect(lambda _checked=False: self.on_record_hotkey())
         header.addWidget(self.record_button)
         section.addLayout(header)
-        section.addWidget(self.pending_label)
         section.addWidget(self.record_status_label)
 
     def _build_backend_section(self, parent_layout: QVBoxLayout, s: AppSettings) -> None:
@@ -591,9 +588,6 @@ class SettingsWindow:
 
     def _build_volume_section(self, parent_layout: QVBoxLayout, s: AppSettings) -> None:
         section = self._create_section(parent_layout)
-        form = section.parentWidget()
-        if form is not None:
-            form.setFixedWidth(300)
         header = QHBoxLayout()
         header.setContentsMargins(0, 0, 0, 0)
         header.addWidget(self._section_title("朗读音量"))
@@ -602,7 +596,6 @@ class SettingsWindow:
         header.addWidget(self.volume_value_label, 0, Qt.AlignmentFlag.AlignRight)
         section.addLayout(header)
         self.volume_slider = NoWheelSlider(Qt.Orientation.Horizontal)
-        self.volume_slider.setMaximumWidth(300)
         self.volume_slider.setRange(0, self._volume_to_slider(MAX_VOLUME))
         self.volume_slider.setSingleStep(1)
         self.volume_slider.setPageStep(max(1, int(0.25 / VOLUME_STEP)))
@@ -613,9 +606,6 @@ class SettingsWindow:
 
     def _build_opacity_section(self, parent_layout: QVBoxLayout, s: AppSettings) -> None:
         section = self._create_section(parent_layout)
-        form = section.parentWidget()
-        if form is not None:
-            form.setFixedWidth(300)
         header = QHBoxLayout()
         header.setContentsMargins(0, 0, 0, 0)
         # 此值是背景 alpha：百分比越低越透明，明确名称避免把 100% 理解为全透明。
@@ -625,7 +615,6 @@ class SettingsWindow:
         header.addWidget(self.opacity_value_label, 0, Qt.AlignmentFlag.AlignRight)
         section.addLayout(header)
         self.opacity_slider = NoWheelSlider(Qt.Orientation.Horizontal)
-        self.opacity_slider.setMaximumWidth(300)
         self.opacity_slider.setRange(0, self._opacity_to_slider(MAX_OVERLAY_OPACITY))
         self.opacity_slider.setSingleStep(1)
         self.opacity_slider.setPageStep(max(1, int(0.10 / OVERLAY_OPACITY_STEP)))
@@ -843,7 +832,6 @@ class SettingsWindow:
         section = self._create_section(parent_layout)
         section.addWidget(self._section_title("日志等级"))
         self.log_level_combo = NoWheelComboBox()
-        self.log_level_combo.setMaximumWidth(220)
         self.log_level_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContentsOnFirstShow)
         self.log_level_combo.setMinimumContentsLength(24)
         self.log_level_combo.view().setTextElideMode(Qt.TextElideMode.ElideRight)
@@ -1033,28 +1021,34 @@ class SettingsWindow:
         self.on_field_changed("overlay_opacity", op)
 
     @staticmethod
-    def _create_columns(parent_layout: QVBoxLayout) -> tuple[QVBoxLayout, QVBoxLayout]:
-        """两列采用等宽表单，共用上边线，长文案在各自列内换行。"""
+    def _create_columns(parent_layout: QVBoxLayout,
+                        stretches: tuple[int, int] = (1, 1)) -> tuple[QVBoxLayout, QVBoxLayout]:
+        """两列共用上边线，按任务分配表单宽度。"""
         row = QHBoxLayout()
-        row.setSpacing(40)
+        row.setSpacing(32)
         columns = []
-        for _ in range(2):
+        for stretch in stretches:
             column = QVBoxLayout()
             column.setContentsMargins(0, 0, 0, 0)
             column.setSpacing(0)
-            row.addLayout(column, 1)
+            row.addLayout(column, stretch)
             columns.append(column)
         parent_layout.addLayout(row)
         return columns[0], columns[1]
 
     def _create_section(self, parent_layout: QVBoxLayout) -> QVBoxLayout:
-        # 宽屏保留列间留白，表单以阅读宽度呈现，不随列宽无限拉伸。
+        # 同栏字段共用宽度，随窗口收窄；上限避免大窗口里的控件过长。
         form = QWidget()
-        form.setFixedWidth(340)
+        form.setMaximumWidth(440)
         section = QVBoxLayout(form)
         section.setContentsMargins(0, 0, 0, 0)
         section.setSpacing(10)
-        parent_layout.addWidget(form, 0, Qt.AlignmentFlag.AlignLeft)
+        # 超过阅读宽度的余量留在右侧，避免 Qt 把限宽表单居中挪离页标题。
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.addWidget(form, 1)
+        row.addStretch(0)
+        parent_layout.addLayout(row)
         return section
 
     def _create_tab_page(self, tab_widget: QTabWidget, title: str) -> QVBoxLayout:
@@ -1066,14 +1060,14 @@ class SettingsWindow:
         content = QWidget()
         content_layout = QVBoxLayout(content)
         # 横向仍留足阅读边距，收紧上下留白以容纳页标题而无需初始滚动。
-        content_layout.setContentsMargins(CONTENT_MARGIN, 26, CONTENT_MARGIN, 24)
+        content_layout.setContentsMargins(CONTENT_MARGIN, 24, CONTENT_MARGIN, 20)
         content_layout.setSpacing(0)
         # 页面标题说明当前任务，分组用留白区分，避免窄窗口被边框和卡片切碎。
         page_titles = {
             "本地设置": ("输入与显示", "调整快捷键、提示文字和输入栏外观。"),
             "音频侦听": ("声音与路由", "选择播放设备，控制侦听与返听。"),
             "TTS 设置": ("语音生成", "选择服务商，配置密钥与音色。"),
-            "聊天轮盘": ("音频轮盘", "选择八个音频，用全局快捷键随时播放。"),
+            "聊天轮盘": ("音频轮盘", "按住快捷键，移向音频，松开播放；回到中心或按 Esc 取消。"),
         }
         heading, description = page_titles[title]
         heading_label = QLabel(heading)
@@ -1082,7 +1076,7 @@ class SettingsWindow:
         description_label = self._hint_label(description, TEXT_MUTED)
         description_label.setObjectName("pageDescription")
         content_layout.addWidget(description_label)
-        content_layout.addSpacing(28)
+        content_layout.addSpacing(24)
         scroll_area.setWidget(content)
         tab_widget.addTab(scroll_area, title)
         return content_layout

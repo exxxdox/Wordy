@@ -185,11 +185,8 @@ class ChatWheelSettings(QWidget):
         layout = QVBoxLayout(self)
         # 父级页签已有标题和阅读边距，面板不重复增加外边距。
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(20)
-        hint = QLabel("按住快捷键，移向音频，松开播放；回到中心或按 Esc 取消。")
-        hint.setWordWrap(True)
-        hint.setStyleSheet(f"color: {TEXT_MUTED};")
-        layout.addWidget(hint)
+        # 操作指引已放在页标题下，避免重复占高挤出纵向滚动条。
+        layout.setSpacing(12)
 
         hotkey_row = QHBoxLayout()
         # 轮盘管理独立一行，预览与槽位编辑在下方并列。
@@ -231,7 +228,7 @@ class ChatWheelSettings(QWidget):
         self.slot_buttons = self.wheel_picker.buttons
         # 预览保持运行轮盘的材质与比例，编辑区利用新增宽度独立呈现字段。
         body = QHBoxLayout()
-        body.setSpacing(48)
+        body.setSpacing(32)
         body.addWidget(self.wheel_picker, 0, Qt.AlignmentFlag.AlignTop)
         editor = QWidget()
         editor.setObjectName("wheelEditor")
@@ -263,7 +260,8 @@ class ChatWheelSettings(QWidget):
         editor_layout.addLayout(editor_row)
         editor_layout.addWidget(QLabel("名称"))
         self.label_input = QLineEdit()
-        self.label_input.setMaximumWidth(340)
+        # 名称与朗读文字共用右边线，让编辑区保持完整的表单轮廓。
+        self.label_input.setMaximumWidth(520)
         self.label_input.setPlaceholderText("名称")
         self.label_input.setMaxLength(40)
         self.label_input.editingFinished.connect(self._save_label)

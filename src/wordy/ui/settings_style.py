@@ -236,9 +236,10 @@ def build_settings_stylesheet(font_stack: str | None = None) -> str:
             border: none;
         }}
         QFrame#ttsProviderContainer {{
-            background: {GLASS_SHEEN};
-            border: 1px solid {GLASS_HAIRLINE};
-            border-radius: {RADIUS_CARD}px;
+            /* 分栏靠轻分隔线区分，避免右栏的外框压过服务商选择。 */
+            background: transparent;
+            border: none;
+            border-left: 1px solid {GLASS_HAIRLINE};
         }}
         QPushButton {{
             min-height: 20px;

@@ -616,6 +616,7 @@ def test_settings_compact_width_keeps_navigation_and_forms_visible(monkeypatch: 
                 page = tabs.widget(index)
                 assert isinstance(page, QScrollArea)
                 assert page.horizontalScrollBar().maximum() == 0
+                assert page.verticalScrollBar().maximum() == 0
                 content = page.widget()
                 assert content is not None
                 assert content.minimumSizeHint().width() <= page.viewport().width()
@@ -672,10 +673,17 @@ def test_local_setting_headers_share_the_same_right_edge(monkeypatch: pytest.Mon
         font_position = window.ui_font_combo.mapTo(dialog, window.ui_font_combo.rect().topLeft())
         assert opacity_position.x() == font_position.x()
         assert opacity_position.x() > volume_position.x() + window.volume_slider.width()
-        assert window.volume_slider.width() <= 300
-        assert window.opacity_slider.width() <= 300
-        assert window.ui_font_combo.width() <= 340
-        assert window.placeholder_input.width() <= 340
+        # 同栏字段共用右边线，避免固定宽度在宽屏下留下零散空档。
+        assert window.volume_slider.width() == window.placeholder_input.width()
+        assert window.opacity_slider.width() == window.ui_font_combo.width()
+        assert window.log_level_combo.width() == window.placeholder_input.width()
+        assert window.placeholder_input.width() <= 440
+        assert window.ui_font_combo.width() <= 440
+        # 限宽后的表单仍与页标题左对齐，不能被布局居中。
+        from PySide6.QtWidgets import QLabel
+        heading = dialog.findChild(QLabel, "pageTitle")
+        assert heading is not None
+        assert volume_position.x() == heading.mapTo(dialog, heading.rect().topLeft()).x()
     finally:
         window.close()
 
