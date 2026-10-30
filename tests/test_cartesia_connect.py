@@ -675,3 +675,57 @@ class TestSharedRequestArgs:
         assert captured_kwargs["context_id"].startswith("cartesia-tts-")
         for key, value in expected_shared.items():
             assert captured_kwargs[key] == value
+
+    def test_realtime_speak_cancels_context_and_stops_writing(self, monkeypatch):
+        """取消要在 worker 线程里向服务端 cancel，并停止写入后续音频块。"""
+        import sys
+        import threading
+        from types import ModuleType
+
+        from wordy.tts.cartesia import CartesiaRealtimeTTS
+
+        # speak() 会 from websockets.exceptions import ConnectionClosed，
+        # 而 websockets 在本文件被替换成 DummyModule（不能作为包导入子模块）。
+        exceptions = ModuleType("websockets.exceptions")
+
+        class _ConnectionClosed(Exception):
+            pass
+
+        exceptions.ConnectionClosed = _ConnectionClosed  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "websockets.exceptions", exceptions)
+
+        mock_player = Mock()
+        mock_player.open_stream.return_value = True
+        tts = CartesiaRealtimeTTS(
+            audio_player=mock_player,
+            api_key="fake-key",
+            voice_id="voice-1",
+        )
+
+        class _Chunk:
+            type = "chunk"
+            audio = b"\x00\x01" * 10
+            context_id = "cartesia-tts-test"
+
+        class _CancelCtx:
+            cancelled = 0
+
+            def push(self, text): pass
+            def no_more_inputs(self): pass
+            def cancel(self): self.cancelled += 1
+            def receive(self):
+                while True:
+                    yield _Chunk()
+
+        ctx = _CancelCtx()
+        fake_conn = _FakeConnection()
+        fake_conn.context = lambda **kwargs: ctx
+        _install_connection(tts, fake_conn)
+
+        cancel = threading.Event()
+        # 第一块写完即取消：不能继续写第二块。
+        mock_player.write_stream.side_effect = lambda _data: cancel.set()
+
+        assert tts.speak("hi", cancel) is False
+        assert ctx.cancelled == 1
+        assert mock_player.write_stream.call_count == 1

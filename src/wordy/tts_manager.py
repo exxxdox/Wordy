@@ -16,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 from collections.abc import Callable
 from pathlib import Path
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from queue import SimpleQueue
 
 from wordy.config import AppSettings
@@ -57,6 +57,9 @@ class _SpeechJob:
     backend: str
     on_finished: Callable[[], None] | None
     on_error: Callable[[str], None] | None
+    # 每次朗读独立的取消句柄：stop_speech 只打断提交时对应的那一次，
+    # 用引擎级共享事件会误杀紧接着提交的下一段。
+    cancel: threading.Event = field(default_factory=threading.Event)
 
 
 def _janitor_loop_inner(janitor_queue: SimpleQueue) -> None:
@@ -115,6 +118,8 @@ class TTSManager:
         self._speech_lock = Lock()
         self._speech_running = False
         self._pending_speech: _SpeechJob | None = None
+        # 正在朗读那一次的取消句柄；worker 结束后清空。
+        self._speech_cancel: threading.Event | None = None
 
         worker = self._create_worker()
         self.engine = worker.engine
@@ -353,12 +358,29 @@ class TTSManager:
             else:
                 self._speech_running = True
                 submit_now = True
+                self._speech_cancel = job.cancel
         if replaced is not None:
             # 回调可能再次提交朗读，不能在持有队列锁时调用用户代码。
             self._notify_finished(replaced.on_finished)
         if not submit_now:
             return
         self._submit_speech(job)
+
+    def stop_speech(self) -> None:
+        """打断当前文字朗读，并丢弃排队中的待读文本。
+
+        引擎没有强杀能力，worker 线程在下一次写入前的自检处退出；排队任务不会再
+        被提交，所以它的完成回调必须在这里补发。
+        """
+        with self._speech_lock:
+            cancel = self._speech_cancel
+            pending = self._pending_speech
+            self._pending_speech = None
+        if cancel is not None:
+            cancel.set()
+        if pending is not None:
+            # 回调可能再次提交朗读，不能在持有队列锁时调用用户代码。
+            self._notify_finished(pending.on_finished)
 
     def _submit_speech(self, job: _SpeechJob) -> None:
         """提交已绑定 worker 的任务；executor 关闭时也释放队列状态。"""
@@ -379,17 +401,28 @@ class TTSManager:
         try:
             if job.ready is not None:
                 job.ready.wait()
-            if not job.engine.speak(job.text):
+            # 排队等待旧引擎交接期间也可能已被停止，置位后不必再开口。
+            if job.cancel.is_set():
+                return
+            if not job.engine.speak(job.text, job.cancel):
+                # 被取消不是失败：引擎按约定返回 False 表示「没播完」。
+                if job.cancel.is_set():
+                    return
                 message = f"{job.backend} 播放失败：未输出音频"
                 logger.error(message)
                 if job.on_error is not None:
                     job.on_error(message)
         except Exception as e:
+            if job.cancel.is_set():
+                return
             message = f"{job.backend} 播放失败：{e}"
             logger.error(message)
             if job.on_error is not None:
                 job.on_error(message)
         finally:
+            with self._speech_lock:
+                if self._speech_cancel is job.cancel:
+                    self._speech_cancel = None
             self._notify_finished(job.on_finished)
             self._advance_speech_queue()
 
@@ -491,6 +524,8 @@ class TTSManager:
         self._audio_files_stopped.set()
         # 播放层现在只看单次句柄，退出必须显式打断正在播的那一段。
         self.stop_audio_file()
+        # 文字朗读同理：不打断就要等引擎把整段播完（bytes 模式还可能等满 HTTP 超时）。
+        self.stop_speech()
         self._enqueue_retire_current()
         self._janitor_queue.put(None)
         self._janitor_thread.join(timeout=_JANITOR_JOIN_TIMEOUT_SECONDS)

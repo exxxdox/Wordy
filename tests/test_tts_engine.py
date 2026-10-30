@@ -78,7 +78,7 @@ class _ConcreteEngine(BackendTTSEngine):
     def fetch_voices(self) -> list[VoiceInfo]:
         return [{"id": "v1", "name": "Alice"}]
 
-    def speak(self, text: str) -> bool:
+    def speak(self, text: str, cancel_event: Event | None = None) -> bool:
         return len(text) > 0
 
 

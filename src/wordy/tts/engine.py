@@ -107,6 +107,10 @@ class BackendTTSEngine(ABC):
         ...
 
     @abstractmethod
-    def speak(self, text: str) -> bool:
-        """生成并播放输入文本。"""
+    def speak(self, text: str, cancel_event: Event | None = None) -> bool:
+        """生成并播放输入文本；``cancel_event`` 置位时尽快停止。
+
+        引擎只能协作式取消：由播放线程在写入循环里自检，不做跨线程关闭音频流
+        （那会和 PortAudio 生命周期竞争，直接原生访问违例）。
+        """
         ...

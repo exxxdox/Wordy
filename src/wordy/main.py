@@ -165,8 +165,10 @@ class WordyApp:
                 self.tts_manager.play_audio_file(Path(filename), controller.playback_error.emit,
                                                  on_finished, volume=volume)
         elif field == "chat_wheel_preview_stop":
-            # 只打断这一次试听，不触碰全局停止标志。
+            # 只打断这一次试听，不触碰全局停止标志；音频与文字共用这个停止信号，
+            # 两者在空转时都是 no-op，不用调用方区分试听类型。
             self.tts_manager.stop_audio_file()
+            self.tts_manager.stop_speech()
         elif field in ("chat_wheel_hotkey", "chat_wheel_add", "chat_wheel_remove"):
             error = None
             try:
@@ -254,6 +256,8 @@ class WordyApp:
 
     def _on_submit(self, text: str) -> None:
         """用户提交文本 → TTSManager 串行播放。"""
+        # 新提交视为打断旧朗读（包括轮盘文字槽），否则新内容要排到整段读完。
+        self.tts_manager.stop_speech()
         self.tts_manager.speak(text, on_error=self._on_tts_error)
 
     def _on_tts_error(self, message: str) -> None:
@@ -385,7 +389,9 @@ class WordyApp:
                 self._on_chat_wheel_playback_finished,
                 lambda text, done: self.tts_manager.speak(
                     text, done, self._on_tts_error
-                ))
+                ),
+                # 文字朗读没有引擎级强杀，只能让 manager 置取消位由 worker 自退。
+                self.tts_manager.stop_speech)
             try:
                 self._chat_wheel_controller.start()
             except (ValueError, RuntimeError, OSError) as error:

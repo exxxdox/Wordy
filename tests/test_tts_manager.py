@@ -88,6 +88,54 @@ def test_stop_audio_file_interrupts_current_clip(manager, mock_player):
     manager.shutdown()
 
 
+def test_stop_speech_interrupts_running_text(manager, mock_engine):
+    """停止朗读靠取消位让引擎自退；被打断不算失败，完成回调照常发出。"""
+    started = threading.Event()
+
+    def speak(_text, cancel_event=None):
+        assert isinstance(cancel_event, threading.Event)
+        started.set()
+        # 模拟引擎里阻塞的写入循环：等到取消才返回。
+        return not cancel_event.wait(2)
+
+    mock_engine.speak.side_effect = speak
+    finished, error = MagicMock(), MagicMock()
+    manager.speak("马上到", finished, error)
+    operation, *args = manager.executor.submit.call_args.args
+    thread = threading.Thread(target=operation, args=args)
+    thread.start()
+    try:
+        assert started.wait(2)
+        manager.stop_speech()
+    finally:
+        thread.join(2)
+    assert not thread.is_alive()
+    finished.assert_called_once_with()
+    error.assert_not_called()
+    manager.shutdown()
+
+
+def test_stop_speech_drops_pending_text(manager, mock_engine):
+    """排队中的待读文本不再提交，但它的完成回调必须补发。"""
+    release = threading.Event()
+    mock_engine.speak.side_effect = lambda _text, cancel_event=None: release.wait(2) or True
+    running_finished, pending_finished = MagicMock(), MagicMock()
+    manager.speak("第一句", running_finished)
+    operation, *args = manager.executor.submit.call_args.args
+    thread = threading.Thread(target=operation, args=args)
+    thread.start()
+    try:
+        manager.speak("第二句", pending_finished)
+        manager.stop_speech()
+        pending_finished.assert_called_once_with()
+    finally:
+        release.set()
+        thread.join(2)
+        manager.shutdown()
+    # 第二句从未进入 executor，worker 只收到第一次提交。
+    assert manager.executor.submit.call_count == 1
+
+
 def test_audio_file_reports_finish_on_success_and_failure(manager, mock_player, mock_engine):
     """播完和播放失败都要回调，否则设置页的「停止」按钮会一直挂着。"""
     finished = MagicMock()
@@ -149,6 +197,7 @@ def test_queued_text_keeps_engine_selected_at_submission():
     manager._speech_lock = threading.Lock()
     manager._speech_running = False
     manager._pending_speech = None
+    manager._speech_cancel = None
     old, new = MagicMock(), MagicMock()
     manager.engine = old
     manager.speak("queued text")
@@ -156,7 +205,9 @@ def test_queued_text_keeps_engine_selected_at_submission():
     kwargs = manager._executor.submit.call_args.kwargs
     manager.engine = new
     operation(*args, **kwargs)
-    old.speak.assert_called_once_with("queued text")
+    # 第二个参数是该次朗读的取消句柄，每次提交都是新事件。
+    assert old.speak.call_args.args[0] == "queued text"
+    assert isinstance(old.speak.call_args.args[1], threading.Event)
     new.speak.assert_not_called()
 
 
@@ -167,7 +218,7 @@ def test_new_worker_waits_for_retired_engine_close(manager, mock_engine, monkeyp
         assert release.wait(2)
     mock_engine.close.side_effect = close_old
     new_engine, executor = MagicMock(), MagicMock()
-    new_engine.speak.side_effect = lambda _text: playback.set()
+    new_engine.speak.side_effect = lambda *_args: playback.set()
     monkeypatch.setattr(manager, "_create_worker", lambda: _TTSWorker(executor, new_engine))
     manager._rebuild_worker("test switch", lambda: None)
     assert closing.wait(2)
@@ -591,7 +642,9 @@ class TestTTSManagerSpeak:
         operation, *args = manager._executor.submit.call_args.args
         operation(*args, **manager._executor.submit.call_args.kwargs)
         finished.assert_called_once_with()
-        mock_engine.speak.assert_called_once_with("hello")
+        # 第二个参数是这次朗读的取消句柄。
+        assert mock_engine.speak.call_args.args[0] == "hello"
+        assert isinstance(mock_engine.speak.call_args.args[1], threading.Event)
 
     def test_speak_reports_finish_on_engine_error(self, manager, mock_settings, mock_engine):
         mock_engine.speak.side_effect = OSError("网络中断")
@@ -641,10 +694,7 @@ class TestTTSManagerSpeak:
         assert manager._executor.submit.call_count == 2
         next_operation, next_job = manager._executor.submit.call_args.args
         next_operation(next_job)
-        assert mock_engine.speak.call_args_list == [
-            (("first",), {}),
-            (("latest",), {}),
-        ]
+        assert [call.args[0] for call in mock_engine.speak.call_args_list] == ["first", "latest"]
         first_finished.assert_called_once_with()
         latest_finished.assert_called_once_with()
 

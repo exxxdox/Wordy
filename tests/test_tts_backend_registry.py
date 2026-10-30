@@ -39,7 +39,7 @@ class FakeFakeEngine(BackendTTSEngine):
     def fetch_voices(self) -> list[dict]:
         return []
 
-    def speak(self, text: str) -> bool:
+    def speak(self, text: str, cancel_event: object = None) -> bool:
         return True
 
     def stop(self) -> None:

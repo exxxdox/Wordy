@@ -86,7 +86,7 @@ def test_text_slot_speaks_instead_of_playing_a_file(qapp, tmp_path: Path):
     controller.play_slot(0)
 
     assert speak.call_args.args[0] == "马上到"
-    # 第二个参数是完成回调，设置页靠它复位「朗读中…」。
+    # 第二个参数是完成回调，设置页靠它复位试听按钮。
     assert callable(speak.call_args.args[1])
     playback.assert_not_called()
 
@@ -104,6 +104,42 @@ def test_text_slot_shows_its_label_on_the_wheel(qapp, tmp_path: Path):
     controller._open()
 
     assert controller.wheel._labels[0] == "催场"
+    controller.stop()
+
+
+def test_playing_text_slot_stops_previous_speech_first(qapp, tmp_path: Path):
+    """新朗读必须先停掉上一段：顺序反了会把刚提交的那段自己打断。"""
+    settings = AppSettings.load(config_file=tmp_path / "config.toml")
+    settings.update(chat_wheel_texts=["马上到"] + [""] * 7)
+    playback, error, speak, stop = MagicMock(), MagicMock(), MagicMock(), MagicMock()
+    order = MagicMock()
+    order.attach_mock(stop, "stop")
+    order.attach_mock(speak, "speak")
+    controller = ChatWheelController(settings, playback, error, None, speak, stop)
+
+    controller.play_slot(0)
+
+    assert [call[0] for call in order.mock_calls] == ["stop", "speak"]
+    controller.stop()
+
+
+def test_playing_audio_slot_stops_running_speech(qapp, tmp_path: Path):
+    """音频槽与文字共用串行 worker，不先停朗读就得等整段读完才出声。"""
+    clips = tmp_path / "audio_clips"
+    clips.mkdir()
+    clip = clips / "clip.wav"
+    clip.write_bytes(b"RIFF")
+    settings = AppSettings.load(config_file=tmp_path / "config.toml")
+    settings.update(chat_wheel_slots=["clip.wav"] + [""] * 7)
+    playback, error, speak, stop = MagicMock(), MagicMock(), MagicMock(), MagicMock()
+    controller = ChatWheelController(settings, playback, error, None, speak, stop)
+
+    with patch("wordy.chat_wheel_controller.resolve_audio_clip", return_value=clip):
+        controller.play_slot(0)
+
+    stop.assert_called_once_with()
+    playback.assert_called_once()
+    speak.assert_not_called()
     controller.stop()
 
 

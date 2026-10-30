@@ -7,6 +7,7 @@ from unittest.mock import Mock
 import pytest
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtTest import QTest
+from PySide6.QtWidgets import QMessageBox
 
 from wordy.config import AppSettings
 from wordy.ui.chat_wheel_settings import ChatWheelSettings
@@ -122,6 +123,7 @@ def test_wheel_selection_edits_only_selected_wheel(qapp):
     settings.add_wheel("f9")
     panel = ChatWheelSettings(settings, Mock())
     panel.wheel_combo.setCurrentIndex(1)
+    panel.text_mode_button.click()  # 空槽切文字不弹确认
     panel.text_input.setText("第二轮盘")
     panel._save_text()
     assert settings.get_wheel(1)["texts"][0] == "第二轮盘"
@@ -318,11 +320,13 @@ def test_wheel_selects_slot_and_shows_only_its_editor(qapp):
 def test_wheel_sector_hit_test_matches_runtime_directions(qapp):
     panel = ChatWheelSettings(AppSettings(), Mock())
 
-    assert panel.wheel_picker._slot_at(QPoint(200, 50)) == 0
-    assert panel.wheel_picker._slot_at(QPoint(350, 200)) == 2
-    assert panel.wheel_picker._slot_at(QPoint(200, 350)) == 4
-    assert panel.wheel_picker._slot_at(QPoint(50, 200)) == 6
+    # 预览按 634×540 画布等比缩放，命中半径随缩放变小（内 50px / 外 146px）。
+    assert panel.wheel_picker._slot_at(QPoint(200, 60)) == 0
+    assert panel.wheel_picker._slot_at(QPoint(340, 200)) == 2
+    assert panel.wheel_picker._slot_at(QPoint(200, 340)) == 4
+    assert panel.wheel_picker._slot_at(QPoint(60, 200)) == 6
     assert panel.wheel_picker._slot_at(QPoint(200, 200)) is None
+    assert panel.wheel_picker._slot_at(QPoint(200, 40)) is None
 
 
 def test_selected_sector_survives_mouse_leaving(qapp):
@@ -330,7 +334,7 @@ def test_selected_sector_survives_mouse_leaving(qapp):
     panel.show()
     qapp.processEvents()
 
-    QTest.mouseClick(panel.wheel_picker, Qt.MouseButton.LeftButton, pos=QPoint(350, 200))
+    QTest.mouseClick(panel.wheel_picker, Qt.MouseButton.LeftButton, pos=QPoint(340, 200))
     QTest.mouseMove(panel.label_input, QPoint(4, 4))
     qapp.processEvents()
 
@@ -698,11 +702,88 @@ def test_text_input_shares_the_label_row(qapp):
     assert panel.text_input.maxLength() > 0
 
 
-def test_saving_text_replaces_the_slot_clip(qapp):
+def test_slot_mode_shows_only_matching_editor(qapp):
+    """类型选择器必须让槽内容一眼可辨：只显示该类型用得上的编辑控件。"""
+    settings = AppSettings(chat_wheel_slots=["a.wav"] + [""] * 7,
+                           chat_wheel_texts=["", "马上到"] + [""] * 6)
+    panel = ChatWheelSettings(settings, Mock())
+
+    assert panel.audio_mode_button.isChecked()
+    assert panel.text_input.isHidden()
+    assert not panel.choose_button.isHidden()
+
+    panel.slot_buttons[1].click()
+
+    assert panel.text_mode_button.isChecked()
+    assert not panel.text_input.isHidden()
+    assert panel.choose_button.isHidden()
+    assert panel.record_button.isHidden()
+    assert panel.trim_button.isHidden()
+    assert panel.volume_slider.isHidden()
+
+
+def test_switching_to_text_clears_audio_after_confirmation(qapp, monkeypatch):
+    monkeypatch.setattr("wordy.ui.chat_wheel_settings.QMessageBox.question",
+                        lambda *args, **kwargs: QMessageBox.StandardButton.Yes)
+    settings = AppSettings(chat_wheel_slots=["a.wav"] + [""] * 7)
+    panel = ChatWheelSettings(settings, Mock())
+
+    panel.text_mode_button.click()
+
+    assert settings.chat_wheel_slots[0] == ""
+    assert panel.text_mode_button.isChecked()
+    assert not panel.text_input.isHidden()
+
+
+def test_cancelling_the_switch_keeps_audio(qapp, monkeypatch):
+    monkeypatch.setattr("wordy.ui.chat_wheel_settings.QMessageBox.question",
+                        lambda *args, **kwargs: QMessageBox.StandardButton.No)
+    settings = AppSettings(chat_wheel_slots=["a.wav"] + [""] * 7)
+    panel = ChatWheelSettings(settings, Mock())
+
+    panel.text_mode_button.click()
+
+    assert settings.chat_wheel_slots[0] == "a.wav"
+    assert panel.audio_mode_button.isChecked()
+    assert panel.text_input.isHidden()
+
+
+def test_switching_to_audio_clears_text_and_restores_actions(qapp):
+    settings = AppSettings(chat_wheel_texts=["马上到"] + [""] * 7)
+    panel = ChatWheelSettings(settings, Mock())
+
+    panel.audio_mode_button.click()
+
+    assert settings.chat_wheel_texts[0] == ""
+    assert panel.audio_mode_button.isChecked()
+    assert not panel.choose_button.isHidden()
+    assert panel.text_input.isHidden()
+
+
+def test_empty_slot_mode_is_a_local_choice_until_content(qapp):
+    settings = AppSettings()
+    panel = ChatWheelSettings(settings, Mock())
+
+    panel.text_mode_button.click()
+
+    assert panel.text_mode_button.isChecked()
+    assert not panel.text_input.isHidden()
+    # 空槽切换类型不写配置。
+    assert settings.chat_wheel_texts == [""] * 8
+    assert settings.chat_wheel_slots == [""] * 8
+
+    panel.slot_buttons[1].click()  # 切槽回到默认音频
+    assert panel.audio_mode_button.isChecked()
+
+
+def test_saving_text_replaces_the_slot_clip(qapp, monkeypatch):
+    monkeypatch.setattr("wordy.ui.chat_wheel_settings.QMessageBox.question",
+                        lambda *args, **kwargs: QMessageBox.StandardButton.Yes)
     settings = AppSettings(chat_wheel_slots=["a.wav"] + [""] * 7,
                            chat_wheel_labels=["旧片段"] + [""] * 7)
     panel = ChatWheelSettings(settings, Mock())
 
+    panel.text_mode_button.click()
     panel.text_input.setText("马上到")
     panel.text_input.editingFinished.emit()
 
@@ -732,20 +813,22 @@ def test_importing_a_clip_clears_the_slot_text(qapp):
     assert settings.chat_wheel_texts[0] == ""
 
 
-def test_text_slot_previews_as_speaking_and_resets(qapp):
-    """朗读打断不了，所以按钮如实显示「朗读中…」并禁用，而不是假装能停。"""
+def test_text_slot_preview_can_be_stopped(qapp):
+    """朗读可打断：按钮变成「停止」，点击发停止信号，完成回调才复位并解锁。"""
     settings = AppSettings(chat_wheel_texts=["马上到"] + [""] * 7)
     changed = Mock()
     panel = ChatWheelSettings(settings, changed)
 
     panel.preview_button.click()
 
-    assert panel.preview_button.text() == "朗读中…"
-    assert not panel.preview_button.isEnabled()
+    assert panel.preview_button.text() == "停止"
+    assert panel.preview_button.isEnabled()
     changed.assert_called_once_with("chat_wheel_preview", 0)
 
-    panel.preview_button.click()  # 禁用时点击无效
-    assert panel.preview_button.text() == "朗读中…"
+    panel.preview_button.click()
+
+    changed.assert_called_with("chat_wheel_preview_stop", 0)
+    # 回调到达前保持锁定：回调不带槽号，提前放开会误复位新开的试听。
     assert panel._preview_speech is True
 
     panel.set_preview_playing(False)
@@ -754,17 +837,22 @@ def test_text_slot_previews_as_speaking_and_resets(qapp):
     assert panel._preview_speech is False
 
 
-def test_speaking_disables_preview_on_every_slot(qapp):
-    """完成回调不带槽号，所以朗读期间必须全局禁用试听，否则回调会误复位新的试听。"""
+def test_stop_button_on_another_slot_only_stops_the_speech(qapp):
+    """朗读中切到别的槽，按钮仍是「停止」：它只能停当前朗读，不能另起新试听。"""
     settings = AppSettings(chat_wheel_slots=["", "b.wav"] + [""] * 6,
                            chat_wheel_texts=["马上到"] + [""] * 7)
-    panel = ChatWheelSettings(settings, Mock())
+    changed = Mock()
+    panel = ChatWheelSettings(settings, changed)
     panel.preview_button.click()
+    changed.reset_mock()
 
     panel.slot_buttons[1].click()
+    panel.preview_button.click()
 
-    assert panel.preview_button.text() == "朗读中…"
-    assert not panel.preview_button.isEnabled()
+    # 只发停止信号，没有再提交新的试听。
+    assert [call.args[0] for call in changed.call_args_list] == ["chat_wheel_preview_stop"]
+    assert panel._preview_speech is True
+    assert panel.preview_button.text() == "停止"
 
 
 def test_recording_is_refused_while_speaking(qapp, monkeypatch):
@@ -905,11 +993,14 @@ def test_import_file_temporary_source_is_removed(qapp, monkeypatch, tmp_path):
     assert settings.chat_wheel_labels[3] == "录音 093000"
 
 
-def test_real_settings_window_wheel_fits_default_width(qapp, fake_keyring):
+def test_real_settings_window_wheel_fits_default_width(qapp, fake_keyring, monkeypatch):
     from PySide6.QtWidgets import QScrollArea, QTabWidget
     from wordy.ui.settings import DIALOG_WIDTH, SettingsWindow
     from wordy.ui.settings_state import SettingsState
 
+    # 该槽带音频，切到文字会弹确认框；离屏测试里必须直接回答，否则永久阻塞。
+    monkeypatch.setattr("wordy.ui.chat_wheel_settings.QMessageBox.question",
+                        lambda *args, **kwargs: QMessageBox.StandardButton.Yes)
     settings = AppSettings.load()
     settings.update(chat_wheel_slots=["sample.wav"] * 8,
                     chat_wheel_labels=[f"轮盘音频 {index + 1}" for index in range(8)])
@@ -932,6 +1023,7 @@ def test_real_settings_window_wheel_fits_default_width(qapp, fake_keyring):
         assert panel.clear_button.geometry().right() < panel.width()
         assert scroll.verticalScrollBar().maximum() == 0
         # 名称与朗读文字同行的两个输入框不能把面板撑宽。
+        panel.text_mode_button.click()
         panel.text_input.setText("这是一段很长的朗读文字" * 10)
         qapp.processEvents()
         assert panel.text_input.geometry().right() < panel.width()
@@ -1003,5 +1095,5 @@ def test_picker_uses_shared_wheel_painter(qapp, monkeypatch):
     assert picker.width() == picker.height() == 400
     assert picker._slot_at(picker.buttons[0].geometry().center()) == 0
     assert picker._slot_at(QPoint(200, 140)) == 0
-    assert picker._slot_at(QPoint(200, 142)) is None
+    assert picker._slot_at(QPoint(200, 150)) is None
     picker.close()

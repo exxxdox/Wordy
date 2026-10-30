@@ -10,7 +10,8 @@ from wordy.ui import wheel_paint
 
 
 def _render(labels, selected, *, highlights=None, opacity=1.0, editing=False):
-    image = QImage(540, 540, QImage.Format.Format_ARGB32_Premultiplied)
+    image = QImage(wheel_paint.WHEEL_CANVAS_WIDTH, wheel_paint.WHEEL_CANVAS_HEIGHT,
+                   QImage.Format.Format_ARGB32_Premultiplied)
     image.fill(Qt.GlobalColor.transparent)
     painter = QPainter(image)
     painter.setOpacity(opacity)
@@ -26,7 +27,7 @@ def test_game_wheel_is_translucent_and_highlights_direction(qapp):
     selected = _render(labels, 1)
     # 扇区本身保持透明；选中是浅色扇面，不是蓝色实心圆盘。
     # 取奇数槽取样：偶数槽本身已是亮色，选中靠透明度提升，色差不明显。
-    sample = (369, 171)
+    sample = (369 + wheel_paint.WHEEL_CANVAS_PAD, 171)
     assert 0 < selected.pixelColor(*sample).alpha() < 180
     assert selected.pixelColor(*sample).red() > idle.pixelColor(*sample).red() + 80
     assert selected.pixelColor(0, 0).alpha() == 0
@@ -39,14 +40,15 @@ def test_game_wheel_empty_selection_and_fade(qapp, editing):
         assert _render(empty, 0) == _render(empty, None)
     full = _render(["Audio"] * 8, 2, editing=editing)
     half = _render(["Audio"] * 8, 2, opacity=0.5, editing=editing)
-    assert half.pixelColor(270, 270).alpha() < full.pixelColor(270, 270).alpha()
+    center_x = 270 + wheel_paint.WHEEL_CANVAS_PAD
+    assert half.pixelColor(center_x, 270).alpha() < full.pixelColor(center_x, 270).alpha()
 
 
 def test_game_wheel_long_names_stay_inside_window(qapp):
     image = _render(["这是一个很长的音频名称用于检查文字省略"] * 8, 2)
     # 窗口最外侧留透明余量，长名称不能画到窗口边界被硬切。
-    assert all(image.pixelColor(0, y).alpha() == 0 for y in range(540))
-    assert all(image.pixelColor(539, y).alpha() == 0 for y in range(540))
+    assert all(image.pixelColor(0, y).alpha() == 0 for y in range(image.height()))
+    assert all(image.pixelColor(image.width() - 1, y).alpha() == 0 for y in range(image.height()))
 
 
 def test_game_wheel_side_names_clear_metal_base_and_match_preview(qapp, monkeypatch):
@@ -67,16 +69,18 @@ def test_game_wheel_side_names_clear_metal_base_and_match_preview(qapp, monkeypa
 def test_game_wheel_center_ring_is_compact_and_seals_gap(qapp):
     image = _render(["Audio"] * 8, None)
     # 圆环半径缩到 62px；环外 70px 处应是扇面，不能留透明空隙。
-    assert image.pixelColor(270, 200).alpha() > 0
-    assert image.pixelColor(270, 200).alpha() < 200
-    assert image.pixelColor(270, 270).alpha() == 255
+    center_x = 270 + wheel_paint.WHEEL_CANVAS_PAD
+    assert image.pixelColor(center_x, 200).alpha() > 0
+    assert image.pixelColor(center_x, 200).alpha() < 200
+    assert image.pixelColor(center_x, 270).alpha() == 255
 
 
 def test_game_wheel_sectors_alternate_black_and_white(qapp):
     image = _render(["Audio"] * 8, None)
     for index in range(8):
         angle = math.radians(90 - index * 45)
-        x, y = round(270 + 150 * math.cos(angle)), round(270 - 150 * math.sin(angle))
+        x, y = (round(270 + wheel_paint.WHEEL_CANVAS_PAD + 150 * math.cos(angle)),
+                round(270 - 150 * math.sin(angle)))
         color = image.pixelColor(x, y)
         # 背景仍透出：不透明扇面被禁止；相邻槽一明一暗，偶数槽亮。
         assert 0 < color.alpha() < 180
@@ -89,9 +93,11 @@ def test_game_wheel_ring_highlight_follows_selection(qapp):
     right = _render(labels, 2)
     left = _render(labels, 6)
     # 圆环带上的高光随选中方向移动：右侧选中时右环更亮，左环与空闲一致。
-    assert right.pixelColor(326, 270).red() > idle.pixelColor(326, 270).red() + 30
-    assert left.pixelColor(214, 270).red() > idle.pixelColor(214, 270).red() + 30
-    assert abs(right.pixelColor(214, 270).red() - idle.pixelColor(214, 270).red()) < 20
+    offset = wheel_paint.WHEEL_CANVAS_PAD
+    assert right.pixelColor(326 + offset, 270).red() > idle.pixelColor(326 + offset, 270).red() + 30
+    assert left.pixelColor(214 + offset, 270).red() > idle.pixelColor(214 + offset, 270).red() + 30
+    assert abs(right.pixelColor(214 + offset, 270).red()
+               - idle.pixelColor(214 + offset, 270).red()) < 20
 
 
 def test_game_wheel_hover_keeps_ten_char_label(qapp, monkeypatch):
@@ -102,7 +108,7 @@ def test_game_wheel_hover_keeps_ten_char_label(qapp, monkeypatch):
     _render([label] * 8, None)
     assert label in texts
     texts.clear()
-    # 左上槽 hover 放大字号后不能反而省略：贴边槽按外侧对齐，向内侧伸。
+    # 左上槽 hover 放大字号后不能反而省略：画布左右余量保证居中名称仍放得下。
     _render([label] * 8, 7, highlights=[0, 0, 0, 0, 0, 0, 0, 1])
     assert label in texts
 
@@ -112,7 +118,8 @@ def test_game_wheel_has_only_one_selected_pointer(qapp, selected):
     image = _render(["Audio"] * 8, selected)
     for index in range(8):
         angle = math.radians(90 - index * 45)
-        x, y = round(270 + 90 * math.cos(angle)), round(270 - 90 * math.sin(angle))
+        x, y = (round(270 + wheel_paint.WHEEL_CANVAS_PAD + 90 * math.cos(angle)),
+                round(270 - 90 * math.sin(angle)))
         alpha = image.pixelColor(x, y).alpha()
         if index == selected:
             assert alpha > 200
@@ -123,15 +130,18 @@ def test_game_wheel_has_only_one_selected_pointer(qapp, selected):
 
 def test_game_wheel_pointer_does_not_linger_in_previous_direction(qapp):
     image = _render(["Audio"] * 8, 2, highlights=[0.5, 0, 0.5, 0, 0, 0, 0, 0])
-    assert image.pixelColor(270, 180).alpha() < 180
+    offset = wheel_paint.WHEEL_CANVAS_PAD
+    assert image.pixelColor(270 + offset, 180).alpha() < 180
     empty = _render([""] * 8, 2, highlights=[0, 0, 1, 0, 0, 0, 0, 0])
-    assert empty.pixelColor(360, 270).alpha() < 180
+    assert empty.pixelColor(360 + offset, 270).alpha() < 180
 
 
 @pytest.mark.parametrize("selected", [None, 0])
 def test_game_wheel_names_are_white_with_dark_shadow(qapp, selected):
     image = _render(["清晰白字"] * 8, selected)
-    colors = [image.pixelColor(x, y) for x in range(150, 390) for y in range(44, 100)]
+    offset = wheel_paint.WHEEL_CANVAS_PAD
+    colors = [image.pixelColor(x, y) for x in range(150 + offset, 390 + offset)
+              for y in range(44, 100)]
     # 未选中的名称也要是实白；近字缘须有足够实的黑影，才能从亮背景中分离。
     assert sum(c.red() > 248 and c.green() > 248 and c.blue() > 248 and c.alpha() > 248
                for c in colors) > 50

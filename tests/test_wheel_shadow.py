@@ -34,7 +34,8 @@ def test_wheel_shadow_fades_smoothly_outside_disc(size):
 
 def test_wheel_shadow_does_not_darken_translucent_disc(qapp, monkeypatch):
     def render():
-        image = QImage(540, 540, QImage.Format.Format_ARGB32_Premultiplied)
+        image = QImage(wheel_paint.WHEEL_CANVAS_WIDTH, wheel_paint.WHEEL_CANVAS_HEIGHT,
+                       QImage.Format.Format_ARGB32_Premultiplied)
         image.fill(Qt.GlobalColor.transparent)
         painter = QPainter(image)
         wheel_paint.paint_wheel(painter, [""] * 8, None)
@@ -45,5 +46,7 @@ def test_wheel_shadow_does_not_darken_translucent_disc(qapp, monkeypatch):
     monkeypatch.setattr(wheel_paint, "_paint_wheel_shadow", lambda painter, disc: None)
     without_shadow = render()
     # 空槽较透明，最容易暴露盘底投影；外影开关不得改变盘内像素。
-    for x, y in ((270, 50), (270, 110), (110, 270), (430, 270), (270, 490)):
+    offset = wheel_paint.WHEEL_CANVAS_PAD
+    for x, y in ((270 + offset, 50), (270 + offset, 110), (110 + offset, 270),
+                 (430 + offset, 270), (270 + offset, 490)):
         assert with_shadow.pixelColor(x, y) == without_shadow.pixelColor(x, y)

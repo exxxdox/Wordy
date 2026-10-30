@@ -14,7 +14,9 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QWidget
 
-from wordy.ui.wheel_paint import WheelHover, paint_wheel
+from wordy.ui.wheel_paint import (
+    WHEEL_CANVAS_HEIGHT, WHEEL_CANVAS_WIDTH, WheelHover, paint_wheel,
+)
 from wordy.ui.theme import (
     GREEN_ACCENT, TEXT_PRIMARY, WINDOW_BG, tint,
 )
@@ -36,7 +38,8 @@ class ChatWheel(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.setMouseTracking(True)
-        self.setFixedSize(540, 540)
+        # 画布比盘体宽：左右透明余量给贴边名称，hover 放大也不再被窗口边缘截短。
+        self.setFixedSize(WHEEL_CANVAS_WIDTH, WHEEL_CANVAS_HEIGHT)
         self.setWindowTitle("Wordy · 音频轮盘")
         self._on_select = on_select
         self._labels = [""] * 8
@@ -75,7 +78,8 @@ class ChatWheel(QWidget):
         self._origin = QPoint(position)
         screen = QGuiApplication.screenAt(position) or QGuiApplication.primaryScreen()
         x, y = clamp_window_position(screen, self.width(), self.height(),
-                                     position.x() - 270, position.y() - 270)
+                                     position.x() - WHEEL_CANVAS_WIDTH // 2,
+                                     position.y() - WHEEL_CANVAS_HEIGHT // 2)
         self.move(x, y)
         # 只定位窗口，不移动游戏光标；show 前的窗口映射在首开/跨屏时也可能尚未稳定。
         self.show()
@@ -130,7 +134,7 @@ class ChatWheel(QWidget):
         self._origin = None
 
     def _slot_at(self, point: QPoint) -> int | None:
-        dx, dy = point.x() - 270, point.y() - 270
+        dx, dy = point.x() - WHEEL_CANVAS_WIDTH // 2, point.y() - WHEEL_CANVAS_HEIGHT // 2
         if math.hypot(dx, dy) < 76:
             return None
         # 正上方为 0，顺时针每 45 度一个槽；远处拖动仍按方向选择。
@@ -149,7 +153,8 @@ class ChatWheel(QWidget):
         if self._origin is None:
             return None
         # 方向以唤出时的 Qt 全局逻辑坐标为锚点，窗口边缘钳位不会造成静止误选。
-        return self._slot_at(point - self._origin + QPoint(270, 270))
+        return self._slot_at(point - self._origin
+                             + QPoint(WHEEL_CANVAS_WIDTH // 2, WHEEL_CANVAS_HEIGHT // 2))
 
     def _poll(self) -> None:
         if not self.is_active():
@@ -194,7 +199,7 @@ class ChatWheel(QWidget):
             self._selected if self._selected is not None and self._labels[self._selected] else None)
         paint_wheel(painter, self._labels, self._selected,
                     highlights=self._hover_animation.values, style=self._style)
-        center = QPointF(270, 270)
+        center = QPointF(WHEEL_CANVAS_WIDTH / 2, WHEEL_CANVAS_HEIGHT / 2)
         accent = QColor(GREEN_ACCENT)
         # 钳位只移动盘体：标出真实取消区，避免把视觉中心误认为手势起点。
         if self._origin is not None:
