@@ -97,7 +97,6 @@ uv add --dev <dev-package>
 ### 技术栈
 
 - **Python 3.12**（uv 管理，`.python-version` 锁定）
-- **TTS**: Cartesia API
 - **音频**: sounddevice + pyaudio
 - **路由**: Windows Core Audio 侦听策略 + VB-CABLE
 - **GUI**: PySide6
