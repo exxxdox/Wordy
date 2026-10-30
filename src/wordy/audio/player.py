@@ -683,6 +683,10 @@ class AudioPlayer:
         p, self._stream_p = self._stream_p, None
         self._stream_mono_upmix = False
         self._stream_sample_width = None
+        # get_stream_config 是「当前是否还占着设备」的唯一可见状态；不归零会让
+        # 调用方以为流还开着，继续往已关闭的流写或跳过补开。
+        self._stream_format = None
+        self._stream_rate = None
 
         self._close_stream(stream)
         self._terminate_pyaudio(p)

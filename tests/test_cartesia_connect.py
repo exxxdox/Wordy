@@ -702,10 +702,16 @@ class TestSharedRequestArgs:
             voice_id="voice-1",
         )
 
+        # context_id 由被测代码生成，假事件必须回报同一个值，否则会被当外来的旧上下文丢弃。
+        captured: dict[str, object] = {}
+
         class _Chunk:
             type = "chunk"
             audio = b"\x00\x01" * 10
-            context_id = "cartesia-tts-test"
+
+            @property
+            def context_id(self):
+                return captured["context_id"]
 
         class _CancelCtx:
             cancelled = 0
@@ -719,7 +725,7 @@ class TestSharedRequestArgs:
 
         ctx = _CancelCtx()
         fake_conn = _FakeConnection()
-        fake_conn.context = lambda **kwargs: ctx
+        fake_conn.context = lambda **kwargs: (captured.update(kwargs), ctx)[1]
         _install_connection(tts, fake_conn)
 
         cancel = threading.Event()
@@ -749,10 +755,15 @@ class TestSharedRequestArgs:
         mock_player.open_stream.return_value = True
         tts = CartesiaRealtimeTTS(audio_player=mock_player, api_key="fake-key", voice_id="voice-1")
 
+        captured: dict[str, object] = {}
+
         class _Chunk:
             type = "chunk"
             audio = b"\x00\x01" * 10
-            context_id = "cartesia-tts-test"
+
+            @property
+            def context_id(self):
+                return captured["context_id"]
 
         class _CancelCtx:
             cancelled = 0
@@ -766,9 +777,123 @@ class TestSharedRequestArgs:
 
         ctx = _CancelCtx()
         fake_conn = _FakeConnection()
-        fake_conn.context = lambda **kwargs: ctx
+        fake_conn.context = lambda **kwargs: (captured.update(kwargs), ctx)[1]
         _install_connection(tts, fake_conn)
         mock_player.write_stream.side_effect = InterruptedError("播放已取消")
 
         assert tts.speak("hi") is False
         assert ctx.cancelled == 1
+
+
+class TestRealtimeContextIsolation:
+    """取消后旧 context 的残余事件不能串进下一次朗读。"""
+
+    @staticmethod
+    def _install(monkeypatch):
+        import sys
+        from types import ModuleType
+
+        from wordy.tts.cartesia import CartesiaRealtimeTTS
+
+        exceptions = ModuleType("websockets.exceptions")
+
+        class _ConnectionClosed(Exception):
+            pass
+
+        exceptions.ConnectionClosed = _ConnectionClosed  # type: ignore[attr-defined]
+        monkeypatch.setitem(sys.modules, "websockets.exceptions", exceptions)
+
+        mock_player = Mock()
+        mock_player.open_stream.return_value = True
+        tts = CartesiaRealtimeTTS(
+            audio_player=mock_player, api_key="fake-key", voice_id="voice-1",
+        )
+        return tts, mock_player
+
+    def test_leftover_chunk_of_cancelled_context_is_not_played(self, monkeypatch):
+        """被打断的旧 context 仍有余音在连接上时，新朗读不能把它当自己的音频播出去。"""
+        tts, mock_player = self._install(monkeypatch)
+        captured: dict[str, object] = {}
+
+        def _event(context_id, kind, audio=b""):
+            event = Mock()
+            event.type = kind
+            event.audio = audio
+            event.context_id = context_id
+            return event
+
+        class _Ctx:
+            def push(self, text): pass
+            def no_more_inputs(self): pass
+            def cancel(self): pass
+            def receive(self):
+                # 旧 context 的残余音频排在前面：SDK 会把它当「未注册上下文」交给当前 context。
+                yield _event("cartesia-tts-old", "chunk", b"old")
+                yield _event(captured["context_id"], "chunk", b"new")
+                yield _event(captured["context_id"], "done")
+
+        fake_conn = _FakeConnection()
+        fake_conn.context = lambda **kwargs: (captured.update(kwargs), _Ctx())[1]
+        _install_connection(tts, fake_conn)
+
+        assert tts.speak("hi") is True
+        assert [call.args[0] for call in mock_player.write_stream.call_args_list] == [b"new"]
+
+    def test_released_audio_stream_is_reopened_before_speaking(self, monkeypatch):
+        """片段播放只释放设备流；连接还在时补开流，不重建 websocket。"""
+        tts, mock_player = self._install(monkeypatch)
+        captured: dict[str, object] = {}
+        # 设备流已被片段播放释放：get_stream_config 报不出采样率。
+        mock_player.get_stream_config.return_value = {"format": None, "rate": None}
+
+        class _Ctx:
+            def push(self, text): pass
+            def no_more_inputs(self): pass
+            def cancel(self): pass
+            def receive(self):
+                event = Mock()
+                event.type = "done"
+                event.audio = b""
+                event.context_id = captured["context_id"]
+                yield event
+
+        fake_conn = _FakeConnection()
+        fake_conn.context = lambda **kwargs: (captured.update(kwargs), _Ctx())[1]
+        _install_connection(tts, fake_conn)
+
+        # 连接仍在（没有走 connect），只补开了设备流。
+        assert tts.speak("hi") is True
+        mock_player.open_stream.assert_called_once()
+
+    def test_foreign_done_does_not_end_current_context(self, monkeypatch):
+        """SDK 的 receive() 撞上旧 context 的 done 会提前返回，不能因此丢掉新朗读的后半段。"""
+        tts, mock_player = self._install(monkeypatch)
+        captured: dict[str, object] = {}
+
+        def _event(context_id, kind, audio=b""):
+            event = Mock()
+            event.type = kind
+            event.audio = audio
+            event.context_id = context_id
+            return event
+
+        class _Ctx:
+            calls = 0
+
+            def push(self, text): pass
+            def no_more_inputs(self): pass
+            def cancel(self): pass
+            def receive(self):
+                _Ctx.calls += 1
+                if _Ctx.calls == 1:
+                    yield _event("cartesia-tts-old", "done")
+                    return
+                yield _event(captured["context_id"], "chunk", b"new")
+                yield _event(captured["context_id"], "done")
+
+        fake_conn = _FakeConnection()
+        fake_conn.context = lambda **kwargs: (captured.update(kwargs), _Ctx())[1]
+        _install_connection(tts, fake_conn)
+
+        assert tts.speak("hi") is True
+        assert [call.args[0] for call in mock_player.write_stream.call_args_list] == [b"new"]

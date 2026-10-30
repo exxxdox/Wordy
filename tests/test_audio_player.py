@@ -585,6 +585,17 @@ def test_close_stream_terminates_pyaudio_and_clears_ref(_patch_pyaudio):
     assert player._stream_p is None
 
 
+def test_close_stream_clears_reported_config(_patch_pyaudio):
+    """关闭后 get_stream_config 必须回到未打开：调用方据此判断设备是否还占着、能否直接写入。"""
+    player = AudioPlayer()
+    assert player.open_stream(audio_format=8, channels=1, rate=22050) is True
+    assert player.get_stream_config()["rate"] == 22050
+
+    player.close_stream()
+
+    assert player.get_stream_config() == {"format": None, "rate": None}
+
+
 def test_close_stream_is_idempotent(_patch_pyaudio):
     """Calling close_stream repeatedly should not raise when refs are already cleared."""
     player = AudioPlayer()

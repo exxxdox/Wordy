@@ -109,6 +109,14 @@ class BackendTTSEngine(ABC):
     def reset_audio_output(self) -> None:
         """音频输出设备变更后重建底层流；默认 no-op，由实时引擎按需覆写。"""
 
+    def release_audio_output(self) -> None:
+        """释放音频设备但保留后端连接（本地片段播放前调用）。
+
+        ``close()`` 会连 websocket 一起拆掉：关闭握手最长可等 10 秒，片段起播
+        被拖慢，下次朗读还要重新建连。这里只让出设备，连接留给实时引擎复用。
+        """
+        self.audio_player.close_stream()
+
     @abstractmethod
     def fetch_voices(self) -> list[VoiceInfo]:
         """获取当前后端可用的音色列表。"""

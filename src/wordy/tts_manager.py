@@ -481,8 +481,9 @@ class TTSManager:
                 ready.wait()
             if self._audio_files_stopped.is_set():
                 return
-            # reset 会立即重开实时流；关闭引擎才真正释放设备，下次 speak 自动连接。
-            engine.close()
+            # 只让出音频设备：reset 会立刻重开实时流，close 又要等 websocket 关闭
+            # 握手（最长 10 秒）并让下次朗读重连，都会拖慢片段起播。
+            engine.release_audio_output()
             self._audio_player.begin_playback(cancel)
             with decoded_audio_clip(path, cancel) as wav_path:
                 # 按提交时的槽位音量播放，避免排队期间切槽或调音串到其他音频。

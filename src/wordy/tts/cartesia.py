@@ -357,6 +357,11 @@ class CartesiaRealtimeTTS(CartesiaTTS):
         if connection is None:
             raise RuntimeError("Cartesia realtime websocket 未建立连接")
 
+        # 本地片段播放只释放了设备流（release_audio_output），连接还在时补开流即可，
+        # 不必拆掉 websocket 再重建。
+        if self.audio_player.get_stream_config().get("rate") is None:
+            self._open_audio_stream()
+
         # 流固定按 paInt16 打开，请求编码就必须是 pcm_s16le——
         # float32 PCM 会被 CABLE 等虚拟设备的 WASAPI 端点错当 int16 解析而变声。
         output_format = _raw_int16_output_format(self.sample_rate)
@@ -375,7 +380,29 @@ class CartesiaRealtimeTTS(CartesiaTTS):
         # 对 CABLE 等虚拟设备可能因 chunk 间隔产生轻微间隙；
         # 介意延迟的用户可切换 bytes 模式。
         try:
+            return self._play_context(ctx, context_id, cancel_event)
+        except InterruptedError:
+            # 播放层令牌兜底取消写入时也要通知服务端，否则这个 context 的队列会泄漏。
+            self._cancel_context(ctx)
+            return False
+
+    def _play_context(self, ctx: Any, context_id: str,
+                      cancel_event: threading.Event | None) -> bool:
+        """只播放本 context 的响应，直到收到自己的 done。
+
+        SDK 的 ``receive()`` 是整条连接共用的路由器：被打断的旧 context 已从注册表
+        移除，它残余的音频会被当作「未注册上下文」交给下一个 context，而旧 context
+        的 done 还会让 ``receive()`` 直接返回。不过滤就会把旧文本的尾巴播出去、
+        并让新文本被截断；所以按 context_id 丢弃外来事件，并在提前返回后继续读。
+        """
+        while True:
+            received = False
             for response in ctx.receive():
+                received = True
+                # 没有 context_id 的是全局事件，按本 context 处理。
+                event_context = getattr(response, "context_id", None)
+                if event_context is not None and event_context != context_id:
+                    continue
                 if cancel_event is not None and cancel_event.is_set():
                     # 必须在 worker 线程里取消：websockets 同步连接不允许另一线程并发 send。
                     self._cancel_context(ctx)
@@ -390,12 +417,10 @@ class CartesiaRealtimeTTS(CartesiaTTS):
                     message = getattr(response, "message", "") or getattr(response, "title", "")
                     raise RuntimeError(f"Cartesia realtime 返回错误: {message}")
                 elif response.type == "done":
-                    break
-        except InterruptedError:
-            # 播放层令牌兜底取消写入时也要通知服务端，否则这个 context 的队列会泄漏。
-            self._cancel_context(ctx)
-            return False
-        return True
+                    return True
+            # 连接已关闭且一个事件都没读到：按播完处理，避免原地空转。
+            if not received:
+                return True
 
     def speak(self, text: str, cancel_event: threading.Event | None = None) -> bool:
         """在已有 websocket 连接上发送单段文本并流式播放返回音频。"""

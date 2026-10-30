@@ -70,6 +70,23 @@ def test_audio_file_reports_failed_output(manager, mock_player, monkeypatch):
     manager.shutdown()
 
 
+def test_clip_playback_releases_device_without_closing_engine(manager, mock_player, mock_engine, monkeypatch):
+    """本地片段只借音频设备：关掉整个引擎要等 websocket 关闭握手（最长 10 秒），起播被拖慢。"""
+    from contextlib import contextmanager
+
+    @contextmanager
+    def decoded(path, cancel_event):
+        yield path
+    monkeypatch.setattr("wordy.tts_manager.decoded_audio_clip", decoded)
+    manager.play_audio_file(Path("clip.wav"))
+    operation, *args = manager.executor.submit.call_args.args
+    operation(*args)
+
+    mock_engine.release_audio_output.assert_called_once_with()
+    mock_engine.close.assert_not_called()
+    manager.shutdown()
+
+
 def test_stop_audio_file_interrupts_current_clip(manager, mock_player):
     """停止试听只打断这一次播放，不能连累后续播放（那是 shutdown 的事）。"""
     manager.play_audio_file(Path("clip.wav"))
@@ -253,9 +270,11 @@ def test_shutdown_discards_queued_audio_files(manager, mock_player):
     mock_player.play_wav.assert_not_called()
 
 
-def test_audio_file_closes_realtime_engine_before_file_stream(manager, mock_player, mock_engine, monkeypatch):
+def test_audio_file_releases_realtime_device_before_file_stream(manager, mock_player, mock_engine, monkeypatch):
+    """片段播放前必须让出设备；但不拆引擎——拆 websocket 要等关闭握手，起播会被拖慢。"""
     from contextlib import contextmanager
     order = []
+    mock_engine.release_audio_output.side_effect = lambda: order.append("release")
     mock_engine.close.side_effect = lambda: order.append("close")
     mock_player.play_wav.side_effect = lambda *_args, **_kwargs: order.append("play") or True
     @contextmanager
@@ -265,7 +284,7 @@ def test_audio_file_closes_realtime_engine_before_file_stream(manager, mock_play
     manager.play_audio_file(Path("clip.wav"))
     operation, *args = manager.executor.submit.call_args.args
     operation(*args)
-    assert order == ["close", "play"]
+    assert order == ["release", "play"]
     mock_engine.reset_audio_output.assert_not_called()
     manager.shutdown()
 
