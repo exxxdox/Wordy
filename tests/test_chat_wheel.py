@@ -156,3 +156,22 @@ def test_corner_render_keeps_anchor_and_selected_title(qapp, monkeypatch, origin
     assert wheel._slot_at_global(origin) is None
     assert wheel._slot_at_global(origin + QPoint(160, 0)) == 2
     wheel.cancel()
+
+
+@pytest.mark.parametrize("editing", [False, True])
+def test_wheel_numbers_stay_readable_without_brand_or_ticks(qapp, monkeypatch, editing):
+    from PySide6.QtGui import QColor, QImage, QPainter
+    from wordy.ui.theme import TEXT_PRIMARY
+
+    texts = {}
+    monkeypatch.setattr(wheel_paint.glass, "paint_lifted_text",
+                        lambda painter, rect, flags, text, color: texts.update({text: color}))
+    image = QImage(540, 540, QImage.Format.Format_ARGB32_Premultiplied)
+    image.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(image)
+    wheel_paint.paint_wheel(painter, ["Audio"] + [""] * 7, 0, editing=editing)
+    assert texts["01"] == QColor(TEXT_PRIMARY)
+    texts.clear()
+    wheel_paint.paint_wheel(painter, [""] * 8, None, editing=editing)
+    painter.end()
+    assert "WORDY" not in texts

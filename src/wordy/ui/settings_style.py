@@ -44,6 +44,7 @@ def build_settings_stylesheet(font_stack: str | None = None) -> str:
         QWidget {{
             font-family: {font_stack or UI_FONT};
             font-size: {BASE_FONT_PX}px;
+            color: {TEXT_PRIMARY};
         }}
         QDialog {{
             /* 玻璃底、投影与圆角都由 _SettingsDialog.paintEvent 手绘：
@@ -93,7 +94,7 @@ def build_settings_stylesheet(font_stack: str | None = None) -> str:
         }}
         QLabel#pageTitle {{
             color: {TEXT_PRIMARY};
-            font-size: 18px;
+            font-size: 24px;
             font-weight: 600;
             border: none;
         }}
@@ -168,7 +169,7 @@ def build_settings_stylesheet(font_stack: str | None = None) -> str:
         }}
         QTabWidget#settingsTabs::tab-bar {{
             alignment: left;
-            left: 20px;
+            left: 36px;
         }}
         QTabWidget#settingsTabs QTabBar {{
             background: transparent;

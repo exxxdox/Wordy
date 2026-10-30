@@ -31,8 +31,8 @@ _SETTINGS_PACKAGE_PATHS = (
 # ----- 期望阈值 -----
 MIN_DIALOG_WIDTH = 480
 MIN_DIALOG_HEIGHT = 580  # 标签页布局下，默认打开高度只需容纳当前分类内容与底部按钮
-MAX_CONTENT_MARGIN = 20
-MAX_SECTION_GAP = 12
+MAX_CONTENT_MARGIN = 40
+MAX_SECTION_GAP = 32
 MIN_COMBO_SIZE_ADJUST_CALLS = 4
 MIN_COMBO_MIN_CONTENTS_LENGTH = 4
 MIN_COMBO_MIN_CONTENTS_LENGTH_INT = 24
@@ -476,7 +476,7 @@ def test_audio_output_is_owned_by_routing_tab_and_locks_to_cable() -> None:
     source = SETTINGS_PATH.read_text(encoding="utf-8")
     if "_build_audio_output_section(local_layout" in source:
         _fail("音频输出仍位于本地设置页")
-    if "_build_audio_output_section(route_layout" not in source:
+    if "output_column, route_column = self._create_columns(route_layout)" not in source or "_build_audio_output_section(output_column" not in source:
         _fail("音频输出未移动到音频侦听页")
     if "def _sync_audio_output_control" not in source or "combo.setEnabled(False)" not in source:
         _fail("缺少路由启用时锁定音频输出下拉框的实现")

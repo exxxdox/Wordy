@@ -101,7 +101,8 @@ def paint_wheel(painter: QPainter, labels: list[str], selected_index: int | None
             QRectF(text_center.x() - 54, text_center.y() - 30, 108, 20),
             Qt.AlignmentFlag.AlignCenter,
             f"0{index + 1}",
-            accent if selected else secondary if label else QColor(TEXT_MUTED),
+            # 编号不跟随蓝色选中底色，悬停时仍保持明暗对比。
+            QColor(TEXT_PRIMARY) if selected or label else QColor(TEXT_MUTED),
         )
         painter.setFont(QFont("Microsoft YaHei UI", 10 if not editing else 14, QFont.Weight.DemiBold))
         text = painter.fontMetrics().elidedText(label or "—", Qt.TextElideMode.ElideRight, 116)
@@ -113,12 +114,7 @@ def paint_wheel(painter: QPainter, labels: list[str], selected_index: int | None
             QColor(TEXT_PRIMARY) if label else QColor(TEXT_MUTED),
         )
 
-    # 只保留八个方位；选中方向用粗弧补充颜色反馈。
-    for tick in range(8):
-        angle = math.radians(tick * 45)
-        painter.setPen(QPen(secondary, 1.5))
-        painter.drawLine(center + QPointF(241 * math.cos(angle), 241 * math.sin(angle)),
-                         center + QPointF(248 * math.cos(angle), 248 * math.sin(angle)))
+    # 选中方向保留粗弧，移除无操作含义的外圈刻度。
     if selected_index is not None and (labels[selected_index] or editing):
         painter.setPen(QPen(accent, 5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
         painter.drawArc(QRectF(31, 31, 478, 478),
@@ -154,7 +150,7 @@ def paint_wheel(painter: QPainter, labels: list[str], selected_index: int | None
     has_selection = selected_index is not None and bool(labels[selected_index])
     painter.setFont(QFont("Microsoft YaHei UI", 10 if not editing else 14, QFont.Weight.DemiBold))
     # 中心补足扇区省略的名称，最多两行，超长第二行仍保留省略号。
-    title = labels[selected_index] if selected_index is not None and has_selection else "WORDY"
+    title = labels[selected_index] if selected_index is not None and has_selection else ""
     metrics = painter.fontMetrics()
     split = 0
     while split < len(title) and metrics.horizontalAdvance(title[:split + 1]) <= 112:

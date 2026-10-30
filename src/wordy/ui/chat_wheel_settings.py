@@ -177,14 +177,16 @@ class ChatWheelSettings(QWidget):
         layout = QVBoxLayout(self)
         # 父级页签已有标题和阅读边距，面板不重复增加外边距。
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
+        layout.setSpacing(20)
         hint = QLabel("按住快捷键，移向音频，松开播放；回到中心或按 Esc 取消。")
         hint.setWordWrap(True)
         hint.setStyleSheet(f"color: {TEXT_MUTED};")
         layout.addWidget(hint)
 
         hotkey_row = QHBoxLayout()
-        # 与快捷键共用一行，保留默认窗口内八槽编辑器的空间。
+        # 轮盘管理独立一行，预览与槽位编辑在下方并列。
+        hotkey_row.setSpacing(12)
+        hotkey_row.addWidget(QLabel("轮盘"))
         self.wheel_combo = QComboBox()
         self.wheel_combo.setAccessibleName("选择或重命名轮盘")
         # 可编辑下拉框即重命名入口；NoInsert 防止回车把临时输入变成新条目。
@@ -204,6 +206,7 @@ class ChatWheelSettings(QWidget):
         self.hotkey_input.setAccessibleName("轮盘全局快捷键")
         # 与其他设置页一样自动保存：编辑结束（按键组合完成或失焦）即提交。
         self.hotkey_input.editingFinished.connect(self._apply_hotkey)
+        hotkey_row.addWidget(QLabel("快捷键"))
         hotkey_row.addWidget(self.hotkey_input, 1)
         self.add_wheel_button = QPushButton("新增")
         self.add_wheel_button.clicked.connect(self._add_wheel)
@@ -215,42 +218,52 @@ class ChatWheelSettings(QWidget):
 
         self.wheel_picker = _WheelPicker(self._select_slot)
         self.slot_buttons = self.wheel_picker.buttons
-        layout.addWidget(self.wheel_picker, 0, Qt.AlignmentFlag.AlignHCenter)
+        # 预览保持运行轮盘的材质与比例，编辑区利用新增宽度独立呈现字段。
+        body = QHBoxLayout()
+        body.setSpacing(48)
+        body.addWidget(self.wheel_picker, 0, Qt.AlignmentFlag.AlignTop)
+        editor = QWidget()
+        editor.setObjectName("wheelEditor")
+        editor_layout = QVBoxLayout(editor)
+        editor_layout.setContentsMargins(0, 12, 0, 0)
+        editor_layout.setSpacing(12)
+        body.addWidget(editor, 1)
+        layout.addLayout(body)
 
         self.editor_title = QLabel()
         self.editor_title.setObjectName("sectionTitle")
-        # 与槽位标题同行，增加音量控制也不挤占默认窗口的编辑空间。
+        editor_layout.addWidget(self.editor_title)
+        # 音量独立成行，名称与朗读文字各占一行，避免宽屏下字段挤在一起。
         editor_row = QHBoxLayout()
-        editor_row.addWidget(self.editor_title)
-        editor_row.addStretch()
         editor_row.addWidget(QLabel("音量"))
         self.volume_slider = QSlider(Qt.Orientation.Horizontal)
         self.volume_slider.setRange(0, 200)
-        self.volume_slider.setFixedWidth(120)
+        self.volume_slider.setMinimumWidth(120)
         self.volume_slider.setToolTip("音量（下次播放生效）")
         self.volume_slider.valueChanged.connect(self._volume_changed)
         self.volume_slider.sliderReleased.connect(self._save_volume)
-        editor_row.addWidget(self.volume_slider)
+        editor_row.addWidget(self.volume_slider, 1)
         self.volume_value_label = QLabel("100%")
         self.volume_value_label.setMinimumWidth(42)
         editor_row.addWidget(self.volume_value_label)
-        layout.addLayout(editor_row)
-        # 名称与朗读文字同行分栏，保持槽位编辑区紧凑。
-        inputs_row = QHBoxLayout()
-        inputs_row.setSpacing(6)
+        editor_layout.addSpacing(4)
+        editor_layout.addLayout(editor_row)
+        editor_layout.addWidget(QLabel("名称"))
         self.label_input = QLineEdit()
         self.label_input.setPlaceholderText("名称")
         self.label_input.setMaxLength(40)
         self.label_input.editingFinished.connect(self._save_label)
-        inputs_row.addWidget(self.label_input, 1)
+        editor_layout.addWidget(self.label_input)
+        editor_layout.addWidget(QLabel("朗读文字"))
         self.text_input = QLineEdit()
         self.text_input.setPlaceholderText("或输入要朗读的文字")
         # 朗读走单 worker 执行器且无法打断，太长会卡住后续播放与轮盘。
         self.text_input.setMaxLength(200)
         self.text_input.editingFinished.connect(self._save_text)
-        inputs_row.addWidget(self.text_input, 1)
-        layout.addLayout(inputs_row)
+        editor_layout.addWidget(self.text_input)
+        editor_layout.addSpacing(8)
         action_row = QHBoxLayout()
+        action_row.setSpacing(8)
         self.choose_button = QPushButton("导入")
         self.choose_button.clicked.connect(lambda: self._choose_file(self.selected_index))
         action_row.addWidget(self.choose_button, 1)
@@ -272,7 +285,7 @@ class ChatWheelSettings(QWidget):
         self.clear_button.clicked.connect(
             lambda: self._replace_clip(self.selected_index, "", ""))
         action_row.addWidget(self.clear_button)
-        layout.addLayout(action_row)
+        editor_layout.addLayout(action_row)
         # 压缩音频解码期间用不确定进度条表态；平时隐藏，不占纵向空间。
         self.decode_bar = QProgressBar()
         self.decode_bar.setRange(0, 0)
@@ -280,13 +293,14 @@ class ChatWheelSettings(QWidget):
         self.decode_bar.setFixedHeight(4)
         self.decode_bar.setAccessibleName("正在准备截取")
         self.decode_bar.setVisible(False)
-        layout.addWidget(self.decode_bar)
+        editor_layout.addWidget(self.decode_bar)
         self.status_label = QLabel("")
         self.status_label.setWordWrap(True)
         self.status_label.setAccessibleName("轮盘设置状态")
         # 反馈优先走设置窗口的浮动弹窗，原地标签仅在面板独立使用时出现。
         self.status_label.setVisible(False)
-        layout.addWidget(self.status_label)
+        editor_layout.addWidget(self.status_label)
+        editor_layout.addStretch()
         layout.addStretch()
         self._reload_wheels()
         for index in range(8):

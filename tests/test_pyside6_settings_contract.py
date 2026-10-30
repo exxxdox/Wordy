@@ -583,7 +583,7 @@ def test_settings_compact_width_keeps_navigation_and_forms_visible(monkeypatch: 
         from wordy.ui.settings import DIALOG_WIDTH
 
         dialog = _dialog(settings)
-        assert dialog.width() == DIALOG_WIDTH
+        assert dialog.width() == DIALOG_WIDTH == 1120
         tabs = dialog.findChild(QTabWidget, "settingsTabs")
         assert tabs is not None
         bar = tabs.tabBar()
@@ -591,6 +591,15 @@ def test_settings_compact_width_keeps_navigation_and_forms_visible(monkeypatch: 
         # 新增轮盘页后日志索引会变化，按标题验证短标签而非绑定固定索引。
         log_index = next(i for i in range(tabs.count()) if tabs.tabText(i) == "日志")
         assert bar.tabRect(log_index).width() < bar.tabRect(0).width()
+        # 默认宽屏下所有页面完整展示；服务商切换不得撑出纵向滚动。
+        for provider in ("Cartesia", "Volcengine"):
+            settings.tts_api_combo.setCurrentText(provider)
+            for index in range(tabs.count()):
+                tabs.setCurrentIndex(index)
+                app.processEvents()
+                page = tabs.widget(index)
+                assert isinstance(page, QScrollArea)
+                assert page.verticalScrollBar().maximum() == 0
         dialog.resize(dialog.minimumWidth(), dialog.height())
         # 加载长音色名也不应撑宽表单或把同一行的刷新按钮挤出窗口。
         settings.set_voices_loaded([{"id": "long-voice", "name": "Long Voice Name " * 12}], "long-voice")
@@ -653,12 +662,11 @@ def test_local_setting_headers_share_the_same_right_edge(monkeypatch: pytest.Mon
     try:
         _dialog(window).show()
         app.processEvents()
-        right_edges = {
-            window.record_button.geometry().right(),
-            window.volume_value_label.geometry().right(),
-            window.opacity_value_label.geometry().right(),
-        }
-        assert len(right_edges) == 1
+        # 同列的操作和值右对齐；显示列独立使用右侧空间。
+        assert window.record_button.geometry().right() == window.volume_value_label.geometry().right()
+        assert window.opacity_value_label.geometry().right() > window.volume_value_label.geometry().right()
+        assert window.opacity_slider.geometry().left() == window.ui_font_combo.geometry().left()
+        assert window.opacity_slider.geometry().left() > window.volume_slider.geometry().right()
     finally:
         window.close()
 

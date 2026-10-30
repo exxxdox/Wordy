@@ -46,14 +46,14 @@ from wordy.ui.chat_wheel_settings import ChatWheelSettings
 
 INPUT_TEXT_COLOR = GREEN_ACCENT
 SYSTEM_DEFAULT_AUDIO_OUTPUT_LABEL = "系统默认"
-# 放大轮盘与槽位编辑器在默认窗口内完整呈现，并留出操作行和反馈余量。
+# 双栏表单与轮盘编辑并列呈现；默认宽度为原560px的两倍。
 # 尺寸包含透明边缘与标题栏；静态尺寸契约要求顶层整数字面量。
-DIALOG_WIDTH = 560
+DIALOG_WIDTH = 1120
 DIALOG_HEIGHT = 760
-DIALOG_MIN_WIDTH = 504
+DIALOG_MIN_WIDTH = 960
 DIALOG_MIN_HEIGHT = 636
-CONTENT_MARGIN = 20
-SECTION_GAP = 12
+CONTENT_MARGIN = 36
+SECTION_GAP = 28
 INLINE_GAP = 10
 # 卡片内边距：带描边的容器里，内容要留出呼吸位，否则贴到框线上。
 # 不能再大——窄窗口（DIALOG_MIN_WIDTH）下 TTS 页的最小宽度余量只剩 26px，
@@ -338,45 +338,45 @@ class SettingsWindow:
         tab_widget.setElideMode(Qt.TextElideMode.ElideNone)
         shell_layout.addWidget(tab_widget, 1)
 
-        # 1. 本地设置
+        # 宽屏按任务分栏，避免输入框和滑块被拉成长条；两栏共用对齐与留白。
         local_layout = self._create_tab_page(tab_widget, "本地设置")
-        self._build_hotkey_section(local_layout, s)
-        self._add_inner_gap(local_layout)
-        self._build_ui_font_section(local_layout, s)
-        self._add_inner_gap(local_layout)
-        self._build_placeholder_section(local_layout, s)
-        self._add_inner_gap(local_layout)
-        self._build_volume_section(local_layout, s)
-        self._add_inner_gap(local_layout)
-        self._build_opacity_section(local_layout, s)
-        self._add_inner_gap(local_layout)
-        self._build_position_section(local_layout, s)
+        input_column, display_column = self._create_columns(local_layout)
+        self._build_hotkey_section(input_column, s)
+        self._add_inner_gap(input_column)
+        self._build_placeholder_section(input_column, s)
+        self._add_inner_gap(input_column)
+        self._build_volume_section(input_column, s)
+        self._build_ui_font_section(display_column, s)
+        self._add_inner_gap(display_column)
+        self._build_opacity_section(display_column, s)
+        self._add_inner_gap(display_column)
+        self._build_position_section(display_column, s)
+        input_column.addStretch(1)
+        display_column.addStretch(1)
         local_layout.addStretch(1)
 
-        # 2. 音频侦听
         route_layout = self._create_tab_page(tab_widget, "音频侦听")
-        self._build_audio_output_section(route_layout, state, s)
-        self._add_inner_gap(route_layout)
-        self._build_audio_route_section(route_layout, state, s)
-        self._add_inner_gap(route_layout)
-        self._build_sidetone_section(route_layout, s)
+        output_column, route_column = self._create_columns(route_layout)
+        self._build_audio_output_section(output_column, state, s)
+        self._add_inner_gap(output_column)
+        self._build_sidetone_section(output_column, s)
+        self._build_audio_route_section(route_column, state, s)
+        output_column.addStretch(1)
+        route_column.addStretch(1)
         route_layout.addStretch(1)
 
-        # 3. TTS 设置
         tts_layout = self._create_tab_page(tab_widget, "TTS 设置")
-        self._build_tts_api_section(tts_layout, s)
-        self._add_inner_gap(tts_layout)
+        provider_column, voice_column = self._create_columns(tts_layout)
+        self._build_tts_api_section(provider_column, s)
+        self._add_inner_gap(provider_column)
+        self._build_backend_section(provider_column, s)
+        provider_column.addStretch(1)
         self._tts_provider_container = QFrame()
         self._tts_provider_container.setObjectName("ttsProviderContainer")
         container_layout = QVBoxLayout(self._tts_provider_container)
-        # 服务商与生成模式沿用同一条左对齐线：横向内边距由容器统一给，
-        # 内层表单仍是 0，两者照样对齐。给的是卡片内边距而不是 0——容器带
-        # 1px 描边，内容贴到 0 会让带边框的控件直接压在框线上。
-        container_layout.setContentsMargins(CARD_PADDING, 12, CARD_PADDING, 12)
+        # 服务商配置保留内边距，避免输入控件压住原有玻璃边框。
+        container_layout.setContentsMargins(CARD_PADDING, 16, CARD_PADDING, 16)
         container_layout.setSpacing(0)
-
-        # 生成模式
-        self._build_backend_section(container_layout, s)
 
         # 各 provider 面板
         self._provider_panel_widgets: dict[str, QFrame] = {}
@@ -384,7 +384,7 @@ class SettingsWindow:
             # 必须先归属设置页再切换可见性；无父级时 setVisible(True) 会短暂弹出独立窗口。
             wrapper = QFrame(self._tts_provider_container)
             layout = QVBoxLayout(wrapper)
-            layout.setContentsMargins(0, 12, 0, 0)
+            layout.setContentsMargins(0, 0, 0, 0)
             layout.setSpacing(0)
             panel.build(layout, state, self.on_refresh_voices, self.on_field_changed)  # type: ignore[arg-type]
             if (name == TTS_API_PROVIDER_CARTESIA and state.cartesia_voices_cache
@@ -397,7 +397,7 @@ class SettingsWindow:
             self._provider_panel_widgets[name] = wrapper
 
         container_layout.addStretch(1)
-        tts_layout.addWidget(self._tts_provider_container)
+        voice_column.addWidget(self._tts_provider_container)
         tts_layout.addStretch(1)
 
         # 4. 日志
@@ -408,7 +408,13 @@ class SettingsWindow:
         wheel_layout.addStretch(1)
 
         log_layout = self._create_tab_page(tab_widget, "日志")
-        self._build_log_level_section(log_layout, s)
+        # 日志只有一个选项，限制阅读宽度，不为填满屏幕增加无用内容。
+        log_form = QWidget()
+        log_form.setMaximumWidth(520)
+        log_form_layout = QVBoxLayout(log_form)
+        log_form_layout.setContentsMargins(0, 0, 0, 0)
+        self._build_log_level_section(log_form_layout, s)
+        log_layout.addWidget(log_form)
         log_layout.addStretch(1)
 
         footer = QWidget()
@@ -1009,10 +1015,25 @@ class SettingsWindow:
         self._settings.overlay_opacity = op  # auto-save (debounced)
         self.on_field_changed("overlay_opacity", op)
 
+    @staticmethod
+    def _create_columns(parent_layout: QVBoxLayout) -> tuple[QVBoxLayout, QVBoxLayout]:
+        """两列采用等宽表单，共用上边线，长文案在各自列内换行。"""
+        row = QHBoxLayout()
+        row.setSpacing(40)
+        columns = []
+        for _ in range(2):
+            column = QVBoxLayout()
+            column.setContentsMargins(0, 0, 0, 0)
+            column.setSpacing(0)
+            row.addLayout(column, 1)
+            columns.append(column)
+        parent_layout.addLayout(row)
+        return columns[0], columns[1]
+
     def _create_section(self, parent_layout: QVBoxLayout) -> QVBoxLayout:
         section = QVBoxLayout()
         section.setContentsMargins(0, 0, 0, 0)
-        section.setSpacing(6)
+        section.setSpacing(10)
         parent_layout.addLayout(section)
         return section
 
@@ -1025,7 +1046,7 @@ class SettingsWindow:
         content = QWidget()
         content_layout = QVBoxLayout(content)
         # 横向仍留足阅读边距，收紧上下留白以容纳页标题而无需初始滚动。
-        content_layout.setContentsMargins(CONTENT_MARGIN, 14, CONTENT_MARGIN, 12)
+        content_layout.setContentsMargins(CONTENT_MARGIN, 26, CONTENT_MARGIN, 24)
         content_layout.setSpacing(0)
         # 页面标题说明当前任务，分组用留白区分，避免窄窗口被边框和卡片切碎。
         page_titles = {
@@ -1042,7 +1063,7 @@ class SettingsWindow:
         description_label = self._hint_label(description, TEXT_MUTED)
         description_label.setObjectName("pageDescription")
         content_layout.addWidget(description_label)
-        content_layout.addSpacing(14)
+        content_layout.addSpacing(28)
         scroll_area.setWidget(content)
         tab_widget.addTab(scroll_area, title)
         return content_layout

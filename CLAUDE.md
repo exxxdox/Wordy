@@ -125,12 +125,12 @@ WASAPI 回环在系统静音时可能完全不发数据包，采集循环必须�
 设置窗口是**无边框自绘玻璃窗口**（`FramelessWindowHint` + `WA_TranslucentBackground` + `_SettingsDialog.paintEvent` 手绘），与悬浮输入框、音频轮盘同材质。原生标题栏、拖动、缩放和三个窗口按钮全部自绘：标题栏是 `settings_widgets._TitleBar`，拖动/缩放交给 Windows 原生的 `startSystemMove()` / `startSystemResize()`，不在 Python 里算鼠标位移。
 
 - **缩放必须先补 `WS_THICKFRAME`（`window.enable_system_resize`）**：`FramelessWindowHint` 让窗口变成 `WS_POPUP`，没有可缩放边框，而 Windows 的缩放循环要求这一位，缺了会**静默忽略** `startSystemResize`——光标会变，但窗口拖不动。补上样式位后 DWM 会顺带加系统圆角，必须同时把 `DWMWA_WINDOW_CORNER_PREFERENCE` 压成 `DONOTROUND`，否则和自绘圆角叠成双层。
-- **窗口四周留 `WINDOW_EDGE_PAD`（12px）透明余量**，一举三得：容投影、当 8 向缩放热区、让子控件不贴边——热区必须落在没有子控件的区域，鼠标按下才会直达窗口自己。`DIALOG_WIDTH/HEIGHT` 已含这圈余量（默认窗口 560×760，含透明边缘与标题栏；340px 轮盘及编辑区默认完整显示，无需纵向滚动），且必须写成字面量整数，静态尺寸契约只识别顶层 `ast.Constant`。
+- **窗口四周留 `WINDOW_EDGE_PAD`（12px）透明余量**，一举三得：容投影、当 8 向缩放热区、让子控件不贴边——热区必须落在没有子控件的区域，鼠标按下才会直达窗口自己。`DIALOG_WIDTH/HEIGHT` 已含这圈余量（默认窗口 1120×760，最小宽度960px，设置按任务双栏排列，含透明边缘与标题栏；340px 轮盘及编辑区默认完整显示，无需纵向滚动），且必须写成字面量整数，静态尺寸契约只识别顶层 `ast.Constant`。
 - **`QDialog` 与 `QWidget#settingsFooter` 的 QSS 必须透明**：窗口改成透明合成后，任何不透明底色都会整块盖住玻璃与投影。玻璃底的渐变分层已从 QSS 的 `qlineargradient` 搬到 `paintEvent`（`test_glass_theme_contract` 改为扫手绘源文件里的 `QLinearGradient`）。
 - **首帧用 DWM cloaking（`window.set_window_cloaked`）**：透明窗口从 HWND 创建到首次合成之间必然有一段没有内容的空档，靠"提前多画一帧"堵不住。`show()` 前遮蔽、首帧 `paintEvent` 后解除；`FIRST_FRAME_GUARD_MS` 兜底，防止窗口始终不绘制时被永久藏起来。遮蔽必须在所有窗口标志/属性改完之后设置——`show` 期间若因改标志重建 HWND，遮蔽会连窗口一起丢掉。
 - **缩放光标不继承**：窗口在边缘把光标设成缩放形后，Qt 的 `QWidget::cursor()` 会沿祖先链继承，内容区会跟着变缩放光标。`dialogShell` 与 `_TitleBar` 各显式设回 `ArrowCursor`。
 - 最大化/全屏时余量与圆角都归零：`edge_pad()` / `corner_radius()` 是派生值，绘制、热区、布局三处自动一致。
-- 内容区仍靠留白分组，没有做成卡片：窄窗口下卡片边框会把表单切碎（`_create_tab_page` 的注释记录了这一点）。
+- 内容区仍靠留白分组，没有做成卡片：分栏表单通过间距表达层级，避免卡片边框切碎内容（`_create_tab_page` 的注释记录了这一点）。
 
 ## 悬浮输入框的投影留白
 
