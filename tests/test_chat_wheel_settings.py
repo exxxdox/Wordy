@@ -48,7 +48,8 @@ def test_unchanged_hotkey_is_not_reapplied(qapp):
     changed.assert_not_called()
 
 
-def test_style_choice_is_saved_and_restored_without_touching_slots(qapp, tmp_path):
+@pytest.mark.parametrize("style", ["glass", "petals", "game"])
+def test_style_choice_is_saved_and_restored_without_touching_slots(qapp, tmp_path, style):
     config_file = tmp_path / "styles.toml"
     settings = AppSettings(chat_wheel_labels=["保留名称"] * 8)
     settings.save(config_file=config_file)
@@ -56,26 +57,27 @@ def test_style_choice_is_saved_and_restored_without_touching_slots(qapp, tmp_pat
     changed = Mock()
     panel = ChatWheelSettings(settings, changed)
     assert [panel.style_combo.itemText(i) for i in range(panel.style_combo.count())] == [
-        "经典玻璃", "轻薄玻璃", "悬浮花瓣",
+        "经典玻璃", "轻薄玻璃", "悬浮花瓣", "竞技轮盘",
     ]
-    panel.style_combo.setCurrentIndex(panel.style_combo.findData("petals"))
-    assert settings.chat_wheel_style == "petals"
-    assert panel.wheel_picker.wheel_style == "petals"
-    assert AppSettings.load(config_file=config_file).chat_wheel_style == "petals"
+    panel.style_combo.setCurrentIndex(panel.style_combo.findData(style))
+    assert settings.chat_wheel_style == style
+    assert panel.wheel_picker.wheel_style == style
+    assert AppSettings.load(config_file=config_file).chat_wheel_style == style
     assert settings.chat_wheel_labels == ["保留名称"] * 8
-    changed.assert_called_once_with("chat_wheel_style", "petals")
+    changed.assert_called_once_with("chat_wheel_style", style)
     restored = ChatWheelSettings(settings, Mock())
-    assert restored.style_combo.currentData() == "petals"
+    assert restored.style_combo.currentData() == style
     panel.close()
     restored.close()
 
 
-def test_style_save_failure_restores_choice_and_preview(qapp, monkeypatch):
+@pytest.mark.parametrize("style", ["glass", "petals", "game"])
+def test_style_save_failure_restores_choice_and_preview(qapp, monkeypatch, style):
     settings = AppSettings()
     changed = Mock()
     panel = ChatWheelSettings(settings, changed)
     monkeypatch.setattr(settings, "save", Mock(side_effect=OSError("磁盘不可写")))
-    panel.style_combo.setCurrentIndex(panel.style_combo.findData("glass"))
+    panel.style_combo.setCurrentIndex(panel.style_combo.findData(style))
     assert settings.chat_wheel_style == "classic"
     assert panel.style_combo.currentData() == "classic"
     assert panel.wheel_picker.wheel_style == "classic"

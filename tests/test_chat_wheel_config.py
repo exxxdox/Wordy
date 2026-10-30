@@ -13,11 +13,11 @@ def test_wheel_style_defaults_to_classic_for_missing_setting(tmp_path):
     assert AppSettings.load(config_file=file).chat_wheel_style == "classic"
 
 
-@pytest.mark.parametrize("style", ["classic", "glass", "petals"])
+@pytest.mark.parametrize("style", ["classic", "glass", "petals", "game"])
 def test_wheel_style_round_trip_and_direct_assignment(tmp_path, style):
     from wordy.config import CHAT_WHEEL_STYLES
 
-    assert CHAT_WHEEL_STYLES == ("classic", "glass", "petals")
+    assert CHAT_WHEEL_STYLES == ("classic", "glass", "petals", "game")
     file = tmp_path / "style.toml"
     settings = AppSettings.load(config_file=file)
     settings.chat_wheel_style = style
@@ -46,7 +46,8 @@ def test_wheel_style_update_normalizes_invalid_values(tmp_path, value):
 
 
 @pytest.mark.parametrize("direct_assignment", [False, True])
-def test_wheel_style_save_failure_restores_previous_value(tmp_path, monkeypatch, direct_assignment):
+@pytest.mark.parametrize("style", ["classic", "petals", "game"])
+def test_wheel_style_save_failure_restores_previous_value(tmp_path, monkeypatch, direct_assignment, style):
     from unittest.mock import Mock
 
     settings = AppSettings.load(config_file=tmp_path / "style-fail.toml")
@@ -54,9 +55,9 @@ def test_wheel_style_save_failure_restores_previous_value(tmp_path, monkeypatch,
     monkeypatch.setattr(AppSettings, "save", Mock(side_effect=OSError("disk full")))
     with pytest.raises(OSError):
         if direct_assignment:
-            settings.chat_wheel_style = "petals"
+            settings.chat_wheel_style = style
         else:
-            settings.update(chat_wheel_style="petals")
+            settings.update(chat_wheel_style=style)
     assert settings.chat_wheel_style == "glass"
 
 

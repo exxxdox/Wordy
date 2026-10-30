@@ -41,7 +41,7 @@ from wordy.constants import (
 
 _USER_CONFIG_FILE: Path = config_directory() / "config.toml"
 USER_CONFIG_FILE: Path = _USER_CONFIG_FILE  # 测试 monkeypatch 使用
-CHAT_WHEEL_STYLES = ("classic", "glass", "petals")
+CHAT_WHEEL_STYLES = ("classic", "glass", "petals", "game")
 
 # load() 缓存：同一配置文件多次调用复用同一实例，避免重复磁盘 I/O
 _cached_settings: AppSettings | None = None

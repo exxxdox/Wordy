@@ -229,7 +229,8 @@ class ChatWheelSettings(QWidget):
         self.style_combo = NoWheelComboBox()
         self.style_combo.setAccessibleName("轮盘样式")
         self.style_combo.setToolTip("所有轮盘共用此样式")
-        for style, title in zip(CHAT_WHEEL_STYLES, ("经典玻璃", "轻薄玻璃", "悬浮花瓣")):
+        # 新外观追加到末尾，保留既有样式顺序和用户已保存的选择。
+        for style, title in zip(CHAT_WHEEL_STYLES, ("经典玻璃", "轻薄玻璃", "悬浮花瓣", "竞技轮盘")):
             self.style_combo.addItem(title, style)
         self.style_combo.setFixedWidth(136)
         self.style_combo.setCurrentIndex(self.style_combo.findData(settings.chat_wheel_style))

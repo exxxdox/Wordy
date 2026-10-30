@@ -68,11 +68,118 @@ def paint_wheel(painter: QPainter, labels: list[str], selected_index: int | None
                 *, editing: bool = False, highlights: list[float] | None = None,
                 style: str = "classic") -> None:
     """预览与运行时统一分派；旧配置和未知样式保持经典外观。"""
-    if style in ("glass", "petals"):
+    if style == "game":
+        _paint_game_wheel(painter, labels, selected_index, editing=editing, highlights=highlights)
+    elif style in ("glass", "petals"):
         _paint_modern_wheel(painter, labels, selected_index, editing=editing,
                             highlights=highlights, petals=style == "petals")
     else:
         _paint_classic_wheel(painter, labels, selected_index, editing=editing, highlights=highlights)
+
+
+def _paint_game_wheel(painter: QPainter, labels: list[str], selected_index: int | None,
+                      *, editing: bool, highlights: list[float] | None) -> None:
+    """竞技轮盘：半透明扇面、外围大字与随选择方向偏移的金属圆钮。"""
+    painter.save()
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    center = QPointF(270, 270)
+    outer = QRectF(14, 14, 512, 512)
+    inner = QRectF(190, 190, 160, 160)
+    strengths = [
+        (highlights[index] if highlights is not None else float(index == selected_index))
+        if label or editing else 0.0
+        for index, label in enumerate(labels)
+    ]
+    # 边界不画描边、外沿渐隐，让游戏背景自然穿过扇区而非被实心圆盘遮住。
+    painter.setPen(Qt.PenStyle.NoPen)
+    for index, strength in enumerate(strengths):
+        angle = 112.5 - index * 45
+        path = QPainterPath()
+        path.arcMoveTo(outer, angle)
+        path.arcTo(outer, angle, -45)
+        end = math.radians(angle - 45)
+        path.lineTo(center + QPointF(80 * math.cos(end), -80 * math.sin(end)))
+        path.arcTo(inner, angle - 45, 45)
+        path.closeSubpath()
+        level = round(20 + 225 * strength)
+        face = QRadialGradient(center, 256)
+        face.setColorAt(0.0, QColor(level, level, level, round(64 + 80 * strength)))
+        face.setColorAt(0.35, QColor(level, level, level, round(64 + 80 * strength)))
+        face.setColorAt(0.82, QColor(level, level, level, round(32 + 55 * strength)))
+        face.setColorAt(1.0, QColor(level, level, level, 0))
+        painter.setBrush(face)
+        painter.drawPath(path)
+
+    # 左右长名称向窗口内侧排版，给中心圆钮和窗口边缘各留余量。
+    text_rects = (
+        QRectF(150, 44, 240, 56), QRectF(306, 122, 228, 56),
+        QRectF(368, 242, 166, 56), QRectF(306, 362, 228, 56),
+        QRectF(150, 440, 240, 56), QRectF(6, 362, 228, 56),
+        QRectF(6, 242, 166, 56), QRectF(6, 122, 228, 56),
+    )
+    for index, label in enumerate(labels):
+        strength = strengths[index]
+        font = QFont("Microsoft YaHei UI")
+        # 竞技轮盘的名称靠近边缘，预览连同文字等比缩放，避免比实际轮盘更早省略。
+        font.setPixelSize(round(22 + 4 * strength))
+        painter.setFont(font)
+        rect = text_rects[index]
+        text = painter.fontMetrics().elidedText(label or "—", Qt.TextElideMode.ElideRight,
+                                               round(rect.width() - 4))
+        # 游戏画面亮暗变化大：已有名称始终用实白，薄黑字缘和下移阴影共同保住对比。
+        color = QColor(255, 255, 255, 255 if label else round(90 + 165 * strength))
+        painter.setPen(QColor(0, 0, 0, 220))
+        for dx, dy in ((-1, 0), (1, 0), (0, -1), (0, 2)):
+            painter.drawText(rect.translated(dx, dy), Qt.AlignmentFlag.AlignCenter, text)
+        glass.paint_lifted_text(painter, rect, Qt.AlignmentFlag.AlignCenter, text, color,
+                                opacity=painter.opacity())
+
+    # 指向角只属于当前有效选择；不沿动画残影画旧方向，也不常驻多角底座。
+    if selected_index is not None and (labels[selected_index] or editing):
+        painter.save()
+        painter.translate(center)
+        painter.rotate(selected_index * 45)
+        painter.setOpacity(painter.opacity() * strengths[selected_index])
+        pointer = QPainterPath(QPointF(0, -96))
+        pointer.lineTo(-46, -54)
+        pointer.lineTo(46, -54)
+        pointer.closeSubpath()
+        metal = QLinearGradient(QPointF(-20, -96), QPointF(20, -54))
+        metal.setColorAt(0, QColor(65, 73, 78, 250))
+        metal.setColorAt(1, QColor(20, 27, 32, 250))
+        painter.setBrush(metal)
+        painter.setPen(QPen(QColor(0, 0, 0, 85), 2))
+        painter.drawPath(pointer)
+        painter.restore()
+    ring = QLinearGradient(QPointF(270, 194), QPointF(270, 346))
+    ring.setColorAt(0, QColor(220, 225, 225))
+    ring.setColorAt(0.5, QColor(115, 126, 131))
+    ring.setColorAt(1, QColor(177, 187, 190))
+    painter.setBrush(ring)
+    painter.setPen(QPen(QColor(225, 232, 232), 1.2))
+    painter.drawEllipse(QRectF(194, 194, 152, 152))
+    bowl = QRadialGradient(QPointF(254, 240), 110)
+    bowl.setColorAt(0, QColor(65, 75, 83))
+    bowl.setColorAt(1, QColor(19, 27, 33))
+    painter.setBrush(bowl)
+    painter.setPen(QPen(QColor(180, 190, 192), 1.5))
+    painter.drawEllipse(QRectF(207, 207, 126, 126))
+    offset = QPointF()
+    for index, strength in enumerate(strengths):
+        radians = math.radians(90 - index * 45)
+        offset += QPointF(math.cos(radians), -math.sin(radians)) * (34 * strength)
+    knob = center + offset
+    cap = QRadialGradient(knob + QPointF(-7, -10), 29)
+    cap.setColorAt(0, QColor(207, 216, 219))
+    cap.setColorAt(0.36, QColor(112, 126, 137))
+    cap.setColorAt(0.65, QColor(55, 67, 76))
+    cap.setColorAt(1, QColor(17, 25, 32))
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(QColor(0, 0, 0, 90))
+    painter.drawEllipse(knob + QPointF(1, 3), 22, 22)
+    painter.setBrush(cap)
+    painter.drawEllipse(knob, 21, 21)
+    painter.restore()
 
 
 def _modern_sector(index: int, petals: bool) -> QPainterPath:

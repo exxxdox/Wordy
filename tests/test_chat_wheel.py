@@ -20,7 +20,7 @@ def test_direction_and_center_deadzone(qapp, point, expected):
     assert wheel._slot_at(point) == expected
 
 
-@pytest.mark.parametrize("style", ["classic", "glass", "petals"])
+@pytest.mark.parametrize("style", ["classic", "glass", "petals", "game"])
 def test_release_plays_selected_slot_and_hides(qapp, monkeypatch, style):
     selected: list[int] = []
     origin = QPoint(600, 600)
