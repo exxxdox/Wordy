@@ -2,6 +2,7 @@
 
 from unittest.mock import Mock
 import ctypes
+import time
 from types import FunctionType, SimpleNamespace
 from typing import cast
 
@@ -15,6 +16,18 @@ from PySide6.QtWidgets import QLabel
 from wordy.ui.overlay import InputOverlay
 from wordy.ui.settings import SettingsWindow
 from wordy.ui.settings_state import SettingsState
+
+
+def _wait_for_deferred_scan(scan: Mock, timeout_ms: int = 5000) -> None:
+    """轮询等待延后的设备枚举完成。
+
+    原先固定 `qWait(AUDIO_SCAN_DELAY_MS + 20)`：Windows 定时器粒度约 15.6ms，
+    叠加 CI 负载后 `singleShot(150)` 常在 170ms 之后才触发，测试随机失败。
+    轮询到真正调用为止，只保留一个宽松上限防止挂死。
+    """
+    deadline = time.monotonic() + timeout_ms / 1000.0
+    while not scan.called and time.monotonic() < deadline:
+        QTest.qWait(10)
 
 
 def _move_cursor_onto(widget) -> None:
@@ -465,7 +478,7 @@ def test_output_scan_only_runs_on_first_audio_tab_visit(qapp, monkeypatch):
         assert tabs is not None
         tabs.setCurrentIndex(1)
         # 设备枚举延后到页签首帧之后，避免阻塞切换。
-        QTest.qWait(settings.AUDIO_SCAN_DELAY_MS + 20)
+        _wait_for_deferred_scan(scan)
         scan.assert_called_once()
         assert settings.audio_output_combo.findText("测试输出") >= 0
         tabs.setCurrentIndex(0)
@@ -689,7 +702,7 @@ def test_settings_tab_switch_has_no_fade_and_defers_audio_scan(qapp, fake_keyrin
         assert page.graphicsEffect() is None, "切页不应给新页挂图形效果"
         scan.assert_not_called()
 
-        QTest.qWait(settings.AUDIO_SCAN_DELAY_MS + 20)
+        _wait_for_deferred_scan(scan)
         scan.assert_called_once()
     finally:
         settings.close()
