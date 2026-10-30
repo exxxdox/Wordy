@@ -12,10 +12,11 @@ jobs:
   build:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      # 升级到 node24 运行时版本，消除 Node.js 20 弃用告警
+      - uses: actions/checkout@v5
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v5
+        uses: astral-sh/setup-uv@v7
 
       - name: Sync dependencies
         run: uv sync --locked --group dev
@@ -30,7 +31,7 @@ jobs:
         run: .\wordy.ps1 build -Clean -NoPause
 
       - name: Upload to Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: dist/Wordy.exe
           generate_release_notes: true
