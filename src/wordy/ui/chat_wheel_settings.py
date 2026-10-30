@@ -11,8 +11,8 @@ from pathlib import Path
 
 from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import (
-    QColor, QFont, QIcon, QKeySequence, QLinearGradient, QMouseEvent, QPaintEvent, QPainter,
-    QPainterPath, QPen, QPixmap, QPolygonF, QRadialGradient,
+    QColor, QFont, QIcon, QKeySequence, QMouseEvent, QPaintEvent, QPainter,
+    QPixmap, QPolygonF,
 )
 from PySide6.QtWidgets import (
     QComboBox, QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout, QKeySequenceEdit,
@@ -27,10 +27,10 @@ from wordy.audio.recorder import MAX_RECORD_SECONDS, RecordingError, SystemAudio
 from wordy.config import AppSettings, WHEEL_NAME_MAX_LENGTH
 from wordy.ui.audio_trim_dialog import AudioTrimDialog
 from wordy.ui.status_toast import show_status_toast
-from wordy.ui import glass
+from wordy.ui.wheel_paint import paint_wheel
 from wordy.ui.theme import (
-    ACCENT_SECONDARY, ELEVATED_BG, GREEN_ACCENT, TEXT_ERROR, TEXT_MUTED, TEXT_PRIMARY,
-    SURFACE_BG, WINDOW_BG, tint,
+    GREEN_ACCENT, TEXT_ERROR, TEXT_MUTED, TEXT_PRIMARY,
+    SURFACE_BG,
 )
 
 logger = logging.getLogger(__name__)
@@ -65,16 +65,11 @@ class _ImportSignals(QObject):
 class _WheelPicker(QWidget):
     """用真实方位呈现八个可键盘聚焦的轮盘槽。"""
 
-    POSITIONS = (
-        (126, 20), (181, 43), (204, 98), (181, 153),
-        (126, 176), (71, 153), (48, 98), (71, 43),
-    )
-
     def __init__(self, on_select: Callable[[int], None]) -> None:
         super().__init__()
         self._on_select = on_select
         self._hovered_index: int | None = None
-        self.setFixedSize(340, 240)
+        self.setFixedSize(340, 340)
         self.setMouseTracking(True)
         self.buttons: list[QPushButton] = []
         for index in range(8):
@@ -85,7 +80,11 @@ class _WheelPicker(QWidget):
             # 鼠标统一由轮盘处理，避免透明按钮的 hover/pressed 状态覆盖扇区选中色。
             button.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
             button.setFixedSize(88, 44)
-            button.move(*self.POSITIONS[index])
+            # 焦点按钮跟随放大后的槽位中心，确保键盘导航滚动到正确位置。
+            angle = math.radians(90 - index * 45)
+            radius = 158 * 340 / 540
+            button.move(round(170 + radius * math.cos(angle) - 44),
+                        round(170 - radius * math.sin(angle) - 22))
             button.clicked.connect(lambda _checked=False, i=index: on_select(i))
             button.installEventFilter(self)
             self.buttons.append(button)
@@ -108,9 +107,10 @@ class _WheelPicker(QWidget):
 
     @staticmethod
     def _slot_at(point: QPoint) -> int | None:
-        dx, dy = point.x() - 170, point.y() - 120
+        dx, dy = point.x() - 170, point.y() - 170
         distance = math.hypot(dx, dy)
-        if distance < 42 or distance > 116:
+        # 命中范围跟随共享盘体的 80/232 半径及缩放比例。
+        if distance < 80 * 340 / 540 or distance > 232 * 340 / 540:
             return None
         angle = math.degrees(math.atan2(dx, -dy)) % 360
         return int((angle + 22.5) % 360 // 45)
@@ -138,137 +138,14 @@ class _WheelPicker(QWidget):
 
     def paintEvent(self, _event: QPaintEvent) -> None:
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        center = QPointF(170, 120)
-        outer = QRectF(58, 8, 224, 224)
-        inner = QRectF(129, 79, 82, 82)
-        accent = QColor(GREEN_ACCENT)
-        secondary = QColor(ACCENT_SECONDARY)
-        # 与运行轮盘共用同一套玻璃叠层，两处视觉不漂移；扇区同样保持足够不透明度。
-        disc = QPainterPath()
-        disc.addEllipse(QRectF(48, -2, 244, 244))
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(tint(WINDOW_BG, 190))
-        painter.drawPath(disc)
-        glass.paint_noise(painter, disc)
-        glass.paint_edge_glow(painter, disc, QRectF(48, -2, 244, 244), alpha=48)
-        # 与运行轮盘同一套光学：外圈做出顶部受光、底部背光的厚度带。
-        rim = QPainterPath()
-        rim.addEllipse(QRectF(48, -2, 244, 244))
-        rim.addEllipse(outer)
-        rim.setFillRule(Qt.FillRule.OddEvenFill)
-        rim_light = QLinearGradient(QPointF(170, -2), QPointF(170, 242))
-        rim_light.setColorAt(0.0, QColor(255, 255, 255, 64))
-        rim_light.setColorAt(0.5, QColor(255, 255, 255, 20))
-        rim_light.setColorAt(1.0, QColor(0, 0, 0, 150))
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(rim_light)
-        painter.drawPath(rim)
-        # 运行轮盘的主光是整盘共享的，缩略图沿用同一束，避免两处观感漂移。
-        sheen = QRadialGradient(center + QPointF(-15, -20), 130)
-        sheen.setColorAt(0.0, QColor(255, 255, 255, 26))
-        sheen.setColorAt(0.55, QColor(255, 255, 255, 6))
-        sheen.setColorAt(1.0, QColor(255, 255, 255, 0))
-
-        for index, button in enumerate(self.buttons):
-            active = button.isChecked()
-            highlighted = active or index == self._hovered_index or button.hasFocus()
-            angle = 112.5 - index * 45
-            path = QPainterPath()
-            path.arcMoveTo(outer, angle - 1)
-            path.arcTo(outer, angle - 1, -43)
-            end = math.radians(angle - 44)
-            path.lineTo(center + QPointF(41 * math.cos(end), -41 * math.sin(end)))
-            path.arcTo(inner, angle - 44, 43)
-            path.closeSubpath()
-            if active:
-                painter.setPen(QPen(tint(GREEN_ACCENT, 50), 7))
-                painter.setBrush(Qt.BrushStyle.NoBrush)
-                painter.drawPath(path)
-            painter.setPen(Qt.PenStyle.NoPen)
-            base = QColor(GREEN_ACCENT) if active else QColor(ELEVATED_BG)
-            # 扇区同样用中心提亮、外缘压暗的曲面渐变，而不是一块纯色片。
-            face = QRadialGradient(center + QPointF(-15, -20), 130)
-            lit = base.lighter(122)
-            lit.setAlpha(130 if active else 250 if highlighted else 225)
-            shade = base.darker(135)
-            shade.setAlpha(95 if active else 205)
-            face.setColorAt(0.0, lit)
-            face.setColorAt(1.0, shade)
-            painter.setBrush(face)
-            painter.drawPath(path)
-            painter.save()
-            painter.setClipPath(path)
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(sheen)
-            painter.drawPath(path)
-            painter.restore()
-            # 与运行轮盘一致：分隔用居中 1px 细线，避免相邻扇区各自内缩叠出深缝。
-            painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.setPen(QPen(accent if highlighted else tint(TEXT_PRIMARY, 45), 1.0))
-            painter.drawPath(path)
-
-            radians = math.radians(90 - index * 45)
-            text_center = center + QPointF(78 * math.cos(radians), -78 * math.sin(radians))
-            label = button.text().split("\n", 1)[-1]
-            painter.setFont(QFont("Segoe UI", 7, QFont.Weight.DemiBold))
-            glass.paint_lifted_text(
-                painter,
-                QRectF(text_center.x() - 38, text_center.y() - 18, 76, 14),
-                Qt.AlignmentFlag.AlignCenter,
-                f"0{index + 1}",
-                accent if highlighted else secondary,
-            )
-            painter.setFont(QFont("Microsoft YaHei UI", 8, QFont.Weight.DemiBold))
-            text = painter.fontMetrics().elidedText(label, Qt.TextElideMode.ElideRight, 82)
-            glass.paint_lifted_text(
-                painter,
-                QRectF(text_center.x() - 42, text_center.y() - 2, 84, 24),
-                Qt.AlignmentFlag.AlignCenter,
-                text,
-                QColor(TEXT_PRIMARY) if label != "未设置" else QColor(TEXT_MUTED),
-            )
-
-        for tick in range(40):
-            angle = math.radians(tick * 9)
-            major = tick % 5 == 0
-            painter.setPen(QPen(secondary if major else tint(TEXT_PRIMARY, 45),
-                                1.4 if major else 0.8))
-            painter.drawLine(center + QPointF(116 * math.cos(angle), 116 * math.sin(angle)),
-                             center + QPointF((121 if major else 119) * math.cos(angle),
-                                              (121 if major else 119) * math.sin(angle)))
-
-        # 中心盘沿用运行轮盘的叠层：投影、曲面渐变、倒角弧，缩略图也有层次。
-        painter.setPen(Qt.PenStyle.NoPen)
-        for step, alpha in ((4, 14), (2, 26), (1, 38)):
-            painter.setBrush(QColor(0, 0, 0, alpha))
-            painter.drawEllipse(QRectF(133 - step, 84 - step, 74 + step * 2, 74 + step * 2))
-        hub = QRadialGradient(QPointF(166, 104), 48)
-        hub_inner = QColor(WINDOW_BG).lighter(185)
-        hub_inner.setAlpha(250)
-        hub_outer = QColor(WINDOW_BG)
-        hub_outer.setAlpha(238)
-        hub.setColorAt(0.0, hub_inner)
-        hub.setColorAt(1.0, hub_outer)
-        painter.setBrush(hub)
-        painter.setPen(QPen(tint(GREEN_ACCENT, 110), 1))
-        painter.drawEllipse(QRectF(133, 83, 74, 74))
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.setPen(QPen(tint(TEXT_PRIMARY, 90), 1.5))
-        painter.drawArc(QRectF(135, 85, 70, 70), 50 * 16, 80 * 16)
-        painter.setPen(QPen(QColor(0, 0, 0, 120), 1.5))
-        painter.drawArc(QRectF(135, 85, 70, 70), 230 * 16, 80 * 16)
-        # 静态双弧代替运行轮盘的入场扫描：设置页不应有持续动画。
-        painter.setPen(QPen(accent, 2))
-        painter.drawArc(QRectF(138, 88, 64, 64), 16 * 18, 52 * 16)
-        painter.setPen(QPen(secondary, 2))
-        painter.drawArc(QRectF(138, 88, 64, 64), 16 * 198, 52 * 16)
-        painter.setFont(QFont("Segoe UI", 8, QFont.Weight.DemiBold))
-        painter.setPen(accent)
-        painter.drawText(QRectF(137, 101, 66, 17), Qt.AlignmentFlag.AlignCenter, "WORDY")
-        painter.setFont(QFont("Microsoft YaHei UI", 7))
-        painter.setPen(QColor(TEXT_MUTED))
-        painter.drawText(QRectF(137, 121, 66, 17), Qt.AlignmentFlag.AlignCenter, "点击编辑")
+        # 与运行轮盘共用盘体，缩放到设置页；编辑交互仍由透明按钮承接。
+        painter.scale(340 / 540, 340 / 540)
+        labels = [button.text().split("\n", 1)[-1] for button in self.buttons]
+        labels = ["" if label == "未设置" else label for label in labels]
+        focused = next((i for i, button in enumerate(self.buttons) if button.hasFocus()), None)
+        checked = next((i for i, button in enumerate(self.buttons) if button.isChecked()), None)
+        selected = focused if focused is not None else self._hovered_index
+        paint_wheel(painter, labels, selected if selected is not None else checked, editing=True)
         painter.end()
 
 
@@ -298,9 +175,9 @@ class ChatWheelSettings(QWidget):
         self._trimming = False
 
         layout = QVBoxLayout(self)
-        # 父级页签已有标题和阅读边距，避免重复留白把第八槽挤出默认窗口。
+        # 父级页签已有标题和阅读边距，面板不重复增加外边距。
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(5)
+        layout.setSpacing(8)
         hint = QLabel("按住快捷键，移向音频，松开播放；回到中心或按 Esc 取消。")
         hint.setWordWrap(True)
         hint.setStyleSheet(f"color: {TEXT_MUTED};")
@@ -358,7 +235,7 @@ class ChatWheelSettings(QWidget):
         self.volume_value_label.setMinimumWidth(42)
         editor_row.addWidget(self.volume_value_label)
         layout.addLayout(editor_row)
-        # 名称与朗读文字同行分栏：轮盘页纵向余量为 0，再占一行就会顶出滚动条。
+        # 名称与朗读文字同行分栏，保持槽位编辑区紧凑。
         inputs_row = QHBoxLayout()
         inputs_row.setSpacing(6)
         self.label_input = QLineEdit()
@@ -377,7 +254,7 @@ class ChatWheelSettings(QWidget):
         self.choose_button = QPushButton("导入")
         self.choose_button.clicked.connect(lambda: self._choose_file(self.selected_index))
         action_row.addWidget(self.choose_button, 1)
-        # 文案保持两字，动作行必须留在同一行里：加行高会顶掉滚动区契约。
+        # 动作按钮保持同一行，便于在选槽后直接操作。
         self.record_button = QPushButton("录制")
         self.record_button.setIconSize(QSize(14, 14))
         self.record_button.clicked.connect(self._toggle_record)

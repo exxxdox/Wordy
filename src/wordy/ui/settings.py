@@ -46,11 +46,10 @@ from wordy.ui.chat_wheel_settings import ChatWheelSettings
 
 INPUT_TEXT_COLOR = GREEN_ACCENT
 SYSTEM_DEFAULT_AUDIO_OUTPUT_LABEL = "系统默认"
-# 单列表单无需宽屏留白；保留导航和密钥操作行所需宽度，仍允许原生缩放。
-# 尺寸含窗口四周的透明余量（WINDOW_EDGE_PAD=12）：玻璃本体仍是 480×580，
-# 高度再加上自绘标题栏的 44。写成字面量是因为静态尺寸契约只识别顶层 int 常量。
-DIALOG_WIDTH = 504
-DIALOG_HEIGHT = 636
+# 放大轮盘与槽位编辑器在默认窗口内完整呈现，并留出操作行和反馈余量。
+# 尺寸包含透明边缘与标题栏；静态尺寸契约要求顶层整数字面量。
+DIALOG_WIDTH = 560
+DIALOG_HEIGHT = 760
 DIALOG_MIN_WIDTH = 504
 DIALOG_MIN_HEIGHT = 636
 CONTENT_MARGIN = 20

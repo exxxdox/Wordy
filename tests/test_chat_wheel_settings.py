@@ -278,11 +278,11 @@ def test_wheel_selects_slot_and_shows_only_its_editor(qapp):
 def test_wheel_sector_hit_test_matches_runtime_directions(qapp):
     panel = ChatWheelSettings(AppSettings(), Mock())
 
-    assert panel.wheel_picker._slot_at(QPoint(170, 20)) == 0
-    assert panel.wheel_picker._slot_at(QPoint(270, 120)) == 2
-    assert panel.wheel_picker._slot_at(QPoint(170, 220)) == 4
-    assert panel.wheel_picker._slot_at(QPoint(70, 120)) == 6
-    assert panel.wheel_picker._slot_at(QPoint(170, 120)) is None
+    assert panel.wheel_picker._slot_at(QPoint(170, 40)) == 0
+    assert panel.wheel_picker._slot_at(QPoint(300, 170)) == 2
+    assert panel.wheel_picker._slot_at(QPoint(170, 300)) == 4
+    assert panel.wheel_picker._slot_at(QPoint(40, 170)) == 6
+    assert panel.wheel_picker._slot_at(QPoint(170, 170)) is None
 
 
 def test_selected_sector_survives_mouse_leaving(qapp):
@@ -290,7 +290,7 @@ def test_selected_sector_survives_mouse_leaving(qapp):
     panel.show()
     qapp.processEvents()
 
-    QTest.mouseClick(panel.wheel_picker, Qt.MouseButton.LeftButton, pos=QPoint(270, 120))
+    QTest.mouseClick(panel.wheel_picker, Qt.MouseButton.LeftButton, pos=QPoint(300, 170))
     QTest.mouseMove(panel.label_input, QPoint(4, 4))
     qapp.processEvents()
 
@@ -938,3 +938,26 @@ def test_parent_close_during_import_completes_worker_and_discards_clip(qapp, mon
     qapp.processEvents()
     assert panel._settings.chat_wheel_slots[0] == ""
     cleanup.assert_called_once_with("managed.wav", None)
+
+
+def test_picker_uses_shared_wheel_painter(qapp, monkeypatch):
+    from wordy.ui import chat_wheel_settings
+
+    calls = []
+    monkeypatch.setattr(chat_wheel_settings, "paint_wheel",
+                        lambda painter, labels, selected, **options: calls.append((labels, selected, options)))
+    picker = chat_wheel_settings._WheelPicker(lambda _: None)
+    for button in picker.buttons:
+        button.setText("音频\n未设置")
+    picker.buttons[2].setText("音频 3\nExample")
+    picker.buttons[2].setChecked(True)
+    picker.grab()
+    assert calls[-1] == (["", "", "Example", "", "", "", "", ""], 2, {"editing": True})
+    picker._hovered_index = 0
+    picker.grab()
+    assert calls[-1][1] == 0
+    assert picker.width() == picker.height() == 340
+    assert picker._slot_at(picker.buttons[0].geometry().center()) == 0
+    assert picker._slot_at(QPoint(170, 119)) == 0
+    assert picker._slot_at(QPoint(170, 121)) is None
+    picker.close()
