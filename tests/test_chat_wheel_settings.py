@@ -870,6 +870,23 @@ def test_recording_is_refused_while_speaking(qapp, monkeypatch):
     assert "朗读" in panel.status_label.text()
 
 
+def test_recording_cancel_button_discards_without_saving(qapp, monkeypatch):
+    recorder = _FakeRecorder()
+    panel, settings = _recording_panel(monkeypatch, recorder)
+    assert panel.cancel_record_button.isHidden()
+
+    panel.record_button.click()
+    assert not panel.cancel_record_button.isHidden()
+
+    panel.cancel_record_button.click()
+
+    assert recorder.cancelled is True
+    assert panel._recording is None
+    assert panel.cancel_record_button.isHidden()
+    assert settings.chat_wheel_slots == [""] * 8
+    assert "取消" in panel.status_label.text()
+
+
 def test_recording_start_failure_reports_reason(qapp, monkeypatch):
     from wordy.audio.recorder import RecordingError
 
@@ -1074,9 +1091,11 @@ def test_parent_close_during_import_completes_worker_and_discards_clip(qapp, mon
 
 def test_picker_uses_shared_wheel_painter(qapp, monkeypatch):
     from wordy.ui import chat_wheel_settings
+    import wordy.ui.wheel_picker as wheel_picker
 
     calls = []
-    monkeypatch.setattr(chat_wheel_settings, "paint_wheel",
+    # 盘体绘制已抽到共享 wheel_picker，设置页与截取目标选择器共用同一实现。
+    monkeypatch.setattr(wheel_picker, "paint_wheel",
                         lambda painter, labels, selected, **options: calls.append((labels, selected, options)))
     picker = chat_wheel_settings._WheelPicker(lambda _: None)
     for button in picker.buttons:

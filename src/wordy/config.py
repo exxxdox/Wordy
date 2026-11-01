@@ -42,6 +42,9 @@ from wordy.constants import (
 _USER_CONFIG_FILE: Path = config_directory() / "config.toml"
 USER_CONFIG_FILE: Path = _USER_CONFIG_FILE  # 测试 monkeypatch 使用
 CHAT_WHEEL_STYLES = ("classic", "glass", "petals", "game")
+# 后台录制窗口：太短截不到整句，太长会让内存和截取选择都失去意义。
+MIN_ROLLING_BUFFER_SECONDS = 5.0
+MAX_ROLLING_BUFFER_SECONDS = 300.0
 
 # load() 缓存：同一配置文件多次调用复用同一实例，避免重复磁盘 I/O
 _cached_settings: AppSettings | None = None
@@ -115,6 +118,16 @@ def _parse_wheel_name(value: object) -> str | None:
     return value.strip()[:WHEEL_NAME_MAX_LENGTH]
 
 
+def _parse_rolling_target(raw: object, wheel_count: int) -> list[int]:
+    """截取目标 [轮盘, 槽位]；损坏值回到首盘首槽，越界值钳到有效范围。"""
+    if (not isinstance(raw, list) or len(raw) != 2
+            or not all(isinstance(item, int) and not isinstance(item, bool) for item in raw)):
+        return [0, 0]
+    wheel = min(max(int(raw[0]), 0), max(0, wheel_count - 1))
+    slot = min(max(int(raw[1]), 0), 7)
+    return [wheel, slot]
+
+
 def new_chat_wheel(hotkey: str = "f8", name: str = "") -> ChatWheelConfig:
     return {"name": name, "hotkey": hotkey, "slots": [""] * 8, "labels": [""] * 8,
             "texts": [""] * 8, "volumes": [1.0] * 8}
@@ -177,6 +190,11 @@ class AppSettings:
     chat_wheel_texts: list[str] = field(default_factory=lambda: [""] * 8)
     chat_wheel_volumes: list[float] = field(default_factory=lambda: [1.0] * 8)
     additional_chat_wheels: list[ChatWheelConfig] = field(default_factory=list)
+    # 后台持续录制：按热键开始/停止，停止时从最近 N 秒里截取保存。
+    rolling_buffer_hotkey: str = "f10"
+    rolling_buffer_seconds: float = 30.0
+    # [轮盘下标, 槽位下标]；截取弹窗默认选中上次保存目标。
+    rolling_buffer_target: list[int] = field(default_factory=lambda: [0, 0])
     volume: float = 1.0
     overlay_opacity: float = 1.0
     overlay_placeholder: str = "Hello World~"
@@ -223,6 +241,7 @@ class AppSettings:
     _CLAMP_RANGES: ClassVar[dict[str, tuple[float, float]]] = {
         "volume": (MIN_VOLUME, MAX_VOLUME),
         "overlay_opacity": (MIN_OVERLAY_OPACITY, MAX_OVERLAY_OPACITY),
+        "rolling_buffer_seconds": (MIN_ROLLING_BUFFER_SECONDS, MAX_ROLLING_BUFFER_SECONDS),
     }
 
     @property
@@ -451,6 +470,17 @@ class AppSettings:
             settings.additional_chat_wheels = [wheel for item in raw_wheels
                                                if (wheel := _parse_chat_wheel(item)) is not None]
 
+        # 后台录制：热键与窗口秒数；目标必须在轮盘全部载入后再钳位。
+        rolling_hotkey = raw.get("rolling_buffer_hotkey")
+        if isinstance(rolling_hotkey, str):
+            try:
+                parse_hotkey(rolling_hotkey)
+                settings.rolling_buffer_hotkey = rolling_hotkey
+            except ValueError:
+                pass
+        _apply_if_present(raw, "rolling_buffer_seconds", settings, _parse_rolling_seconds)
+        setattr(settings, "rolling_buffer_target", raw.get("rolling_buffer_target", [0, 0]))
+
         # 结构化 tts_providers
         raw_providers = raw.get("tts_providers")
         if isinstance(raw_providers, dict):
@@ -507,6 +537,9 @@ class AppSettings:
             return
         if name == "chat_wheel_style" and (not isinstance(value, str) or value not in CHAT_WHEEL_STYLES):
             value = "classic"
+        if name == "rolling_buffer_target":
+            # 保存目标随时可能因为删除轮盘而失效，写入口统一钳到现有范围。
+            value = _parse_rolling_target(value, self.wheel_count)
         # float 范围字段：clamp
         if name in self._CLAMP_RANGES and isinstance(value, (int, float)):
             lo, hi = self._CLAMP_RANGES[name]
@@ -631,6 +664,12 @@ def _nonempty_str(value: object) -> str | None:
         return None
     s = value.strip()
     return s if s else None
+
+
+def _parse_rolling_seconds(value: object) -> float | None:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return _clamp(float(value), MIN_ROLLING_BUFFER_SECONDS, MAX_ROLLING_BUFFER_SECONDS)
+    return None
 
 
 def _parse_window_pos(raw: object) -> dict[str, int] | None:

@@ -75,6 +75,8 @@ class InputOverlay:
         height: int = 58,
         poll_interval_ms: int = 30,
         on_chat_wheel_change: Callable[[str, object], None] | None = None,
+        on_rolling_buffer_hotkey_change: Callable[[str], bool] | None = None,
+        on_rolling_hotkey_recording: Callable[[bool], None] | None = None,
     ):
         if sys.platform != "win32":
             raise RuntimeError("InputOverlay 仅支持 Windows")
@@ -82,6 +84,8 @@ class InputOverlay:
         self._cfg = AppSettings.load()  # 单例——唯一数据源，不镜像副本
         self.on_submit = on_submit
         self.on_chat_wheel_change = on_chat_wheel_change
+        self.on_rolling_buffer_hotkey_change = on_rolling_buffer_hotkey_change
+        self.on_rolling_hotkey_recording = on_rolling_hotkey_recording
         self.on_voice_change = on_voice_change
         self.on_volume_change = on_volume_change
         self.on_tts_backend_change = on_tts_backend_change
@@ -102,6 +106,7 @@ class InputOverlay:
         self._settings_window: SettingsWindow | None = None
         self._ignore_focus_out = False
         self._recording_hotkey = False
+        self._recording_hotkey_target = "hotkey"
         # 按 provider 独立的音色缓存
         self._cartesia_voices_cache: list[VoiceInfo] = []
         self._volcengine_voices_cache: list[VoiceInfo] = []
@@ -290,6 +295,9 @@ class InputOverlay:
         if any(parse_hotkey(self._cfg.get_wheel(i)["hotkey"]) == binding
                for i in range(self._cfg.wheel_count)):
             logger.warning("输入框快捷键不能与轮盘快捷键相同")
+            return False
+        if binding == parse_hotkey(self._cfg.rolling_buffer_hotkey):
+            logger.warning("输入框快捷键不能与后台录制快捷键相同")
             return False
         old_hotkey = self._cfg.hotkey
         old_name = self._cfg.name
@@ -586,6 +594,7 @@ class InputOverlay:
             self.root,
             state,
             on_record_hotkey=self._start_record_hotkey,
+            on_record_rolling_hotkey=self._start_record_rolling_hotkey,
             on_refresh_voices=self._start_load_voices,
             on_field_changed=self._on_settings_field_changed,
             on_close=self._on_settings_window_closed,
@@ -674,23 +683,41 @@ class InputOverlay:
 
     def _on_settings_window_closed(self) -> None:
         was_recording_hotkey = self._recording_hotkey
+        target = getattr(self, "_recording_hotkey_target", "hotkey")
         self._recording_hotkey = False
         self._settings_window = None
         if was_recording_hotkey:
+            if target == "rolling_buffer":
+                # 录制中关窗也要恢复滚动监听器，否则快捷键会永久失效。
+                if self.on_rolling_hotkey_recording is not None:
+                    self.on_rolling_hotkey_recording(False)
+                return
             try:
                 self._register_hotkey()
             except Exception as e:
                 logger.warning("设置窗口关闭后重新注册全局快捷键 %s 失败: %s", self._cfg.name, e)
 
-    def _start_record_hotkey(self) -> None:
+    def _start_record_hotkey(self, target: str = "hotkey") -> None:
         if self._recording_hotkey:
             return
         self._recording_hotkey = True
+        self._recording_hotkey_target = target
         settings = self._active_settings_window()
         if settings is not None:
-            settings.set_recording_started()
-        self._unregister_hotkey()
+            if target == "rolling_buffer":
+                settings.set_rolling_recording_started()
+            else:
+                settings.set_recording_started()
+        if target == "rolling_buffer":
+            # 录制新组合期间先停掉滚动监听器，否则按到旧键会同时触发录制/切换。
+            if self.on_rolling_hotkey_recording is not None:
+                self.on_rolling_hotkey_recording(True)
+        else:
+            self._unregister_hotkey()
         threading.Thread(target=self._read_hotkey_worker, daemon=True).start()
+
+    def _start_record_rolling_hotkey(self) -> None:
+        self._start_record_hotkey("rolling_buffer")
 
     def _read_hotkey_worker(self) -> None:
         try:
@@ -708,7 +735,23 @@ class InputOverlay:
 
     def _finish_record_hotkey(self, hotkey: object, error: object) -> None:
         settings = self._active_settings_window()
+        target = getattr(self, "_recording_hotkey_target", "hotkey")
         self._recording_hotkey = False
+        if target == "rolling_buffer":
+            try:
+                if settings is not None:
+                    if isinstance(error, Exception):
+                        settings.set_rolling_record_result(None, None, error)
+                    elif not isinstance(hotkey, str):
+                        settings.set_rolling_record_result(None, None)
+                    else:
+                        settings.set_rolling_record_result(hotkey, display_hotkey(hotkey))
+            finally:
+                # on_field_changed 成功时控制器已注册新监听器，恢复是空操作；
+                # 取消或失败时由它重新注册旧快捷键。
+                if self.on_rolling_hotkey_recording is not None:
+                    self.on_rolling_hotkey_recording(False)
+            return
         register_error: Exception | None = None
         if self._hotkey_listener is None:
             try:
@@ -884,6 +927,12 @@ class InputOverlay:
         elif field_name == "volcengine_access_key":
             if self.on_volcengine_credentials_change:
                 self.on_volcengine_credentials_change(str(value) if value else None)
+
+        elif field_name == "rolling_buffer_hotkey":
+            # 注册与落盘由后台录制控制器负责，失败时返回 False 让设置页保留旧值。
+            if self.on_rolling_buffer_hotkey_change is not None:
+                return self.on_rolling_buffer_hotkey_change(str(value))
+            return False
 
     def _refresh_mic_listen_status(self) -> None:
         """路由变更后刷新设置窗口中麦克风侦听状态。"""

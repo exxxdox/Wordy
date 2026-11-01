@@ -14,6 +14,7 @@ import os
 import threading
 import time
 import wave
+from collections import deque
 from pathlib import Path
 from tempfile import mkstemp
 from typing import Any
@@ -30,6 +31,10 @@ FRAMES_PER_BUFFER = 1024
 _JOIN_TIMEOUT_SECONDS = 2.0
 _CAPTURE_POLL_SECONDS = 0.01
 
+# pyaudiowpatch 的 PortAudio 初始化计数是进程级非原子量：滚动录制与设置页录音
+# 可能同时新建/释放实例，必须像 AudioPlayer 一样只串行化生命周期调用。
+_PYAUDIO_LIFECYCLE_LOCK = threading.Lock()
+
 # 无类型桩的二进制模块，声明成 Any 才能同时容纳“缺依赖”的 None 分支。
 _pyaudio: Any = None
 try:
@@ -44,11 +49,19 @@ class RecordingError(RuntimeError):
 
 # Qt 退出不一定给顶层窗口派发 Close，退出流程需要一个进程级兜底句柄。
 _ACTIVE: SystemAudioRecorder | None = None
+_ACTIVE_ROLLING: RollingAudioRecorder | None = None
 
 
 def cancel_active_recording() -> None:
     """退出时丢弃仍在进行的录音；没有进行中的录音时什么也不做。"""
     active = _ACTIVE
+    if active is not None:
+        active.cancel()
+
+
+def cancel_active_rolling_recording() -> None:
+    """退出时丢弃后台滚动录制；没有进行中的会话时什么也不做。"""
+    active = _ACTIVE_ROLLING
     if active is not None:
         active.cancel()
 
@@ -89,33 +102,8 @@ class SystemAudioRecorder:
                 raise RecordingError("上一次录音设备尚未停止，请稍后重试")
             _ACTIVE.cancel()
 
-        api = _pyaudio
-        if api is None:
-            raise RecordingError("未安装 PyAudioWPatch，无法录制系统声音")
-
-        instance = api.PyAudio()
-        try:
-            device = instance.get_default_wasapi_loopback()
-        except Exception as error:  # noqa: BLE001 - 没有 WASAPI 渲染端点时抛 LookupError
-            instance.terminate()
-            raise RecordingError("找不到可录制的系统声音输出设备") from error
-
-        # WASAPI 共享模式必须匹配端点 mix format，采样率和声道数都按端点原样请求；
-        # 多出来的声道在 _normalize 里截掉，8 声道虚拟声卡也不会打不开。
-        channels = max(1, int(device["maxInputChannels"]))
-        rate = int(device["defaultSampleRate"])
-        try:
-            stream = instance.open(
-                format=api.paInt16,
-                channels=channels,
-                rate=rate,
-                input=True,
-                input_device_index=device["index"],
-                frames_per_buffer=FRAMES_PER_BUFFER,
-            )
-        except Exception as error:  # noqa: BLE001
-            instance.terminate()
-            raise RecordingError(f"无法打开系统声音采集流：{error}") from error
+        # 打开逻辑与后台滚动录制共用，错误文案和生命周期锁只有一份。
+        instance, stream, channels, rate = _open_loopback_stream()
 
         self._api = instance
         self._stream = stream
@@ -228,12 +216,7 @@ class SystemAudioRecorder:
             raise RecordingError("录音文件不可用")
         normalized = _normalize(frames, self._rate)
         try:
-            # wave 在 close 时才写 RIFF 长度，必须完整退出 with 再交给导入方。
-            with wave.open(str(path), "wb") as output:
-                output.setnchannels(TARGET_CHANNELS)
-                output.setsampwidth(2)
-                output.setframerate(TARGET_SAMPLE_RATE)
-                output.writeframes(normalized.tobytes())
+            _write_pcm_wav(path, normalized, TARGET_SAMPLE_RATE)
         except (OSError, wave.Error) as error:
             # 写盘失败时清掉半成品，否则临时文件再没人认领，会一直留在 %TEMP%。
             self._discard_path()
@@ -253,10 +236,7 @@ class SystemAudioRecorder:
             except Exception as error:  # noqa: BLE001
                 logger.warning("关闭采集流失败: %s", error)
         if api is not None:
-            try:
-                api.terminate()
-            except Exception as error:  # noqa: BLE001
-                logger.warning("释放 PyAudio 失败: %s", error)
+            _terminate_pyaudio(api)
 
     def _discard_path(self) -> None:
         path, self._path = self._path, None
@@ -268,11 +248,249 @@ class SystemAudioRecorder:
             logger.warning("清理录音临时文件失败: %s", error)
 
 
-def _create_temp_path() -> Path:
+class RollingAudioRecorder:
+    """持续采集系统声音，内存里只保留最近 N 秒。
+
+    录制期间不写盘；``stop()`` 才把当前窗口压成临时 WAV 交给截取流程。
+    """
+
+    def __init__(self) -> None:
+        self._api: Any = None
+        self._stream: Any = None
+        self._thread: threading.Thread | None = None
+        self._stop_event = threading.Event()
+        self._lock = threading.Lock()
+        self._chunks: deque[np.ndarray] = deque()
+        self._buffered_frames = 0
+        self._max_frames = 1
+        self._channels = TARGET_CHANNELS
+        self._rate = TARGET_SAMPLE_RATE
+        self._started_at = 0.0
+        self._final_elapsed = 0.0
+
+    @property
+    def is_running(self) -> bool:
+        thread = self._thread
+        return thread is not None and thread.is_alive()
+
+    @property
+    def elapsed_seconds(self) -> float:
+        if self.is_running:
+            return time.monotonic() - self._started_at
+        return self._final_elapsed
+
+    def start(self, seconds: float) -> None:
+        global _ACTIVE_ROLLING
+
+        if self.is_running:
+            raise RecordingError("后台录制已经在进行中")
+        # 超时的原生读取可能仍持有设备，不能再开第二个实例或回收它的流。
+        active = _ACTIVE_ROLLING
+        if active is not None and active is not self:
+            if active.is_running:
+                raise RecordingError("上一次后台录制尚未停止，请稍后重试")
+            active.cancel()
+
+        instance, stream, channels, rate = _open_loopback_stream()
+        self._api, self._stream = instance, stream
+        try:
+            self._channels, self._rate = channels, rate
+            self._set_capacity(max(0.1, float(seconds)))
+            with self._lock:
+                self._chunks.clear()
+                self._buffered_frames = 0
+            self._stop_event.clear()
+            self._started_at = time.monotonic()
+            self._final_elapsed = 0.0
+            self._thread = threading.Thread(
+                target=self._capture, name="RollingRecord", daemon=True,
+            )
+            self._thread.start()
+            _ACTIVE_ROLLING = self
+        except Exception as error:
+            self._thread = None
+            self._release_device()
+            raise RecordingError(f"无法启动后台录制：{error}") from error
+
+    def _set_capacity(self, seconds: float) -> None:
+        self._max_frames = max(1, int(seconds * self._rate))
+        self._trim()
+
+    def _capture(self) -> None:
+        # WASAPI 静音时可能不产生数据包，固定帧数的阻塞 read 会永远等不到停止信号。
+        stream = self._stream
+        while not self._stop_event.is_set():
+            try:
+                available = stream.get_read_available()
+                if available <= 0:
+                    self._stop_event.wait(_CAPTURE_POLL_SECONDS)
+                    continue
+                data = stream.read(min(FRAMES_PER_BUFFER, available), exception_on_overflow=False)
+            except Exception as error:  # noqa: BLE001 - 设备被拔掉等，按已缓冲内容收尾
+                logger.warning("后台录制采集中断: %s", error)
+                break
+            if data:
+                self._push(data)
+        self._final_elapsed = time.monotonic() - self._started_at
+
+    def _push(self, data: bytes) -> None:
+        frames = np.frombuffer(data, dtype=np.int16)
+        # 块边界不保证按帧对齐；尾部不足一帧的样本丢弃，避免 L/R 错位。
+        usable = len(frames) - len(frames) % self._channels
+        if usable <= 0:
+            return
+        block = frames[:usable].reshape(-1, self._channels)
+        with self._lock:
+            self._chunks.append(block)
+            self._buffered_frames += block.shape[0]
+        self._trim()
+
+    def _trim(self) -> None:
+        with self._lock:
+            while self._buffered_frames > self._max_frames and self._chunks:
+                excess = self._buffered_frames - self._max_frames
+                first = self._chunks[0]
+                if first.shape[0] <= excess:
+                    self._chunks.popleft()
+                    self._buffered_frames -= first.shape[0]
+                else:
+                    self._chunks[0] = first[excess:]
+                    self._buffered_frames -= excess
+
+    def _snapshot(self) -> np.ndarray:
+        with self._lock:
+            chunks = list(self._chunks)
+        if not chunks:
+            return np.empty((0, self._channels), dtype=np.int16)
+        return np.concatenate(chunks)
+
+    def stop(self) -> Path:
+        """结束录制并返回最近窗口的临时 WAV；内容不足时抛 ``RecordingError``。"""
+        global _ACTIVE_ROLLING
+
+        thread = self._thread
+        if thread is None:
+            raise RecordingError("当前没有正在进行的后台录制")
+        self._stop_event.set()
+        thread.join(timeout=_JOIN_TIMEOUT_SECONDS)
+        # close/terminate 与原生 read 并发会直接访问违例，超时也必须保留活对象。
+        if thread.is_alive():
+            raise RecordingError("录制设备尚未停止，请稍后重试")
+        self._release_device()
+        self._thread = None
+        if _ACTIVE_ROLLING is self:
+            _ACTIVE_ROLLING = None
+
+        frames = self._snapshot()
+        with self._lock:
+            self._chunks.clear()
+            self._buffered_frames = 0
+        if frames.shape[0] == 0:
+            if self._final_elapsed >= MIN_RECORD_SECONDS:
+                raise RecordingError("未录到系统声音，请播放声音后重试")
+            raise RecordingError(f"录音太短，请至少录制 {MIN_RECORD_SECONDS:g} 秒")
+        if frames.shape[0] < MIN_RECORD_SECONDS * self._rate:
+            raise RecordingError(f"录音太短，请至少录制 {MIN_RECORD_SECONDS:g} 秒")
+
+        path = _create_temp_path("wordy-rolling-")
+        try:
+            _write_pcm_wav(path, _normalize(frames, self._rate), TARGET_SAMPLE_RATE)
+        except (OSError, wave.Error) as error:
+            path.unlink(missing_ok=True)
+            raise RecordingError(f"录音写入失败：{error}") from error
+        # 所有权移交给调用方：保存成功后由调用方删除，失败留在调用方手里重试。
+        return path
+
+    def cancel(self) -> None:
+        """中止录制并丢弃缓冲；没有进行中的录制时也不报错。"""
+        global _ACTIVE_ROLLING
+
+        thread = self._thread
+        if thread is None:
+            return
+        self._stop_event.set()
+        thread.join(timeout=_JOIN_TIMEOUT_SECONDS)
+        # 超时与录音器一致：不碰仍在 read() 的流，保留句柄等读取线程退出。
+        if thread.is_alive():
+            return
+        self._release_device()
+        self._thread = None
+        with self._lock:
+            self._chunks.clear()
+            self._buffered_frames = 0
+        if _ACTIVE_ROLLING is self:
+            _ACTIVE_ROLLING = None
+
+    def _release_device(self) -> None:
+        stream, self._stream = self._stream, None
+        api, self._api = self._api, None
+        if stream is not None:
+            try:
+                stream.stop_stream()
+            except Exception as error:  # noqa: BLE001
+                logger.warning("停止采集流失败: %s", error)
+            try:
+                stream.close()
+            except Exception as error:  # noqa: BLE001
+                logger.warning("关闭采集流失败: %s", error)
+        if api is not None:
+            _terminate_pyaudio(api)
+
+
+def _create_temp_path(prefix: str = "wordy-record-") -> Path:
     """一次性临时文件：不用 TemporaryDirectory，避免对象被回收时删掉尚未导入的录音。"""
-    handle, name = mkstemp(prefix="wordy-record-", suffix=".wav")
+    handle, name = mkstemp(prefix=prefix, suffix=".wav")
     os.close(handle)
     return Path(name)
+
+
+def _write_pcm_wav(path: Path, frames: np.ndarray, rate: int) -> None:
+    """wave 在 close 时才写 RIFF 长度，必须完整退出 with 再交给导入方。"""
+    with wave.open(str(path), "wb") as output:
+        output.setnchannels(TARGET_CHANNELS)
+        output.setsampwidth(2)
+        output.setframerate(rate)
+        output.writeframes(frames.tobytes())
+
+
+def _open_loopback_stream() -> tuple[Any, Any, int, int]:
+    """按端点 mix format 打开默认输出端点的 WASAPI 回环采集流。"""
+    api = _pyaudio
+    if api is None:
+        raise RecordingError("未安装 PyAudioWPatch，无法录制系统声音")
+    with _PYAUDIO_LIFECYCLE_LOCK:
+        instance = api.PyAudio()
+    try:
+        device = instance.get_default_wasapi_loopback()
+    except Exception as error:  # noqa: BLE001 - 没有 WASAPI 渲染端点时抛 LookupError
+        _terminate_pyaudio(instance)
+        raise RecordingError("找不到可录制的系统声音输出设备") from error
+
+    # WASAPI 共享模式必须匹配端点 mix format，采样率和声道数都按端点原样请求；
+    # 多出来的声道在 _normalize 里截掉，8 声道虚拟声卡也不会打不开。
+    channels = max(1, int(device["maxInputChannels"]))
+    rate = int(device["defaultSampleRate"])
+    try:
+        stream = instance.open(
+            format=api.paInt16,
+            channels=channels,
+            rate=rate,
+            input=True,
+            input_device_index=device["index"],
+            frames_per_buffer=FRAMES_PER_BUFFER,
+        )
+    except Exception as error:  # noqa: BLE001
+        _terminate_pyaudio(instance)
+        raise RecordingError(f"无法打开系统声音采集流：{error}") from error
+    return instance, stream, channels, rate
+
+
+def _terminate_pyaudio(instance: Any) -> None:
+    with _PYAUDIO_LIFECYCLE_LOCK:
+        try:
+            instance.terminate()
+        except Exception as error:  # noqa: BLE001
+            logger.warning("释放 PyAudio 失败: %s", error)
 
 
 def _normalize(frames: np.ndarray, rate: int) -> np.ndarray:
@@ -309,6 +527,8 @@ __all__ = [
     "TARGET_CHANNELS",
     "TARGET_SAMPLE_RATE",
     "RecordingError",
+    "RollingAudioRecorder",
     "SystemAudioRecorder",
     "cancel_active_recording",
+    "cancel_active_rolling_recording",
 ]

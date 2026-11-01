@@ -26,7 +26,7 @@
 
 返听（`SidetoneAudioPlayer.play_wav`）主输出在调用线程同步播、返听另起守护线程，两路同时播放，正好制造这个并发。因此 `player.py` 用模块级 `_PORTAUDIO_LIFECYCLE_LOCK` 包住每一次 `_new_pyaudio()` 与 `_terminate_pyaudio_locked()`，**只锁生命周期调用、不锁中间的实际播放**（否则一路播放会把另一路整个堵住）。返听那一路只等固定上限（`_SIDETONE_TAIL_TIMEOUT_SECONDS`）就放手——调用方是串行的 TTS worker，无限等下去会把后续所有朗读一起拖住；上一段返听还没收尾时，本次直接跳过返听而不是排队叠加。回归用例在 `tests/test_audio_player.py::test_portaudio_lifecycle_is_serialized`：真跑真 PortAudio 会让 pytest 进程本身挂掉，所以它用假实例检测重叠。
 
-`pyaudiowpatch`（录音）是另一份静态链接的 PortAudio，有独立的初始化计数，不共用这把锁。
+`pyaudiowpatch`（录音）是另一份静态链接的 PortAudio，有独立的初始化计数，不共用这把锁；`recorder.py` 用 `_PYAUDIO_LIFECYCLE_LOCK` 串行化它，因为普通录音与后台滚动录制可能并发新建/释放实例。
 
 ## 音频设备枚举
 
@@ -41,6 +41,14 @@
 **厂商没有可枚举音色的 HTTP 接口**，别去写「拉取音色列表」。`POST /api/v3/tts/get_voice` 是**单查**（入参必填 `speaker_id`），只返回该音色的注册状态与试听音频 `demo_audio`，**没有任何人类可读名称字段**，也没有分页/列表参数；官方「大模型音色列表」文档是静态表格，不是接口。
 
 因此音色列表由用户**手动维护**并持久化在 `AppSettings.volcengine_voice_list`（`[{"id", "name"}]`，读取时由 `_normalize_voice_entries` 清洗：id 必须非空字符串、同 id 留第一条、缺名用 id 兜底——下拉按名称做标签，没名称的条目会被 `build_voice_label_maps` 静默丢掉）。火山音色**不再单独存 id/name**：列表顺序就是选择，首条即当前生效音色；旧配置里的 `voice_id`/`voice_name` 键加载时直接丢弃。`VolcenginePanel` 只做三件事：下拉快速切换（把选中条目移到首位并通知重建引擎）、添加（同 ID 改名而非新增，新条目排首位直接生效）、删除（落到剩下第一条，全删光才回「无」）。`set_voices_loaded` 忽略传入的网络结果，始终按本地列表重填。
+
+## 后台持续录制
+
+`RollingAudioRecorder`（`audio/recorder.py`）按全局快捷键持续采集系统声音，内存环形缓冲只保留最近 `rolling_buffer_seconds` 秒（默认 30，范围 5–300，设置页可改）；录制期间不落盘，第二次按快捷键停止时才把窗口压成 48k 双声道临时 WAV。采集循环与普通录音共用 `_open_loopback_stream`、`_normalize`、`_write_pcm_wav`，必须先查 `get_read_available()`，停止超时不得 close 仍在 read 的流；两种录音器共用 `_PYAUDIO_LIFECYCLE_LOCK`，但 `_ACTIVE` 只约束普通录音。
+
+`RollingBufferController` 运行在 GUI 线程：热键监听器经 `triggered` 排队信号切状态；停止后打开 `AudioTrimDialog`。目标选择复用设置页的轮盘预览：`ui/wheel_picker.py` 提供共享 `WheelPicker`（设置页与目标选择器共用盘体绘制），`TargetSlotPicker` 在弹窗内显示各槽原有名称、空槽/音频/文字状态与选中槽详情，点击扇区选槽、下拉切盘；默认选中 `rolling_buffer_target`（`[轮盘, 槽位]`，越界自动钳位）。保存走 `save_buffer_clip`：导入托管副本 → 完整解码校验 → 一次 `update_wheel` 同时写 `slots` / `labels` / 清空同槽 `texts` → 只有确认成功才删临时文件，失败保留临时文件并回滚托管副本；被替换的旧文件仅在无任何轮盘引用时删除。取消弹窗即丢弃，不自动恢复滚动录制。
+
+后台录制快捷键默认 `f10`，不能与输入框或任一轮盘快捷键重复（启动、改键、轮盘改键三处都校验）。设置页录制新组合期间先停掉监听器，取消或失败要恢复；只有成功时控制器才写入配置。托盘图标在录制中叠加红点，状态变化和结果（开始/结束/保存/失败）经托盘气泡提示。退出时 `cancel_active_rolling_recording()` 与控制器 `stop()` 都要收掉采集流。
 
 ## 音频聊天轮盘
 
