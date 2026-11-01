@@ -1074,9 +1074,11 @@ def test_parent_close_during_import_completes_worker_and_discards_clip(qapp, mon
 
 def test_picker_uses_shared_wheel_painter(qapp, monkeypatch):
     from wordy.ui import chat_wheel_settings
+    import wordy.ui.wheel_picker as wheel_picker
 
     calls = []
-    monkeypatch.setattr(chat_wheel_settings, "paint_wheel",
+    # 盘体绘制已抽到共享 wheel_picker，设置页与截取目标选择器共用同一实现。
+    monkeypatch.setattr(wheel_picker, "paint_wheel",
                         lambda painter, labels, selected, **options: calls.append((labels, selected, options)))
     picker = chat_wheel_settings._WheelPicker(lambda _: None)
     for button in picker.buttons:

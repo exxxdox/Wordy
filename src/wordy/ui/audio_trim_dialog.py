@@ -28,13 +28,17 @@ class _WaveformSignals(QObject):
 class AudioTrimDialog(QDialog):
     def __init__(self, source: Path, parent: QWidget | None = None, *,
                  play_preview: Callable[[Path], None] | None = None,
-                 stop_preview: Callable[[], None] | None = None) -> None:
+                 stop_preview: Callable[[], None] | None = None,
+                 target_picker: QWidget | None = None,
+                 target_index: int = 0) -> None:
         super().__init__(parent)
         self._source = source
         self._play_preview = play_preview
         self._stop_preview = stop_preview
         self._preview_paths: list[Path] = []
         self._clip: Path | None = None
+        # 后台录制没有“当前槽位”，目标选择器由调用方提供；普通截取不显示。
+        self.target_picker = target_picker
         self.setWindowTitle("截取录音")
         self.setMinimumWidth(640)
         self.resize(860, 400)
@@ -97,6 +101,13 @@ class AudioTrimDialog(QDialog):
         self.preview_button.clicked.connect(self._preview)
         self._space_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Space), self)
         self._space_shortcut.activated.connect(self._preview)
+        if target_picker is not None:
+            set_index = getattr(target_picker, "set_index", None)
+            if callable(set_index):
+                set_index(target_index)
+            layout.addWidget(target_picker)
+            # 轮盘预览占高较多，弹窗整体放大到仍能完整看到波形与目标。
+            self.resize(900, 760)
         actions = QHBoxLayout()
         actions.addWidget(self.preview_button)
         actions.addStretch(1)
@@ -173,6 +184,12 @@ class AudioTrimDialog(QDialog):
             self.preview_button.setText("停止试听" if playing else "试听片段")
 
 
+    def set_play_preview(self, play_preview: Callable[[Path], None] | None) -> None:
+        """构造后再接试听回调：回调需要反引用窗口自身来复位按钮与播放线。"""
+        self._play_preview = play_preview
+        if hasattr(self, "preview_button"):
+            self.preview_button.setEnabled(play_preview is not None)
+
     def _selected_clip(self) -> Path:
         end = self.end_input.value()
         # 毫秒显示不能精确表示所有 PCM 帧；选到末尾时保留原录音的最后一帧。
@@ -215,6 +232,11 @@ class AudioTrimDialog(QDialog):
             raise ValueError("尚未保存录音片段")
         clip, self._clip = self._clip, None
         return clip
+
+    @property
+    def target_index(self) -> int:
+        """选中的目标项下标；没有目标选择器时固定为 0。"""
+        return int(getattr(self.target_picker, "target_index", 0))
 
     def done(self, result: int) -> None:
         self._closed.set()

@@ -11,11 +11,14 @@ from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtGui import QFont, QFontDatabase, QIcon
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFontComboBox, QFrame, QHBoxLayout, QLabel,
-    QLineEdit, QPushButton, QScrollArea, QSizePolicy, QSlider, QStyle, QTabWidget, QVBoxLayout,
-    QWidget,
+    QLineEdit, QPushButton, QScrollArea, QSizePolicy, QSlider, QSpinBox, QStyle, QTabWidget,
+    QVBoxLayout, QWidget,
 )
 
-from wordy.config import AppSettings
+from wordy.config import (
+    AppSettings, MAX_ROLLING_BUFFER_SECONDS, MIN_ROLLING_BUFFER_SECONDS,
+)
+from wordy.hotkey import display_hotkey
 from wordy.constants import (
     LOG_LEVELS, MAX_OVERLAY_OPACITY, MAX_VOLUME,
     MIN_OVERLAY_OPACITY, MIN_VOLUME, OVERLAY_OPACITY_STEP, VOLUME_STEP,
@@ -59,6 +62,7 @@ BUTTON_GAP = 16
 BUTTON_MIN_WIDTH = 88
 # 录制结果改由浮动弹窗呈现，原地提示回到中性指引。
 RECORD_HINT = "点击录制后按下新的快捷键组合"
+ROLLING_RECORD_HINT = "点击录制后按下新的快捷键组合"
 
 
 def _font_is_usable(family: str) -> bool:
@@ -97,13 +101,15 @@ class SettingsWindow:
                  on_field_changed: Callable[[str, object], bool | None],
                  on_close: Callable[[], None],
                  on_audio_outputs_needed: Callable[[], None] | None = None,
-                 prewarm: bool = False):
+                 prewarm: bool = False,
+                 on_record_rolling_hotkey: Callable[[], None] | None = None):
         self.root = root
         self._on_audio_outputs_needed = on_audio_outputs_needed
         self._audio_outputs_requested = False
         # 预热实例不显示也不改配置，丢弃时不必落盘。
         self._prewarmed = prewarm
         self.on_record_hotkey = on_record_hotkey
+        self.on_record_rolling_hotkey = on_record_rolling_hotkey
         self.on_refresh_voices = on_refresh_voices
         self.on_field_changed = on_field_changed
         self.on_close = on_close
@@ -113,6 +119,9 @@ class SettingsWindow:
         # 热键录制结果（仅在录制完成后赋值）
         self._recorded_hotkey: str | None = None
         self._recorded_hotkey_name: str | None = None
+        # 后台录制热键独立一份：两个快捷键走同一套原生录制流程。
+        self._rolling_recorded_hotkey: str | None = None
+        self._rolling_recorded_hotkey_name: str | None = None
 
         self._audio_output_label_to_identity: dict[str, AudioOutputIdentity] = {}
         self._audio_output_devices_error: Exception | None = None
@@ -123,6 +132,11 @@ class SettingsWindow:
         self.pending_label: QLabel = QLabel()
         self.record_status_label: QLabel = QLabel()
         self.record_button: QPushButton = QPushButton()
+        # 后台录制控件：秒数与独立热键同区展示。
+        self.rolling_pending_label: QLabel = QLabel()
+        self.rolling_status_label: QLabel = QLabel()
+        self.rolling_record_button: QPushButton = QPushButton()
+        self.rolling_seconds_spin: QSpinBox = QSpinBox()
         # 音色控件由活跃 provider panel 持有。
         self.tts_backend_combo: QComboBox = NoWheelComboBox()
         self.tts_api_combo: QComboBox = NoWheelComboBox()
@@ -246,6 +260,33 @@ class SettingsWindow:
         self.pending_label.setText(f"当前：{hotkey_name}")
         self.set_status("已录制，快捷键已更新", INPUT_TEXT_COLOR)
 
+    def set_rolling_recording_started(self) -> None:
+        """后台录制快捷键进入录制中状态。"""
+        self._set_label(self.rolling_status_label, "请按下新的快捷键组合，Esc 取消录制", TEXT_WARNING)
+        self.rolling_record_button.setText("录制中...")
+        self.rolling_record_button.setEnabled(False)
+
+    def set_rolling_record_result(self, hotkey: str | None, hotkey_name: str | None,
+                                  error: Exception | None = None) -> None:
+        """应用后台录制快捷键；注册/保存失败时保持旧值并提示。"""
+        self.rolling_record_button.setEnabled(True)
+        self.rolling_record_button.setText("重新录制")
+        self._set_label(self.rolling_status_label, ROLLING_RECORD_HINT, TEXT_MUTED)
+        if error is not None:
+            self.set_status(f"录制失败：{error}", TEXT_ERROR)
+            return
+        if hotkey is None or hotkey_name is None:
+            self.set_status("已取消录制", TEXT_MUTED)
+            self.rolling_record_button.setText("录制快捷键")
+            return
+        self._rolling_recorded_hotkey = hotkey
+        self._rolling_recorded_hotkey_name = hotkey_name
+        if self.on_field_changed("rolling_buffer_hotkey", hotkey) is False:
+            self.set_status("后台录制快捷键未能启用，请换一个组合", TEXT_ERROR)
+            return
+        self.rolling_pending_label.setText(f"快捷键：{hotkey_name}")
+        self.set_status("后台录制快捷键已更新", INPUT_TEXT_COLOR)
+
     def _reset_record_hint(self) -> None:
         """把录制提示还原成中性指引，避免上一次结果长期留在固定位置。"""
         self._set_label(self.record_status_label, RECORD_HINT, TEXT_MUTED)
@@ -353,6 +394,8 @@ class SettingsWindow:
         local_layout = self._create_tab_page(tab_widget, "本地设置")
         input_column, display_column = self._create_columns(local_layout)
         self._build_hotkey_section(input_column, s)
+        self._add_inner_gap(input_column)
+        self._build_rolling_section(input_column, s)
         self._add_inner_gap(input_column)
         self._build_placeholder_section(input_column, s)
         self._add_inner_gap(input_column)
@@ -521,6 +564,40 @@ class SettingsWindow:
         header.addWidget(self.record_button)
         section.addLayout(header)
         section.addWidget(self.record_status_label)
+
+    def _build_rolling_section(self, parent_layout: QVBoxLayout, s: AppSettings) -> None:
+        section = self._create_section(parent_layout)
+        section.addWidget(self._section_title("后台录制"))
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        self.rolling_pending_label = self._body_label(
+            f"快捷键：{display_hotkey(s.rolling_buffer_hotkey)}", INPUT_TEXT_COLOR, True)
+        header.addWidget(self.rolling_pending_label, 1)
+        self.rolling_status_label = self._hint_label(ROLLING_RECORD_HINT, TEXT_MUTED)
+        self.rolling_record_button = QPushButton("录制快捷键")
+        self.rolling_record_button.clicked.connect(
+            lambda _checked=False: self.on_record_rolling_hotkey
+            and self.on_record_rolling_hotkey())
+        header.addWidget(self.rolling_record_button)
+        section.addLayout(header)
+        section.addWidget(self.rolling_status_label)
+
+        seconds_row = QHBoxLayout()
+        seconds_row.setContentsMargins(0, 0, 0, 0)
+        seconds_row.addWidget(self._body_label("保留时长", TEXT_MUTED))
+        self.rolling_seconds_spin = QSpinBox()
+        self.rolling_seconds_spin.setRange(int(MIN_ROLLING_BUFFER_SECONDS),
+                                           int(MAX_ROLLING_BUFFER_SECONDS))
+        self.rolling_seconds_spin.setSuffix(" 秒")
+        self.rolling_seconds_spin.setValue(round(s.rolling_buffer_seconds))
+        self.rolling_seconds_spin.valueChanged.connect(self._on_rolling_seconds_changed)
+        seconds_row.addWidget(self.rolling_seconds_spin)
+        seconds_row.addStretch(1)
+        section.addLayout(seconds_row)
+
+    def _on_rolling_seconds_changed(self, value: int) -> None:
+        self._settings.rolling_buffer_seconds = float(value)
+        self.on_field_changed("rolling_buffer_seconds", float(value))
 
     def _build_backend_section(self, parent_layout: QVBoxLayout, s: AppSettings) -> None:
         section = self._create_section(parent_layout)

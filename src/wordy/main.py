@@ -14,7 +14,7 @@ import sys
 from typing import cast
 
 from wordy.audio.player import AudioPlayer, OutputDeviceSelection
-from wordy.audio.recorder import cancel_active_recording
+from wordy.audio.recorder import cancel_active_recording, cancel_active_rolling_recording
 from wordy.audio.sidetone import SidetoneAudioPlayer
 from wordy.config import AppSettings, USER_CONFIG_FILE
 from wordy.log import install_file_logging, install_log_stream
@@ -36,6 +36,7 @@ from wordy.tts_manager import TTSManager
 from wordy.ui.overlay import InputOverlay
 from wordy.ui.tray import TrayApp
 from wordy.chat_wheel_controller import ChatWheelController
+from wordy.rolling_buffer_controller import RollingBufferController
 
 from PySide6.QtCore import QTimer
 
@@ -109,6 +110,9 @@ class WordyApp:
 
         # ── UI ─────────────────────────────────────────────────────────
         self._chat_wheel_controller: ChatWheelController | None = None
+        self._rolling_controller: RollingBufferController | None = None
+        # 托盘晚于控制器创建，录制状态回调通过这个可变引用接线。
+        self._tray_app: TrayApp | None = None
         self.overlay = InputOverlay(
             on_submit=self._on_submit,
             on_voice_change=self._on_voice_change,
@@ -125,6 +129,8 @@ class WordyApp:
             on_query_mic_listen_status=lambda: self.routing.is_mic_listen_configured,
             audio_player=self.player,
             on_chat_wheel_change=self._on_chat_wheel_change,
+            on_rolling_buffer_hotkey_change=self._on_rolling_hotkey_change,
+            on_rolling_hotkey_recording=self._on_rolling_hotkey_recording,
         )
 
     # ── 凭据加载 ───────────────────────────────────────────────────────────
@@ -190,6 +196,33 @@ class WordyApp:
                     settings.chat_wheel_panel.set_hotkey_result(error)
                 else:
                     settings.chat_wheel_panel.set_wheel_result(error)
+
+    def _on_rolling_hotkey_change(self, hotkey: str) -> bool:
+        controller = self._rolling_controller
+        if controller is None:
+            return False
+        return controller.set_hotkey(hotkey)
+
+    def _on_rolling_hotkey_recording(self, active: bool) -> None:
+        controller = self._rolling_controller
+        if controller is None:
+            return
+        if active:
+            controller.suspend_hotkey()
+        else:
+            controller.resume_hotkey()
+
+    def _rolling_state_changed(self, active: bool) -> None:
+        tray = self._tray_app
+        if tray is not None:
+            tray.set_recording_state(active)
+
+    def _rolling_notify(self, message: str) -> None:
+        tray = self._tray_app
+        if tray is not None:
+            tray.notify(message)
+        else:
+            logger.info(message)
 
     def _on_chat_wheel_playback_finished(self) -> None:
         """播放结束（播完/被停止/失败）后复位试听按钮；设置窗口没开时无事可做。"""
@@ -372,8 +405,11 @@ class WordyApp:
             # app.quit() 不给顶层窗口派发 Close，设置页的关窗清理不会执行，
             # 进行中的录音必须在这里收掉，否则采集流会活到进程退出。
             cancel_active_recording()
+            cancel_active_rolling_recording()
             if self._chat_wheel_controller is not None:
                 self._chat_wheel_controller.stop()
+            if self._rolling_controller is not None:
+                self._rolling_controller.stop()
             # 退出后不会继续播放，避免先重开音频流再由 shutdown 立即关闭。
             self.routing.stop(notify_output_change=False)
             self.tts_manager.shutdown()
@@ -396,11 +432,25 @@ class WordyApp:
                 self._chat_wheel_controller.start()
             except (ValueError, RuntimeError, OSError) as error:
                 self._on_chat_wheel_error(f"聊天轮盘快捷键未启用：{error}")
+            # 后台录制不依赖设置窗口；预览走 TTS worker，弹窗只经信号回 GUI。
+            rolling_controller = RollingBufferController(
+                self._settings,
+                dialog_parent=lambda: self.overlay.root,
+                play_preview=lambda path, done, progress: self.tts_manager.play_audio_file(
+                    path, self._on_tts_error, done, on_progress=progress),
+                stop_preview=self.tts_manager.stop_audio_file,
+                on_state_changed=self._rolling_state_changed,
+                on_notify=self._rolling_notify,
+            )
+            self._rolling_controller = rolling_controller
+            if not rolling_controller.start():
+                logger.warning("后台录制快捷键未启用，可在设置页重新录制")
             if self._should_prewarm():
                 # manager 已把连接提交到串行 worker，无需额外线程绕过生命周期队列。
                 self.tts_manager.connect_async()
             # TrayApp 已负责托盘生命周期，无需再创建仅保存引用的控制器。
             tray_app = TrayApp(self.overlay)
+            self._tray_app = tray_app
             # 界面已经起来，趁空闲先把设置窗口的一次性构建成本付掉。
             QTimer.singleShot(SETTINGS_PREWARM_DELAY_MS, self.overlay.prewarm_settings_window)
 

@@ -53,7 +53,7 @@ class _LogStreamLike(Protocol):
     def attach(self, view: object, /) -> None: ...
 
 
-def _create_tts_tray_icon() -> QIcon:
+def _create_tts_tray_icon(recording: bool = False) -> QIcon:
     """Create a geometric text-to-speech tray icon with waveform motif."""
     size = 64
     pixmap = QPixmap(size, size)
@@ -82,6 +82,12 @@ def _create_tts_tray_icon() -> QIcon:
         rx = x_start + i * (bar_w + bar_gap)
         ry = base_y - h
         painter.drawRoundedRect(QRectF(rx, ry, bar_w, h), 1.5, 1.5)
+
+    if recording:
+        # 录制状态只加一颗红点，保留原有品牌轮廓供用户继续识别应用。
+        painter.setPen(QPen(QColor(ICON_BACKGROUND), 2))
+        painter.setBrush(QBrush(QColor("#f43f5e")))
+        painter.drawEllipse(QRectF(40, 4, 20, 20))
 
     painter.end()
     return QIcon(pixmap)
@@ -243,6 +249,24 @@ class TrayApp:
         self.log_window.show()
         self.log_window.raise_()
         self.log_window.activateWindow()
+
+    def set_recording_state(self, active: bool) -> None:
+        """后台录制开关只改图标红点与提示，不弹菜单或改托盘可见性。"""
+        icon = self.tray_icon
+        if icon is None:
+            return
+        icon.setIcon(_create_tts_tray_icon(recording=active))
+        icon.setToolTip("Wav Trans · 后台录制中" if active else "Wav Trans")
+
+    def notify(self, message: str, title: str = "Wav Trans") -> None:
+        """托盘气泡提示；托盘不可用或已销毁时静默跳过。"""
+        icon = self.tray_icon
+        if icon is None:
+            return
+        try:
+            icon.showMessage(title, message, QSystemTrayIcon.MessageIcon.Information, 4000)
+        except RuntimeError:
+            pass
 
     def _on_quit(self) -> None:
         # Defer overlay.stop() out of the QAction slot so the Qt event loop

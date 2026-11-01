@@ -9,9 +9,9 @@ from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QObject, QPoint, QPointF, QRectF, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QObject, QPointF, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import (
-    QColor, QFont, QIcon, QKeySequence, QMouseEvent, QPaintEvent, QPainter,
+    QColor, QIcon, QKeySequence, QPainter,
     QPixmap, QPolygonF,
 )
 from PySide6.QtWidgets import (
@@ -28,11 +28,9 @@ from wordy.config import AppSettings, CHAT_WHEEL_STYLES, WHEEL_NAME_MAX_LENGTH
 from wordy.ui.audio_trim_dialog import AudioTrimDialog
 from wordy.ui.status_toast import show_status_toast
 from wordy.ui.settings_widgets import NoWheelComboBox
-from wordy.ui.wheel_paint import (
-    WHEEL_CANVAS_HEIGHT, WHEEL_CANVAS_WIDTH, WheelHover, paint_wheel,
-)
+from wordy.ui.wheel_picker import WheelPicker as _WheelPicker
 from wordy.ui.theme import (
-    GREEN_ACCENT, TEXT_ERROR, TEXT_MUTED, TEXT_PRIMARY,
+    GREEN_ACCENT, TEXT_ERROR, TEXT_PRIMARY,
     SURFACE_BG,
 )
 
@@ -40,11 +38,6 @@ logger = logging.getLogger(__name__)
 # 槽位用数字编号标识：方向名（上/右上…）既指不明确，又和运行时轮盘的方向概念重名。
 SLOT_NAMES = tuple(f"音频 {index}" for index in range(1, 9))
 RECORD_TICK_MS = 200
-# 预览把整块轮盘画布等比缩进 400×400：按画布宽缩放，上下留白居中，
-# 与运行轮盘保持同一比例（含左右给贴边名称的透明余量）。
-_PREVIEW_SIZE = 400
-_PREVIEW_SCALE = _PREVIEW_SIZE / WHEEL_CANVAS_WIDTH
-_PREVIEW_TOP = (_PREVIEW_SIZE - WHEEL_CANVAS_HEIGHT * _PREVIEW_SCALE) / 2
 
 
 def _action_icon(shape: str, color: str) -> QIcon:
@@ -70,100 +63,6 @@ class _ImportSignals(QObject):
     finished = Signal(int, str, str, str, str)
     preview_finished = Signal(str)
     preview_progress = Signal(str, float)
-
-
-class _WheelPicker(QWidget):
-    """用真实方位呈现八个可键盘聚焦的轮盘槽。"""
-
-    def __init__(self, on_select: Callable[[int], None]) -> None:
-        super().__init__()
-        self._on_select = on_select
-        self._hovered_index: int | None = None
-        self._hover_animation = WheelHover(self)
-        self.wheel_style = "classic"
-        # 预览整体等比缩进 400×400：画布比盘体宽，按画布宽缩放让左右余量也完整显示。
-        self.setFixedSize(400, 400)
-        self.setMouseTracking(True)
-        self.buttons: list[QPushButton] = []
-        for index in range(8):
-            button = QPushButton(self)
-            button.setObjectName("wheelSlot")
-            button.setAccessibleName(f"编辑{SLOT_NAMES[index]}")
-            button.setCheckable(True)
-            # 鼠标统一由轮盘处理，避免透明按钮的 hover/pressed 状态覆盖扇区选中色。
-            button.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
-            button.setFixedSize(88, 44)
-            # 焦点按钮跟随放大后的槽位中心，确保键盘导航滚动到正确位置。
-            angle = math.radians(90 - index * 45)
-            radius = 158 * _PREVIEW_SCALE
-            button.move(round(200 + radius * math.cos(angle) - 44),
-                        round(200 - radius * math.sin(angle) - 22))
-            button.clicked.connect(lambda _checked=False, i=index: on_select(i))
-            button.installEventFilter(self)
-            self.buttons.append(button)
-        self.setStyleSheet(f"""
-            QPushButton#wheelSlot {{
-                background: transparent;
-                color: transparent;
-                border: none;
-            }}
-            QPushButton#wheelSlot:disabled {{
-                background: transparent;
-                color: transparent;
-            }}
-        """)
-
-    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
-        if watched in self.buttons and event.type() in (QEvent.Type.FocusIn, QEvent.Type.FocusOut):
-            self.update()
-        return super().eventFilter(watched, event)
-
-    @staticmethod
-    def _slot_at(point: QPoint) -> int | None:
-        dx, dy = point.x() - 200, point.y() - 200
-        distance = math.hypot(dx, dy)
-        # 命中范围跟随共享盘体的 80/232 半径及缩放比例。
-        if distance < 80 * _PREVIEW_SCALE or distance > 232 * _PREVIEW_SCALE:
-            return None
-        angle = math.degrees(math.atan2(dx, -dy)) % 360
-        return int((angle + 22.5) % 360 // 45)
-
-    def mousePressEvent(self, event: QMouseEvent) -> None:
-        if event.button() == Qt.MouseButton.LeftButton:
-            index = self._slot_at(event.position().toPoint())
-            if index is not None and self.buttons[index].isEnabled():
-                self._on_select(index)
-                self.update()
-                return
-        super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event: QMouseEvent) -> None:
-        hovered_index = self._slot_at(event.position().toPoint())
-        if hovered_index != self._hovered_index:
-            self._hovered_index = hovered_index
-            self.update()
-        super().mouseMoveEvent(event)
-
-    def leaveEvent(self, event: QEvent) -> None:
-        self._hovered_index = None
-        self.update()
-        super().leaveEvent(event)
-
-    def paintEvent(self, _event: QPaintEvent) -> None:
-        painter = QPainter(self)
-        # 与运行轮盘共用盘体，按画布宽缩放到设置页；编辑交互仍由透明按钮承接。
-        painter.translate(0, _PREVIEW_TOP)
-        painter.scale(_PREVIEW_SCALE, _PREVIEW_SCALE)
-        labels = [button.text().split("\n", 1)[-1] for button in self.buttons]
-        labels = ["" if label == "未设置" else label for label in labels]
-        focused = next((i for i, button in enumerate(self.buttons) if button.hasFocus()), None)
-        checked = next((i for i, button in enumerate(self.buttons) if button.isChecked()), None)
-        selected = focused if focused is not None else self._hovered_index
-        selected = selected if selected is not None else checked
-        self._hover_animation.select(selected)
-        paint_wheel(painter, labels, selected, editing=True, highlights=self._hover_animation.values,
-                    style=self.wheel_style)
-        painter.end()
 
 
 class ChatWheelSettings(QWidget):

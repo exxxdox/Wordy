@@ -52,6 +52,8 @@ class ChatWheelController(QObject):
             raise ValueError("轮盘快捷键不能重复")
         if parse_hotkey(self.settings.hotkey) in bindings:
             raise ValueError("轮盘快捷键不能与输入框快捷键相同")
+        if parse_hotkey(self.settings.rolling_buffer_hotkey) in bindings:
+            raise ValueError("轮盘快捷键不能与后台录制快捷键相同")
         previous_wheels = [self.settings.get_wheel(i) for i in range(self.settings.wheel_count)]
         added: dict[tuple[int, int], NativeHotkeyListener] = {}
         try:

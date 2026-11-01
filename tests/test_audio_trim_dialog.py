@@ -99,3 +99,25 @@ def test_preview_playhead_follows_matching_clip_and_resets(qapp, tmp_path):
     dialog.preview_progress(filename, .5)
     assert dialog.waveform._playhead is None
     dialog.reject()
+
+
+def test_target_selector_reports_chosen_wheel_and_slot(qapp, tmp_path):
+    from wordy.config import AppSettings
+    from wordy.ui.target_slot_picker import TargetSlotPicker
+
+    settings = AppSettings.load(config_file=tmp_path / "config.toml")
+    settings.add_wheel("f10")
+    picker = TargetSlotPicker(settings)
+    dialog = AudioTrimDialog(recording(tmp_path), target_picker=picker, target_index=9)
+    assert dialog.target_index == 9
+    picker.set_index(0)
+    assert dialog.target_index == 0
+    dialog.reject()
+
+
+def test_without_targets_selector_is_hidden(qapp, tmp_path):
+    dialog = AudioTrimDialog(recording(tmp_path))
+    assert dialog.target_picker is None
+    assert dialog.target_index == 0
+    dialog.reject()
+
