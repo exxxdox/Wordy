@@ -228,6 +228,12 @@ class ChatWheelSettings(QWidget):
         self.record_button.setIconSize(QSize(14, 14))
         self.record_button.clicked.connect(self._toggle_record)
         action_row.addWidget(self.record_button)
+        # 录制中单独给「取消」：停止会落盘，丢弃必须另有一个入口。
+        self.cancel_record_button = QPushButton("取消")
+        self.cancel_record_button.setAccessibleName("取消录音")
+        self.cancel_record_button.setVisible(False)
+        self.cancel_record_button.clicked.connect(self._cancel_current_recording)
+        action_row.addWidget(self.cancel_record_button)
         self.preview_button = QPushButton("试听")
         self.preview_button.setIconSize(QSize(14, 14))
         self.preview_button.clicked.connect(self._toggle_preview)
@@ -598,6 +604,14 @@ class ChatWheelSettings(QWidget):
             self._trim_dialog = None
             dialog.deleteLater()
 
+    def _cancel_current_recording(self) -> None:
+        """用户主动取消：丢弃当前录音，不导入、不覆盖槽位。"""
+        if self._recording is None:
+            return
+        self._cancel_recording()
+        self._refresh_all_slots()
+        self._status("已取消录音")
+
     def _cancel_recording(self) -> None:
         """丢弃进行中的录音；采集线程不碰 Qt，可以在这里安全收尾。"""
         self._record_timer.stop()
@@ -860,6 +874,9 @@ class ChatWheelSettings(QWidget):
         for audio_button in (self.choose_button, self.record_button, self.trim_button):
             audio_button.setVisible(not is_text)
         self.record_button.setEnabled(recording or not busy)
+        # 取消只在录制当前槽时出现；文字槽没有录音入口。
+        self.cancel_record_button.setVisible(recording and not is_text)
+        self.cancel_record_button.setEnabled(recording)
         self._refresh_record_button()
         if self._preview_speech:
             # 朗读可打断，按钮就是「停止」；其余槽位仍锁到完成回调，

@@ -870,6 +870,23 @@ def test_recording_is_refused_while_speaking(qapp, monkeypatch):
     assert "朗读" in panel.status_label.text()
 
 
+def test_recording_cancel_button_discards_without_saving(qapp, monkeypatch):
+    recorder = _FakeRecorder()
+    panel, settings = _recording_panel(monkeypatch, recorder)
+    assert panel.cancel_record_button.isHidden()
+
+    panel.record_button.click()
+    assert not panel.cancel_record_button.isHidden()
+
+    panel.cancel_record_button.click()
+
+    assert recorder.cancelled is True
+    assert panel._recording is None
+    assert panel.cancel_record_button.isHidden()
+    assert settings.chat_wheel_slots == [""] * 8
+    assert "取消" in panel.status_label.text()
+
+
 def test_recording_start_failure_reports_reason(qapp, monkeypatch):
     from wordy.audio.recorder import RecordingError
 
