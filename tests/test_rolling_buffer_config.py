@@ -20,7 +20,7 @@ def _settings(tmp_path: Path) -> AppSettings:
 
 def test_defaults_are_safe(tmp_path):
     settings = _settings(tmp_path)
-    assert settings.rolling_buffer_hotkey == "ctrl+alt+r"
+    assert settings.rolling_buffer_hotkey == "f10"
     assert settings.rolling_buffer_seconds == 30.0
     assert settings.rolling_buffer_target == [0, 0]
 
@@ -57,7 +57,7 @@ def test_invalid_hotkey_and_target_fall_back(tmp_path):
         encoding="utf-8",
     )
     settings = AppSettings.load(config_file=path)
-    assert settings.rolling_buffer_hotkey == "ctrl+alt+r"
+    assert settings.rolling_buffer_hotkey == "f10"
     assert settings.rolling_buffer_seconds == MAX_ROLLING_BUFFER_SECONDS
     assert settings.rolling_buffer_target == [0, 7]
 

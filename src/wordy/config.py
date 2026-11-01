@@ -191,7 +191,7 @@ class AppSettings:
     chat_wheel_volumes: list[float] = field(default_factory=lambda: [1.0] * 8)
     additional_chat_wheels: list[ChatWheelConfig] = field(default_factory=list)
     # 后台持续录制：按热键开始/停止，停止时从最近 N 秒里截取保存。
-    rolling_buffer_hotkey: str = "ctrl+alt+r"
+    rolling_buffer_hotkey: str = "f10"
     rolling_buffer_seconds: float = 30.0
     # [轮盘下标, 槽位下标]；截取弹窗默认选中上次保存目标。
     rolling_buffer_target: list[int] = field(default_factory=lambda: [0, 0])

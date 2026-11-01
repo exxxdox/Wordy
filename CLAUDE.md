@@ -116,7 +116,7 @@ driver.py(VBCableDriverManager) → config.py(AppSettings) → main.py(生命周
 
 `RollingBufferController` 运行在 GUI 线程：热键监听器经 `triggered` 排队信号切状态；停止后打开 `AudioTrimDialog`。目标选择复用设置页的轮盘预览：`ui/wheel_picker.py` 提供共享 `WheelPicker`（设置页与目标选择器共用盘体绘制），`TargetSlotPicker` 在弹窗内显示各槽原有名称、空槽/音频/文字状态与选中槽详情，点击扇区选槽、下拉切盘；默认选中 `rolling_buffer_target`（`[轮盘, 槽位]`，越界自动钳位）。保存走 `save_buffer_clip`：导入托管副本 → 完整解码校验 → 一次 `update_wheel` 同时写 `slots` / `labels` / 清空同槽 `texts` → 只有确认成功才删临时文件，失败保留临时文件并回滚托管副本；被替换的旧文件仅在无任何轮盘引用时删除。取消弹窗即丢弃，不自动恢复滚动录制。
 
-后台录制快捷键默认 `ctrl+alt+r`，不能与输入框或任一轮盘快捷键重复（启动、改键、轮盘改键三处都校验）。设置页录制新组合期间先停掉监听器，取消或失败要恢复；只有成功时控制器才写入配置。托盘图标在录制中叠加红点，状态变化和结果（开始/结束/保存/失败）经托盘气泡提示。退出时 `cancel_active_rolling_recording()` 与控制器 `stop()` 都要收掉采集流。
+后台录制快捷键默认 `f10`，不能与输入框或任一轮盘快捷键重复（启动、改键、轮盘改键三处都校验）。设置页录制新组合期间先停掉监听器，取消或失败要恢复；只有成功时控制器才写入配置。托盘图标在录制中叠加红点，状态变化和结果（开始/结束/保存/失败）经托盘气泡提示。退出时 `cancel_active_rolling_recording()` 与控制器 `stop()` 都要收掉采集流。
 
 ## 音频聊天轮盘
 
