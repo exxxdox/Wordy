@@ -19,6 +19,7 @@ from wordy.config import (
     AppSettings, MAX_ROLLING_BUFFER_SECONDS, MIN_ROLLING_BUFFER_SECONDS,
 )
 from wordy.hotkey import display_hotkey
+from wordy.hotkey.native import virtual_key_for_key_name
 from wordy.constants import (
     LOG_LEVELS, MAX_OVERLAY_OPACITY, MAX_VOLUME,
     MIN_OVERLAY_OPACITY, MIN_VOLUME, OVERLAY_OPACITY_STEP, VOLUME_STEP,
@@ -52,7 +53,7 @@ SYSTEM_DEFAULT_AUDIO_OUTPUT_LABEL = "系统默认"
 # 双栏表单与轮盘编辑并列呈现；默认宽度为原560px的两倍。
 # 尺寸包含透明边缘与标题栏；静态尺寸契约要求顶层整数字面量。
 DIALOG_WIDTH = 1120
-DIALOG_HEIGHT = 760
+DIALOG_HEIGHT = 820
 DIALOG_MIN_WIDTH = 960
 DIALOG_MIN_HEIGHT = 636
 CONTENT_MARGIN = 36
@@ -102,7 +103,8 @@ class SettingsWindow:
                  on_close: Callable[[], None],
                  on_audio_outputs_needed: Callable[[], None] | None = None,
                  prewarm: bool = False,
-                 on_record_rolling_hotkey: Callable[[], None] | None = None):
+                 on_record_rolling_hotkey: Callable[[], None] | None = None,
+                 on_record_hold_key: Callable[[], None] | None = None):
         self.root = root
         self._on_audio_outputs_needed = on_audio_outputs_needed
         self._audio_outputs_requested = False
@@ -110,6 +112,7 @@ class SettingsWindow:
         self._prewarmed = prewarm
         self.on_record_hotkey = on_record_hotkey
         self.on_record_rolling_hotkey = on_record_rolling_hotkey
+        self.on_record_hold_key = on_record_hold_key
         self.on_refresh_voices = on_refresh_voices
         self.on_field_changed = on_field_changed
         self.on_close = on_close
@@ -137,6 +140,10 @@ class SettingsWindow:
         self.rolling_status_label: QLabel = QLabel()
         self.rolling_record_button: QPushButton = QPushButton()
         self.rolling_seconds_spin: QSpinBox = QSpinBox()
+        # 播放时自动按住的键：开关与单键录制共用一套录制流程。
+        self.hold_key_check: QCheckBox = QCheckBox()
+        self.hold_key_label: QLabel = QLabel()
+        self.hold_key_button: QPushButton = QPushButton()
         # 音色控件由活跃 provider panel 持有。
         self.tts_backend_combo: QComboBox = NoWheelComboBox()
         self.tts_api_combo: QComboBox = NoWheelComboBox()
@@ -286,6 +293,34 @@ class SettingsWindow:
             return
         self.rolling_pending_label.setText(f"快捷键：{hotkey_name}")
         self.set_status("后台录制快捷键已更新", INPUT_TEXT_COLOR)
+
+    def _on_hold_key_enabled_changed(self, enabled: bool) -> None:
+        self._settings.hold_key_enabled = enabled
+        self.on_field_changed("hold_key_enabled", enabled)
+
+    def set_hold_key_recording_started(self) -> None:
+        """自动按键进入录制中状态。"""
+        self.hold_key_button.setText("录制中...")
+        self.hold_key_button.setEnabled(False)
+        self.set_status("请按下一个键，Esc 取消录制", TEXT_WARNING)
+
+    def set_hold_key_record_result(self, key: str | None, error: Exception | None = None) -> None:
+        """应用录制到的自动按键；取消或失败保持原配置。"""
+        self.hold_key_button.setEnabled(True)
+        self.hold_key_button.setText("录制按键")
+        if error is not None:
+            self.set_status(f"录制失败：{error}", TEXT_ERROR)
+            return
+        if key is None:
+            self.set_status("已取消录制", TEXT_MUTED)
+            return
+        # 先校验再写：__setattr__ 对非法值会回退默认键，会覆盖用户原来的选择。
+        if virtual_key_for_key_name(key) is None:
+            self.set_status(f"不支持的按键：{key}", TEXT_ERROR)
+            return
+        self._settings.hold_key = key
+        self.hold_key_label.setText(f"当前：{display_hotkey(self._settings.hold_key)}")
+        self.set_status("自动按键已更新", INPUT_TEXT_COLOR)
 
     def _reset_record_hint(self) -> None:
         """把录制提示还原成中性指引，避免上一次结果长期留在固定位置。"""
@@ -564,6 +599,25 @@ class SettingsWindow:
         header.addWidget(self.record_button)
         section.addLayout(header)
         section.addWidget(self.record_status_label)
+
+        hold_row = QHBoxLayout()
+        hold_row.setContentsMargins(0, 0, 0, 0)
+        self.hold_key_check = QCheckBox("播放时自动按住某键")
+        self.hold_key_check.setAccessibleName("播放时自动按住某键")
+        self.hold_key_check.setChecked(s.hold_key_enabled)
+        hold_row.addWidget(self.hold_key_check)
+        self.hold_key_label = self._body_label(
+            f"当前：{display_hotkey(s.hold_key)}", INPUT_TEXT_COLOR)
+        hold_row.addWidget(self.hold_key_label, 1)
+        self.hold_key_button = QPushButton("录制按键")
+        self.hold_key_button.clicked.connect(
+            lambda _checked=False: self.on_record_hold_key and self.on_record_hold_key())
+        hold_row.addWidget(self.hold_key_button)
+        section.addLayout(hold_row)
+        section.addWidget(self._hint_label(
+            "开启后，播放语音前自动按下该键，结束后松开。", TEXT_MUTED))
+        # 初始赋值完成后再连接，打开设置不会把已有值当成用户变更写入。
+        self.hold_key_check.toggled.connect(self._on_hold_key_enabled_changed)
 
     def _build_rolling_section(self, parent_layout: QVBoxLayout, s: AppSettings) -> None:
         section = self._create_section(parent_layout)

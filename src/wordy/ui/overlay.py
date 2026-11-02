@@ -435,10 +435,11 @@ class InputOverlay:
     def _submit_text(self, text: str, *, hide_after: bool = False) -> None:
         """提交非空文本；回车收起，朗读按钮保留输入现场。"""
         if text:
-            self.on_submit(text)
-            # 区分键盘提交和按钮试听，避免修复回车时改变朗读按钮行为。
+            # 先收起再提交：播放层会在开播前注入语音键，输入框还占着前台时
+            # 注入的按键会被自己的输入框吃掉，游戏也拿不到。
             if hide_after:
                 self.hide()
+            self.on_submit(text)
 
     def _register_hotkey(self) -> None:
         if not self._unregister_hotkey():
@@ -595,6 +596,7 @@ class InputOverlay:
             state,
             on_record_hotkey=self._start_record_hotkey,
             on_record_rolling_hotkey=self._start_record_rolling_hotkey,
+            on_record_hold_key=self._start_record_hold_key,
             on_refresh_voices=self._start_load_voices,
             on_field_changed=self._on_settings_field_changed,
             on_close=self._on_settings_window_closed,
@@ -706,6 +708,8 @@ class InputOverlay:
         if settings is not None:
             if target == "rolling_buffer":
                 settings.set_rolling_recording_started()
+            elif target == "hold_key":
+                settings.set_hold_key_recording_started()
             else:
                 settings.set_recording_started()
         if target == "rolling_buffer":
@@ -719,10 +723,18 @@ class InputOverlay:
     def _start_record_rolling_hotkey(self) -> None:
         self._start_record_hotkey("rolling_buffer")
 
+    def _start_record_hold_key(self) -> None:
+        self._start_record_hotkey("hold_key")
+
     def _read_hotkey_worker(self) -> None:
+        target = getattr(self, "_recording_hotkey_target", "hotkey")
         try:
             import keyboard
-            hotkey = keyboard.read_hotkey(suppress=False)
+            if target == "hold_key":
+                # 门控只认一个键：read_hotkey 会把组合键当成一次输入。
+                hotkey = keyboard.read_key(suppress=False)
+            else:
+                hotkey = keyboard.read_hotkey(suppress=False)
         except Exception as e:
             signals = self._signals
             if signals is not None:
@@ -759,6 +771,17 @@ class InputOverlay:
             except Exception as e:
                 logger.warning("重新注册全局快捷键 %s 失败: %s", self._cfg.name, e)
                 register_error = e
+        if target == "hold_key":
+            if settings is not None:
+                if register_error is not None:
+                    settings.set_hold_key_record_result(None, register_error)
+                elif isinstance(error, Exception):
+                    settings.set_hold_key_record_result(None, error)
+                elif not isinstance(hotkey, str):
+                    settings.set_hold_key_record_result(None)
+                else:
+                    settings.set_hold_key_record_result(hotkey)
+            return
         if settings is None:
             return
         if register_error is not None:

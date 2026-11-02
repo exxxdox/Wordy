@@ -23,6 +23,7 @@ from typing import ClassVar, TypedDict
 import wordy.secret
 from wordy._toml_serializer import read_toml, write_toml_atomic
 from wordy.hotkey import display_hotkey
+from wordy.hotkey.native import virtual_key_for_key_name
 from wordy.identity import AudioIdentity, normalize_identity
 from wordy.paths import config_directory
 from wordy.tts.constants import (
@@ -195,6 +196,10 @@ class AppSettings:
     rolling_buffer_seconds: float = 30.0
     # [轮盘下标, 槽位下标]；截取弹窗默认选中上次保存目标。
     rolling_buffer_target: list[int] = field(default_factory=lambda: [0, 0])
+    # 「播放时自动按住」：开启后播放轮盘/输入框语音前自动按下该键，播完松开，
+    # 用于游戏里必须按住语音键（如 Dota 2 的 G）才会收音的场景。
+    hold_key_enabled: bool = False
+    hold_key: str = "g"
     volume: float = 1.0
     overlay_opacity: float = 1.0
     overlay_placeholder: str = "Hello World~"
@@ -480,6 +485,9 @@ class AppSettings:
                 pass
         _apply_if_present(raw, "rolling_buffer_seconds", settings, _parse_rolling_seconds)
         setattr(settings, "rolling_buffer_target", raw.get("rolling_buffer_target", [0, 0]))
+        # 播放时自动按住的键；非法按键由 __setattr__ 回退默认键。
+        _apply_if_present(raw, "hold_key_enabled", settings, lambda v: v if isinstance(v, bool) else None)
+        _apply_if_present(raw, "hold_key", settings, _nonempty_str)
 
         # 结构化 tts_providers
         raw_providers = raw.get("tts_providers")
@@ -537,6 +545,12 @@ class AppSettings:
             return
         if name == "chat_wheel_style" and (not isinstance(value, str) or value not in CHAT_WHEEL_STYLES):
             value = "classic"
+        if name == "hold_key":
+            # 配置可能被手改：无法解析的键按不出来，回退默认键。
+            if not isinstance(value, str) or virtual_key_for_key_name(value) is None:
+                value = "g"
+            else:
+                value = value.strip().lower()
         if name == "rolling_buffer_target":
             # 保存目标随时可能因为删除轮盘而失效，写入口统一钳到现有范围。
             value = _parse_rolling_target(value, self.wheel_count)

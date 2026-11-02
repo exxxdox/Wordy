@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from threading import Lock
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
@@ -33,6 +34,18 @@ logger = logging.getLogger(__name__)
 _TTS_EXECUTOR_THREAD_NAME_PREFIX = "WordyTTS"
 _JANITOR_THREAD_NAME = "WordyTTSJanitor"
 _JANITOR_JOIN_TIMEOUT_SECONDS = 30.0
+# 注入按键到游戏打开麦克风之间有输入处理延迟；等一小段再开口，否则开头会被吞掉。
+HOLD_KEY_SETTLE_SECONDS = 0.05
+
+
+def _press_hold_key(key: str) -> None:
+    import keyboard
+    keyboard.press(key)
+
+
+def _release_hold_key(key: str) -> None:
+    import keyboard
+    keyboard.release(key)
 
 
 @dataclass
@@ -399,8 +412,31 @@ class TTSManager:
         if on_finished is not None:
             on_finished()
 
+    def _begin_hold_key(self) -> str | None:
+        """开播前自动按住配置的键；返回按下的键名供结束时松开。"""
+        if not self._settings.hold_key_enabled:
+            return None
+        key = self._settings.hold_key
+        try:
+            _press_hold_key(key)
+        except Exception:
+            logger.warning("自动按住按键 %s 失败", key, exc_info=True)
+            return None
+        time.sleep(HOLD_KEY_SETTLE_SECONDS)
+        return key
+
+    @staticmethod
+    def _end_hold_key(key: str | None) -> None:
+        if key is None:
+            return
+        try:
+            _release_hold_key(key)
+        except Exception:
+            logger.warning("自动松开按键 %s 失败", key, exc_info=True)
+
     def _generate_and_play(self, job: _SpeechJob) -> None:
         """在后台 worker 中生成 TTS 并播放（由 executor 执行）。"""
+        hold_key: str | None = None
         try:
             if job.ready is not None:
                 job.ready.wait()
@@ -409,6 +445,7 @@ class TTSManager:
                 return
             # 播放层兜底：引擎即使漏查取消位，write_stream 也会被这道令牌截断。
             self._audio_player.begin_playback(job.cancel)
+            hold_key = self._begin_hold_key()
             if not job.engine.speak(job.text, job.cancel):
                 # 被取消不是失败：引擎按约定返回 False 表示「没播完」。
                 if job.cancel.is_set():
@@ -426,6 +463,7 @@ class TTSManager:
                 job.on_error(message)
         finally:
             self._audio_player.end_playback(job.cancel)
+            self._end_hold_key(hold_key)
             with self._speech_lock:
                 if self._speech_cancel is job.cancel:
                     self._speech_cancel = None
@@ -476,15 +514,20 @@ class TTSManager:
                          cancel: threading.Event,
                          on_finished: Callable[[], None] | None,
                          on_progress: Callable[[float], None] | None = None) -> None:
+        hold_key: str | None = None
         try:
             if ready is not None:
                 ready.wait()
             if self._audio_files_stopped.is_set():
                 return
+            # 排队期间已被停止就不必再按键：否则会短暂按住游戏语音键又松开。
+            if cancel.is_set():
+                return
             # 只让出音频设备：reset 会立刻重开实时流，close 又要等 websocket 关闭
             # 握手（最长 10 秒）并让下次朗读重连，都会拖慢片段起播。
             engine.release_audio_output()
             self._audio_player.begin_playback(cancel)
+            hold_key = self._begin_hold_key()
             with decoded_audio_clip(path, cancel) as wav_path:
                 # 按提交时的槽位音量播放，避免排队期间切槽或调音串到其他音频。
                 progress: dict[str, Any] = {"on_progress": on_progress} if on_progress is not None else {}
@@ -502,6 +545,7 @@ class TTSManager:
                 on_error(f"音频播放失败：{error}")
         finally:
             self._audio_player.end_playback(cancel)
+            self._end_hold_key(hold_key)
             if self._clip_cancel is cancel:
                 self._clip_cancel = None
             # 播完、被打断、失败都要回调，否则设置页的「停止」按钮会一直挂着。
