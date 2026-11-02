@@ -98,6 +98,60 @@ def _new_settings_window_with_audio_output(
     )
 
 
+def test_hold_key_toggle_persists_and_notifies(monkeypatch: pytest.MonkeyPatch) -> None:
+    from wordy.config import AppSettings
+
+    _, window = _new_settings_window(monkeypatch)
+    callback = _field_changed_mock(window)
+    assert window.hold_key_check.isChecked() is False
+
+    window.hold_key_check.setChecked(True)
+
+    assert AppSettings.load().hold_key_enabled is True
+    callback.assert_called_with("hold_key_enabled", True)
+
+
+def test_hold_key_recording_updates_label_and_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    from wordy.config import AppSettings
+
+    _, window = _new_settings_window(monkeypatch)
+
+    window.set_hold_key_recording_started()
+    assert window.hold_key_button.isEnabled() is False
+
+    window.set_hold_key_record_result("h")
+
+    assert window.hold_key_button.isEnabled() is True
+    assert AppSettings.load().hold_key == "h"
+    assert "H" in window.hold_key_label.text()
+
+
+def test_unsupported_hold_key_recording_keeps_configured_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from wordy.config import AppSettings
+
+    _, window = _new_settings_window(monkeypatch)
+    AppSettings.load().hold_key = "h"
+
+    window.set_hold_key_record_result("no such key")
+
+    # 非法按键不能把原来的选择回退成默认键。
+    assert AppSettings.load().hold_key == "h"
+
+
+def test_cancelled_hold_key_recording_keeps_configured_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    from wordy.config import AppSettings
+
+    _, window = _new_settings_window(monkeypatch)
+    before = AppSettings.load().hold_key
+
+    window.set_hold_key_record_result(None)
+
+    assert AppSettings.load().hold_key == before
+    assert window.hold_key_button.isEnabled() is True
+
+
 def test_audio_routing_enable_failure_keeps_setting_disabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

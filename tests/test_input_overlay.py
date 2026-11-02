@@ -66,6 +66,14 @@ class SettingsWindowStub:
         self.record_results: list[tuple[object, object, object | None]] = []
         self.hotkey_warnings: list[str] = []
         self.status_calls: list[str] = []
+        self.hold_recording_started_count: int = 0
+        self.hold_record_results: list[tuple[object, object | None]] = []
+
+    def set_hold_key_recording_started(self) -> None:
+        self.hold_recording_started_count += 1
+
+    def set_hold_key_record_result(self, key: object, error: object | None = None) -> None:
+        self.hold_record_results.append((key, error))
 
     def set_recording_started(self) -> None:
         self.recording_started_count += 1
@@ -102,6 +110,8 @@ class _OverlayStub(Protocol):
     height: int
     _register_hotkey: Callable[[], None]
     _unregister_hotkey: Callable[[], None]
+    _start_record_hotkey: Callable[..., None]
+    _read_hotkey_worker: Callable[[], None]
     _create_settings_window: Callable[[], None]
     _active_settings_window: Callable[[], SettingsWindowStub | None]
     try_register_hotkey: Callable[[str, str], bool]
@@ -209,6 +219,30 @@ def test_start_record_hotkey_ignores_duplicate_start(monkeypatch: pytest.MonkeyP
     assert unregister_calls == ["unregistered"]
     assert ThreadStub.started_count == 1
     assert settings_window.recording_started_count == 1
+
+
+def test_record_hold_key_applies_single_key_without_touching_hotkey(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """同时按住键走独立结果通道，不能覆盖输入框快捷键的录制结果。"""
+    module = import_input_overlay_with_stubs(monkeypatch)
+    settings_window = SettingsWindowStub()
+    overlay = _new_hotkey_overlay(module)
+    overlay._active_settings_window = lambda: settings_window
+    overlay._hotkey_listener = None
+    overlay._register_hotkey = lambda: None
+    overlay._recording_hotkey = False
+    overlay._read_hotkey_worker = lambda: None
+    overlay._unregister_hotkey = lambda: None
+    monkeypatch.setattr(module.threading, "Thread", ThreadStub)
+
+    overlay._start_record_hotkey("hold_key")
+    overlay._recording_hotkey = True
+    overlay._finish_record_hotkey("h", None)
+
+    assert settings_window.hold_recording_started_count == 1
+    assert settings_window.hold_record_results == [("h", None)]
+    assert settings_window.record_results == []
 
 
 def test_startup_hotkey_conflict_opens_settings_with_actionable_warning(

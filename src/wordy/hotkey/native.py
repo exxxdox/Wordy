@@ -12,7 +12,7 @@ import threading
 from ctypes import wintypes
 from typing import Any, Callable
 
-from wordy.hotkey.parser import iter_hotkey_parts
+from wordy.hotkey.parser import iter_hotkey_parts, normalize_key_part
 
 
 logger = logging.getLogger(__name__)
@@ -137,6 +137,18 @@ MODIFIER_KEYS = {
 }
 
 
+# RegisterHotKey 里修饰键是位标志，GetAsyncKeyState 要的是虚拟键码，不能复用上面那张表。
+MODIFIER_VK_CODES = {
+    "ctrl": 0x11, "control": 0x11,
+    "left ctrl": 0xA2, "left control": 0xA2,
+    "right ctrl": 0xA3, "right control": 0xA3,
+    "shift": 0x10, "left shift": 0xA0, "right shift": 0xA1,
+    "alt": 0x12, "left alt": 0xA4, "right alt": 0xA5,
+    "win": 0x5B, "windows": 0x5B, "left win": 0x5B, "left windows": 0x5B,
+    "right win": 0x5C, "right windows": 0x5C,
+}
+
+
 class MSG(ctypes.Structure):
     _fields_ = [
         ("hwnd", wintypes.HWND),
@@ -164,6 +176,14 @@ def _virtual_key_from_name(key: str) -> int | None:
         if 0 <= num_index <= 9:
             return 0x60 + num_index
     return None
+
+
+def virtual_key_for_key_name(name: str) -> int | None:
+    """把单个按键名（含修饰键）解析成 GetAsyncKeyState 用的虚拟键码。"""
+    key = normalize_key_part(name)
+    if key in MODIFIER_VK_CODES:
+        return MODIFIER_VK_CODES[key]
+    return _virtual_key_from_name(key)
 
 
 def parse_hotkey(hotkey: str) -> tuple[int, int]:
