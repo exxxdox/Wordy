@@ -57,7 +57,8 @@ DIALOG_HEIGHT = 820
 DIALOG_MIN_WIDTH = 960
 DIALOG_MIN_HEIGHT = 636
 CONTENT_MARGIN = 36
-SECTION_GAP = 28
+# 分组已有栏标题，收紧组间距以容纳 Windows 字体与高 DPI 下的说明行。
+SECTION_GAP = 20
 INLINE_GAP = 10
 BUTTON_GAP = 16
 BUTTON_MIN_WIDTH = 88
@@ -427,28 +428,31 @@ class SettingsWindow:
 
         # 宽屏按任务分栏，避免输入框和滑块被拉成长条；两栏共用对齐与留白。
         local_layout = self._create_tab_page(tab_widget, "本地设置")
-        input_column, display_column = self._create_columns(local_layout)
+        input_column, display_column = self._create_columns(
+            local_layout, ("快捷键与播放", "界面与显示"))
         self._build_hotkey_section(input_column, s)
         self._add_inner_gap(input_column)
         self._build_rolling_section(input_column, s)
         self._add_inner_gap(input_column)
-        self._build_placeholder_section(input_column, s)
-        self._add_inner_gap(input_column)
         self._build_volume_section(input_column, s)
-        # 日志等级属于本机显示偏好，与本地设置集中管理。
-        self._add_inner_gap(input_column)
-        self._build_log_level_section(input_column, s)
         self._build_ui_font_section(display_column, s)
+        self._add_inner_gap(display_column)
+        # 提示文字与字体、透明度属于同一个输入栏，集中在右栏减少视线往返。
+        self._build_placeholder_section(display_column, s)
         self._add_inner_gap(display_column)
         self._build_opacity_section(display_column, s)
         self._add_inner_gap(display_column)
         self._build_position_section(display_column, s)
+        # 日志显示偏好归到界面栏，平衡两侧高度，保留完整的快捷键说明。
+        self._add_inner_gap(display_column)
+        self._build_log_level_section(display_column, s)
         input_column.addStretch(1)
         display_column.addStretch(1)
         local_layout.addStretch(1)
 
         route_layout = self._create_tab_page(tab_widget, "音频侦听")
-        output_column, route_column = self._create_columns(route_layout)
+        output_column, route_column = self._create_columns(
+            route_layout, ("播放与返听", "麦克风与路由"))
         self._build_audio_output_section(output_column, state, s)
         self._add_inner_gap(output_column)
         self._build_sidetone_section(output_column, s)
@@ -459,7 +463,8 @@ class SettingsWindow:
 
         tts_layout = self._create_tab_page(tab_widget, "TTS 设置")
         # 服务商选择较短，给密钥和音色表单更多横向空间。
-        provider_column, voice_column = self._create_columns(tts_layout, (2, 3))
+        provider_column, voice_column = self._create_columns(
+            tts_layout, ("生成方式", "音色与密钥"), (2, 3))
         self._build_tts_api_section(provider_column, s)
         self._add_inner_gap(provider_column)
         self._build_backend_section(provider_column, s)
@@ -1152,16 +1157,22 @@ class SettingsWindow:
         self.on_field_changed("overlay_opacity", op)
 
     @staticmethod
-    def _create_columns(parent_layout: QVBoxLayout,
+    def _create_columns(parent_layout: QVBoxLayout, titles: tuple[str, str],
                         stretches: tuple[int, int] = (1, 1)) -> tuple[QVBoxLayout, QVBoxLayout]:
         """两列共用上边线，按任务分配表单宽度。"""
         row = QHBoxLayout()
         row.setSpacing(32)
         columns = []
-        for stretch in stretches:
+        for title, stretch in zip(titles, stretches):
             column = QVBoxLayout()
             column.setContentsMargins(0, 0, 0, 0)
             column.setSpacing(0)
+            # 栏标题承载任务层级，细线只分隔标题与表单，不给每个设置套卡片。
+            heading = QLabel(title)
+            heading.setObjectName("columnTitle")
+            heading.setMaximumWidth(440)
+            column.addWidget(heading)
+            column.addSpacing(20)
             row.addLayout(column, stretch)
             columns.append(column)
         parent_layout.addLayout(row)

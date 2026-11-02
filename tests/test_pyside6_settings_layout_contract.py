@@ -476,7 +476,9 @@ def test_audio_output_is_owned_by_routing_tab_and_locks_to_cable() -> None:
     source = SETTINGS_PATH.read_text(encoding="utf-8")
     if "_build_audio_output_section(local_layout" in source:
         _fail("音频输出仍位于本地设置页")
-    if "output_column, route_column = self._create_columns(route_layout)" not in source or "_build_audio_output_section(output_column" not in source:
+    # 栏标题允许作为额外参数；归属检查不依赖调用的换行排版。
+    compact_source = "".join(source.split())
+    if "output_column,route_column=self._create_columns(route_layout," not in compact_source or "_build_audio_output_section(output_column" not in source:
         _fail("音频输出未移动到音频侦听页")
     if "def _sync_audio_output_control" not in source or "combo.setEnabled(False)" not in source:
         _fail("缺少路由启用时锁定音频输出下拉框的实现")
