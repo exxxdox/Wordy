@@ -28,6 +28,23 @@ def _wav(path: Path, frames: int = 4800) -> Path:
     return path
 
 
+def test_backup_guard_stays_busy_until_pending_save_notification(qapp, tmp_path, monkeypatch):
+    import wordy.rolling_buffer_controller as module
+    controller = RollingBufferController(
+        _settings(tmp_path), dialog_parent=lambda: None,
+        play_preview=lambda *_args: None, stop_preview=lambda: None)
+    assert not controller.is_busy
+    controller._dialog_open = True
+    assert controller.is_busy
+    controller._dialog_open = False
+    monkeypatch.setattr(module.threading, "Thread", lambda **_kwargs: type(
+        "PendingThread", (), {"start": lambda self: None})())
+    controller._save_async(tmp_path / "clip.wav", 0, 0, "test", "test")
+    assert controller.is_busy
+    controller._on_save_finished(False, "test failure")
+    assert not controller.is_busy
+
+
 class _FakeRecorder:
     def __init__(self, path: Path) -> None:
         self._path = path

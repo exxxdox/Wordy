@@ -122,11 +122,17 @@ class RollingBufferController(QObject):
         self._recorder: _RecorderLike | None = None
         self._listener: NativeHotkeyListener | None = None
         self._dialog_open = False
+        self._pending_saves = 0
         self._stopped = False
         self.triggered.connect(self._toggle, Qt.ConnectionType.QueuedConnection)
         self.save_finished.connect(self._on_save_finished, Qt.ConnectionType.QueuedConnection)
 
     # ── 热键 ──────────────────────────────────────────────────────────
+
+    @property
+    def is_busy(self) -> bool:
+        """备份导入不能与仍可能写入槽位的采集、弹窗或保存并发。"""
+        return self._recorder is not None or self._dialog_open or self._pending_saves > 0
 
     def start(self) -> bool:
         """注册配置中的后台录制快捷键；失败只影响本功能，不阻断启动。"""
@@ -297,6 +303,8 @@ class RollingBufferController(QObject):
                     label: str, target_name: str) -> None:
         settings = self.settings
         signal = self.save_finished
+        # 在 GUI 线程先登记，完成信号处理前始终禁止导入替换配置。
+        self._pending_saves += 1
 
         def run() -> None:
             try:
@@ -311,9 +319,14 @@ class RollingBufferController(QObject):
                 logger.warning("清理已保存的截取临时文件失败: %s", error)
             signal.emit(True, f"已保存到 {target_name}")
 
-        threading.Thread(target=run, name="RollingBufferSave", daemon=True).start()
+        try:
+            threading.Thread(target=run, name="RollingBufferSave", daemon=True).start()
+        except Exception:
+            self._pending_saves -= 1
+            raise
 
     def _on_save_finished(self, ok: bool, message: str) -> None:
+        self._pending_saves = max(0, self._pending_saves - 1)
         if not ok:
             logger.warning(message)
         self._notify(message)

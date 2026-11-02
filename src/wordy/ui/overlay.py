@@ -77,6 +77,7 @@ class InputOverlay:
         on_chat_wheel_change: Callable[[str, object], None] | None = None,
         on_rolling_buffer_hotkey_change: Callable[[str], bool] | None = None,
         on_rolling_hotkey_recording: Callable[[bool], None] | None = None,
+        on_backup_import_ready: Callable[[], bool] | None = None,
     ):
         if sys.platform != "win32":
             raise RuntimeError("InputOverlay 仅支持 Windows")
@@ -86,6 +87,7 @@ class InputOverlay:
         self.on_chat_wheel_change = on_chat_wheel_change
         self.on_rolling_buffer_hotkey_change = on_rolling_buffer_hotkey_change
         self.on_rolling_hotkey_recording = on_rolling_hotkey_recording
+        self.on_backup_import_ready = on_backup_import_ready
         self.on_voice_change = on_voice_change
         self.on_volume_change = on_volume_change
         self.on_tts_backend_change = on_tts_backend_change
@@ -600,6 +602,7 @@ class InputOverlay:
             on_refresh_voices=self._start_load_voices,
             on_field_changed=self._on_settings_field_changed,
             on_close=self._on_settings_window_closed,
+            on_backup_imported=self.stop,
             on_audio_outputs_needed=self._refresh_settings_audio_outputs,
             prewarm=prewarm,
         )
@@ -861,6 +864,8 @@ class InputOverlay:
 
     def _on_settings_field_changed(self, field_name: str, value: object) -> bool | None:
         """设置变更副作用——持久化已由 AppSettings.__setattr__ 完成，self._cfg 即该单例。"""
+        if field_name == "backup_import_ready":
+            return self.on_backup_import_ready() if self.on_backup_import_ready else True
         if field_name.startswith("chat_wheel_"):
             if self.on_chat_wheel_change is not None:
                 self.on_chat_wheel_change(field_name, value)
