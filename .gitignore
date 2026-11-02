@@ -19,3 +19,4 @@ __pycache__
 /.claude/
 /.venv
 /.tmp
+/tmp/

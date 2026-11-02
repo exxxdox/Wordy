@@ -109,6 +109,15 @@ def build_settings_stylesheet(font_stack: str | None = None) -> str:
             font-weight: 600;
             border: none;
         }}
+        QLabel#columnTitle {{
+            color: {TEXT_PRIMARY};
+            font-size: 16px;
+            font-weight: 600;
+            background: transparent;
+            border: none;
+            border-bottom: 1px solid {GLASS_HAIRLINE};
+            padding-bottom: 12px;
+        }}
         QLabel#bodyLabel, QLabel#bodyLabelEmphasis {{
             font-size: 13px;
             border: none;

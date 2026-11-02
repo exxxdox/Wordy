@@ -726,6 +726,10 @@ def test_local_setting_headers_share_the_same_right_edge(monkeypatch: pytest.Mon
         opacity_position = window.opacity_slider.mapTo(dialog, window.opacity_slider.rect().topLeft())
         font_position = window.ui_font_combo.mapTo(dialog, window.ui_font_combo.rect().topLeft())
         assert opacity_position.x() == font_position.x()
+        # 提示文字随输入栏外观归到右栏，快捷操作保持在左栏。
+        placeholder_position = window.placeholder_input.mapTo(dialog, window.placeholder_input.rect().topLeft())
+        log_position = window.log_level_combo.mapTo(dialog, window.log_level_combo.rect().topLeft())
+        assert placeholder_position.x() == log_position.x() == font_position.x()
         assert opacity_position.x() > volume_position.x() + window.volume_slider.width()
         # 同栏字段共用右边线，避免固定宽度在宽屏下留下零散空档。
         assert window.volume_slider.width() == window.placeholder_input.width()
