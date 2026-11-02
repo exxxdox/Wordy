@@ -131,7 +131,13 @@ class WordyApp:
             on_chat_wheel_change=self._on_chat_wheel_change,
             on_rolling_buffer_hotkey_change=self._on_rolling_hotkey_change,
             on_rolling_hotkey_recording=self._on_rolling_hotkey_recording,
+            on_backup_import_ready=self._backup_import_ready,
         )
+
+    def _backup_import_ready(self) -> bool:
+        # 检查后导入同步运行，不派发 GUI 事件；已有后台写入必须先结束。
+        return not getattr(self.overlay, "_recording_hotkey", False) and (
+            self._rolling_controller is None or not self._rolling_controller.is_busy)
 
     # ── 凭据加载 ───────────────────────────────────────────────────────────
 

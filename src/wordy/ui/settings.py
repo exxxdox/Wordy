@@ -6,18 +6,21 @@
 from __future__ import annotations
 
 from typing import Callable
+from datetime import datetime
+from pathlib import Path
 
 from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtGui import QFont, QFontDatabase, QIcon
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QFontComboBox, QFrame, QHBoxLayout, QLabel,
-    QLineEdit, QPushButton, QScrollArea, QSizePolicy, QSlider, QSpinBox, QStyle, QTabWidget,
+    QApplication, QCheckBox, QComboBox, QFileDialog, QFontComboBox, QFrame, QHBoxLayout, QLabel, QMessageBox,
+    QInputDialog, QLineEdit, QPushButton, QScrollArea, QSizePolicy, QSlider, QSpinBox, QStyle, QTabWidget,
     QVBoxLayout, QWidget,
 )
 
 from wordy.config import (
     AppSettings, MAX_ROLLING_BUFFER_SECONDS, MIN_ROLLING_BUFFER_SECONDS,
 )
+from wordy.backup import default_backup_directory, export_backup, import_backup
 from wordy.hotkey import display_hotkey
 from wordy.hotkey.native import virtual_key_for_key_name
 from wordy.constants import (
@@ -105,8 +108,10 @@ class SettingsWindow:
                  on_audio_outputs_needed: Callable[[], None] | None = None,
                  prewarm: bool = False,
                  on_record_rolling_hotkey: Callable[[], None] | None = None,
-                 on_record_hold_key: Callable[[], None] | None = None):
+                 on_record_hold_key: Callable[[], None] | None = None,
+                 on_backup_imported: Callable[[], None] | None = None):
         self.root = root
+        self._on_backup_imported = on_backup_imported
         self._on_audio_outputs_needed = on_audio_outputs_needed
         self._audio_outputs_requested = False
         # 预热实例不显示也不改配置，丢弃时不必落盘。
@@ -986,6 +991,11 @@ class SettingsWindow:
         auto_save_label.setObjectName("autoSaveLabel")
         button_row.addWidget(auto_save_label)
         button_row.addStretch(1)
+        for text, handler in (("导出备份", self._export_backup), ("导入备份", self._import_backup)):
+            button = QPushButton(text)
+            button.setAutoDefault(False)
+            button.clicked.connect(handler)
+            button_row.addWidget(button)
         exit_button = QPushButton("关闭")
         exit_button.setObjectName("cancelButton")
         # 原生标题栏启用后，底部退出仍不能成为表单 Enter 的默认动作。
@@ -994,6 +1004,70 @@ class SettingsWindow:
         exit_button.clicked.connect(lambda _checked=False: self.close())
         button_row.addWidget(exit_button)
         parent_layout.addLayout(button_row)
+
+    def _backup_password(self, *, confirm: bool = False) -> str | None:
+        password, accepted = QInputDialog.getText(
+            self.window, "备份密码", "设置备份密码（忘记后无法恢复）：" if confirm else "输入备份密码：",
+            QLineEdit.EchoMode.Password)
+        if not accepted:
+            return None
+        if not password.strip():
+            self.set_status("备份密码不能为空", TEXT_WARNING)
+            return None
+        if confirm:
+            repeated, accepted = QInputDialog.getText(
+                self.window, "确认备份密码", "再次输入备份密码：", QLineEdit.EchoMode.Password)
+            if not accepted:
+                return None
+            if repeated != password:
+                self.set_status("两次输入的密码不一致", TEXT_WARNING)
+                return None
+        return password
+
+    def _export_backup(self) -> None:
+        filename = default_backup_directory() / f"Wordy-backup-{datetime.now():%Y%m%d-%H%M%S}.wordybackup"
+        selected, _ = QFileDialog.getSaveFileName(self.window, "导出备份", str(filename), "Wordy 加密备份 (*.wordybackup)")
+        if not selected:
+            return
+        password = self._backup_password(confirm=True)
+        if password is None:
+            return
+        try:
+            export_backup(self._settings, Path(selected), password)
+        except Exception as error:
+            self.set_status(f"备份导出失败：{error}", TEXT_ERROR)
+            return
+        self.set_status("备份已导出")
+
+    def _import_backup(self) -> None:
+        selected, _ = QFileDialog.getOpenFileName(
+            self.window, "导入备份", str(default_backup_directory()), "Wordy 加密备份 (*.wordybackup)")
+        if not selected:
+            return
+        if QMessageBox.question(
+            self.window, "导入备份",
+            "将替换全部设置和 API 密钥。成功后 Wordy 会退出，请重新启动。是否继续？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        ) != QMessageBox.StandardButton.Yes:
+            return
+        password = self._backup_password()
+        if password is None:
+            return
+        panel = self.chat_wheel_panel
+        # 等现有音频写入完成，防止迟到的槽位保存覆盖刚恢复的配置。
+        if (panel._busy or panel._recording is not None or panel._trimming
+                or self.on_field_changed("backup_import_ready", None) is False):
+            self.set_status("请先结束录制、音频导入或快捷键录制，再导入备份", TEXT_WARNING)
+            return
+        try:
+            import_backup(self._settings, Path(selected), password)
+        except Exception as error:
+            self.set_status(f"备份导入失败：{error}", TEXT_ERROR)
+            return
+        # 走应用原有退出链路，先收掉热键、采集与播放器，再结束 Qt。
+        if self._on_backup_imported is not None:
+            self._on_backup_imported()
 
     def _add_inner_gap(self, parent_layout: QVBoxLayout) -> None:
         parent_layout.addSpacing(SECTION_GAP)

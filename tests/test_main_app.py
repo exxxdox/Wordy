@@ -31,6 +31,15 @@ from wordy.tts_manager import _TTSWorker
 # Fakes
 # ---------------------------------------------------------------------------
 
+
+@pytest.mark.parametrize("recording,busy,ready", [(False, False, True), (True, False, False), (False, True, False)])
+def test_backup_import_rejects_pending_configuration_writers(recording, busy, ready):
+    from wordy.main import WordyApp
+    app = WordyApp.__new__(WordyApp)
+    app.overlay = cast(Any, SimpleNamespace(_recording_hotkey=recording))
+    app._rolling_controller = cast(Any, SimpleNamespace(is_busy=busy))
+    assert app._backup_import_ready() is ready
+
 class FakeInputOverlay:
     """Stub InputOverlay that never touches Tk."""
 
