@@ -97,6 +97,23 @@ def test_cleared_hotkey_restores_stored_sequence(qapp):
     assert panel.hotkey_input.keySequence().toString().lower() == "f8"
 
 
+def test_last_wheel_is_restored_and_remembered(qapp, tmp_path):
+    """重新打开设置页回到上次查看的轮盘，切换后立即落盘。"""
+    config_file = tmp_path / "last-wheel.toml"
+    settings = AppSettings.load(config_file=config_file)
+    settings.add_wheel("f9")
+    settings.chat_wheel_last_index = 1
+
+    panel = ChatWheelSettings(settings, Mock())
+    assert panel.wheel_index == 1
+    assert panel.wheel_combo.currentIndex() == 1
+
+    panel.wheel_combo.setCurrentIndex(0)
+    assert settings.chat_wheel_last_index == 0
+    assert AppSettings.load(config_file=config_file).chat_wheel_last_index == 0
+    panel.close()
+
+
 def test_wheel_name_can_be_customized_and_cleared(qapp):
     """轮盘名直接用组合框文本编辑：非空即自定义名，清空回退「轮盘 N」。"""
     settings = AppSettings()

@@ -163,6 +163,30 @@ def test_multiple_wheels_save_failure_restores_all(tmp_path, monkeypatch):
     assert settings.wheel_count == 1
 
 
+def test_last_wheel_index_round_trip_and_clamps(tmp_path):
+    file = tmp_path / "last-wheel.toml"
+    settings = AppSettings.load(config_file=file)
+    settings.add_wheel("f9")
+    settings.chat_wheel_last_index = 1
+
+    assert AppSettings.load(config_file=file).chat_wheel_last_index == 1
+
+    settings.chat_wheel_last_index = 99
+    assert settings.chat_wheel_last_index == 1, "删除轮盘后不能留下失效下标"
+    settings.chat_wheel_last_index = -5
+    assert settings.chat_wheel_last_index == 0
+
+
+def test_last_wheel_index_load_rejects_bad_values(tmp_path):
+    file = tmp_path / "bad-last-wheel.toml"
+    file.write_text('chat_wheel_last_index = "second"\n', encoding="utf-8")
+    assert AppSettings.load(config_file=file).chat_wheel_last_index == 0
+
+    file.write_text("chat_wheel_last_index = 7\n", encoding="utf-8")
+    assert AppSettings.load(config_file=file).chat_wheel_last_index == 0, (
+        "只有一个轮盘时下标必须钳回 0")
+
+
 def test_slot_volumes_round_trip_across_wheels_and_first_removal(tmp_path):
     file = tmp_path / "volume.toml"
     settings = AppSettings.load(config_file=file)

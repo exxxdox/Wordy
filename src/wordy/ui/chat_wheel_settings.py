@@ -90,7 +90,9 @@ class ChatWheelSettings(QWidget):
         self._signals.preview_finished.connect(self._trim_preview_finished)
         self._signals.preview_progress.connect(self._trim_preview_progress)
         self.selected_index = 0
-        self.wheel_index = 0
+        # 重新打开设置页时回到上次查看的轮盘；删除轮盘后下标由配置层钳位。
+        self.wheel_index = max(0, min(settings.chat_wheel_last_index,
+                                       settings.wheel_count - 1))
         # 截取前的解码会走嵌套事件循环，期间用它锁住动作行防止重入。
         self._trim_dialog: AudioTrimDialog | None = None
         self._trimming = False
@@ -321,6 +323,8 @@ class ChatWheelSettings(QWidget):
         self.wheel_combo.blockSignals(False)
         self.hotkey_input.setKeySequence(QKeySequence(self._settings.get_wheel(self.wheel_index)["hotkey"]))
         self.remove_wheel_button.setEnabled(self._settings.wheel_count > 1)
+        # 删除轮盘后下标可能被钳位，记住新的有效位置。
+        self._remember_wheel()
 
     def _rename_wheel(self) -> None:
         """下拉框文本即自定义名称；只在编辑结束时落盘，空名回退默认标题。"""
@@ -344,9 +348,18 @@ class ChatWheelSettings(QWidget):
             return
         self._stop_preview()
         self.wheel_index = index
+        self._remember_wheel()
         self._reload_wheels()
         self._refresh_all_slots()
         self._select_slot(0)
+
+    def _remember_wheel(self) -> None:
+        """记住当前轮盘；删除轮盘导致的钳位也在重载后写回。"""
+        try:
+            if self._settings.chat_wheel_last_index != self.wheel_index:
+                self._settings.chat_wheel_last_index = self.wheel_index
+        except Exception:
+            logger.warning("保存上次查看的轮盘失败", exc_info=True)
 
     def _add_wheel(self) -> None:
         dialog = QDialog(self)

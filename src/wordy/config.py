@@ -191,6 +191,8 @@ class AppSettings:
     chat_wheel_texts: list[str] = field(default_factory=lambda: [""] * 8)
     chat_wheel_volumes: list[float] = field(default_factory=lambda: [1.0] * 8)
     additional_chat_wheels: list[ChatWheelConfig] = field(default_factory=list)
+    # 设置页上次查看的轮盘；下次打开默认回到这里，删除轮盘后自动钳位。
+    chat_wheel_last_index: int = 0
     # 后台持续录制：按热键开始/停止，停止时从最近 N 秒里截取保存。
     rolling_buffer_hotkey: str = "f10"
     rolling_buffer_seconds: float = 30.0
@@ -485,6 +487,9 @@ class AppSettings:
                 pass
         _apply_if_present(raw, "rolling_buffer_seconds", settings, _parse_rolling_seconds)
         setattr(settings, "rolling_buffer_target", raw.get("rolling_buffer_target", [0, 0]))
+        # 轮盘全部载入后再解析，钳位才能按真实轮盘数量计算。
+        _apply_if_present(raw, "chat_wheel_last_index", settings,
+                          lambda v: v if isinstance(v, int) and not isinstance(v, bool) else None)
         # 播放时自动按住的键；非法按键由 __setattr__ 回退默认键。
         _apply_if_present(raw, "hold_key_enabled", settings, lambda v: v if isinstance(v, bool) else None)
         _apply_if_present(raw, "hold_key", settings, _nonempty_str)
@@ -554,6 +559,11 @@ class AppSettings:
         if name == "rolling_buffer_target":
             # 保存目标随时可能因为删除轮盘而失效，写入口统一钳到现有范围。
             value = _parse_rolling_target(value, self.wheel_count)
+        if name == "chat_wheel_last_index":
+            # 轮盘数量会变，记住的下标不能指向已删除的轮盘。
+            if not isinstance(value, int) or isinstance(value, bool):
+                value = 0
+            value = max(0, min(value, self.wheel_count - 1))
         # float 范围字段：clamp
         if name in self._CLAMP_RANGES and isinstance(value, (int, float)):
             lo, hi = self._CLAMP_RANGES[name]
