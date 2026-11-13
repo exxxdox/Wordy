@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 import wordy.secret
 from wordy.config import AppSettings
 from wordy.tts.labels import build_voice_label_maps
+from wordy.ui.settings_style import INLINE_GAP
 from wordy.ui.theme import (
     GREEN_ACCENT, TEXT_ERROR, TEXT_MUTED, TEXT_WARNING,
 )
@@ -26,7 +27,6 @@ from wordy.ui.settings_widgets import NoWheelComboBox
 from wordy.ui.status_toast import show_status_toast
 
 INPUT_TEXT_COLOR = GREEN_ACCENT
-INLINE_GAP = 10
 BUTTON_MIN_WIDTH = 88
 
 
@@ -74,7 +74,7 @@ class _BasePanel:
     def _create_section(parent: QVBoxLayout) -> QVBoxLayout:
         section = QVBoxLayout()
         section.setContentsMargins(0, 0, 0, 0)
-        section.setSpacing(6)
+        section.setSpacing(INLINE_GAP)
         parent.addLayout(section)
         return section
 

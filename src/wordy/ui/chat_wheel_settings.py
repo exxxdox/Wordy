@@ -15,7 +15,7 @@ from PySide6.QtGui import (
     QPixmap, QPolygonF,
 )
 from PySide6.QtWidgets import (
-    QComboBox, QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout, QKeySequenceEdit,
+    QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFrame, QHBoxLayout, QKeySequenceEdit,
     QLabel, QLineEdit, QMessageBox, QProgressBar, QPushButton, QSlider, QVBoxLayout, QWidget,
 )
 from shiboken6 import isValid
@@ -26,6 +26,7 @@ from wordy.audio.clips import (
 from wordy.audio.recorder import MAX_RECORD_SECONDS, RecordingError, SystemAudioRecorder
 from wordy.config import AppSettings, CHAT_WHEEL_STYLES, WHEEL_NAME_MAX_LENGTH
 from wordy.ui.audio_trim_dialog import AudioTrimDialog
+from wordy.ui.settings_style import INLINE_GAP
 from wordy.ui.status_toast import show_status_toast
 from wordy.ui.settings_widgets import NoWheelComboBox
 from wordy.ui.wheel_picker import WheelPicker as _WheelPicker
@@ -105,7 +106,7 @@ class ChatWheelSettings(QWidget):
 
         hotkey_row = QHBoxLayout()
         # 轮盘管理独立一行，预览与槽位编辑在下方并列。
-        hotkey_row.setSpacing(12)
+        hotkey_row.setSpacing(INLINE_GAP)
         hotkey_row.addWidget(QLabel("轮盘"))
         self.wheel_combo = QComboBox()
         self.wheel_combo.setAccessibleName("选择或重命名轮盘")
@@ -134,6 +135,7 @@ class ChatWheelSettings(QWidget):
         self.add_wheel_button.clicked.connect(self._add_wheel)
         hotkey_row.addWidget(self.add_wheel_button)
         self.remove_wheel_button = QPushButton("删除")
+        self.remove_wheel_button.setObjectName("dangerButton")
         self.remove_wheel_button.clicked.connect(self._remove_wheel)
         hotkey_row.addWidget(self.remove_wheel_button)
         hotkey_row.addStretch(1)
@@ -156,22 +158,23 @@ class ChatWheelSettings(QWidget):
         self.slot_buttons = self.wheel_picker.buttons
         # 预览保持运行轮盘的材质与比例，编辑区利用新增宽度独立呈现字段。
         body = QHBoxLayout()
-        body.setSpacing(32)
+        body.setSpacing(24)
         body.addWidget(self.wheel_picker, 0, Qt.AlignmentFlag.AlignTop)
-        editor = QWidget()
+        editor = QFrame()
         editor.setObjectName("wheelEditor")
         editor_layout = QVBoxLayout(editor)
-        editor_layout.setContentsMargins(0, 12, 0, 0)
-        editor_layout.setSpacing(12)
-        body.addWidget(editor, 1)
+        # 内边距给编辑区玻璃层留出呼吸空间，同时容纳窄窗口的同行操作。
+        editor_layout.setContentsMargins(18, 16, 18, 16)
+        editor_layout.setSpacing(INLINE_GAP)
+        body.addWidget(editor, 1, Qt.AlignmentFlag.AlignTop)
         layout.addLayout(body)
 
         self.editor_title = QLabel()
-        self.editor_title.setObjectName("sectionTitle")
+        self.editor_title.setObjectName("wheelEditorTitle")
         editor_layout.addWidget(self.editor_title)
         # 槽内容二选一：类型由内容决定，选择器把它显式化，切换即换内容类型。
         mode_row = QHBoxLayout()
-        mode_row.setSpacing(6)
+        mode_row.setSpacing(INLINE_GAP)
         self.audio_mode_button = QPushButton("音频")
         self.text_mode_button = QPushButton("文字")
         for mode_button in (self.audio_mode_button, self.text_mode_button):
@@ -186,6 +189,7 @@ class ChatWheelSettings(QWidget):
         editor_layout.addLayout(mode_row)
         # 音量独立成行，名称与朗读文字各占一行，避免宽屏下字段挤在一起。
         editor_row = QHBoxLayout()
+        editor_row.setSpacing(INLINE_GAP)
         self.volume_label = QLabel("音量")
         editor_row.addWidget(self.volume_label)
         self.volume_slider = QSlider(Qt.Orientation.Horizontal)
@@ -197,6 +201,7 @@ class ChatWheelSettings(QWidget):
         self.volume_slider.sliderReleased.connect(self._save_volume)
         editor_row.addWidget(self.volume_slider, 1)
         self.volume_value_label = QLabel("100%")
+        self.volume_value_label.setObjectName("settingValue")
         self.volume_value_label.setMinimumWidth(42)
         editor_row.addWidget(self.volume_value_label)
         editor_row.addStretch(1)
@@ -221,7 +226,7 @@ class ChatWheelSettings(QWidget):
         editor_layout.addWidget(self.text_input)
         editor_layout.addSpacing(8)
         action_row = QHBoxLayout()
-        action_row.setSpacing(8)
+        action_row.setSpacing(6)
         self.choose_button = QPushButton("导入")
         self.choose_button.clicked.connect(lambda: self._choose_file(self.selected_index))
         action_row.addWidget(self.choose_button)
@@ -246,6 +251,7 @@ class ChatWheelSettings(QWidget):
         self.trim_button.clicked.connect(self._trim_slot)
         action_row.addWidget(self.trim_button)
         self.clear_button = QPushButton("清空")
+        self.clear_button.setObjectName("dangerButton")
         self.clear_button.clicked.connect(
             lambda: self._replace_clip(self.selected_index, "", ""))
         action_row.addWidget(self.clear_button)
@@ -265,7 +271,6 @@ class ChatWheelSettings(QWidget):
         # 反馈优先走设置窗口的浮动弹窗，原地标签仅在面板独立使用时出现。
         self.status_label.setVisible(False)
         editor_layout.addWidget(self.status_label)
-        editor_layout.addStretch()
         layout.addStretch()
         self._reload_wheels()
         for index in range(8):

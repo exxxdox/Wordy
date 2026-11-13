@@ -4,6 +4,35 @@ from wordy.ui.settings_style import build_settings_stylesheet
 from wordy.ui.theme import GLASS_FILL, GLASS_HAIRLINE, RADIUS_CONTROL
 
 
+def test_text_and_numeric_controls_share_focus_and_disabled_states(qapp):
+    from PySide6.QtWidgets import QComboBox, QLineEdit, QSpinBox, QVBoxLayout, QWidget
+
+    window = QWidget()
+    window.setStyleSheet("QWidget { background-color: #1c1c1e; }" + build_settings_stylesheet())
+    layout = QVBoxLayout(window)
+    controls = (QLineEdit(), QComboBox(), QSpinBox())
+    for control in controls:
+        layout.addWidget(control)
+    window.show()
+    try:
+        qapp.processEvents()
+        focus_colors = []
+        for control in controls:
+            control.clearFocus()
+            idle = control.grab().toImage()
+            control.setFocus()
+            qapp.processEvents()
+            focused = control.grab().toImage()
+            focus_color = focused.pixelColor(0, focused.height() // 2)
+            assert focus_color != idle.pixelColor(0, idle.height() // 2)
+            focus_colors.append(focus_color)
+            control.setEnabled(False)
+            assert control.grab().toImage().size() == idle.size()
+        assert focus_colors[0] == focus_colors[1] == focus_colors[2]
+    finally:
+        window.close()
+
+
 class TestBuildSettingsStylesheet:
     """build_settings_stylesheet 输出验证。"""
 
@@ -27,11 +56,9 @@ class TestBuildSettingsStylesheet:
         css = build_settings_stylesheet()
         assert "border: 1px solid" in css
         assert f"border-radius: {RADIUS_CONTROL}px" in css
-        combo_css = css.split("QComboBox {", 1)[1].split("}", 1)[0]
-        line_edit_css = css.split("QLineEdit {", 1)[1].split("}", 1)[0]
+        input_css = css.split("QLineEdit, QComboBox, QSpinBox {", 1)[1].split("}", 1)[0]
         # 输入控件靠 1px 细高光描边分层，不再用底边加粗模拟焦点。
-        assert f"border: 1px solid {GLASS_HAIRLINE}" in combo_css
-        assert f"border: 1px solid {GLASS_HAIRLINE}" in line_edit_css
+        assert f"border: 1px solid {GLASS_HAIRLINE}" in input_css
 
     def test_contains_scrollbar_selectors(self):
         css = build_settings_stylesheet()

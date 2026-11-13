@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 from PySide6.QtCore import QEvent, QPoint, QPointF, QRect, QRectF, QSize, Qt, QTimer
 from PySide6.QtGui import (
     QBrush, QColor, QCloseEvent, QKeyEvent, QLinearGradient, QMouseEvent, QPainter,
-    QPainterPath, QPaintEvent, QPen, QShowEvent,
+    QPainterPath, QPaintEvent, QPen, QRadialGradient, QShowEvent,
 )
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QFontComboBox, QHBoxLayout, QLabel,
@@ -27,9 +27,10 @@ if TYPE_CHECKING:
     from wordy.ui.settings import SettingsWindow
 
 from wordy.ui import glass
+from wordy.ui.settings_style import CONTENT_INSET
 from wordy.ui.theme import (
-    BUTTON_GHOST_BORDER, ELEVATED_BG, GREEN_ACCENT, RADIUS_WINDOW, SURFACE_BG,
-    TEXT_ERROR, TEXT_PRIMARY, WINDOW_BG, tint,
+    ACCENT_HOVER, ACCENT_PRESSED, BUTTON_GHOST_BORDER, ELEVATED_BG, GREEN_ACCENT,
+    RADIUS_WINDOW, SURFACE_BG, TEXT_ERROR, TEXT_MUTED, TEXT_PRIMARY, WINDOW_BG, tint,
 )
 from wordy.ui.window import set_window_cloaked
 
@@ -240,6 +241,13 @@ class _SettingsDialog(QDialog):
         sheen.setColorAt(1.0, QColor(255, 255, 255, 8))
         painter.setBrush(sheen)
         painter.drawPath(path)
+        # 把冷色反光集中在标题与导航附近，正文继续用低饱和玻璃提高可读性。
+        reflected_light = QRadialGradient(
+            body.topLeft() + QPointF(body.width() * 0.18, 0), body.width() * 0.62)
+        reflected_light.setColorAt(0.0, tint(ACCENT_HOVER, 36))
+        reflected_light.setColorAt(1.0, tint(ACCENT_HOVER, 0))
+        painter.setBrush(reflected_light)
+        painter.drawPath(path)
         painter.restore()
 
         glass.paint_noise(painter, path)
@@ -375,7 +383,7 @@ class _TitleBar(QWidget):
     """自绘标题栏：标题 + 三个窗口按钮，空白处按下交给系统拖动。"""
 
     # 与 QTabBar 的左内边距对齐，标题和页签落在同一条竖线上。
-    PADDING_LEFT = 20
+    PADDING_LEFT = CONTENT_INSET
 
     def __init__(self, dialog: "_SettingsDialog") -> None:
         super().__init__(dialog)
@@ -476,6 +484,21 @@ class CheckmarkCheckBox(QCheckBox):
         # 未勾选态是玻璃空槽：底色比窗口表面亮一档，描边用可见的浅灰。
         border_color = accent_color if self.isChecked() else QColor(BUTTON_GHOST_BORDER)
         background_color = accent_color if self.isChecked() else QColor(ELEVATED_BG)
+        text_color = QColor(TEXT_PRIMARY)
+        if not self.isEnabled():
+            border_color = QColor(BUTTON_GHOST_BORDER)
+            background_color = QColor(SURFACE_BG)
+            text_color = QColor(TEXT_MUTED)
+        elif self.isDown():
+            background_color = QColor(ACCENT_PRESSED if self.isChecked() else WINDOW_BG)
+        elif self.underMouse():
+            background_color = QColor(ACCENT_HOVER if self.isChecked() else BUTTON_GHOST_BORDER)
+        if self.hasFocus() and self.isEnabled():
+            # 用外圈标出键盘焦点，保留勾选和按压时各自的底色。
+            painter.setPen(QPen(QColor(ACCENT_HOVER), 1))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            focus_rect = indicator_rect.adjusted(0, -2, 2, 1)
+            painter.drawRoundedRect(focus_rect, 5, 5)
 
         painter.setPen(QPen(border_color, 1))
         painter.setBrush(background_color)
@@ -486,10 +509,10 @@ class CheckmarkCheckBox(QCheckBox):
             check_path.moveTo(QPointF(3.2, indicator_y + 7.3))
             check_path.lineTo(QPointF(5.7, indicator_y + 9.8))
             check_path.lineTo(QPointF(10.9, indicator_y + 4.1))
-            painter.setPen(QPen(QColor("#ffffff"), 2.2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+            painter.setPen(QPen(text_color, 2.2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawPath(check_path)
 
         text_rect = self.rect().adjusted(self.INDICATOR_SIZE + self.LABEL_GAP, 0, 0, 0)
-        painter.setPen(QPen(QColor(TEXT_PRIMARY)))
+        painter.setPen(QPen(text_color))
         painter.drawText(text_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, self.text())

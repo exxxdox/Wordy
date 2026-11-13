@@ -48,7 +48,7 @@ from wordy.ui.settings_widgets import (
     CheckmarkCheckBox, NoWheelComboBox, NoWheelFontComboBox, NoWheelSlider,
     WINDOW_EDGE_PAD, _SettingsDialog, _TitleBar,
 )
-from wordy.ui.settings_style import BASE_FONT_PX, build_settings_stylesheet
+from wordy.ui.settings_style import BASE_FONT_PX, INLINE_GAP, build_settings_stylesheet
 from wordy.ui.status_toast import StatusToastQueue
 from wordy.ui.window import (
     center_window, disable_window_transitions, enable_system_resize, set_window_cloaked,
@@ -66,8 +66,7 @@ DIALOG_MIN_HEIGHT = 636
 CONTENT_MARGIN = 36
 # 分组已有栏标题，收紧组间距以容纳 Windows 字体与高 DPI 下的说明行。
 SECTION_GAP = 20
-INLINE_GAP = 10
-BUTTON_GAP = 16
+BUTTON_GAP = 8
 BUTTON_MIN_WIDTH = 88
 # 录制结果改由浮动弹窗呈现，原地提示回到中性指引。
 RECORD_HINT = "点击录制后按下新的快捷键组合"
@@ -620,7 +619,7 @@ class SettingsWindow:
 
         hold_row = QHBoxLayout()
         hold_row.setContentsMargins(0, 0, 0, 0)
-        self.hold_key_check = QCheckBox("播放时自动按住某键")
+        self.hold_key_check = CheckmarkCheckBox("播放时自动按住某键")
         self.hold_key_check.setAccessibleName("播放时自动按住某键")
         self.hold_key_check.setChecked(s.hold_key_enabled)
         hold_row.addWidget(self.hold_key_check)
@@ -639,7 +638,7 @@ class SettingsWindow:
 
     def _build_rolling_section(self, parent_layout: QVBoxLayout, s: AppSettings) -> None:
         section = self._create_section(parent_layout)
-        section.addWidget(self._section_title("后台录制"))
+        section.addWidget(self._section_title("录制设置"))
         header = QHBoxLayout()
         header.setContentsMargins(0, 0, 0, 0)
         self.rolling_pending_label = self._body_label(
@@ -740,7 +739,7 @@ class SettingsWindow:
         header = QHBoxLayout()
         header.setContentsMargins(0, 0, 0, 0)
         header.addWidget(self._section_title("朗读音量"))
-        self.volume_value_label = self._body_label(f"{s.volume:.2f}x", INPUT_TEXT_COLOR)
+        self.volume_value_label = QLabel(f"{s.volume:.2f}x")
         self.volume_value_label.setObjectName("settingValue")
         header.addWidget(self.volume_value_label, 0, Qt.AlignmentFlag.AlignRight)
         section.addLayout(header)
@@ -759,7 +758,7 @@ class SettingsWindow:
         header.setContentsMargins(0, 0, 0, 0)
         # 此值是背景 alpha：百分比越低越透明，明确名称避免把 100% 理解为全透明。
         header.addWidget(self._section_title("输入框背景不透明度"))
-        self.opacity_value_label = self._body_label(f"{round(s.overlay_opacity * 100)}%", INPUT_TEXT_COLOR)
+        self.opacity_value_label = QLabel(f"{round(s.overlay_opacity * 100)}%")
         self.opacity_value_label.setObjectName("settingValue")
         header.addWidget(self.opacity_value_label, 0, Qt.AlignmentFlag.AlignRight)
         section.addLayout(header)
@@ -1260,7 +1259,7 @@ class SettingsWindow:
                         stretches: tuple[int, int] = (1, 1)) -> tuple[QVBoxLayout, QVBoxLayout]:
         """两列共用上边线，按任务分配表单宽度。"""
         row = QHBoxLayout()
-        row.setSpacing(32)
+        row.setSpacing(CONTENT_MARGIN)
         columns = []
         for title, stretch in zip(titles, stretches):
             column = QVBoxLayout()
@@ -1271,7 +1270,7 @@ class SettingsWindow:
             heading.setObjectName("columnTitle")
             heading.setMaximumWidth(440)
             column.addWidget(heading)
-            column.addSpacing(20)
+            column.addSpacing(SECTION_GAP)
             row.addLayout(column, stretch)
             columns.append(column)
         parent_layout.addLayout(row)
@@ -1283,7 +1282,7 @@ class SettingsWindow:
         form.setMaximumWidth(440)
         section = QVBoxLayout(form)
         section.setContentsMargins(0, 0, 0, 0)
-        section.setSpacing(10)
+        section.setSpacing(INLINE_GAP)
         # 超过阅读宽度的余量留在右侧，避免 Qt 把限宽表单居中挪离页标题。
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
@@ -1315,6 +1314,7 @@ class SettingsWindow:
         heading_label = QLabel(heading)
         heading_label.setObjectName("pageTitle")
         content_layout.addWidget(heading_label)
+        content_layout.addSpacing(4)
         description_label = self._hint_label(description, TEXT_MUTED)
         description_label.setObjectName("pageDescription")
         content_layout.addWidget(description_label)
