@@ -13,6 +13,7 @@ import logging
 from typing import cast
 
 from wordy.audio.driver import VBCableDriverManager
+from wordy.audio.listen_policy import ListenPolicyState, get_listen_policy
 from wordy.audio.player import AudioPlayer, OutputDeviceSelection
 from wordy.audio.router import AudioRouter
 from wordy.config import AppSettings
@@ -181,11 +182,15 @@ class RoutingController:
         self._notify_output_device_changed()
 
     @property
-    def is_mic_listen_configured(self) -> bool:
-        """返回麦克风侦听是否已在运行时成功配置。"""
-        if self._router is None:
-            return False
-        return self._router.get_stats().listen_configured
+    def mic_listen_state(self) -> ListenPolicyState | None:
+        """读取 Windows 当前的麦克风侦听状态，供设置页回显真实结果。
+
+        不读路由内部标志：设置页要显示系统里实际生效的状态，
+        无论侦听是本应用接管还是用户手动开启。"""
+        device = self._settings.mic_input_device
+        if not device:
+            return None
+        return get_listen_policy(device)
 
     @property
     def is_running(self) -> bool:
@@ -193,12 +198,14 @@ class RoutingController:
 
     # ── 停止 ───────────────────────────────────────────────────────────────
 
-    def stop(self, *, notify_output_change: bool = True) -> bool:
-        """停用路由并恢复本地输出；侦听恢复失败时保留对象供重试。"""
+    def stop(self, *, notify_output_change: bool = True, restore_mic: bool = True) -> bool:
+        """停用路由并恢复本地输出；侦听恢复失败时保留对象供重试。
+
+        restore_mic=False 供应用退出使用：保留 Windows 侦听现状。"""
         if self._router is None:
             return True
         was_running = self._router.is_running()
-        restored = self._router.stop() is not False
+        restored = self._router.stop(restore_listen=restore_mic) is not False
         # 本地输出只恢复一次；重试系统侦听时不能用已清空的设备快照覆盖它。
         if was_running:
             self._disable_routing(notify_output_change=notify_output_change)

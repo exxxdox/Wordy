@@ -126,7 +126,7 @@ class WordyApp:
             on_volcengine_credentials_change=self._on_volcengine_credentials_change,
             on_audio_route_change=self.routing.apply_config,
             on_sidetone_change=self._on_sidetone_change,
-            on_query_mic_listen_status=lambda: self.routing.is_mic_listen_configured,
+            on_query_mic_listen_state=lambda: self.routing.mic_listen_state,
             audio_player=self.player,
             on_chat_wheel_change=self._on_chat_wheel_change,
             on_rolling_buffer_hotkey_change=self._on_rolling_hotkey_change,
@@ -417,7 +417,8 @@ class WordyApp:
             if self._rolling_controller is not None:
                 self._rolling_controller.stop()
             # 退出后不会继续播放，避免先重开音频流再由 shutdown 立即关闭。
-            self.routing.stop(notify_output_change=False)
+            # 不恢复麦克风侦听：退出后保持现有系统侦听，下次启动直接沿用。
+            self.routing.stop(notify_output_change=False, restore_mic=False)
             self.tts_manager.shutdown()
 
         try:

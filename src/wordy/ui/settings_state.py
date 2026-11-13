@@ -6,6 +6,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from wordy.audio.listen_policy import ListenPolicyState
 
 VoiceRecord = dict[str, object]
 AudioOutputDevice = dict[str, object]
@@ -38,5 +42,5 @@ class SettingsState:
 
     # 驱动检测（运行时扫描）
     vb_cable_installed: bool = False
-    # 麦克风侦听运行时状态
-    mic_listen_configured: bool = False
+    # 麦克风侦听的系统实际状态（None 表示未选择设备或读取失败）
+    mic_listen_state: ListenPolicyState | None = None

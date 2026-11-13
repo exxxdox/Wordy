@@ -168,6 +168,54 @@ def test_audio_routing_enable_failure_keeps_setting_disabled(
     callback.assert_called_once_with("audio_routing_enabled", True)
 
 
+def test_mic_listen_status_reflects_windows_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """状态标签以系统读回结果为准：开启、关闭、读取失败三种回显。"""
+    from wordy.audio.listen_policy import ListenPolicyState
+    from wordy.config import AppSettings
+    from wordy.ui.settings_state import SettingsState
+
+    _, window = _new_settings_window(monkeypatch)
+    settings = AppSettings.load()
+    settings.update(mic_input_device="Test Mic")
+
+    window._update_mic_listen_status(
+        settings, SettingsState(mic_listen_state=ListenPolicyState(enabled=True, output_id="cable")),
+    )
+    assert "已开启" in window.mic_listen_status_label.text()
+
+    window._update_mic_listen_status(
+        settings, SettingsState(mic_listen_state=ListenPolicyState(enabled=False, output_id=None)),
+    )
+    assert "未开启" in window.mic_listen_status_label.text()
+
+    window._update_mic_listen_status(settings, SettingsState())
+    assert "无法读取" in window.mic_listen_status_label.text()
+
+
+def test_mic_switch_rereads_listen_state_after_saving(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """切换麦克风后必须按新设备重读系统状态，不能用切换前的快照回显。"""
+    from wordy.audio.listen_policy import ListenPolicyState
+
+    state = ListenPolicyState(enabled=True, output_id="cable")
+    calls: list[str] = []
+
+    def query() -> ListenPolicyState:
+        calls.append("query")
+        return state
+
+    _, window = _new_settings_window(monkeypatch, input_devices=[{"name": "Test Mic"}])
+    window.on_query_mic_listen_state = query
+
+    window._on_mic_input_selected("Test Mic")
+
+    assert calls == ["query"]
+    assert "已开启" in window.mic_listen_status_label.text()
+
+
 SENTINEL_EXISTING_API_KEY = "sk_existing_DO_NOT_LEAK"
 
 

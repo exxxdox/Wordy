@@ -282,25 +282,21 @@ class TestRoutingControllerOutputDevice:
 class TestRoutingControllerProperties:
     """属性访问。"""
 
-    def test_is_mic_listen_configured_when_no_router(self, mock_player, mock_settings):
+    def test_mic_listen_state_none_without_device(self, mock_player, mock_settings):
+        mock_settings.mic_input_device = None
         ctrl = RoutingController(mock_settings, mock_player)
-        assert ctrl.is_mic_listen_configured is False
+        assert ctrl.mic_listen_state is None
 
-    def test_is_mic_listen_configured_when_configured(
+    def test_mic_listen_state_reads_windows_state(
         self, mock_player, mock_settings,
     ):
-        mock_settings.audio_routing_enabled = True
-        with (
-            patch("wordy.routing_controller.VBCableDriverManager.is_installed", return_value=True),
-            patch("wordy.routing_controller.AudioRouter") as MockRouter,
-        ):
-            router = MockRouter.return_value
-            router.start.return_value = True
-            router.get_output_device.return_value = {"name": "CABLE Input", "host_api_name": "Windows WASAPI"}
-            router.get_stats.return_value.listen_configured = True
+        from wordy.audio.listen_policy import ListenPolicyState
 
-            ctrl = RoutingController(mock_settings, mock_player)
-            assert ctrl.is_mic_listen_configured is True
+        state = ListenPolicyState(enabled=True, output_id="cable-id")
+        ctrl = RoutingController(mock_settings, mock_player)
+        with patch("wordy.routing_controller.get_listen_policy", return_value=state) as query:
+            assert ctrl.mic_listen_state is state
+        query.assert_called_once_with("Test Mic")
 
     def test_output_device_changed_callback_invoked(self, mock_player, mock_settings):
         """输出设备变更时回调被调用。"""
@@ -334,6 +330,19 @@ def test_stop_keeps_router_for_restore_retry_and_restores_local_output_once(mock
     assert restore.call_count == 2
     assert ctrl._router is None
     mock_player.set_output_device.assert_called_once_with(local_output)
+
+
+def test_stop_without_restore_mic_leaves_system_listening(mock_player, mock_settings):
+    """退出应用时不要求 AudioRouter 回滚系统侦听状态。"""
+    ctrl = RoutingController(mock_settings, mock_player)
+    router = MagicMock()
+    router.is_running.return_value = True
+    router.stop.return_value = True
+    ctrl._router = router
+
+    assert ctrl.stop(restore_mic=False) is True
+
+    router.stop.assert_called_once_with(restore_listen=False)
 
 
 def test_enable_does_not_replace_router_with_pending_restore(mock_player, mock_settings):

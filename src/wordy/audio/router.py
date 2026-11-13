@@ -137,8 +137,20 @@ class AudioRouter:
         logger.info("TTS 音频侦听已启用（TTS → CABLE Input）")
         return True
 
-    def stop(self) -> bool:
-        """停用路由；返回原侦听状态是否恢复成功，失败可重试。"""
+    def stop(self, *, restore_listen: bool = True) -> bool:
+        """停用路由；返回原侦听状态是否恢复成功，失败可重试。
+
+        restore_listen=False 用于应用退出：不再回滚 Windows 侦听，
+        状态留给下次启动沿用。恢复记录必须同时丢弃，否则下次启动的
+        日志恢复会把它改回旧值。"""
+        if not restore_listen:
+            _clear_listen_journal()
+            self._listen_original_state = None
+            self._listen_original_device = None
+            self._listen_configured = False
+            self._active = False
+            logger.info("音频侦听已停用（保留 Windows 麦克风侦听状态）")
+            return True
         restored = True
         if self._listen_configured and self._mic_device is not None:
             restored = self._disable_mic_listen(self._mic_device)

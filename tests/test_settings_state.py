@@ -38,9 +38,9 @@ class TestSettingsState:
         s = SettingsState()
         assert s.vb_cable_installed is False
 
-    def test_default_mic_listen_configured_is_false(self):
+    def test_default_mic_listen_state_is_none(self):
         s = SettingsState()
-        assert s.mic_listen_configured is False
+        assert s.mic_listen_state is None
 
     def test_fields_are_independent(self):
         """修改一个字段不影响其他字段默认值。"""
