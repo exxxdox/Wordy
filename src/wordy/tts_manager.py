@@ -116,9 +116,12 @@ class TTSManager:
         volcengine_access_key: str | None,
         tts_api_provider: str,
         tts_backend: str,
+        # 试听绕过音频路由：返回本地输出设备的 PortAudio 索引（None 表示失败）。
+        local_output_index: Callable[[], int | None] | None = None,
     ) -> None:
         self._settings = settings
         self._audio_player = audio_player
+        self._local_output_index = local_output_index
         self.cartesia_api_key = cartesia_api_key
         self.volcengine_access_key = volcengine_access_key
         self.tts_api_provider = tts_api_provider
@@ -488,8 +491,11 @@ class TTSManager:
 
     def play_audio_file(self, path: Path, on_error: Callable[[str], None] | None = None,
                         on_finished: Callable[[], None] | None = None, *, volume: float = 1.0,
-                        on_progress: Callable[[float], None] | None = None) -> None:
-        """本地文件与 TTS 共用串行 worker，不要求密钥或音色。"""
+                        on_progress: Callable[[float], None] | None = None,
+                        preview_local: bool = False) -> None:
+        """本地文件与 TTS 共用串行 worker，不要求密钥或音色。
+
+        ``preview_local`` 让试听只走本地扬声器，不进入音频路由的 CABLE Input。"""
         # 新播放顶掉旧播放，避免连点两次后两条音频叠在一起。
         self.stop_audio_file()
         cancel = threading.Event()
@@ -497,7 +503,8 @@ class TTSManager:
         if not self._audio_files_stopped.is_set():
             progress: dict[str, Any] = {"on_progress": on_progress} if on_progress is not None else {}
             self._executor.submit(self._play_audio_file, path, self.engine, self._worker_ready,
-                                  on_error, volume, cancel, on_finished, **progress)
+                                  on_error, volume, cancel, on_finished,
+                                  preview_local=preview_local, **progress)
 
     def stop_audio_file(self) -> None:
         """打断当前文件播放；没有正在播放的片段时什么也不做。
@@ -513,7 +520,8 @@ class TTSManager:
                          volume: float,
                          cancel: threading.Event,
                          on_finished: Callable[[], None] | None,
-                         on_progress: Callable[[float], None] | None = None) -> None:
+                         on_progress: Callable[[float], None] | None = None,
+                         preview_local: bool = False) -> None:
         hold_key: str | None = None
         try:
             if ready is not None:
@@ -523,6 +531,15 @@ class TTSManager:
             # 排队期间已被停止就不必再按键：否则会短暂按住游戏语音键又松开。
             if cancel.is_set():
                 return
+            device_index = None
+            if preview_local:
+                device_index = (
+                    self._local_output_index()
+                    if callable(self._local_output_index) else None
+                )
+                # 解析失败时不能退回配置设备：那正是 CABLE Input，会漏进麦克风。
+                if device_index is None:
+                    raise RuntimeError("无法找到本地输出设备")
             # 只让出音频设备：reset 会立刻重开实时流，close 又要等 websocket 关闭
             # 握手（最长 10 秒）并让下次朗读重连，都会拖慢片段起播。
             engine.release_audio_output()
@@ -531,7 +548,10 @@ class TTSManager:
             with decoded_audio_clip(path, cancel) as wav_path:
                 # 按提交时的槽位音量播放，避免排队期间切槽或调音串到其他音频。
                 progress: dict[str, Any] = {"on_progress": on_progress} if on_progress is not None else {}
-                if not self._audio_player.play_wav(str(wav_path), cancel_event=cancel, volume=volume, **progress):
+                if not self._audio_player.play_wav(
+                    str(wav_path), device_index=device_index, cancel_event=cancel,
+                    volume=volume, preview_local=preview_local, **progress,
+                ):
                     if cancel.is_set():
                         return
                     # play_wav 现在对「打不开设备」和「播到一半失败」都返回 False，

@@ -182,6 +182,16 @@ class RoutingController:
         self._notify_output_device_changed()
 
     @property
+    def local_output_device(self) -> OutputDeviceSelection | None:
+        """本地试听应使用的输出设备。
+
+        路由运行时播放器固定在 CABLE Input，本地设备保存在启用前的快照里；
+        未启用路由时播放器本身就是本地输出。"""
+        if self._router is not None and self._router.is_running():
+            return self._saved_output_device
+        return self._player.output_device
+
+    @property
     def mic_listen_state(self) -> ListenPolicyState | None:
         """读取 Windows 当前的麦克风侦听状态，供设置页回显真实结果。
 

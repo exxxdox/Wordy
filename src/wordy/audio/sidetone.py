@@ -107,15 +107,17 @@ class SidetoneAudioPlayer:
         cancel_event: Event | None = None,
         *, volume: float = 1.0,
         on_progress: Callable[[float], None] | None = None,
+        preview_local: bool = False,
     ) -> bool:
         """同时播放主输出和返听；主输出结果决定调用是否成功。
 
         主输出在调用线程里同步播完（异常照旧向上传播），返听另起守护线程，
-        只在返回前有界地等它收尾。
+        只在返回前有界地等它收尾。``preview_local`` 是本地试听：调用方已把
+        主输出指到本地设备，再返听只会把同一段声音重复播一遍。
         """
         progress: dict[str, Any] = {"on_progress": on_progress} if on_progress is not None else {}
         # 两路绑定同一次播放的增益，不能读取会被后续槽位覆盖的共享音量。
-        if not self._needs_sidetone(device_index):
+        if preview_local or not self._needs_sidetone(device_index):
             if cancel_event is None:
                 return self._main.play_wav(wav_path, device_index=device_index, volume=volume, **progress)
             return self._main.play_wav(

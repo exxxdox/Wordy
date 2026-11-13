@@ -40,6 +40,42 @@ def test_audio_file_waits_for_worker_handoff_without_voice(manager, mock_player,
     manager.shutdown()
 
 
+def test_audio_file_preview_local_plays_on_local_device(manager, mock_player, monkeypatch):
+    """试听必须用本地输出索引，不能退回路由中的 CABLE Input。"""
+    from contextlib import contextmanager
+
+    @contextmanager
+    def decoded(path, cancel_event):
+        yield path
+    monkeypatch.setattr("wordy.tts_manager.decoded_audio_clip", decoded)
+    manager._local_output_index = lambda: 7
+
+    manager.play_audio_file(Path("clip.wav"), preview_local=True)
+    call_args = manager.executor.submit.call_args
+    operation = call_args.args[0]
+    operation(*call_args.args[1:], **call_args.kwargs)
+
+    kwargs = mock_player.play_wav.call_args.kwargs
+    assert kwargs["device_index"] == 7
+    assert kwargs["preview_local"] is True
+    manager.shutdown()
+
+
+def test_audio_file_preview_local_fails_when_no_local_device(manager, mock_player):
+    """解析不到本地设备时宁可报错，也不能把声音漏进虚拟麦克风。"""
+    manager._local_output_index = lambda: None
+    errors: list[str] = []
+
+    manager.play_audio_file(Path("clip.wav"), errors.append, preview_local=True)
+    call_args = manager.executor.submit.call_args
+    operation = call_args.args[0]
+    operation(*call_args.args[1:], **call_args.kwargs)
+
+    mock_player.play_wav.assert_not_called()
+    assert errors and "本地输出" in errors[0]
+    manager.shutdown()
+
+
 def test_audio_file_uses_volume_captured_at_submission(manager, mock_player, monkeypatch):
     from contextlib import contextmanager
 
