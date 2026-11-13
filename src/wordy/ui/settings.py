@@ -13,10 +13,10 @@ if TYPE_CHECKING:
     from wordy.audio.listen_policy import ListenPolicyState
 
 from PySide6.QtCore import QEvent, Qt, QTimer
-from PySide6.QtGui import QFont, QFontDatabase, QIcon
+from PySide6.QtGui import QFont, QFontDatabase
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QFileDialog, QFontComboBox, QFrame, QHBoxLayout, QLabel, QMessageBox,
-    QInputDialog, QLineEdit, QPushButton, QScrollArea, QSizePolicy, QSlider, QSpinBox, QStyle, QTabWidget,
+    QCheckBox, QComboBox, QFileDialog, QFontComboBox, QFrame, QHBoxLayout, QLabel, QMessageBox,
+    QInputDialog, QLineEdit, QPushButton, QScrollArea, QSizePolicy, QSlider, QSpinBox, QTabWidget,
     QVBoxLayout, QWidget,
 )
 
@@ -36,6 +36,7 @@ from wordy.tts.constants import (
     TTS_BACKENDS_BY_PROVIDER,
 )
 from wordy.identity import normalize_identity
+from wordy.ui.app_icon import app_icon
 from wordy.ui.theme import (
     GREEN_ACCENT, TEXT_ERROR, TEXT_MUTED, TEXT_WARNING, UI_FONT_FAMILIES, ui_font_stack,
 )
@@ -179,9 +180,7 @@ class SettingsWindow:
         parent = root if isinstance(root, QWidget) else None
         self.window: _SettingsDialog | None = _SettingsDialog(self, parent)
         self.window.setWindowTitle("设置")
-        app_style = QApplication.style()
-        settings_icon = app_style.standardIcon(QStyle.StandardPixmap.SP_ComputerIcon) if app_style is not None else QIcon()
-        self.window.setWindowIcon(settings_icon)
+        self.window.setWindowIcon(app_icon())
         # 无边框玻璃窗口：标题栏、拖动、缩放和三个窗口按钮全部由内容自绘，
         # 窗口本体只负责透明合成与手绘玻璃底。
         self.window.setWindowFlags(

@@ -76,7 +76,8 @@ try {
             }
             $pyinstallerArgs = @(
                 '-m', 'PyInstaller', '--noconfirm', '--onefile', '--windowed',
-                '--name', 'Wordy', '--icon', (Join-Path $PSScriptRoot 'wavtrans.ico'),
+                '--name', 'Wordy', '--icon', (Join-Path $PSScriptRoot 'src/wordy/ui/icons/wordy.ico'),
+                '--add-data', 'src/wordy/ui/icons/wordy.ico;wordy/ui/icons',
                 '--add-data', 'src/wordy/ui/icons/settings.svg;wordy/ui/icons',
                 '--collect-all', 'cartesia', '--collect-all', 'keyring',
                 '--collect-submodules', 'websockets'

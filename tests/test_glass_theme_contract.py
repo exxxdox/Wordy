@@ -185,22 +185,22 @@ def test_painted_widgets_use_theme_tokens(file_name: str) -> None:
     assert leftovers == [], f"{file_name} 仍硬编码旧主题色: {leftovers}"
 
 
-def test_tray_icon_keeps_the_application_brand_palette() -> None:
-    """托盘图标是应用标识，必须保持原来的绿白配色，不跟随界面主题。
+def test_tray_icon_uses_app_icon_and_keeps_recording_badge(qapp) -> None:
+    from PySide6.QtGui import QColor
 
-    这个配色和打包用的 wavtrans.ico 是同一套；换成强调色会让托盘里的应用
-    标识和 exe 图标对不上。
-    """
-    from wordy.ui.tray import ICON_ACCENT, ICON_BACKGROUND
+    from wordy.ui.app_icon import app_icon
+    from wordy.ui.tray import _create_tts_tray_icon
 
-    assert ICON_BACKGROUND == "#0b1220"
-    assert ICON_ACCENT == "#22d3a0"
+    icon = app_icon()
+    assert {16, 32, 48, 64, 256} <= {size.width() for size in icon.availableSizes()}
+    for size in (16, 64):
+        expected = icon.pixmap(size).toImage()
+        assert expected.pixelColor(0, 0).alpha() == 0
+        assert _create_tts_tray_icon().pixmap(size).toImage() == expected
 
-    with open(os.path.join(_UI_DIR, "tray.py"), encoding="utf-8") as handle:
-        text = handle.read()
-
-    assert "ICON_ACCENT" in text and "ICON_BACKGROUND" in text
-    assert "GREEN_ACCENT" not in text, "托盘图标不应使用界面强调色"
+    recording = _create_tts_tray_icon(recording=True).pixmap(64).toImage()
+    assert recording.pixelColor(50, 14) == QColor("#f43f5e")
+    assert recording.pixelColor(32, 36) == icon.pixmap(64).toImage().pixelColor(32, 36)
 
 
 def test_overlay_paint_uses_specular_hairline_instead_of_terminal_dots() -> None:

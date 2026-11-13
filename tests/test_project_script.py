@@ -87,10 +87,12 @@ def test_build_forwards_flags_and_cleans_only_its_artifacts(script_project):
     assert len(calls) == 2
     build = calls[1]
     for expected in ("run python -m PyInstaller", "--onefile", "--windowed", "--clean",
+                     "--add-data src/wordy/ui/icons/wordy.ico;wordy/ui/icons",
                      "--add-data src/wordy/ui/icons/settings.svg;wordy/ui/icons",
                      "--hidden-import wordy.ui.overlay_widgets", "--collect-all keyring",
                      "--collect-submodules websockets", "src/wordy/__main__.py"):
         assert expected in build
+    assert "--icon" in build and build.count("wordy.ico") == 2
     # 单文件产物，成功提示必须指向 exe 本身，否则发布脚本找不到文件。
     assert str(Path("dist") / "Wordy.exe") in result.stdout
     assert not (root / "build").exists()

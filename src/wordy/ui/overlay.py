@@ -23,6 +23,7 @@ from wordy.tts.constants import (
 )
 from wordy.audio.capture import list_input_devices
 from wordy.audio.driver import VBCableDriverManager
+from wordy.ui.app_icon import app_icon
 from wordy.ui.settings_state import SettingsState
 from wordy.ui.settings import SettingsWindow
 from wordy.ui.overlay_widgets import SHADOW_PAD, _OverlaySignals, _OverlayWidget
@@ -367,6 +368,7 @@ class InputOverlay:
             else:
                 self._app = cast(QApplication, existing_app)  # type: ignore[reportAttributeAccessIssue]
                 self._owns_app = False
+            self._app.setWindowIcon(app_icon())
         if self._signals is None:
             self._signals = _OverlaySignals(self)
             self._signals.hotkey_triggered.connect(self._handle_hotkey_triggered)

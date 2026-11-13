@@ -9,15 +9,12 @@ from typing import Protocol
 from PySide6.QtCore import QRectF, Qt, QTimer
 from PySide6.QtGui import (
     QAction,
-    QBrush,
     QColor,
     QFont,
     QIcon,
     QPainter,
-    QPainterPath,
     QPalette,
     QPen,
-    QPixmap,
 )
 from PySide6.QtWidgets import (
     QApplication,
@@ -30,18 +27,12 @@ from PySide6.QtWidgets import (
 
 from wordy.config import AppSettings
 from wordy.qt_lifecycle import safe_qt_call
+from wordy.ui.app_icon import app_icon
 from wordy.ui.theme import (
     GLASS_FILL, GLASS_FILL_STRONG, GLASS_HAIRLINE, SCROLLBAR_HANDLE,
     SCROLLBAR_HANDLE_HOVER, SEPARATOR_COLOR, TEXT_MUTED, TEXT_PRIMARY, WINDOW_BG,
     ui_font_stack,
 )
-
-# 应用图标是品牌标识，配色与打包用的 wavtrans.ico 保持一致，
-# 不参与界面主题换色——否则托盘里的标识会和 exe 图标对不上。
-ICON_BACKGROUND = "#0b1220"
-ICON_ACCENT = "#22d3a0"
-
-
 
 class _OverlayLike(Protocol):
     def _open_settings(self) -> None: ...
@@ -54,41 +45,17 @@ class _LogStreamLike(Protocol):
 
 
 def _create_tts_tray_icon(recording: bool = False) -> QIcon:
-    """Create a geometric text-to-speech tray icon with waveform motif."""
-    size = 64
-    pixmap = QPixmap(size, size)
-    pixmap.fill(Qt.GlobalColor.transparent)
+    icon = app_icon()
+    if not recording:
+        return icon
 
+    pixmap = icon.pixmap(64)
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-
-    # 应用标识：配色与打包用的 wavtrans.ico 一致，故意不跟随界面主题换色。
-    bg = QPainterPath()
-    bg.addRoundedRect(QRectF(4, 4, 56, 56), 12, 12)
-    painter.fillPath(bg, QBrush(QColor(ICON_BACKGROUND)))
-    painter.setPen(QPen(QColor(ICON_ACCENT), 1.5))
-    painter.drawPath(bg)
-
-    # 几何波形：五条等宽竖线，对称高度
-    bar_w = 4.5
-    bar_gap = 3.5
-    base_y = 42.0
-    heights = [10, 18, 26, 18, 10]
-    x_start = 16.0
-
-    painter.setPen(Qt.PenStyle.NoPen)
-    painter.setBrush(QBrush(QColor(ICON_ACCENT)))
-    for i, h in enumerate(heights):
-        rx = x_start + i * (bar_w + bar_gap)
-        ry = base_y - h
-        painter.drawRoundedRect(QRectF(rx, ry, bar_w, h), 1.5, 1.5)
-
-    if recording:
-        # 录制状态只加一颗红点，保留原有品牌轮廓供用户继续识别应用。
-        painter.setPen(QPen(QColor(ICON_BACKGROUND), 2))
-        painter.setBrush(QBrush(QColor("#f43f5e")))
-        painter.drawEllipse(QRectF(40, 4, 20, 20))
-
+    # 录制状态只叠加红点，保留可辨认的应用标识。
+    painter.setPen(QPen(QColor("#ffffff"), 2))
+    painter.setBrush(QColor("#f43f5e"))
+    painter.drawEllipse(QRectF(40, 4, 20, 20))
     painter.end()
     return QIcon(pixmap)
 
