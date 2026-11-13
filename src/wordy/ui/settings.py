@@ -5,9 +5,12 @@
 
 from __future__ import annotations
 
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 from datetime import datetime
 from pathlib import Path
+
+if TYPE_CHECKING:
+    from wordy.audio.listen_policy import ListenPolicyState
 
 from PySide6.QtCore import QEvent, Qt, QTimer
 from PySide6.QtGui import QFont, QFontDatabase, QIcon
@@ -109,8 +112,11 @@ class SettingsWindow:
                  prewarm: bool = False,
                  on_record_rolling_hotkey: Callable[[], None] | None = None,
                  on_record_hold_key: Callable[[], None] | None = None,
-                 on_backup_imported: Callable[[], None] | None = None):
+                 on_backup_imported: Callable[[], None] | None = None,
+                 on_query_mic_listen_state: Callable[[], ListenPolicyState | None] | None = None):
         self.root = root
+        # 切换麦克风后 overlay 的刷新发生在配置落盘之前，需在落盘后重读一次。
+        self.on_query_mic_listen_state = on_query_mic_listen_state
         self._on_backup_imported = on_backup_imported
         self._on_audio_outputs_needed = on_audio_outputs_needed
         self._audio_outputs_requested = False
@@ -920,35 +926,52 @@ class SettingsWindow:
             self.set_status("麦克风侦听切换失败，已保留原设备。", TEXT_ERROR)
             return
         self._settings.mic_input_device = device  # auto-save
+        # 配置写入后再读一次系统状态，否则回显的是切换前设备的结果。
+        if self._state is not None and callable(self.on_query_mic_listen_state):
+            self._state.mic_listen_state = self.on_query_mic_listen_state()
         self._update_mic_listen_status(self._settings, self._state)
+        if self._settings.audio_routing_enabled and device:
+            listen_state = self._state.mic_listen_state if self._state is not None else None
+            if listen_state is not None and listen_state.enabled:
+                self.set_status("麦克风侦听已切换。", INPUT_TEXT_COLOR)
+            else:
+                self.set_status("麦克风侦听未生效，请检查设备。", TEXT_ERROR)
 
     def _update_mic_listen_status(self, s: AppSettings, state: SettingsState | None) -> None:
-        """更新麦克风侦听状态提示。VB-CABLE 安装检查在 section 顶部，此处只关注侦听结果。"""
-        listen_ok = state.mic_listen_configured if state is not None else False
+        """回显 Windows 中实际生效的麦克风侦听状态。
 
-        if not s.audio_routing_enabled:
-            self._set_label(
-                self.mic_listen_status_label,
-                "启用音频侦听后自动配置",
-                TEXT_MUTED,
-            )
-        elif not s.mic_input_device:
+        不再依赖路由内部标志：系统状态才是用户和游戏实际听到结果。"""
+        listen_state = state.mic_listen_state if state is not None else None
+
+        if not s.mic_input_device:
             self._set_label(
                 self.mic_listen_status_label,
                 "选择麦克风后自动配置",
                 TEXT_MUTED,
             )
-        elif listen_ok:
+        elif listen_state is None:
             self._set_label(
                 self.mic_listen_status_label,
-                "麦克风侦听成功",
+                "无法读取侦听状态——请确认该设备支持系统侦听",
+                TEXT_WARNING,
+            )
+        elif listen_state.enabled:
+            self._set_label(
+                self.mic_listen_status_label,
+                "Windows 侦听：已开启" + ("，音频侦听生效中" if s.audio_routing_enabled else ""),
                 INPUT_TEXT_COLOR,
+            )
+        elif s.audio_routing_enabled:
+            self._set_label(
+                self.mic_listen_status_label,
+                "麦克风侦听未生效（Windows 侦听：未开启）",
+                TEXT_ERROR,
             )
         else:
             self._set_label(
                 self.mic_listen_status_label,
-                "麦克风侦听失败——请检查设备是否被占用",
-                TEXT_ERROR,
+                "Windows 侦听：未开启",
+                TEXT_MUTED,
             )
 
     def _populate_input_devices(self, devices: list[dict[str, object]], selected: str | None) -> None:

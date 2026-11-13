@@ -26,12 +26,14 @@ from wordy.audio.driver import VBCableDriverManager
 from wordy.ui.settings_state import SettingsState
 from wordy.ui.settings import SettingsWindow
 from wordy.ui.overlay_widgets import SHADOW_PAD, _OverlaySignals, _OverlayWidget
-from wordy.ui.theme import ui_font_stack
+from wordy.ui.theme import GREEN_ACCENT as INPUT_TEXT_COLOR
+from wordy.ui.theme import TEXT_ERROR, TEXT_WARNING, ui_font_stack
 from wordy.ui.window import activate_window, center_window, clamp_window_position, get_cursor_position, is_left_button_down, is_point_in_widget
 
 from wordy.qt_lifecycle import safe_qt_call
 
 if TYPE_CHECKING:
+    from wordy.audio.listen_policy import ListenPolicyState
     from wordy.hotkey import NativeHotkeyListener
 
 logger = logging.getLogger(__name__)
@@ -69,7 +71,7 @@ class InputOverlay:
         on_volcengine_credentials_change: Callable[[str | None], None] | None = None,
         on_audio_route_change: Callable[[dict[str, object]], bool] | None = None,
         on_sidetone_change: Callable[[bool], None] | None = None,
-        on_query_mic_listen_status: Callable[[], bool] | None = None,
+        on_query_mic_listen_state: Callable[[], ListenPolicyState | None] | None = None,
         audio_player: object | None = None,
         width: int = 540,
         height: int = 58,
@@ -98,7 +100,7 @@ class InputOverlay:
         self.on_volcengine_credentials_change = on_volcengine_credentials_change
         self.on_audio_route_change = on_audio_route_change
         self.on_sidetone_change = on_sidetone_change
-        self.on_query_mic_listen_status = on_query_mic_listen_status
+        self.on_query_mic_listen_state = on_query_mic_listen_state
         self._audio_player = audio_player
         self.width = width
         self.height = height
@@ -575,10 +577,10 @@ class InputOverlay:
             volcengine_access_key_saved = False
 
         # 运行时数据（非持久化）
-        mic_listen_configured = (
-            self.on_query_mic_listen_status()
-            if callable(self.on_query_mic_listen_status)
-            else False
+        mic_listen_state = (
+            self.on_query_mic_listen_state()
+            if callable(self.on_query_mic_listen_state)
+            else None
         )
         state = SettingsState(
             voices_cache=self._get_active_voices_cache(),
@@ -590,7 +592,7 @@ class InputOverlay:
             cartesia_api_key_saved=cartesia_api_key_saved,
             volcengine_access_key_saved=volcengine_access_key_saved,
             vb_cable_installed=VBCableDriverManager.is_installed(),
-            mic_listen_configured=mic_listen_configured,
+            mic_listen_state=mic_listen_state,
         )
         self._recording_hotkey = False
         self._settings_window = SettingsWindow(
@@ -604,6 +606,7 @@ class InputOverlay:
             on_close=self._on_settings_window_closed,
             on_backup_imported=self.stop,
             on_audio_outputs_needed=self._refresh_settings_audio_outputs,
+            on_query_mic_listen_state=self.on_query_mic_listen_state,
             prewarm=prewarm,
         )
 
@@ -926,12 +929,16 @@ class InputOverlay:
             self._handle_audio_output_change(value)
 
         elif field_name == "audio_routing_enabled":
+            enabled = bool(value)
             applied = (
-                self.on_audio_route_change({"audio_routing_enabled": bool(value)})
+                self.on_audio_route_change({"audio_routing_enabled": enabled})
                 if self.on_audio_route_change
-                else not bool(value)
+                else not enabled
             )
-            self._refresh_mic_listen_status()
+            listen_state = self._refresh_mic_listen_status()
+            self._report_audio_route_result(
+                enabled=enabled, applied=applied, listen_state=listen_state,
+            )
             return applied
 
         elif field_name == "mic_input_device":
@@ -939,6 +946,7 @@ class InputOverlay:
                 self.on_audio_route_change({"mic_input_device": value if isinstance(value, str) else None})
                 if self.on_audio_route_change else True
             )
+            # 回显由设置页在配置落盘并重读后发出，这里只刷新状态。
             self._refresh_mic_listen_status()
             return applied
 
@@ -962,22 +970,56 @@ class InputOverlay:
                 return self.on_rolling_buffer_hotkey_change(str(value))
             return False
 
-    def _refresh_mic_listen_status(self) -> None:
-        """路由变更后刷新设置窗口中麦克风侦听状态。"""
+    def _refresh_mic_listen_status(self) -> ListenPolicyState | None:
+        """路由变更后刷新设置窗口中麦克风侦听状态，并返回读到的系统状态。"""
         settings = self._active_settings_window()
         if settings is None:
-            return
-        listen_ok = (
-            self.on_query_mic_listen_status()
-            if callable(self.on_query_mic_listen_status)
-            else False
+            return None
+        listen_state = (
+            self.on_query_mic_listen_state()
+            if callable(self.on_query_mic_listen_state)
+            else None
         )
         if hasattr(settings, '_state'):
-            settings._state.mic_listen_configured = listen_ok  # type: ignore[union-attr]
+            settings._state.mic_listen_state = listen_state  # type: ignore[union-attr]
         settings._update_mic_listen_status(
             self._cfg,
             getattr(settings, '_state', None),
         )
+        return listen_state
+
+    def _report_audio_route_result(
+        self,
+        *,
+        enabled: bool,
+        applied: bool,
+        listen_state: ListenPolicyState | None,
+    ) -> None:
+        """回显侦听开关结果；以 Windows 读回的状态为准，不只看调用返回值。"""
+        settings = self._active_settings_window()
+        if settings is None:
+            return
+        if not applied:
+            settings.set_status(
+                "启用音频侦听失败，麦克风侦听未改变。"
+                if enabled else "关闭音频侦听失败，麦克风侦听仍保持原状。",
+                TEXT_ERROR,
+            )
+            return
+        if not enabled:
+            settings.set_status("音频侦听已关闭，麦克风侦听已恢复。", INPUT_TEXT_COLOR)
+            return
+        if not self._cfg.mic_input_device:
+            settings.set_status(
+                "音频侦听已启用，选择麦克风后自动开启侦听。", TEXT_WARNING,
+            )
+        elif listen_state is not None and listen_state.enabled:
+            settings.set_status("音频侦听已启用，麦克风侦听已生效。", INPUT_TEXT_COLOR)
+        else:
+            settings.set_status(
+                "音频侦听已启用，但麦克风侦听未生效，请检查设备或手动设置。",
+                TEXT_ERROR,
+            )
 
     def _handle_audio_output_change(self, value: object) -> None:
         """音频输出设备变更的运行时处理。"""

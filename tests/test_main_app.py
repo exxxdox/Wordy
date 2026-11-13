@@ -1212,9 +1212,10 @@ class _FakeAudioRouter:
         self.start_mic_device = mic_device
         return True
 
-    def stop(self) -> None:
+    def stop(self, *, restore_listen: bool = True) -> None:
         self.started = False
         self.stopped = True
+        self.stop_restore_listen = restore_listen
 
     def is_running(self) -> bool:
         return self.started

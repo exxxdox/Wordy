@@ -101,6 +101,30 @@ class TestAudioRouter:
         router.stop()
         assert router.is_running() is False
 
+    def test_stop_without_restore_keeps_system_listening(self, tmp_path, monkeypatch):
+        """退出应用时不回滚 Windows 侦听，并丢弃恢复记录避免下次启动改回旧值。"""
+        import wordy.audio.router as router_module
+        from wordy.audio.listen_policy import ListenPolicyState
+
+        journal = tmp_path / "journal.json"
+        monkeypatch.setattr(router_module, "_journal_path", lambda: journal)
+        journal.write_text("{}", encoding="utf-8")
+        router = AudioRouter(virtual_output="CABLE Input")
+        router._active = True
+        router._mic_device = "Mic"
+        router._listen_configured = True
+        router._listen_original_state = ListenPolicyState(enabled=False, output_id="old")
+        router._listen_original_device = "Mic"
+
+        with patch.object(router, "_disable_mic_listen") as disable:
+            assert router.stop(restore_listen=False) is True
+
+        disable.assert_not_called()
+        assert router.is_running() is False
+        assert router._listen_original_state is None
+        assert router._listen_original_device is None
+        assert not journal.exists()
+
     def test_listen_takeover_restores_original_state(self):
         from wordy.audio.listen_policy import ListenPolicyState
 
