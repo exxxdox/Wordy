@@ -461,7 +461,7 @@ class SettingsWindow:
         display_column.addStretch(1)
         local_layout.addStretch(1)
 
-        route_layout = self._create_tab_page(tab_widget, "音频侦听")
+        route_layout = self._create_tab_page(tab_widget, "音频设置")
         output_column, route_column = self._create_columns(
             route_layout, ("播放与返听", "麦克风与路由"))
         self._build_audio_output_section(output_column, state, s)
@@ -1304,7 +1304,7 @@ class SettingsWindow:
         # 页面标题说明当前任务，分组用留白区分，避免窄窗口被边框和卡片切碎。
         page_titles = {
             "本地设置": ("输入与显示", "调整快捷键、提示文字和输入栏外观。"),
-            "音频侦听": ("声音与路由", "选择播放设备，控制侦听与返听。"),
+            "音频设置": ("声音与路由", "选择播放设备，控制侦听与返听。"),
             "TTS 设置": ("语音生成", "选择服务商，配置密钥与音色。"),
             "聊天轮盘": ("音频轮盘", "按住快捷键，移向音频，松开播放；回到中心或按 Esc 取消。"),
         }

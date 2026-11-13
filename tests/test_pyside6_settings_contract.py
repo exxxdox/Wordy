@@ -691,7 +691,7 @@ def test_settings_compact_width_keeps_navigation_and_forms_visible(monkeypatch: 
         bar = tabs.tabBar()
         assert not bar.expanding()
         assert [tabs.tabText(i) for i in range(tabs.count())] == [
-            "本地设置", "音频侦听", "TTS 设置", "聊天轮盘",
+            "本地设置", "音频设置", "TTS 设置", "聊天轮盘",
         ]
         local_page = tabs.widget(0)
         assert local_page is not None
