@@ -28,6 +28,26 @@ _ = pytest.importorskip("PySide6")
 from PySide6 import QtCore, QtGui, QtWidgets
 
 
+def test_notification_uses_wordy_icon(qapp, monkeypatch: pytest.MonkeyPatch) -> None:
+    from wordy.ui.app_icon import app_icon
+    from wordy.ui.tray import TrayApp
+
+    show_message = MagicMock()
+    monkeypatch.setattr(QtWidgets.QSystemTrayIcon, "showMessage", show_message)
+    overlay = MagicMock(spec=["_open_settings", "stop"])
+    tray = TrayApp(overlay)
+    tray.tray_icon = QtWidgets.QSystemTrayIcon()
+    tray.set_recording_state(True)
+
+    tray.notify("Recording started")
+
+    show_message.assert_called_once()
+    title, message, icon, timeout = show_message.call_args.args
+    assert (title, message, timeout) == ("Wav Trans", "Recording started", 4000)
+    assert isinstance(icon, QtGui.QIcon)
+    assert icon.pixmap(64).toImage() == app_icon().pixmap(64).toImage()
+
+
 _CONFIG: dict[str, Any] = {
     "hotkey": "f6",
     "name": "F6",

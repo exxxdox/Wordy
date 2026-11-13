@@ -231,7 +231,8 @@ class TrayApp:
         if icon is None:
             return
         try:
-            icon.showMessage(title, message, QSystemTrayIcon.MessageIcon.Information, 4000)
+            # 通知有独立的图标参数，直接使用应用图标可避开录制红点和系统信息图标。
+            icon.showMessage(title, message, app_icon(), 4000)
         except RuntimeError:
             pass
 
