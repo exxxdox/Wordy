@@ -392,6 +392,19 @@ class TestSidetoneAudioPlayer:
         main.play_wav.assert_called_once_with("test.wav", device_index=None, volume=1.0)
         sidetone.play_wav.assert_not_called()
 
+    def test_play_wav_preview_local_skips_sidetone(self):
+        """本地试听已指向扬声器，返听会把同一段声音再播一遍。"""
+        main, sidetone = self._make_players()
+        main.play_wav.return_value = True
+        wrapper = SidetoneAudioPlayer(main, sidetone)
+        wrapper.set_sidetone_enabled(True)
+
+        result = wrapper.play_wav("test.wav", device_index=3, preview_local=True)
+
+        assert result is True
+        main.play_wav.assert_called_once_with("test.wav", device_index=3, volume=1.0)
+        sidetone.play_wav.assert_not_called()
+
     def test_play_wav_enabled_calls_both(self):
         main, sidetone = self._make_players()
         main.play_wav.return_value = True

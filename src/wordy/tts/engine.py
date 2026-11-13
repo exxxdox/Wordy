@@ -44,8 +44,10 @@ class TTSAudioPlayer(Protocol):
     output_device_name: str | None
 
     def play_wav(self, wav_path: str | BytesIO, device_index: int | None = None,
-                 cancel_event: Event | None = None, *, volume: float = 1.0, on_progress: Callable[[float], None] | None = None) -> bool:
-        """播放 WAV 音频。"""
+                 cancel_event: Event | None = None, *, volume: float = 1.0,
+                 on_progress: Callable[[float], None] | None = None,
+                 preview_local: bool = False) -> bool:
+        """播放 WAV 音频。``preview_local`` 表示试听只走本地输出、不叠加返听。"""
         ...
 
     def open_stream(

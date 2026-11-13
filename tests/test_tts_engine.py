@@ -45,7 +45,7 @@ class _DummyAudioPlayer:
         wav_path: str | BytesIO,
         device_index: int | None = None,
         cancel_event: Event | None = None,
-        *, volume: float = 1.0, on_progress=None,
+        *, volume: float = 1.0, on_progress=None, preview_local: bool = False,
     ) -> bool:
         return True
 

@@ -282,6 +282,18 @@ class TestRoutingControllerOutputDevice:
 class TestRoutingControllerProperties:
     """属性访问。"""
 
+    def test_local_output_device_follows_routing_state(self, mock_player, mock_settings):
+        ctrl = RoutingController(mock_settings, mock_player)
+        local: OutputDeviceSelection = {"name": "Speakers", "host_api_name": "Windows WASAPI"}
+        mock_player.output_device = local
+        assert ctrl.local_output_device == local
+
+        ctrl._router = MagicMock()
+        ctrl._router.is_running.return_value = True
+        saved: OutputDeviceSelection = {"name": "Headset", "host_api_name": "Windows WASAPI"}
+        ctrl._saved_output_device = saved
+        assert ctrl.local_output_device == saved
+
     def test_mic_listen_state_none_without_device(self, mock_player, mock_settings):
         mock_settings.mic_input_device = None
         ctrl = RoutingController(mock_settings, mock_player)

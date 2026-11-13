@@ -99,6 +99,10 @@ class WordyApp:
             volcengine_access_key=self.volcengine_access_key,
             tts_api_provider=self.tts_api_provider,
             tts_backend=self.tts_backend,
+            # 试听必须绕过 CABLE 路由，只走本地输出；routing 在构造后才赋值，
+            # lambda 只在真正试听时才求值。
+            local_output_index=lambda: self.player.resolve_output_device_index(
+                self.routing.local_output_device),
         )
 
         # ── 路由控制器 ─────────────────────────────────────────────────
@@ -444,7 +448,7 @@ class WordyApp:
                 self._settings,
                 dialog_parent=lambda: self.overlay.root,
                 play_preview=lambda path, done, progress: self.tts_manager.play_audio_file(
-                    path, self._on_tts_error, done, on_progress=progress),
+                    path, self._on_tts_error, done, on_progress=progress, preview_local=True),
                 stop_preview=self.tts_manager.stop_audio_file,
                 on_state_changed=self._rolling_state_changed,
                 on_notify=self._rolling_notify,

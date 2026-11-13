@@ -288,6 +288,28 @@ class AudioPlayer:
         """更新输出设备选择，传入 ``None`` 表示使用系统默认设备。"""
         self.output_device = output_device
 
+    def resolve_output_device_index(
+        self, output_device: OutputDeviceSelection | None = None,
+    ) -> int | None:
+        """把设备身份解析为 PortAudio 索引，不改变当前输出设置。
+
+        试听要在路由把主输出固定到 CABLE Input 时仍走本地扬声器，
+        所以先独立解析目标索引，再以显式索引播放。"""
+        p = _new_pyaudio()
+        try:
+            if output_device is None:
+                return self._default_output_device_index(p)
+            name = output_device.get("name")
+            if not name:
+                return self._default_output_device_index(p)
+            return self._lookup_named_output_device(
+                p, name, host_api_name=output_device.get("host_api_name"))
+        except Exception as error:  # noqa: BLE001
+            logger.warning("无法解析本地输出设备: %s", error)
+            return None
+        finally:
+            self._terminate_pyaudio(p)
+
     def _lookup_named_output_device(
         self,
         p,

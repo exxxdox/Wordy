@@ -12,7 +12,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from wordy.audio.player import AudioPlayer
+from wordy.audio.player import AudioPlayer, OutputDeviceSelection
 
 
 # ---------------------------------------------------------------------------
@@ -156,6 +156,17 @@ def test_portaudio_lifecycle_is_serialized():
         player_module.pyaudio.PyAudio = original
 
     assert overlaps == [], "PortAudio 生命周期调用发生了并发重叠"
+
+
+def test_resolve_output_device_index_does_not_change_configured_output(_patch_pyaudio):
+    """试听解析本地设备时不能改写路由中的主输出。"""
+    configured: OutputDeviceSelection = {"name": "VB-Cable Output", "host_api_name": "Windows WASAPI"}
+    player = AudioPlayer(output_device=configured)
+
+    assert player.resolve_output_device_index(None) == 0
+    assert player.resolve_output_device_index(configured) == 1
+    assert _patch_pyaudio.terminate_calls == 2
+    assert player.output_device == configured
 
 
 def test_audio_player_ctor_accepts_output_device():
