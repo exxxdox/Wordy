@@ -4,6 +4,9 @@
 from __future__ import annotations
 
 import importlib
+import logging
+import subprocess
+from threading import Thread
 from typing import Protocol
 
 from PySide6.QtCore import QRectF, Qt, QTimer
@@ -26,6 +29,7 @@ from PySide6.QtWidgets import (
 )
 
 from wordy.config import AppSettings
+from wordy.notification_sender import show_notification
 from wordy.qt_lifecycle import safe_qt_call
 from wordy.ui.app_icon import app_icon
 from wordy.ui.theme import (
@@ -33,6 +37,8 @@ from wordy.ui.theme import (
     SCROLLBAR_HANDLE_HOVER, SEPARATOR_COLOR, TEXT_MUTED, TEXT_PRIMARY, WINDOW_BG,
     ui_font_stack,
 )
+
+logger = logging.getLogger(__name__)
 
 class _OverlayLike(Protocol):
     def _open_settings(self) -> None: ...
@@ -226,15 +232,22 @@ class TrayApp:
         icon.setToolTip("Wordy · 后台录制中" if active else "Wordy")
 
     def notify(self, message: str, title: str = "Wordy") -> None:
-        """托盘气泡提示；托盘不可用或已销毁时静默跳过。"""
+        """通过 Windows 发送通知，失败时回到 Qt 托盘气泡。"""
         icon = self.tray_icon
         if icon is None:
             return
-        try:
-            # 通知有独立的图标参数，直接使用应用图标可避开录制红点和系统信息图标。
-            icon.showMessage(title, message, app_icon(), 4000)
-        except RuntimeError:
-            pass
+
+        def send() -> None:
+            try:
+                show_notification(title, message)
+            except (OSError, subprocess.SubprocessError):
+                logger.warning("Windows 原生通知发送失败，改用托盘提示", exc_info=True)
+                # 回退需要访问 Qt 托盘，派回其所属线程并随托盘销毁取消。
+                safe_qt_call(lambda: QTimer.singleShot(
+                    0, icon, lambda: icon.showMessage(title, message, app_icon(), 4000),
+                ))
+
+        Thread(target=send, daemon=True).start()
 
     def _on_quit(self) -> None:
         # Defer overlay.stop() out of the QAction slot so the Qt event loop

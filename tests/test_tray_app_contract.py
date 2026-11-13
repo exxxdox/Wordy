@@ -28,19 +28,64 @@ _ = pytest.importorskip("PySide6")
 from PySide6 import QtCore, QtGui, QtWidgets
 
 
+def test_notification_sender_registers_a_durable_wordy_icon(tmp_path, monkeypatch) -> None:
+    from wordy import notification_sender
+    from wordy.paths import APP_ICON_PATH
+
+    registry = MagicMock()
+    monkeypatch.setattr(notification_sender, "winreg", registry)
+    monkeypatch.setattr(notification_sender, "config_directory", lambda: tmp_path)
+
+    app_id = notification_sender.register_notification_sender()
+
+    assert app_id == notification_sender.APP_ID
+    assert registry.CreateKey.call_args.args == (
+        registry.HKEY_CURRENT_USER, rf"Software\Classes\AppUserModelId\{app_id}",
+    )
+    values = {call.args[1]: call.args[4] for call in registry.SetValueEx.call_args_list}
+    assert values["DisplayName"] == "Wordy"
+    icon_path = Path(values["IconUri"])
+    assert icon_path.parent == tmp_path and icon_path.suffix == ".ico"
+    assert icon_path.read_bytes() == APP_ICON_PATH.read_bytes()
+
+
+def test_native_notification_uses_explicit_sender_and_escapes_text(monkeypatch) -> None:
+    import json
+    from xml.etree import ElementTree
+
+    from wordy import notification_sender
+
+    monkeypatch.setattr(notification_sender, "register_notification_sender", lambda: "Wordy.Desktop")
+    run = MagicMock()
+    monkeypatch.setattr(notification_sender.subprocess, "run", run)
+    notification_sender.show_notification("Wordy", "<>& 中文")
+
+    payload = json.loads(run.call_args.kwargs["input"])
+    assert payload["app_id"] == "Wordy.Desktop"
+    assert [node.text for node in ElementTree.fromstring(payload["xml"]).iter("text")] == [
+        "Wordy", "<>& 中文",
+    ]
+    assert run.call_args.kwargs["timeout"] > 0
+
+
 def test_notification_uses_wordy_icon(qapp, monkeypatch: pytest.MonkeyPatch) -> None:
     from wordy.ui.app_icon import app_icon
-    from wordy.ui.tray import TrayApp
+    from wordy.ui import tray as tray_module
 
     show_message = MagicMock()
+    native = MagicMock(side_effect=OSError("unavailable"))
+    monkeypatch.setattr(tray_module, "show_notification", native)
+    monkeypatch.setattr(tray_module, "Thread", lambda *, target, daemon: MagicMock(start=target))
     monkeypatch.setattr(QtWidgets.QSystemTrayIcon, "showMessage", show_message)
     overlay = MagicMock(spec=["_open_settings", "stop"])
-    tray = TrayApp(overlay)
+    tray = tray_module.TrayApp(overlay)
     tray.tray_icon = QtWidgets.QSystemTrayIcon()
     tray.set_recording_state(True)
     assert tray.tray_icon.toolTip() == "Wordy · 后台录制中"
 
     tray.notify("Recording started")
+    qapp.processEvents()
+    native.assert_called_once_with("Wordy", "Recording started")
     tray.set_recording_state(False)
     assert tray.tray_icon.toolTip() == "Wordy"
 
