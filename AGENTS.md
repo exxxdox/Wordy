@@ -20,6 +20,8 @@
 
 `wordy.ps1` 统一提供 `init`（初始化）、`dev`（启动，默认）和 `build`（打包）。`dev.cmd` 保留为参数转发入口；发布工作流使用 `wordy.ps1 build -Clean -NoPause`。
 
+打包时只在 PyInstaller 执行期间将系统目录 `System32` 放到 `PATH` 首位，防止把第三方同名 `icuuc.dll` 收进 EXE，导致 QtCore 启动时找不到所需导出。打包相关改动须实际启动生成的 EXE 验证。
+
 ## 持久化目录
 
 配置和轮盘托管音频集中在 `paths.config_directory()` 返回的同一个目录（目录名固定小写 `wordy`）——配置文件 `config.toml` 与轮盘托管音频 `audio_clips/`（后者从配置文件父目录推导，自动跟随）。`XDG_CONFIG_HOME` 未设置、为空串或给的是相对路径时退回 `~/.config/wordy`（相对路径按 XDG 规范视为无效）。根目录解析刻意放在 `src/wordy/paths.py` 而不是 `config.py`：`config` 有一条契约禁止出现 `os.environ`（防止密钥重新从环境读回来），而路径解析本质上要读环境。录制过程中的临时文件不在这里，走 `%TEMP%`。

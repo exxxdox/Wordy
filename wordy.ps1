@@ -88,7 +88,14 @@ try {
 
             # Windows 下 uv 的 pyinstaller.exe trampoline 解析路径失败，继续使用模块入口。
             Write-Host '[INFO] Running PyInstaller...'
-            Invoke-Uv run python @pyinstallerArgs
+            # QtCore 需要 Windows 的 ICU。PATH 上的同名第三方 DLL 会被错误打进 EXE。
+            $originalPath = $env:Path
+            try {
+                $env:Path = "$(Join-Path $env:SystemRoot 'System32');$originalPath"
+                Invoke-Uv run python @pyinstallerArgs
+            } finally {
+                $env:Path = $originalPath
+            }
 
             # 清理范围限定为当前项目根目录的构建产物，不递归处理外部路径。
             $buildDir = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot 'build'))

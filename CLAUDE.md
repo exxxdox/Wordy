@@ -32,6 +32,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `wordy.ps1` 统一提供 `init`（初始化）、`dev`（启动，默认）和 `build`（打包）。`dev.cmd` 保留为参数转发入口；发布工作流使用 `wordy.ps1 build -Clean -NoPause`。
 
+打包时只在 PyInstaller 执行期间将系统目录 `System32` 放到 `PATH` 首位，防止把第三方同名 `icuuc.dll` 收进 EXE，导致 QtCore 启动时找不到所需导出。打包相关改动须实际启动生成的 EXE 验证。
+
 ### 命令示例
 
 ```bash

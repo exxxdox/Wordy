@@ -21,12 +21,14 @@ def script_project(tmp_path):
     (root / "uv.cmd").write_text(
         '@echo off\n'
         'echo %*>> "%WORDY_TEST_LOG%"\n'
+        'if "%1"=="run" if "%3"=="-m" if "%4"=="PyInstaller" set PATH>"%WORDY_TEST_BUILD_PATH%"\n'
         'if "%WORDY_TEST_FAIL%"=="%1" exit /b 23\n'
         'exit /b 0\n', encoding="ascii",
     )
     log = tmp_path / "uv.log"
     env = dict(os.environ, PATH=str(root) + os.pathsep + os.environ["PATH"],
-               WORDY_TEST_LOG=str(log), WORDY_TEST_FAIL="")
+               WORDY_TEST_LOG=str(log), WORDY_TEST_FAIL="",
+               WORDY_TEST_BUILD_PATH=str(tmp_path / "build-path.txt"))
     return root, log, env
 
 
@@ -76,7 +78,7 @@ def test_cmd_starts_default_or_explicit_dev_and_preserves_exit_code(script_proje
 
 
 def test_build_forwards_flags_and_cleans_only_its_artifacts(script_project):
-    root, _, _ = script_project
+    root, _, env = script_project
     (root / "build").mkdir()
     (root / "build" / "temporary.txt").write_text("build")
     (root / "Wordy.spec").write_text("spec")
@@ -93,6 +95,9 @@ def test_build_forwards_flags_and_cleans_only_its_artifacts(script_project):
                      "--collect-submodules websockets", "src/wordy/__main__.py"):
         assert expected in build
     assert "--icon" in build and build.count("wordy.ico") == 2
+    # PyInstaller must resolve system DLLs before same-named DLLs from the caller's PATH.
+    build_path = Path(env["WORDY_TEST_BUILD_PATH"]).read_bytes().split(b";", 1)[0].decode("ascii")
+    assert build_path.lower() == f"path={os.environ['SystemRoot']}\\System32".lower()
     # 单文件产物，成功提示必须指向 exe 本身，否则发布脚本找不到文件。
     assert str(Path("dist") / "Wordy.exe") in result.stdout
     assert not (root / "build").exists()
