@@ -109,6 +109,8 @@ class RollingBufferController(QObject):
         stop_preview: Callable[[], None],
         on_state_changed: Callable[[bool], None] | None = None,
         on_notify: Callable[[str], None] | None = None,
+        # 新增轮盘要注册全局快捷键，只有轮盘控制器能做。
+        on_add_wheel: Callable[[str], None] | None = None,
         recorder_factory: Callable[[], _RecorderLike] = RollingAudioRecorder,
     ) -> None:
         super().__init__()
@@ -118,6 +120,7 @@ class RollingBufferController(QObject):
         self._stop_preview = stop_preview
         self._on_state_changed = on_state_changed
         self._on_notify = on_notify
+        self._on_add_wheel = on_add_wheel
         self._recorder_factory = recorder_factory
         self._recorder: _RecorderLike | None = None
         self._listener: NativeHotkeyListener | None = None
@@ -252,7 +255,13 @@ class RollingBufferController(QObject):
     # ── 截取与保存 ────────────────────────────────────────────────────
 
     def _open_dialog(self, snapshot: Path) -> None:
-        picker = TargetSlotPicker(self.settings, self._dialog_parent())  # type: ignore[arg-type]
+        default_label = f"录音 {datetime.now():%H%M%S}"
+        picker = TargetSlotPicker(
+            self.settings,
+            self._dialog_parent(),  # type: ignore[arg-type]
+            on_add_wheel=self._on_add_wheel,
+            default_label=default_label,
+        )
         saved_wheel, saved_slot = self.settings.rolling_buffer_target
         saved_index = saved_wheel * SLOTS_PER_WHEEL + saved_slot
         dialog = AudioTrimDialog(
@@ -294,7 +303,8 @@ class RollingBufferController(QObject):
             self.settings.rolling_buffer_target = [wheel_index, slot_index]
         except Exception:  # noqa: BLE001 - 记住目标失败不影响本次保存
             logger.warning("保存后台录制目标失败", exc_info=True)
-        label = f"录音 {datetime.now():%H%M%S}"
+        # 用户在弹窗里改过名称就用它；留空回退自动生成的时间名。
+        label = picker.label() or default_label
         name = self.settings.get_wheel(wheel_index)["name"] or f"轮盘 {wheel_index + 1}"
         target_name = f"{name} / 音频 {slot_index + 1}"
         self._save_async(clip, wheel_index, slot_index, label, target_name)

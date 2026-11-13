@@ -167,6 +167,78 @@ def test_toggle_starts_then_stops_and_opens_picker(qapp, tmp_path, monkeypatch):
     assert notices
 
 
+def test_open_dialog_saves_with_edited_label(qapp, tmp_path, monkeypatch):
+    """保存使用弹窗里改写的名称，并把新增轮盘回调传给目标选择器。"""
+    import wordy.rolling_buffer_controller as module
+    from PySide6.QtWidgets import QDialog
+
+    settings = _settings(tmp_path)
+    snapshot = _wav(tmp_path / "snapshot.wav")
+    added: list[str] = []
+    controller = RollingBufferController(
+        settings,
+        dialog_parent=lambda: None,
+        play_preview=lambda _path, _done, _progress: None,
+        stop_preview=lambda: None,
+        on_add_wheel=added.append,
+    )
+    captured: dict[str, object] = {}
+
+    class FakePicker:
+        def __init__(self, *_args: object, on_add_wheel=None, default_label: str = "", **_kwargs: object):
+            captured["default_label"] = default_label
+            captured["on_add_wheel"] = on_add_wheel
+
+        def set_index(self, _index: int) -> None:
+            pass
+
+        def selected_target(self) -> tuple[int, int]:
+            return 0, 2
+
+        def label(self) -> str:
+            return "自定义名称"
+
+    class FakeDialog:
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            pass
+
+        def set_play_preview(self, _play: object) -> None:
+            pass
+
+        def exec(self) -> QDialog.DialogCode:
+            return QDialog.DialogCode.Accepted
+
+        def take_clip(self) -> Path:
+            return snapshot
+
+        def deleteLater(self) -> None:
+            pass
+
+    saved: dict[str, object] = {}
+
+    def fake_save(_settings: object, _clip: Path, wheel: int, slot: int, label: str) -> str:
+        saved.update(wheel=wheel, slot=slot, label=label)
+        return "saved.wav"
+
+    class InlineThread:
+        def __init__(self, target, **_kwargs: object) -> None:
+            self._target = target
+
+        def start(self) -> None:
+            self._target()
+
+    monkeypatch.setattr(module, "TargetSlotPicker", FakePicker)
+    monkeypatch.setattr(module, "AudioTrimDialog", FakeDialog)
+    monkeypatch.setattr(module, "save_buffer_clip", fake_save)
+    monkeypatch.setattr(module.threading, "Thread", InlineThread)
+
+    controller._open_dialog(snapshot)
+
+    assert saved == {"wheel": 0, "slot": 2, "label": "自定义名称"}
+    assert str(captured["default_label"]).startswith("录音 ")
+    assert callable(captured["on_add_wheel"])
+
+
 def test_stop_failure_keeps_recorder_for_retry(qapp, tmp_path, monkeypatch):
     settings = _settings(tmp_path)
     snapshot = _wav(tmp_path / "snapshot.wav")
