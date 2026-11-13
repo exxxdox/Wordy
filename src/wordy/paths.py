@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""持久化目录解析。
+"""应用资源路径与持久化目录解析。
 
 不放在 ``config`` 里是有意的：``config`` 有一条契约禁止访问环境变量（防止
 密钥重新从环境读回来），而路径根目录的解析本质上是环境相关的。分开之后
@@ -14,6 +14,8 @@ import os
 from pathlib import Path
 
 APP_DIR_NAME = "wordy"
+# Qt 和启动阶段的 Win32 弹窗共用打包到此路径的图标。
+APP_ICON_PATH = Path(__file__).with_name("ui") / "icons" / "wordy.ico"
 
 
 def config_directory() -> Path:
@@ -27,4 +29,4 @@ def config_directory() -> Path:
     return base / APP_DIR_NAME
 
 
-__all__ = ["APP_DIR_NAME", "config_directory"]
+__all__ = ["APP_DIR_NAME", "APP_ICON_PATH", "config_directory"]

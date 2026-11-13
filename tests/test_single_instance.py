@@ -1,6 +1,7 @@
 """单实例命名互斥体：拒绝重复启动，持有首实例句柄直到进程退出。"""
 
 import ctypes
+from ctypes import wintypes
 import subprocess
 import sys
 import time
@@ -46,12 +47,31 @@ def test_mutex_failure_does_not_allow_startup(kernel32, monkeypatch):
     assert instance_module._instance_handle is None
 
 
-def test_duplicate_notice_uses_native_information_dialog(kernel32):
+def test_duplicate_notice_uses_native_dialog_with_wordy_icon(kernel32):
+    kernel32.LoadImageW.return_value = 123
+    kernel32.TaskDialogIndirect.return_value = 0
+
     instance_module.show_duplicate_instance_message()
-    kernel32.MessageBoxW.assert_called_once_with(
-        None, "Wordy 已在运行，请勿重复启动。", "Wordy", 0x00010040,
-    )
+
+    config = kernel32.TaskDialogIndirect.call_args.args[0]._obj
+    assert (config.title, config.text, config.icon) == ("Wordy", "Wordy 已在运行，请勿重复启动。", 123)
+    assert config.flags & 0x0002  # TDF_USE_HICON_MAIN
+    _, path, kind, *_ = kernel32.LoadImageW.call_args.args
+    assert path.endswith("wordy.ico") and kind == 1
+    kernel32.DestroyIcon.assert_called_once_with(123)
+    kernel32.MessageBoxW.assert_not_called()
     kernel32.CreateMutexW.assert_not_called()
+
+
+def test_startup_notice_falls_back_when_native_dialog_fails(kernel32):
+    kernel32.LoadImageW.return_value = 123
+    kernel32.TaskDialogIndirect.return_value = -1
+
+    instance_module.show_native_message("启动失败")
+
+    assert kernel32.TaskDialogIndirect.restype is wintypes.LONG
+    kernel32.DestroyIcon.assert_called_once_with(123)
+    kernel32.MessageBoxW.assert_called_once_with(None, "启动失败", "Wordy", 0x00010000)
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows named mutex")

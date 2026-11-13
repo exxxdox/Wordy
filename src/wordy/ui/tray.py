@@ -189,7 +189,7 @@ class TrayApp:
         self.quit_action = quit_action
 
         tray_icon = QSystemTrayIcon(_create_tts_tray_icon())
-        tray_icon.setToolTip("Wav Trans")
+        tray_icon.setToolTip("Wordy")
         tray_icon.setContextMenu(menu)
         tray_icon.show()
         self.tray_icon = tray_icon
@@ -223,9 +223,9 @@ class TrayApp:
         if icon is None:
             return
         icon.setIcon(_create_tts_tray_icon(recording=active))
-        icon.setToolTip("Wav Trans · 后台录制中" if active else "Wav Trans")
+        icon.setToolTip("Wordy · 后台录制中" if active else "Wordy")
 
-    def notify(self, message: str, title: str = "Wav Trans") -> None:
+    def notify(self, message: str, title: str = "Wordy") -> None:
         """托盘气泡提示；托盘不可用或已销毁时静默跳过。"""
         icon = self.tray_icon
         if icon is None:

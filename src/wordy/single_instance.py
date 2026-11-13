@@ -3,17 +3,82 @@
 import ctypes
 from ctypes import wintypes
 
+from wordy.paths import APP_ICON_PATH
+
 _MUTEX_NAME = r"Local\Wordy.SingleInstance"
 _instance_handle: int | None = None
 
 
+class _TaskDialogConfig(ctypes.Structure):
+    # TASKDIALOGCONFIG 在 Win32 头文件中按 1 字节对齐。
+    _pack_ = 1
+    _fields_ = [
+        ("size", wintypes.UINT),
+        ("parent", wintypes.HWND),
+        ("instance", wintypes.HINSTANCE),
+        ("flags", wintypes.UINT),
+        ("common_buttons", wintypes.UINT),
+        ("title", wintypes.LPCWSTR),
+        ("icon", wintypes.HICON),
+        ("main_instruction", wintypes.LPCWSTR),
+        ("text", wintypes.LPCWSTR),
+        ("button_count", wintypes.UINT),
+        ("buttons", ctypes.c_void_p),
+        ("default_button", ctypes.c_int),
+        ("radio_button_count", wintypes.UINT),
+        ("radio_buttons", ctypes.c_void_p),
+        ("default_radio_button", ctypes.c_int),
+        ("verification_text", wintypes.LPCWSTR),
+        ("expanded_text", wintypes.LPCWSTR),
+        ("expanded_label", wintypes.LPCWSTR),
+        ("collapsed_label", wintypes.LPCWSTR),
+        ("footer_icon", wintypes.HICON),
+        ("footer_text", wintypes.LPCWSTR),
+        ("callback", ctypes.c_void_p),
+        ("callback_data", wintypes.LPARAM),
+        ("width", wintypes.UINT),
+    ]
+
+
 def show_native_message(text: str, title: str = "Wordy") -> None:
-    """启动阶段的可见反馈：此时还没有 QApplication，只能用原生弹窗。"""
+    """在 QApplication 初始化前显示带应用图标的原生弹窗。"""
     user32 = ctypes.WinDLL("user32", use_last_error=True)
+    try:
+        task_dialog = ctypes.WinDLL("comctl32").TaskDialogIndirect
+    except (AttributeError, OSError):
+        task_dialog = None
+
+    if task_dialog is not None:
+        task_dialog.argtypes = [ctypes.POINTER(_TaskDialogConfig), ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+        # 读取原始 HRESULT，让失败时仍能走下方的原生提示。
+        task_dialog.restype = wintypes.LONG
+        user32.LoadImageW.argtypes = [
+            wintypes.HINSTANCE, wintypes.LPCWSTR, wintypes.UINT, ctypes.c_int, ctypes.c_int, wintypes.UINT,
+        ]
+        user32.LoadImageW.restype = wintypes.HICON
+        user32.DestroyIcon.argtypes = [wintypes.HICON]
+        user32.DestroyIcon.restype = wintypes.BOOL
+        # IMAGE_ICON | LR_LOADFROMFILE，源码和单文件包都能直接从 ICO 取图。
+        icon = user32.LoadImageW(None, str(APP_ICON_PATH), 1, 32, 32, 0x0010)
+        if icon:
+            try:
+                config = _TaskDialogConfig(
+                    size=ctypes.sizeof(_TaskDialogConfig),
+                    flags=0x0002 | 0x0008,  # TDF_USE_HICON_MAIN | TDF_ALLOW_DIALOG_CANCELLATION
+                    common_buttons=0x0001,  # TDCBF_OK_BUTTON
+                    title=title,
+                    icon=icon,
+                    text=text,
+                )
+                if task_dialog(ctypes.byref(config), None, None, None) >= 0:
+                    return
+            finally:
+                user32.DestroyIcon(icon)
+
+    # 图标缺失或任务对话框不可用时，仍要把启动失败原因显示出来。
     user32.MessageBoxW.argtypes = [wintypes.HWND, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.UINT]
     user32.MessageBoxW.restype = ctypes.c_int
-    # MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND，确保提示在前台可见。
-    user32.MessageBoxW(None, text, title, 0x00010040)
+    user32.MessageBoxW(None, text, title, 0x00010000)  # MB_OK | MB_SETFOREGROUND
 
 
 def show_duplicate_instance_message() -> None:

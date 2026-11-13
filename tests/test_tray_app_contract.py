@@ -38,12 +38,15 @@ def test_notification_uses_wordy_icon(qapp, monkeypatch: pytest.MonkeyPatch) -> 
     tray = TrayApp(overlay)
     tray.tray_icon = QtWidgets.QSystemTrayIcon()
     tray.set_recording_state(True)
+    assert tray.tray_icon.toolTip() == "Wordy · 后台录制中"
 
     tray.notify("Recording started")
+    tray.set_recording_state(False)
+    assert tray.tray_icon.toolTip() == "Wordy"
 
     show_message.assert_called_once()
     title, message, icon, timeout = show_message.call_args.args
-    assert (title, message, timeout) == ("Wav Trans", "Recording started", 4000)
+    assert (title, message, timeout) == ("Wordy", "Recording started", 4000)
     assert isinstance(icon, QtGui.QIcon)
     assert icon.pixmap(64).toImage() == app_icon().pixmap(64).toImage()
 
