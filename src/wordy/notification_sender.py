@@ -11,6 +11,7 @@ from xml.etree import ElementTree
 from wordy.paths import APP_ICON_PATH, config_directory
 
 APP_ID = "Wordy.Desktop"
+_DISPLAY_NAME = "Wordy"
 _registration_lock = Lock()
 
 _SHOW_TOAST = """
@@ -35,7 +36,7 @@ def register_notification_sender() -> str:
             temporary.write_bytes(icon)
             temporary.replace(icon_path)
         with winreg.CreateKey(winreg.HKEY_CURRENT_USER, rf"Software\Classes\AppUserModelId\{APP_ID}") as key:
-            winreg.SetValueEx(key, "DisplayName", 0, winreg.REG_SZ, "Wordy")
+            winreg.SetValueEx(key, "DisplayName", 0, winreg.REG_SZ, _DISPLAY_NAME)
             winreg.SetValueEx(key, "IconUri", 0, winreg.REG_SZ, str(icon_path))
     return APP_ID
 
@@ -45,8 +46,10 @@ def show_notification(title: str, message: str) -> None:
     toast = ElementTree.Element("toast")
     visual = ElementTree.SubElement(toast, "visual")
     binding = ElementTree.SubElement(visual, "binding", template="ToastGeneric")
-    for text in (title, message):
-        ElementTree.SubElement(binding, "text").text = text
+    # Windows 已单独显示发送者名称，通知内容只保留有信息的标题。
+    if title and title != _DISPLAY_NAME:
+        ElementTree.SubElement(binding, "text").text = title
+    ElementTree.SubElement(binding, "text").text = message
     ElementTree.SubElement(toast, "audio", silent="true")
     # 消息只通过 stdin 传递，避免把标题或内容当作 PowerShell 代码。
     payload = json.dumps({"app_id": app_id, "xml": ElementTree.tostring(toast, encoding="unicode")})

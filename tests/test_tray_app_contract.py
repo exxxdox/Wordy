@@ -49,7 +49,13 @@ def test_notification_sender_registers_a_durable_wordy_icon(tmp_path, monkeypatc
     assert icon_path.read_bytes() == APP_ICON_PATH.read_bytes()
 
 
-def test_native_notification_uses_explicit_sender_and_escapes_text(monkeypatch) -> None:
+@pytest.mark.parametrize("title, expected_text", [
+    ("Wordy", ["<>& 中文"]),
+    ("后台录制", ["后台录制", "<>& 中文"]),
+])
+def test_native_notification_uses_explicit_sender_and_escapes_text(
+    monkeypatch, title: str, expected_text: list[str],
+) -> None:
     import json
     from xml.etree import ElementTree
 
@@ -58,13 +64,11 @@ def test_native_notification_uses_explicit_sender_and_escapes_text(monkeypatch) 
     monkeypatch.setattr(notification_sender, "register_notification_sender", lambda: "Wordy.Desktop")
     run = MagicMock()
     monkeypatch.setattr(notification_sender.subprocess, "run", run)
-    notification_sender.show_notification("Wordy", "<>& 中文")
+    notification_sender.show_notification(title, "<>& 中文")
 
     payload = json.loads(run.call_args.kwargs["input"])
     assert payload["app_id"] == "Wordy.Desktop"
-    assert [node.text for node in ElementTree.fromstring(payload["xml"]).iter("text")] == [
-        "Wordy", "<>& 中文",
-    ]
+    assert [node.text for node in ElementTree.fromstring(payload["xml"]).iter("text")] == expected_text
     assert run.call_args.kwargs["timeout"] > 0
 
 
