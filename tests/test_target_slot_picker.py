@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import patch
 
 from wordy.config import AppSettings
 from wordy.ui.target_slot_picker import TargetSlotPicker
@@ -44,6 +45,45 @@ def test_audio_without_label_still_shows_as_occupied(qapp, tmp_path):
     picker = TargetSlotPicker(settings)
 
     assert picker.picker.buttons[3].text() == "音频"
+
+
+def test_default_label_is_editable_and_trimmed(qapp, tmp_path):
+    settings = _settings(tmp_path)
+    picker = TargetSlotPicker(settings, default_label="录音 120000")
+
+    assert picker.label() == "录音 120000"
+    picker.label_input.setText("  开场  ")
+    assert picker.label() == "开场"
+    picker.label_input.setText("   ")
+    assert picker.label() == ""
+
+
+def test_add_wheel_selects_new_wheel(qapp, tmp_path):
+    settings = _settings(tmp_path)
+
+    def add(hotkey: str) -> None:
+        settings.add_wheel(hotkey)
+
+    picker = TargetSlotPicker(settings, on_add_wheel=add)
+
+    assert picker.add_wheel_with_hotkey("f9") is True
+
+    assert settings.wheel_count == 2
+    assert picker.selected_target() == (1, 0)
+
+
+def test_add_wheel_failure_keeps_selection(qapp, tmp_path):
+    settings = _settings(tmp_path)
+
+    def fail(_hotkey: str) -> None:
+        raise ValueError("轮盘快捷键不能与输入框快捷键相同")
+
+    picker = TargetSlotPicker(settings, on_add_wheel=fail)
+    with patch("wordy.ui.target_slot_picker.QMessageBox.warning"):
+        assert picker.add_wheel_with_hotkey("f6") is False
+
+    assert settings.wheel_count == 1
+    assert picker.selected_target() == (0, 0)
 
 
 def test_wheel_switch_and_saved_index(qapp, tmp_path):

@@ -203,6 +203,13 @@ class WordyApp:
                 else:
                     settings.chat_wheel_panel.set_wheel_result(error)
 
+    def _add_chat_wheel(self, hotkey: str) -> None:
+        """后台录制保存弹窗里新增轮盘；注册快捷键由轮盘控制器负责。"""
+        controller = self._chat_wheel_controller
+        if controller is None:
+            raise RuntimeError("聊天轮盘尚未初始化")
+        controller.add_wheel(hotkey)
+
     def _on_rolling_hotkey_change(self, hotkey: str) -> bool:
         controller = self._rolling_controller
         if controller is None:
@@ -448,6 +455,7 @@ class WordyApp:
                 stop_preview=self.tts_manager.stop_audio_file,
                 on_state_changed=self._rolling_state_changed,
                 on_notify=self._rolling_notify,
+                on_add_wheel=self._add_chat_wheel,
             )
             self._rolling_controller = rolling_controller
             if not rolling_controller.start():

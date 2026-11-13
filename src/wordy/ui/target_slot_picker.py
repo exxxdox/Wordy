@@ -2,8 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QComboBox, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PySide6.QtGui import QKeySequence
+from PySide6.QtWidgets import (
+    QComboBox, QDialog, QDialogButtonBox, QHBoxLayout, QKeySequenceEdit, QLabel,
+    QLineEdit, QMessageBox, QPushButton, QVBoxLayout, QWidget,
+)
 
 from wordy.config import AppSettings, ChatWheelConfig
 from wordy.ui.settings_widgets import NoWheelComboBox
@@ -20,9 +26,17 @@ class TargetSlotPicker(QWidget):
     与设置页共用 ``WheelPicker``，槽位名称、空槽和选中效果不会两处分叉。
     """
 
-    def __init__(self, settings: AppSettings, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        settings: AppSettings,
+        parent: QWidget | None = None,
+        *,
+        on_add_wheel: Callable[[str], None] | None = None,
+        default_label: str = "",
+    ) -> None:
         super().__init__(parent)
         self._settings = settings
+        self._on_add_wheel = on_add_wheel
         self._selected_slot = 0
         self.target_index = 0
 
@@ -37,8 +51,22 @@ class TargetSlotPicker(QWidget):
         self.wheel_combo.setAccessibleName("选择保存到哪个轮盘")
         self.wheel_combo.setFixedWidth(220)
         wheel_row.addWidget(self.wheel_combo)
+        self.add_wheel_button = QPushButton("新增轮盘")
+        self.add_wheel_button.clicked.connect(self._add_wheel)
+        # 没有轮盘控制器时无法注册快捷键，隐藏入口而不是创建喊不醒的轮盘。
+        self.add_wheel_button.setEnabled(on_add_wheel is not None)
+        wheel_row.addWidget(self.add_wheel_button)
         wheel_row.addStretch(1)
         layout.addLayout(wheel_row)
+
+        label_row = QHBoxLayout()
+        label_row.setContentsMargins(0, 0, 0, 0)
+        label_row.addWidget(QLabel("名称"))
+        self.label_input = QLineEdit(default_label)
+        self.label_input.setPlaceholderText("保存后的槽位名称")
+        self.label_input.setAccessibleName("保存后的槽位名称")
+        label_row.addWidget(self.label_input, 1)
+        layout.addLayout(label_row)
 
         self.picker = WheelPicker(self._select_slot, size=_PICKER_SIZE)
         self.picker.wheel_style = settings.chat_wheel_style
@@ -65,12 +93,61 @@ class TargetSlotPicker(QWidget):
     def selected_target(self) -> tuple[int, int]:
         return self.wheel_combo.currentIndex(), self._selected_slot
 
+    def label(self) -> str:
+        """保存时使用的槽位名称；留空由调用方回退默认名称。"""
+        return self.label_input.text().strip()
+
+    def add_wheel_with_hotkey(self, hotkey: str) -> bool:
+        """注册新轮盘并选中它；弹窗与测试共用，失败返回 False。"""
+        if not callable(self._on_add_wheel):
+            return False
+        try:
+            self._on_add_wheel(hotkey)
+        except (ValueError, RuntimeError, OSError) as error:
+            QMessageBox.warning(self, "新增轮盘", str(error))
+            return False
+        self._sync_combo()
+        self.wheel_combo.setCurrentIndex(self._settings.wheel_count - 1)
+        self._refresh()
+        return True
+
     def reload(self) -> None:
         """轮盘/槽位配置变化后重建下拉与预览。"""
         self._sync_combo()
         self._refresh()
 
     # ── 内部 ──────────────────────────────────────────────────────────
+
+    def _add_wheel(self) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("新增轮盘")
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(QLabel("新轮盘快捷键"))
+        hotkey = QKeySequenceEdit()
+        hotkey.setMaximumSequenceLength(1)
+        hotkey.setAccessibleName("新轮盘快捷键")
+        layout.addWidget(hotkey)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("新增")
+        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("取消")
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        try:
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return
+            text = hotkey.keySequence().toString(
+                QKeySequence.SequenceFormat.PortableText).lower()
+            # Qt 使用缩写名称，Win32 解析器使用 keyboard 风格的完整名称。
+            text = text.replace("meta+", "windows+").replace("pgup", "page up").replace(
+                "pgdown", "page down")
+            if not text:
+                QMessageBox.warning(self, "新增轮盘", "请先输入新轮盘的快捷键。")
+                return
+            self.add_wheel_with_hotkey(text)
+        finally:
+            dialog.deleteLater()
 
     def _wheel_names(self) -> list[str]:
         return [self._settings.get_wheel(i)["name"] or f"轮盘 {i + 1}"
