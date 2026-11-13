@@ -691,11 +691,16 @@ def test_settings_compact_width_keeps_navigation_and_forms_visible(monkeypatch: 
         bar = tabs.tabBar()
         assert not bar.expanding()
         assert [tabs.tabText(i) for i in range(tabs.count())] == [
-            "本地设置", "音频设置", "TTS 设置", "聊天轮盘",
+            "本地设置", "音频设置", "TTS 设置", "聊天轮盘", "后台录制",
         ]
         local_page = tabs.widget(0)
         assert local_page is not None
         assert local_page.isAncestorOf(settings.log_level_combo)
+        # 后台录制参数集中在独立页，不再占用本地设置栏。
+        rolling_page = tabs.widget(4)
+        assert rolling_page is not None
+        assert rolling_page.isAncestorOf(settings.rolling_seconds_spin)
+        assert rolling_page.isAncestorOf(settings.rolling_record_button)
         # 默认宽屏下所有页面完整展示；服务商切换不得撑出纵向滚动。
         for provider in ("Cartesia", "Volcengine"):
             settings.tts_api_combo.setCurrentText(provider)

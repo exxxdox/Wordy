@@ -443,8 +443,6 @@ class SettingsWindow:
             local_layout, ("快捷键与播放", "界面与显示"))
         self._build_hotkey_section(input_column, s)
         self._add_inner_gap(input_column)
-        self._build_rolling_section(input_column, s)
-        self._add_inner_gap(input_column)
         self._build_volume_section(input_column, s)
         self._build_ui_font_section(display_column, s)
         self._add_inner_gap(display_column)
@@ -515,6 +513,11 @@ class SettingsWindow:
         self.chat_wheel_panel = ChatWheelSettings(s, self.on_field_changed)
         wheel_layout.addWidget(self.chat_wheel_panel)
         wheel_layout.addStretch(1)
+
+        # 后台录制独立成页：快捷键与缓冲时长不再挤占输入快捷键栏。
+        rolling_layout = self._create_tab_page(tab_widget, "后台录制")
+        self._build_rolling_section(rolling_layout, s)
+        rolling_layout.addStretch(1)
 
         footer = QWidget()
         footer.setObjectName("settingsFooter")
@@ -1307,6 +1310,7 @@ class SettingsWindow:
             "音频设置": ("声音与路由", "选择播放设备，控制侦听与返听。"),
             "TTS 设置": ("语音生成", "选择服务商，配置密钥与音色。"),
             "聊天轮盘": ("音频轮盘", "按住快捷键，移向音频，松开播放；回到中心或按 Esc 取消。"),
+            "后台录制": ("后台录制", "持续保留最近的系统声音，停止后用片段填入轮盘槽位。"),
         }
         heading, description = page_titles[title]
         heading_label = QLabel(heading)
