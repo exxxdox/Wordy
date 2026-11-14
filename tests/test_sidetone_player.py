@@ -405,6 +405,20 @@ class TestSidetoneAudioPlayer:
         main.play_wav.assert_called_once_with("test.wav", device_index=3, volume=1.0)
         sidetone.play_wav.assert_not_called()
 
+    def test_configured_monitor_is_used_for_wav_and_stream(self):
+        main, sidetone = self._make_players()
+        main.play_wav.return_value = True
+        main.open_stream.return_value = True
+        sidetone.open_stream.return_value = True
+        main.get_stream_config.return_value = sidetone.get_stream_config.return_value = {}
+        wrapper = SidetoneAudioPlayer(main, sidetone, monitor_index=lambda: 7)
+        wrapper.set_sidetone_enabled(True)
+        assert wrapper.play_wav("test.wav", device_index=3)
+        sidetone.play_wav.assert_called_once_with("test.wav", device_index=7, volume=1.0)
+        assert wrapper.open_stream(8, 2, 48000, device_index=3)
+        assert sidetone.open_stream.call_args.kwargs["device_index"] == 7
+        wrapper.close_stream()
+
     def test_play_wav_enabled_calls_both(self):
         main, sidetone = self._make_players()
         main.play_wav.return_value = True

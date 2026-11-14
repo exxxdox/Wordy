@@ -164,9 +164,19 @@ def test_resolve_output_device_index_does_not_change_configured_output(_patch_py
     player = AudioPlayer(output_device=configured)
 
     assert player.resolve_output_device_index(None) == 0
-    assert player.resolve_output_device_index(configured) == 1
+    local: OutputDeviceSelection = {"name": "Fake Default Device", "host_api_name": "Windows WASAPI"}
+    assert player.resolve_output_device_index(local) == 0
     assert _patch_pyaudio.terminate_calls == 2
     assert player.output_device == configured
+
+
+@pytest.mark.parametrize("use_system_default", [False, True])
+def test_preview_output_rejects_virtual_cable(_patch_pyaudio, use_system_default):
+    cable: OutputDeviceSelection = {"name": "VB-Cable Output", "host_api_name": "Windows WASAPI"}
+    if use_system_default:
+        _patch_pyaudio._default_device = _patch_pyaudio._devices[1]
+
+    assert AudioPlayer().resolve_output_device_index(None if use_system_default else cable) is None
 
 
 def test_audio_player_ctor_accepts_output_device():

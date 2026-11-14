@@ -49,6 +49,8 @@ def test_audio_file_preview_local_plays_on_local_device(manager, mock_player, mo
         yield path
     monkeypatch.setattr("wordy.tts_manager.decoded_audio_clip", decoded)
     manager._local_output_index = lambda: 7
+    hold_key = MagicMock(return_value="g")
+    monkeypatch.setattr(manager, "_begin_hold_key", hold_key)
 
     manager.play_audio_file(Path("clip.wav"), preview_local=True)
     call_args = manager.executor.submit.call_args
@@ -58,6 +60,7 @@ def test_audio_file_preview_local_plays_on_local_device(manager, mock_player, mo
     kwargs = mock_player.play_wav.call_args.kwargs
     assert kwargs["device_index"] == 7
     assert kwargs["preview_local"] is True
+    hold_key.assert_not_called()
     manager.shutdown()
 
 

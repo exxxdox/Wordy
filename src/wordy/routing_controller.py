@@ -170,7 +170,8 @@ class RoutingController:
                 self._saved_output_device = cast(OutputDeviceSelection, device)
             else:
                 self._saved_output_device = None
-            logger.debug("音频侦听运行中，已保存本地输出设置，当前输出保持 CABLE Input")
+            # 已打开的返听流要重新选择设备，虚拟麦克风的主输出保持原样。
+            self._notify_output_device_changed()
             return
 
         if isinstance(device, dict):

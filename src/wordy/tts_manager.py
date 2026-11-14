@@ -544,7 +544,9 @@ class TTSManager:
             # 握手（最长 10 秒）并让下次朗读重连，都会拖慢片段起播。
             engine.release_audio_output()
             self._audio_player.begin_playback(cancel)
-            hold_key = self._begin_hold_key()
+            # 裁剪试听只给自己听，不能打开游戏的语音键。
+            if not preview_local:
+                hold_key = self._begin_hold_key()
             with decoded_audio_clip(path, cancel) as wav_path:
                 # 按提交时的槽位音量播放，避免排队期间切槽或调音串到其他音频。
                 progress: dict[str, Any] = {"on_progress": on_progress} if on_progress is not None else {}

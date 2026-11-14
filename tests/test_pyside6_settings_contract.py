@@ -969,13 +969,30 @@ def _combo_item_texts(combo: Any) -> list[str]:
     return [combo.itemText(i) for i in range(combo.count())]
 
 
+def test_playback_device_excludes_virtual_cable(monkeypatch):
+    devices = [
+        _device_entry("Headphones", "Windows WASAPI"),
+        _device_entry("CABLE Input (VB-Audio Virtual Cable)", "Windows WASAPI"),
+    ]
+    _app, window = _new_settings_window_with_audio_output(
+        monkeypatch, audio_output_devices=devices, audio_output_device_identity=None,
+    )
+    try:
+        window.set_audio_output_devices([dict(device) for device in devices], None)
+        assert _combo_item_texts(window.audio_output_combo) == [
+            SYSTEM_DEFAULT_LABEL, "Headphones [Windows WASAPI]",
+        ]
+    finally:
+        window.close()
+
+
 def test_settings_window_renders_output_device_combo_with_system_default_first(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Output device combo must list 系统默认 first followed by Host-API display names."""
     devices = [
         _device_entry("Speakers (Realtek)", "MME"),
-        _device_entry("VB-Audio Virtual Cable", "Windows WASAPI"),
+        _device_entry("USB Headphones", "Windows WASAPI"),
     ]
     _app, window = _new_settings_window_with_audio_output(
         monkeypatch,
@@ -992,7 +1009,7 @@ def test_settings_window_renders_output_device_combo_with_system_default_first(
         )
         assert items[1:] == [
             "Speakers (Realtek) [MME]",
-            "VB-Audio Virtual Cable [Windows WASAPI]",
+            "USB Headphones [Windows WASAPI]",
         ], f"discovered devices must render display_name in order, got {items!r}"
         assert combo.currentText() == SYSTEM_DEFAULT_LABEL
     finally:
@@ -1005,7 +1022,7 @@ def test_settings_window_output_device_selection_persists_structured_identity(
     """Selecting a display row must update live settings with structured identity."""
     devices = [
         _device_entry("Speakers (Realtek)", "MME"),
-        _device_entry("VB-Audio Virtual Cable", "Windows WASAPI"),
+        _device_entry("USB Headphones", "Windows WASAPI"),
     ]
     _app, window = _new_settings_window_with_audio_output(
         monkeypatch,
@@ -1016,10 +1033,11 @@ def test_settings_window_output_device_selection_persists_structured_identity(
         combo = getattr(window, "audio_output_combo", None)
         assert combo is not None, "SettingsWindow must expose audio_output_combo"
 
-        combo.setCurrentText("VB-Audio Virtual Cable [Windows WASAPI]")
+        window._settings.audio_routing_enabled = True
+        combo.setCurrentText("USB Headphones [Windows WASAPI]")
         identity = window._settings.audio_output_device
         assert identity == {
-            "name": "VB-Audio Virtual Cable",
+            "name": "USB Headphones",
             "host_api_name": "Windows WASAPI",
         }, (
             "audio_output_device must carry both name and host_api_name, "

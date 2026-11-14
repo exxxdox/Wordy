@@ -178,17 +178,8 @@ def _is_device_invalid_error(error: Exception) -> bool:
     return "-9996" in str(error) or "Invalid device" in str(error)
 
 
-def _is_vb_cable_playback_device(p, device_index: int) -> bool:
-    """判断已解析的输出端点是否属于 VB-CABLE 播放侧。"""
-    try:
-        info = p.get_device_info_by_index(device_index)
-    except Exception as e:  # noqa: BLE001 - 诊断失败时保持原始声道配置
-        logger.warning("无法读取输出设备 %s 信息，跳过 VB-CABLE 声道适配: %s", device_index, e)
-        return False
-
-    name = info.get("name", "") if isinstance(info, Mapping) else ""
-    if not isinstance(name, str):
-        return False
+def is_vb_cable_device_name(name: str) -> bool:
+    """识别 VB-CABLE 的播放端点，包括旧版设备名称。"""
     normalized = name.casefold()
     return (
         "cable input" in normalized
@@ -196,6 +187,18 @@ def _is_vb_cable_playback_device(p, device_index: int) -> bool:
         or "vb-cable" in normalized
         or "vb-audio virtual cable" in normalized
     )
+
+
+
+def _is_vb_cable_playback_device(p, device_index: int) -> bool:
+    """判断已解析的输出端点是否属于 VB-CABLE 播放侧。"""
+    try:
+        info = p.get_device_info_by_index(device_index)
+    except Exception as e:  # noqa: BLE001 - 诊断失败时保持原始声道配置
+        logger.warning("无法读取输出设备 %s 信息，跳过 VB-CABLE 声道适配: %s", device_index, e)
+        return False
+    name = info.get("name", "") if isinstance(info, Mapping) else ""
+    return isinstance(name, str) and is_vb_cable_device_name(name)
 
 
 def _duplicate_mono_to_stereo(data: bytes, sample_width: int) -> bytes:
@@ -297,13 +300,16 @@ class AudioPlayer:
         所以先独立解析目标索引，再以显式索引播放。"""
         p = _new_pyaudio()
         try:
-            if output_device is None:
-                return self._default_output_device_index(p)
-            name = output_device.get("name")
-            if not name:
-                return self._default_output_device_index(p)
-            return self._lookup_named_output_device(
-                p, name, host_api_name=output_device.get("host_api_name"))
+            name = output_device.get("name") if output_device else None
+            if output_device and name:
+                index = self._lookup_named_output_device(
+                    p, name, host_api_name=output_device.get("host_api_name"))
+            else:
+                index = self._default_output_device_index(p)
+            # 选中的本地设备或系统默认设备本身也可能指向虚拟麦克风。
+            if index is None or _is_vb_cable_playback_device(p, index):
+                return None
+            return index
         except Exception as error:  # noqa: BLE001
             logger.warning("无法解析本地输出设备: %s", error)
             return None

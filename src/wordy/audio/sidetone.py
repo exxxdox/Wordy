@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-"""返听（Sidetone）包装器：将 TTS 音频同时输出到主设备和系统默认设备。
+"""返听（Sidetone）包装器：将 TTS 音频同时输出到主设备和本地播放设备。
 
 返听流写入通过小容量队列异步执行；队列吸收设备与线程调度抖动，
 生产侧永不阻塞主链路，慢设备持续落后时才停用本次返听。
@@ -35,7 +35,7 @@ _SIDETONE_TAIL_TIMEOUT_SECONDS = 2.0
 
 
 class SidetoneAudioPlayer:
-    """TTSAudioPlayer 协议包装器，同时输出到主设备和系统默认返听设备。
+    """TTSAudioPlayer 协议包装器，同时输出到主设备和本地播放设备。
 
     通过 ``set_sidetone_enabled()`` 控制返听开关。
     开关关闭时所有方法近乎零开销直通主播放器（仅一个 bool 判断）。
@@ -45,9 +45,11 @@ class SidetoneAudioPlayer:
     队列缓存若干块以吸收设备抖动，持续落后时才停用本次返听。
     """
 
-    def __init__(self, main_player: AudioPlayer, sidetone_player: AudioPlayer) -> None:
+    def __init__(self, main_player: AudioPlayer, sidetone_player: AudioPlayer, *,
+                 monitor_index: Callable[[], int | None] | None = None) -> None:
         self._main = main_player
         self._sidetone = sidetone_player
+        self._monitor_index = monitor_index
         self._sidetone_enabled = False
         # 返听流是否已确认不可用（打开失败或写入异常后置位，避免重复报错）
         self._sidetone_stream_dead = False
@@ -90,7 +92,7 @@ class SidetoneAudioPlayer:
         # 主输出已经使用系统默认设备时，再返听会叠加同一段声音，造成爆音和回声。
         if not self._sidetone_enabled:
             return False
-        if device_index is not None:
+        if self._monitor_index is not None or device_index is not None:
             return True
         if self._main.output_device_name is None:
             return False
@@ -156,10 +158,13 @@ class SidetoneAudioPlayer:
     def _play_sidetone_safe(self, wav_path: str | BytesIO, cancel_event: Event | None, volume: float) -> None:
         """在返听线程中播放；失败只记 warning，不影响主链路。"""
         try:
+            index = self._monitor_index() if self._monitor_index is not None else None
+            if self._monitor_index is not None and index is None:
+                return
             if cancel_event is None:
-                self._sidetone.play_wav(wav_path, device_index=None, volume=volume)
+                self._sidetone.play_wav(wav_path, device_index=index, volume=volume)
             else:
-                self._sidetone.play_wav(wav_path, device_index=None, cancel_event=cancel_event, volume=volume)
+                self._sidetone.play_wav(wav_path, device_index=index, cancel_event=cancel_event, volume=volume)
         except Exception:
             logger.warning("返听 WAV 播放失败", exc_info=True)
 
@@ -211,10 +216,14 @@ class SidetoneAudioPlayer:
         try:
             # 主设备可能回退了格式或采样率，返听必须按实际 PCM 配置打开。
             main_config = self._main.get_stream_config()
+            index = self._monitor_index() if self._monitor_index is not None else None
+            if self._monitor_index is not None and index is None:
+                self._sidetone_stream_dead = True
+                return True
             sidetone_ok = self._sidetone.open_stream(
                 main_config.get("format") or audio_format, channels,
                 main_config.get("rate") or rate,
-                device_index=None,
+                device_index=index,
                 frames_per_buffer=frames_per_buffer,
             )
             if not sidetone_ok:

@@ -13,7 +13,7 @@ import os
 import sys
 from typing import cast
 
-from wordy.audio.player import AudioPlayer, OutputDeviceSelection
+from wordy.audio.player import AudioPlayer, OutputDeviceSelection, is_vb_cable_device_name
 from wordy.audio.recorder import cancel_active_recording, cancel_active_rolling_recording
 from wordy.audio.sidetone import SidetoneAudioPlayer
 from wordy.config import AppSettings, USER_CONFIG_FILE
@@ -77,7 +77,9 @@ class WordyApp:
         # ── 返听 ───────────────────────────────────────────────────────
         self._sidetone_player = AudioPlayer()
         self._sidetone_wrapper = SidetoneAudioPlayer(
-            self.player, self._sidetone_player
+            self.player, self._sidetone_player,
+            # 没走虚拟麦克风时，主播放已经在本地设备上。
+            monitor_index=self._routed_monitor_index,
         )
         self._sidetone_wrapper.set_sidetone_enabled(
             self._settings.sidetone_enabled
@@ -99,10 +101,7 @@ class WordyApp:
             volcengine_access_key=self.volcengine_access_key,
             tts_api_provider=self.tts_api_provider,
             tts_backend=self.tts_backend,
-            # 试听必须绕过 CABLE 路由，只走本地输出；routing 在构造后才赋值，
-            # lambda 只在真正试听时才求值。
-            local_output_index=lambda: self.player.resolve_output_device_index(
-                self.routing.local_output_device),
+            local_output_index=self._local_playback_index,
         )
 
         # ── 路由控制器 ─────────────────────────────────────────────────
@@ -296,11 +295,22 @@ class WordyApp:
 
     # ── 音频播放器 ────────────────────────────────────────────────────────
 
+    def _local_playback_index(self) -> int | None:
+        return self.player.resolve_output_device_index(self._configured_playback_device())
+
+    def _routed_monitor_index(self) -> int | None:
+        name = self.player.output_device_name
+        return self._local_playback_index() if name and is_vb_cable_device_name(name) else None
+
+    def _configured_playback_device(self) -> OutputDeviceSelection | None:
+        device = self._settings.audio_output_device
+        if device is not None and not is_vb_cable_device_name(device["name"]):
+            return cast(OutputDeviceSelection, device)
+        # 旧版可以把 CABLE Input 保存为本地设备，升级后使用系统默认播放设备。
+        return None
+
     def _create_audio_player(self) -> AudioPlayer:
-        s = self._settings
-        return AudioPlayer(
-            output_device=cast(OutputDeviceSelection, s.audio_output_device) if s.audio_output_device is not None else None,
-        )
+        return AudioPlayer(output_device=self._configured_playback_device())
 
     # ── UI 回调 ───────────────────────────────────────────────────────────
 

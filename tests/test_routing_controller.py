@@ -259,12 +259,15 @@ class TestRoutingControllerOutputDevice:
             router.get_output_device.return_value = {"name": "CABLE Input", "host_api_name": "Windows WASAPI"}
             router.get_stats.return_value.listen_configured = False
 
-            ctrl = RoutingController(mock_settings, mock_player)
+            callback = MagicMock()
+            ctrl = RoutingController(mock_settings, mock_player, on_output_device_changed=callback)
+            callback.reset_mock()
             mock_player.set_output_device.reset_mock()
 
             new_device = {"name": "New Speakers", "host_api_name": "MME"}
             ctrl.on_output_device_change(new_device)
             mock_player.set_output_device.assert_not_called()
+            callback.assert_called_once()
 
     def test_change_when_not_routing_applies_directly(self, mock_player, mock_settings):
         """路由未运行时直接应用设备到 player。"""

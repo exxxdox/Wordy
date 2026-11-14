@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 from wordy.config import (
     AppSettings, MAX_ROLLING_BUFFER_SECONDS, MIN_ROLLING_BUFFER_SECONDS,
 )
+from wordy.audio.player import is_vb_cable_device_name
 from wordy.backup import default_backup_directory, export_backup, import_backup
 from wordy.hotkey import display_hotkey
 from wordy.hotkey.native import virtual_key_for_key_name
@@ -139,9 +140,6 @@ class SettingsWindow:
         self._rolling_recorded_hotkey_name: str | None = None
 
         self._audio_output_label_to_identity: dict[str, AudioOutputIdentity] = {}
-        self._audio_output_devices_error: Exception | None = None
-        # 路由锁定时仅改变下拉框显示，保留用户关闭路由后使用的本地输出。
-        self._local_audio_output_label: str | None = None
         self._closed = False
         self._closing = False
         self.pending_label: QLabel = QLabel()
@@ -710,7 +708,7 @@ class SettingsWindow:
 
     def _build_audio_output_section(self, parent_layout: QVBoxLayout, state: SettingsState, s: AppSettings) -> None:
         section = self._create_section(parent_layout)
-        section.addWidget(self._section_title("音频输出"))
+        section.addWidget(self._section_title("播放设备"))
         self.audio_output_combo = NoWheelComboBox()
         self.audio_output_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContentsOnFirstShow)
         self.audio_output_combo.setMinimumContentsLength(24)
@@ -720,8 +718,6 @@ class SettingsWindow:
         self.audio_output_status_label.setObjectName("hintLabel")
         self._apply_audio_output_devices(state.audio_output_devices, s.audio_output_device,  # type: ignore[arg-type]
                                          s.audio_output_device_name, state.audio_output_devices_error)
-        self._local_audio_output_label = self.audio_output_combo.currentText()
-        self._sync_audio_output_control(s)
         section.addWidget(self.audio_output_status_label)
 
     def set_audio_output_devices(self, devices: list[AudioOutputDevice] | list[str], error: Exception | None) -> None:
@@ -731,8 +727,6 @@ class SettingsWindow:
             devices, dict(s.audio_output_device) if s.audio_output_device else None,
             s.audio_output_device_name, error,
         )
-        self._local_audio_output_label = self.audio_output_combo.currentText()
-        self._sync_audio_output_control(s)
 
     def _build_volume_section(self, parent_layout: QVBoxLayout, s: AppSettings) -> None:
         section = self._create_section(parent_layout)
@@ -810,6 +804,7 @@ class SettingsWindow:
 
         # 启用开关
         self.audio_route_enabled_check = CheckmarkCheckBox("启用音频侦听")
+        self.audio_route_enabled_check.setEnabled(state.vb_cable_installed)
         self.audio_route_enabled_check.setChecked(s.audio_routing_enabled)
         self.audio_route_enabled_check.stateChanged.connect(self._on_audio_route_enabled_changed)
         section.addWidget(self.audio_route_enabled_check)
@@ -830,12 +825,12 @@ class SettingsWindow:
     def _build_sidetone_section(self, parent_layout: QVBoxLayout, s: AppSettings) -> None:
         section = self._create_section(parent_layout)
         section.addWidget(self._section_title("返听"))
-        self.sidetone_enabled_check = CheckmarkCheckBox("启用返听（TTS 同步输出到默认设备）")
+        self.sidetone_enabled_check = CheckmarkCheckBox("启用返听")
         self.sidetone_enabled_check.setChecked(s.sidetone_enabled)
         self.sidetone_enabled_check.stateChanged.connect(self._on_sidetone_enabled_changed)
         section.addWidget(self.sidetone_enabled_check)
         section.addWidget(self._hint_label(
-            "TTS 播放时同步在扬声器/耳机中播放，方便音频侦听启用后自己能听到声音。",
+            "启用音频侦听时，同时通过上方播放设备听到朗读和音频。",
             TEXT_MUTED,
         ))
 
@@ -846,77 +841,19 @@ class SettingsWindow:
     def _on_audio_route_enabled_changed(self, state: int) -> None:
         enabled = state == Qt.CheckState.Checked.value
         s = self._settings
-        local_output_label = self.audio_output_combo.currentText()
         # 运行态成功后再落盘；否则下次启动仍会显示一个未生效的开关。
         if self.on_field_changed("audio_routing_enabled", enabled) is False:
             was_blocked = self.audio_route_enabled_check.blockSignals(True)
             self.audio_route_enabled_check.setChecked(s.audio_routing_enabled)
             self.audio_route_enabled_check.blockSignals(was_blocked)
             return
-        if enabled and not s.audio_routing_enabled:
-            self._local_audio_output_label = local_output_label
         s.audio_routing_enabled = enabled  # auto-save
-        self._sync_audio_output_control(s)
         self._update_mic_listen_status(s, self._state)
 
     def _on_sidetone_enabled_changed(self, state: int) -> None:
         enabled = state == Qt.CheckState.Checked.value
         self._settings.sidetone_enabled = enabled  # auto-save
         self.on_field_changed("sidetone_enabled", enabled)
-
-    def _find_routing_output_label(self) -> str | None:
-        """查找路由固定使用的 Windows WASAPI CABLE Input 标签。"""
-        for label, identity in self._audio_output_label_to_identity.items():
-            name = identity.get("name")
-            host_api = identity.get("host_api_name")
-            if isinstance(name, str) and "CABLE Input" in name and host_api == "Windows WASAPI":
-                return label
-        return None
-
-    def _sync_audio_output_control(self, s: AppSettings) -> None:
-        """路由启用时固定显示 CABLE Input，关闭后恢复本地输出选择。"""
-        combo = self.audio_output_combo
-        combo.blockSignals(True)
-        if s.audio_routing_enabled:
-            routing_label = self._find_routing_output_label()
-            if routing_label is None:
-                routing_label = "CABLE Input [Windows WASAPI]（未检测到）"
-                if combo.findText(routing_label) < 0:
-                    combo.addItem(routing_label)
-            combo.setCurrentText(routing_label)
-            combo.setEnabled(False)
-            self._set_label(
-                self.audio_output_status_label,
-                "音频侦听已启用，输出固定为 VB-CABLE Input，不可更改。",
-                INPUT_TEXT_COLOR,
-            )
-        else:
-            combo.setEnabled(True)
-            local_label = self._local_audio_output_label or SYSTEM_DEFAULT_AUDIO_OUTPUT_LABEL
-            if combo.findText(local_label) >= 0:
-                combo.setCurrentText(local_label)
-            else:
-                combo.setCurrentText(SYSTEM_DEFAULT_AUDIO_OUTPUT_LABEL)
-            if self._audio_output_devices_error is not None:
-                self._set_label(
-                    self.audio_output_status_label,
-                    f"输出设备枚举失败：{self._audio_output_devices_error}",
-                    TEXT_WARNING,
-                )
-            elif self._audio_output_label_to_identity:
-                self._set_label(
-                    self.audio_output_status_label,
-                    f"已发现 {len(self._audio_output_label_to_identity)} 个输出设备",
-                    TEXT_MUTED,
-                )
-            else:
-                self._set_label(
-                    self.audio_output_status_label,
-                    "未发现输出设备，将使用系统默认",
-                    TEXT_MUTED,
-                )
-        combo.blockSignals(False)
-        # 同步显示不能触发设备切换；否则打开设置也会写配置并重建 TTS 音频流。
 
     MIC_NONE_LABEL = "无（不侦听麦克风）"
 
@@ -1165,7 +1102,6 @@ class SettingsWindow:
                                      selected_device_name: str | None,
                                      error: Exception | None) -> None:
         self._audio_output_label_to_identity = {}
-        self._audio_output_devices_error = error
         labels: list[str] = []
         identities: list[AudioOutputIdentity] = []
         if error is None:
@@ -1190,6 +1126,8 @@ class SettingsWindow:
                     label = device
                     identity = dict(normalize_identity(device))
                 else:
+                    continue
+                if is_vb_cable_device_name(str(identity["name"])):
                     continue
                 labels.append(label)
                 identities.append(identity)
@@ -1229,9 +1167,6 @@ class SettingsWindow:
 
     def _on_audio_output_selected(self, device_label: str) -> None:
         s = self._settings
-        if s.audio_routing_enabled:
-            return
-        self._local_audio_output_label = device_label
         if device_label == SYSTEM_DEFAULT_AUDIO_OUTPUT_LABEL:
             s.audio_output_device = None
             s.audio_output_device_name = None

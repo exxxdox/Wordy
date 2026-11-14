@@ -14,6 +14,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 + 所有设置页面的内容都要持久化保存
 + pyright和测试错误要清零，不管是否这次引入
 
+## 播放与返听
+
+「播放设备」保存本地输出选择，默认跟随系统。F10 裁剪试听与启用路由后的文件、流式返听共用该设备，拒绝向 VB-CABLE 返听。「麦克风输入」在检测到 VB-CABLE 后仅显示 CABLE Input，音频侦听开启时使用系统枚举的 WASAPI 端点。更改播放设备后重建音频流。
+
 ## 轮盘 UI 一致性
 
 设置中的轮盘 UI 与快捷键唤出的轮盘 UI 必须保持一致。调整轮盘布局、材质、槽位编号、名称呈现、空槽或选中状态时，须同步检查并更新两处，避免视觉规则分叉。
@@ -122,7 +126,7 @@ driver.py(VBCableDriverManager) → config.py(AppSettings) → main.py(生命周
 
 `RollingAudioRecorder`（`audio/recorder.py`）按全局快捷键持续采集系统声音，内存环形缓冲只保留最近 `rolling_buffer_seconds` 秒（默认 30，范围 5–300，设置页可改）；录制期间不落盘，第二次按快捷键停止时才把窗口压成 48k 双声道临时 WAV。采集循环与普通录音共用 `_open_loopback_stream`、`_normalize`、`_write_pcm_wav`，必须先查 `get_read_available()`，停止超时不得 close 仍在 read 的流；两种录音器共用 `_PYAUDIO_LIFECYCLE_LOCK`，但 `_ACTIVE` 只约束普通录音。
 
-`RollingBufferController` 运行在 GUI 线程：热键监听器经 `triggered` 排队信号切状态；停止后打开 `AudioTrimDialog`。目标选择复用设置页的轮盘预览：`ui/wheel_picker.py` 提供共享 `WheelPicker`（设置页与目标选择器共用盘体绘制），`TargetSlotPicker` 在弹窗内显示各槽原有名称、空槽/音频/文字状态与选中槽详情，点击扇区选槽、下拉切盘；默认选中 `rolling_buffer_target`（`[轮盘, 槽位]`，越界自动钳位）。弹窗试听走 `play_audio_file(preview_local=True)`：解析本地输出设备索引并以显式索引播放，跳过返听，避免音频被送进 CABLE Input 当成麦克风。保存前可改写槽位名称（留空回退「录音 HHMMSS」），也可在弹窗内输入快捷键新增轮盘：快捷键经 `ChatWheelController.add_wheel` 注册成功后自动选中新盘，失败弹窗提示且不改动配置。保存走 `save_buffer_clip`：导入托管副本 → 完整解码校验 → 一次 `update_wheel` 同时写 `slots` / `labels` / `volumes` / 清空同槽 `texts` → 只有确认成功才删临时文件，失败保留临时文件并回滚托管副本；被替换的旧文件仅在无任何轮盘引用时删除。取消弹窗即丢弃，不自动恢复滚动录制。
+`RollingBufferController` 运行在 GUI 线程：热键监听器经 `triggered` 排队信号切状态；停止后打开 `AudioTrimDialog`。目标选择复用设置页的轮盘预览：`ui/wheel_picker.py` 提供共享 `WheelPicker`（设置页与目标选择器共用盘体绘制），`TargetSlotPicker` 在弹窗内显示各槽原有名称、空槽/音频/文字状态与选中槽详情，点击扇区选槽、下拉切盘；默认选中 `rolling_buffer_target`（`[轮盘, 槽位]`，越界自动钳位）。弹窗试听只走本地返听设备，拒绝 VB-CABLE 且不触发自动按住语音键。播放走 `play_audio_file(preview_local=True)`：解析本地输出设备索引并以显式索引播放，跳过返听，避免音频被送进 CABLE Input 当成麦克风。保存前可改写槽位名称（留空回退「录音 HHMMSS」），也可在弹窗内输入快捷键新增轮盘：快捷键经 `ChatWheelController.add_wheel` 注册成功后自动选中新盘，失败弹窗提示且不改动配置。保存走 `save_buffer_clip`：导入托管副本 → 完整解码校验 → 一次 `update_wheel` 同时写 `slots` / `labels` / `volumes` / 清空同槽 `texts` → 只有确认成功才删临时文件，失败保留临时文件并回滚托管副本；被替换的旧文件仅在无任何轮盘引用时删除。取消弹窗即丢弃，不自动恢复滚动录制。
 
 F10 截取弹窗可设置片段音量（0%–200%，每次默认 100%）。切换目标保留已调音量，每次试听应用当时的值，确认保存后用当前值更新目标槽，覆盖已有音频时也使用这个值。
 
@@ -140,7 +144,7 @@ WASAPI 回环在系统静音时可能完全不发数据包，采集循环必须�
 
 录音结束直接整段导入槽位（名称「录音 HHMMSS」），不再强制先裁剪；「截取」按钮随时对当前槽位已保存的音频打开「截取录音」对话框，通过波形拖选区间或拖动左右手柄试听并保存片段，精确起止时间收在「精确调整」中，结果替换该槽，取消保持原样。`audio/trim.py` 按 PCM 帧创建独立 WAV，不修改源文件。波形峰值由后台线程分块读取，关闭窗口后取消并忽略迟到结果；试听完成按片段路径匹配回调，旧片段不能复位新试听。试听红色播放线按主输出音频块回调推进，排队时不计时；停止、改选区间或关闭后清除，并按片段路径过滤迟到进度。片段导入和槽位配置都成功后，才删除裁剪临时文件；失败保留副本。片段试听通过 TTS worker 与控制器排队信号完成，不能从播放线程直接更新 Qt 控件。
 
-「播放时自动按住某键」由 `AppSettings.hold_key_enabled` / `hold_key` 持久化：开启后 `TTSManager` 在每次实际播放前注入按键按下（`keyboard.press`），播放结束、失败或取消后在 `finally` 里松开（`keyboard.release`），用于游戏要求按住语音键（如 Dota 2 的 G）才收音的场景。用户操作不变——轮盘与输入框仍按原热键使用，不必自己按该键。注入点只在 `_generate_and_play` / `_play_audio_file`，由串行 worker 保证同一时刻只按住一个键、不残留按住状态；按下后等 `HOLD_KEY_SETTLE_SECONDS` 再开播，给游戏打开麦克风留出输入处理时间。输入框回车提交先收起窗口再提交，否则注入的键会被自己的输入框吃掉。设置页在「全局快捷键」区录制单键（`keyboard.read_key`），无法解析的按键回退 `g`。
+「播放时自动按住某键」由 `AppSettings.hold_key_enabled` / `hold_key` 持久化：开启后 `TTSManager` 在正式播放前注入按键按下（F10 裁剪试听只走本地返听，跳过语音键并拒绝 VB-CABLE）（`keyboard.press`），播放结束、失败或取消后在 `finally` 里松开（`keyboard.release`），用于游戏要求按住语音键（如 Dota 2 的 G）才收音的场景。用户操作不变——轮盘与输入框仍按原热键使用，不必自己按该键。注入点只在 `_generate_and_play` / `_play_audio_file`，由串行 worker 保证同一时刻只按住一个键、不残留按住状态；按下后等 `HOLD_KEY_SETTLE_SECONDS` 再开播，给游戏打开麦克风留出输入处理时间。输入框回车提交先收起窗口再提交，否则注入的键会被自己的输入框吃掉。设置页在「全局快捷键」区录制单键（`keyboard.read_key`），无法解析的按键回退 `g`。
 
 首个轮盘默认 F8，独立于输入框快捷键；按住唤醒，八向选择，松开播放，中心/Esc/右键取消；唤出与收起均不移动光标，方向以唤出点为锚点，屏幕边缘钳位只影响窗口。窗口不抢焦点。八槽文件名、名称与快捷键由 `AppSettings` 持久化。槽内容是**互斥**的：`chat_wheel_texts` 非空则该槽朗读这段文字（当前 TTS），否则才播放 `chat_wheel_slots` 里的音频；填文字会按「清空」语义删掉该槽音频，导入/录制音频会清掉该槽文字。三个数组（`chat_wheel_slots` / `chat_wheel_labels` / `chat_wheel_texts`）必须在同一次 `update()` 里写、一起回滚，否则落盘失败会留下错位状态。设置页把内容类型显式化为「音频 / 文字」二选一：有内容时类型由内容决定，空槽跟随用户本次选择的模式（切槽复位为音频）；切换类型会清空另一类内容，删音频前必须确认。音频模式只显示导入/录制/截取与音量，文字模式只显示朗读文字与试听/清空，两个入口不再同屏出现。轮盘的「可选中」判据就是标签非空，所以文字槽必须把文字（或名称）当标签传进 `open_wheel`——`ChatWheel` 没有别的传参通道。朗读**可打断**：`BackendTTSEngine.speak(text, cancel_event)` 协作式取消，播放线程在写入循环里自检（Volcengine 按 SSE 行与子块、Cartesia realtime 按事件并在 worker 线程内 `ctx.cancel()`；Cartesia bytes 的生成是整段阻塞 HTTP，取消只在生成前后与播放中生效）。只能协作取消，禁止从别的线程关闭音频流或引擎（PortAudio 生命周期竞争会原生崩溃）。取消句柄是**单次朗读**的（`TTSManager.stop_speech()` 置位并丢弃排队任务），轮盘新选择和输入框提交都会先停旧朗读；反向同样成立——`TTSManager.speak()` 提交前会 `stop_audio_file()`，文字槽因此能打断音频槽，音频槽开播也会先停朗读。`shutdown()` 两者都显式停止。设置页文字试听中按钮变成可点的「停止」，其余控件（切槽、录制、导入）仍锁到完成回调：`playback_finished` 不带槽号，提前放开新试听会被旧回调误复位。朗读期间仍拒绝开始录音（否则录音会把 TTS 录进去）。设置页的八个槽用数字编号（`音频 1`…`音频 8`）标识，不用方向名——方向概念只属于运行时轮盘的八向选择。试听按钮在播放期间变成「停止」，再点即停止试听；`TTSManager` 的取消句柄是**单次播放**的（`stop_audio_file()`），不能用全局的 `_audio_files_stopped`，否则一次停止会连累后续播放；`shutdown()` 因此必须显式调用 `stop_audio_file()`。播放结束（播完/被停止/失败）经 `ChatWheelController.playback_finished` 排队回 GUI 线程复位按钮，否则「停止」会一直挂着；替换或清空槽位、开始录音都会先停掉试听。音频存于配置目录下的 `audio_clips`（`$XDG_CONFIG_HOME/wordy/audio_clips`），Windows 优先硬链接，失败复制；硬链接共享内容。Qt 解码成临时 PCM WAV，经 `TTSManager` 当前 worker 串行播放并等待交接，复用输出路由与返听，不依赖 TTS 密钥或音色。文件替换/清空先保存配置，再删除未引用托管文件。槽位音频也能直接录制系统声音：`audio/recorder.py` 用 PyAudioWPatch 采默认输出端点的 WASAPI loopback（sounddevice 的 PortAudio 不支持 loopback），采集线程不碰任何 Qt 对象，流按端点 mix format 原样打开（采样率和声道数都不能自选，多声道在下游截前两路），产物归一化成 48000 Hz 双声道 PCM 再走同一条托管导入链路——播放回退链在设备拒绝源采样率时只换 `rate` 不重采样数据，44100 的录音会静默变调。录音临时文件只在内容进了托管目录**且**槽位落了盘之后才删：导入失败或槽位保存失败时必须留着，那是这份音频唯一的副本。录制上限 `MAX_RECORD_SECONDS`（60 秒），设置窗口关闭与 `app.quit()`（`main.py:_stop_background_threads`，Qt 退出不派发 Close）都会丢弃未完成的录音。
 

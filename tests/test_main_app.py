@@ -1057,8 +1057,8 @@ def test_app_constructs_audio_player_with_loaded_output_device_name(monkeypatch)
     s.voice_id = "fake-voice"
     s.voice_name = "Fake"
     s.volume = 1.0
-    s.audio_output_device = {"name": "VB-Audio Virtual Cable", "host_api_name": "WASAPI"}
-    s.audio_output_device_name = "VB-Audio Virtual Cable"
+    s.audio_output_device = {"name": "USB Headphones", "host_api_name": "WASAPI"}
+    s.audio_output_device_name = "USB Headphones"
     monkeypatch.setattr(AppSettings, "load", lambda **kw: s)
     audio_player_calls = _patch_audio_player_factory(monkeypatch)
 
@@ -1071,7 +1071,7 @@ def test_app_constructs_audio_player_with_loaded_output_device_name(monkeypatch)
 
     assert audio_player_calls, "AudioPlayer must be constructed exactly once at startup"
     init_kwargs = audio_player_calls[0]["kwargs"]
-    assert init_kwargs.get("output_device", {}).get("name") == "VB-Audio Virtual Cable", (
+    assert init_kwargs.get("output_device", {}).get("name") == "USB Headphones", (
         f"AudioPlayer must receive output_device with name from load helper, got {init_kwargs!r}"
     )
 
