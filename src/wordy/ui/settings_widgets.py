@@ -462,6 +462,7 @@ class CheckmarkCheckBox(QCheckBox):
     """用代码绘制勾选标记的复选框，保留 QCheckBox 行为。"""
 
     INDICATOR_SIZE: int = 14
+    INDICATOR_INSET: int = 2
     LABEL_GAP: int = 8
 
     def sizeHint(self) -> QSize:
@@ -469,8 +470,8 @@ class CheckmarkCheckBox(QCheckBox):
         font_height = self.fontMetrics().height()
         text_width = self.fontMetrics().horizontalAdvance(self.text())
         return QSize(
-            max(size.width(), self.INDICATOR_SIZE + self.LABEL_GAP + text_width),
-            max(size.height(), self.INDICATOR_SIZE, font_height),
+            max(size.width(), self.INDICATOR_INSET + self.INDICATOR_SIZE + self.LABEL_GAP + text_width),
+            max(size.height(), self.INDICATOR_SIZE + 2 * self.INDICATOR_INSET, font_height),
         )
 
     def paintEvent(self, event: QPaintEvent) -> None:
@@ -479,7 +480,8 @@ class CheckmarkCheckBox(QCheckBox):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
         indicator_y = (self.height() - self.INDICATOR_SIZE) // 2
-        indicator_rect = QRect(0, indicator_y, self.INDICATOR_SIZE, self.INDICATOR_SIZE)
+        # 为抗锯齿描边和焦点外圈留出空间，防止贴边裁切。
+        indicator_rect = QRect(self.INDICATOR_INSET, indicator_y, self.INDICATOR_SIZE, self.INDICATOR_SIZE)
         accent_color = QColor(INPUT_TEXT_COLOR)
         # 未勾选态是玻璃空槽：底色比窗口表面亮一档，描边用可见的浅灰。
         border_color = accent_color if self.isChecked() else QColor(BUTTON_GHOST_BORDER)
@@ -497,7 +499,7 @@ class CheckmarkCheckBox(QCheckBox):
             # 用外圈标出键盘焦点，保留勾选和按压时各自的底色。
             painter.setPen(QPen(QColor(ACCENT_HOVER), 1))
             painter.setBrush(Qt.BrushStyle.NoBrush)
-            focus_rect = indicator_rect.adjusted(0, -2, 2, 1)
+            focus_rect = indicator_rect.adjusted(-1, -1, 0, 0)
             painter.drawRoundedRect(focus_rect, 5, 5)
 
         painter.setPen(QPen(border_color, 1))
@@ -506,13 +508,13 @@ class CheckmarkCheckBox(QCheckBox):
 
         if self.isChecked():
             check_path = QPainterPath()
-            check_path.moveTo(QPointF(3.2, indicator_y + 7.3))
-            check_path.lineTo(QPointF(5.7, indicator_y + 9.8))
-            check_path.lineTo(QPointF(10.9, indicator_y + 4.1))
+            check_path.moveTo(QPointF(self.INDICATOR_INSET + 3.2, indicator_y + 7.3))
+            check_path.lineTo(QPointF(self.INDICATOR_INSET + 5.7, indicator_y + 9.8))
+            check_path.lineTo(QPointF(self.INDICATOR_INSET + 10.9, indicator_y + 4.1))
             painter.setPen(QPen(text_color, 2.2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawPath(check_path)
 
-        text_rect = self.rect().adjusted(self.INDICATOR_SIZE + self.LABEL_GAP, 0, 0, 0)
+        text_rect = self.rect().adjusted(self.INDICATOR_INSET + self.INDICATOR_SIZE + self.LABEL_GAP, 0, 0, 0)
         painter.setPen(QPen(text_color))
         painter.drawText(text_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, self.text())

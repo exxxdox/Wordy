@@ -76,6 +76,17 @@ def _new_settings_window(
     return qt_app, window
 
 
+@pytest.mark.parametrize("installed", [False, True])
+def test_microphone_input_displays_cable_in_disabled_field(monkeypatch, installed):
+    _app, window = _new_settings_window(monkeypatch, vb_cable_installed=installed)
+    try:
+        field = window.virtual_mic_field
+        assert not field.isEnabled()
+        assert field.text() == ("CABLE Input" if installed else "未检测到 VB-CABLE")
+    finally:
+        window.close()
+
+
 def _device_entry(name: str, host_api_name: str, display_name: str | None = None) -> dict[str, str]:
     """Build a Host-API-aware audio output device descriptor for tests."""
     return {

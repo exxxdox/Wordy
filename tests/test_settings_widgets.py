@@ -1,5 +1,6 @@
 """设置窗口专用控件测试。"""
 
+import pytest
 from PySide6.QtCore import QPoint, Qt
 from PySide6.QtGui import QWheelEvent
 
@@ -78,3 +79,15 @@ class TestCheckmarkCheckBox:
         hint = cb.sizeHint()
         assert hint.width() > 0
         assert hint.height() > 0
+
+    @pytest.mark.parametrize("enabled", [False, True])
+    def test_left_indicator_border_has_painting_space(self, qapp, enabled):
+        cb = CheckmarkCheckBox("Test")
+        cb.setEnabled(enabled)
+        cb.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        cb.resize(cb.sizeHint())
+        image = cb.grab().toImage()
+        scale = image.devicePixelRatio()
+        y = image.height() // 2
+        assert image.pixelColor(0, y).alpha() == 0
+        assert image.pixelColor(round(2 * scale), y).alpha() > 0

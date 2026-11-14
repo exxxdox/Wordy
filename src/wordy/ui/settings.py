@@ -796,6 +796,12 @@ class SettingsWindow:
                 TEXT_WARNING,
             )
         section.addWidget(self.audio_route_status_label)
+        section.addWidget(self._section_title("麦克风输入"))
+        # 设备由路由自动选定，设置页仅显示驱动检测结果。
+        self.virtual_mic_field = QLineEdit("CABLE Input" if state.vb_cable_installed else "未检测到 VB-CABLE")
+        self.virtual_mic_field.setAccessibleName("麦克风输入")
+        self.virtual_mic_field.setEnabled(False)
+        section.addWidget(self.virtual_mic_field)
 
         if not state.vb_cable_installed:
             self.vb_cable_install_button = QPushButton("下载并安装 VB-CABLE")
