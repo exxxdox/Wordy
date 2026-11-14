@@ -80,11 +80,10 @@ def test_recording_volume_follows_clip_when_switching_target(qapp, tmp_path):
 
     assert picker.volume() == 1.0
     assert picker.volume_slider.minimum() == 0
-    assert picker.volume_slider.maximum() == 200
-    picker.volume_slider.setValue(135)
+    picker.volume_slider.setValue(300)
     picker.set_index(9)
-    assert picker.volume() == 1.35
-    assert picker.volume_value_label.text() == "135%"
+    assert picker.volume() == 3.0
+    assert picker.volume_value_label.text() == "300%"
     assert settings.get_wheel(0)["volumes"][0] == 0.3
     assert settings.get_wheel(1)["volumes"][1] == 1.0
 

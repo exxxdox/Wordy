@@ -79,15 +79,15 @@ def test_save_buffer_clip_writes_slot_and_clears_text(tmp_path):
     settings.update_wheel(0, texts=texts, labels=labels)
     source = _wav(tmp_path / "snapshot.wav")
 
-    filename = save_buffer_clip(settings, source, 0, 2, "录音 120000", volume=0.65)
+    filename = save_buffer_clip(settings, source, 0, 2, "录音 120000", volume=3.0)
 
     wheel = settings.get_wheel(0)
     assert wheel["slots"][2] == filename
     assert wheel["labels"][2] == "录音 120000"
     assert wheel["texts"][2] == ""
-    assert wheel["volumes"] == [1.0, 1.0, 0.65, 1.0, 1.0, 1.0, 1.0, 1.0]
+    assert wheel["volumes"] == [1.0, 1.0, 3.0, 1.0, 1.0, 1.0, 1.0, 1.0]
     saved_config = tomllib.loads((tmp_path / "wordy" / "config.toml").read_text(encoding="utf-8"))
-    assert saved_config["chat_wheel_volumes"][2] == 0.65
+    assert saved_config["chat_wheel_volumes"][2] == 3.0
     assert (tmp_path / "wordy" / "audio_clips" / filename).is_file()
     assert source.is_file(), "临时源文件由调用方决定何时删除"
 

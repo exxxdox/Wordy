@@ -25,6 +25,7 @@ from wordy.audio.clips import (
 )
 from wordy.audio.recorder import MAX_RECORD_SECONDS, RecordingError, SystemAudioRecorder
 from wordy.config import AppSettings, CHAT_WHEEL_STYLES, WHEEL_NAME_MAX_LENGTH
+from wordy.constants import MAX_AUDIO_FILE_VOLUME
 from wordy.ui.audio_trim_dialog import AudioTrimDialog
 from wordy.ui.settings_style import INLINE_GAP
 from wordy.ui.status_toast import show_status_toast
@@ -193,7 +194,7 @@ class ChatWheelSettings(QWidget):
         self.volume_label = QLabel("音量")
         editor_row.addWidget(self.volume_label)
         self.volume_slider = QSlider(Qt.Orientation.Horizontal)
-        self.volume_slider.setRange(0, 200)
+        self.volume_slider.setRange(0, round(MAX_AUDIO_FILE_VOLUME * 100))
         self.volume_slider.setMinimumWidth(120)
         self.volume_slider.setMaximumWidth(280)
         self.volume_slider.setToolTip("音量（下次播放生效）")

@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
 )
 
 from wordy.config import AppSettings, ChatWheelConfig
+from wordy.constants import MAX_AUDIO_FILE_VOLUME
 from wordy.ui.settings_widgets import NoWheelComboBox, NoWheelSlider
 from wordy.ui.wheel_picker import WheelPicker
 
@@ -73,11 +74,12 @@ class TargetSlotPicker(QWidget):
         volume_row.addWidget(QLabel("音量"))
         self.volume_slider = NoWheelSlider(Qt.Orientation.Horizontal)
         self.volume_slider.setAccessibleName("片段音量")
-        self.volume_slider.setRange(0, 200)
+        max_percent = round(MAX_AUDIO_FILE_VOLUME * 100)
+        self.volume_slider.setRange(0, max_percent)
         self.volume_slider.setValue(100)
         volume_row.addWidget(self.volume_slider, 1)
         self.volume_value_label = QLabel("100%")
-        self.volume_value_label.setMinimumWidth(self.volume_value_label.fontMetrics().horizontalAdvance("200%"))
+        self.volume_value_label.setMinimumWidth(self.volume_value_label.fontMetrics().horizontalAdvance(f"{max_percent}%"))
         self.volume_slider.valueChanged.connect(lambda value: self.volume_value_label.setText(f"{value}%"))
         volume_row.addWidget(self.volume_value_label)
         layout.addLayout(volume_row)

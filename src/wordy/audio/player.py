@@ -17,6 +17,8 @@ from typing import TypedDict, cast
 import numpy as np
 import pyaudio
 
+from wordy.constants import MAX_AUDIO_FILE_VOLUME
+
 # PortAudio 的初始化计数是进程级且非原子的。并发跑 Pa_Initialize/Pa_Terminate 会让
 # 一个线程把全局设备表释放掉，另一个线程还在读它：表现为 Pa_GetDeviceCount 返回
 # 垃圾值、报告「没有默认输出设备」，严重时原生访问违例直接段错误（没有 Python 栈）。
@@ -728,8 +730,8 @@ class AudioPlayer:
         on_progress: Callable[[float], None] | None = None,
     ) -> bool:
         """播放 WAV 文件到指定或匹配到的输出设备。"""
-        if not math.isfinite(volume) or not 0 <= volume <= 2:
-            raise ValueError("音频音量必须在 0 到 2 之间")
+        if not math.isfinite(volume) or not 0 <= volume <= MAX_AUDIO_FILE_VOLUME:
+            raise ValueError(f"音频音量必须在 0 到 {MAX_AUDIO_FILE_VOLUME:g} 之间")
         if self._playback_interrupted(cancel_event):
             return False
         try:

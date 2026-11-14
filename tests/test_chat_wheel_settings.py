@@ -154,8 +154,8 @@ def test_audio_volume_is_independent_for_each_slot_and_wheel(qapp):
     settings.update_wheel(1, slots=["shared.wav"] * 8)
     panel = ChatWheelSettings(settings, Mock())
     assert panel.volume_slider.value() == 100
-    panel.volume_slider.setValue(40)
-    assert settings.get_wheel(0)["volumes"][:2] == [0.4, 1.0]
+    panel.volume_slider.setValue(300)
+    assert settings.get_wheel(0)["volumes"][:2] == [3.0, 1.0]
     panel._select_slot(1)
     assert panel.volume_slider.value() == 100
     panel.volume_slider.setValue(160)
@@ -163,9 +163,9 @@ def test_audio_volume_is_independent_for_each_slot_and_wheel(qapp):
     assert panel.volume_slider.value() == 100
     panel.volume_slider.setValue(0)
     panel._select_wheel(0)
-    assert panel.volume_slider.value() == 40
+    assert panel.volume_slider.value() == 300
     assert settings.get_wheel(1)["volumes"][0] == 0
-    assert panel.volume_value_label.text() == "40%"
+    assert panel.volume_value_label.text() == "300%"
 
 
 def test_volume_save_failure_restores_slider_and_configuration(qapp, monkeypatch):

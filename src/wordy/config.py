@@ -34,6 +34,7 @@ from wordy.tts.constants import (
 )
 from wordy.constants import (
     LOG_LEVELS,
+    MAX_AUDIO_FILE_VOLUME,
     MAX_OVERLAY_OPACITY,
     MAX_VOLUME,
     MIN_OVERLAY_OPACITY,
@@ -137,7 +138,7 @@ def new_chat_wheel(hotkey: str = "f8", name: str = "") -> ChatWheelConfig:
 def _parse_wheel_volumes(raw: object) -> list[float]:
     # 手改配置中的非法增益回到原音量，缺少的槽位不能误变成静音。
     values = raw[:8] if isinstance(raw, list) else []
-    clean = [_parse_clamped(value, 0.0, 2.0) for value in values]
+    clean = [_parse_clamped(value, 0.0, MAX_AUDIO_FILE_VOLUME) for value in values]
     return [value if value is not None else 1.0 for value in clean] + [1.0] * (8 - len(clean))
 
 

@@ -192,13 +192,13 @@ def test_slot_volumes_round_trip_across_wheels_and_first_removal(tmp_path):
     settings = AppSettings.load(config_file=file)
     settings.add_wheel("f9")
     settings.update_wheel(0, volumes=[0.0, 0.5] + [1.0] * 6)
-    settings.update_wheel(1, volumes=[1.5] + [1.0] * 7)
+    settings.update_wheel(1, volumes=[3.0] + [1.0] * 7)
     settings._loaded = False
     settings = AppSettings.load(config_file=file)
     assert settings.get_wheel(0)["volumes"] == [0.0, 0.5] + [1.0] * 6
-    assert settings.get_wheel(1)["volumes"][0] == 1.5
+    assert settings.get_wheel(1)["volumes"][0] == 3.0
     settings.remove_wheel(0)
-    assert settings.chat_wheel_volumes == [1.5] + [1.0] * 7
+    assert settings.chat_wheel_volumes == [3.0] + [1.0] * 7
 
 
 def test_slot_volume_load_sanitizes_and_pads(tmp_path):
@@ -206,7 +206,7 @@ def test_slot_volume_load_sanitizes_and_pads(tmp_path):
     file.write_text('chat_wheel_volumes = [0, -1, 5, nan, inf, "bad", true]\n'
                     '[[additional_chat_wheels]]\nhotkey="f9"\nvolumes=[0.25, nan]\n', encoding="utf-8")
     settings = AppSettings.load(config_file=file)
-    assert settings.chat_wheel_volumes == [0.0, 0.0, 2.0, 1.0, 1.0, 1.0, 1.0, 1.0]
+    assert settings.chat_wheel_volumes == [0.0, 0.0, 3.0, 1.0, 1.0, 1.0, 1.0, 1.0]
     assert settings.get_wheel(1)["volumes"] == [0.25] + [1.0] * 7
 
 

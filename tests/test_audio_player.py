@@ -1017,12 +1017,12 @@ def test_play_wav_cancellation_closes_output_after_current_chunk(tmp_path, _patc
 
 
 @pytest.mark.parametrize("sample_width", [1, 2, 3, 4])
-@pytest.mark.parametrize("volume", [0.0, 0.5, 2.0])
+@pytest.mark.parametrize("volume", [0.0, 0.5, 2.0, 3.0])
 def test_play_wav_scales_pcm_and_saturates_without_changing_source(tmp_path, _patch_pyaudio, sample_width, volume):
     import wave
 
     peak = 2 ** (8 * sample_width - 1)
-    samples = [0, peak // 2, -peak // 2, peak - 1, -peak]
+    samples = [0, peak // 4, -peak // 4, peak // 2, -peak // 2, peak - 1, -peak]
     def encode(values):
         return b"".join((value + 128).to_bytes(1, "little") if sample_width == 1
                         else value.to_bytes(sample_width, "little", signed=True) for value in values)
@@ -1092,7 +1092,7 @@ def test_play_wav_rejects_rate_fallback_for_non_int16_source(monkeypatch, tmp_pa
     assert stream.write_calls == []
 
 
-@pytest.mark.parametrize("volume", [float("nan"), float("inf"), -0.1, 2.1])
+@pytest.mark.parametrize("volume", [float("nan"), float("inf"), -0.1, 3.1])
 def test_play_wav_rejects_invalid_volume(volume):
     with pytest.raises(ValueError):
         AudioPlayer().play_wav("unused.wav", volume=volume)
