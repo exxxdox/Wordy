@@ -52,7 +52,7 @@ def ensure_hotkey_available(settings: AppSettings, hotkey: str) -> None:
 
 
 def save_buffer_clip(settings: AppSettings, source: Path, wheel_index: int,
-                     slot_index: int, label: str) -> str:
+                     slot_index: int, label: str, *, volume: float) -> str:
     """把截取片段写入指定槽位，返回托管文件名。
 
     成功后才允许调用方删除 ``source``；任一步失败都回滚托管副本并抛出，
@@ -68,12 +68,14 @@ def save_buffer_clip(settings: AppSettings, source: Path, wheel_index: int,
         slots = list(wheel["slots"])
         labels = list(wheel["labels"])
         texts = list(wheel["texts"])
+        volumes = list(wheel["volumes"])
         replaced = slots[slot_index]
         slots[slot_index] = imported.name
         labels[slot_index] = label
-        # 槽内容互斥：写入音频必须清掉同槽文字，三组数组一次事务落盘。
+        # 清除同槽文字并同时保存音量，避免部分成功后槽位与音量错配。
         texts[slot_index] = ""
-        settings.update_wheel(wheel_index, slots=slots, labels=labels, texts=texts)
+        volumes[slot_index] = volume
+        settings.update_wheel(wheel_index, slots=slots, labels=labels, texts=texts, volumes=volumes)
     except Exception:
         try:
             remove_audio_clip(imported.name, config_file)
@@ -103,9 +105,9 @@ class RollingBufferController(QObject):
         settings: AppSettings,
         *,
         dialog_parent: Callable[[], object | None],
-        # (片段路径, 播放结束回调, 播放进度回调)
+        # (片段路径, 播放结束回调, 播放进度回调, 片段音量)
         play_preview: Callable[
-            [Path, Callable[[], None], Callable[[float], None]], None],
+            [Path, Callable[[], None], Callable[[float], None], float], None],
         stop_preview: Callable[[], None],
         on_state_changed: Callable[[bool], None] | None = None,
         on_notify: Callable[[str], None] | None = None,
@@ -287,7 +289,7 @@ class RollingBufferController(QObject):
                 except RuntimeError:
                     pass  # 窗口销毁后忽略迟到的音频进度。
 
-            self._play_preview(clip, finished, progress)
+            self._play_preview(clip, finished, progress, picker.volume())
 
         dialog.set_play_preview(play)
 
@@ -307,10 +309,10 @@ class RollingBufferController(QObject):
         label = picker.label() or default_label
         name = self.settings.get_wheel(wheel_index)["name"] or f"轮盘 {wheel_index + 1}"
         target_name = f"{name} / 音频 {slot_index + 1}"
-        self._save_async(clip, wheel_index, slot_index, label, target_name)
+        self._save_async(clip, wheel_index, slot_index, label, target_name, volume=picker.volume())
 
     def _save_async(self, clip: Path, wheel_index: int, slot_index: int,
-                    label: str, target_name: str) -> None:
+                    label: str, target_name: str, *, volume: float) -> None:
         settings = self.settings
         signal = self.save_finished
         # 在 GUI 线程先登记，完成信号处理前始终禁止导入替换配置。
@@ -318,7 +320,7 @@ class RollingBufferController(QObject):
 
         def run() -> None:
             try:
-                save_buffer_clip(settings, clip, wheel_index, slot_index, label)
+                save_buffer_clip(settings, clip, wheel_index, slot_index, label, volume=volume)
             except Exception as error:  # noqa: BLE001 - 临时片段保留在 %TEMP% 供重试
                 logger.exception("保存后台录制片段失败")
                 signal.emit(False, f"保存失败：{error}（临时文件保留在 {clip}）")

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import tomllib
 import wave
 from pathlib import Path
 
@@ -39,7 +40,7 @@ def test_backup_guard_stays_busy_until_pending_save_notification(qapp, tmp_path,
     controller._dialog_open = False
     monkeypatch.setattr(module.threading, "Thread", lambda **_kwargs: type(
         "PendingThread", (), {"start": lambda self: None})())
-    controller._save_async(tmp_path / "clip.wav", 0, 0, "test", "test")
+    controller._save_async(tmp_path / "clip.wav", 0, 0, "test", "test", volume=1.0)
     assert controller.is_busy
     controller._on_save_finished(False, "test failure")
     assert not controller.is_busy
@@ -78,12 +79,15 @@ def test_save_buffer_clip_writes_slot_and_clears_text(tmp_path):
     settings.update_wheel(0, texts=texts, labels=labels)
     source = _wav(tmp_path / "snapshot.wav")
 
-    filename = save_buffer_clip(settings, source, 0, 2, "录音 120000")
+    filename = save_buffer_clip(settings, source, 0, 2, "录音 120000", volume=0.65)
 
     wheel = settings.get_wheel(0)
     assert wheel["slots"][2] == filename
     assert wheel["labels"][2] == "录音 120000"
     assert wheel["texts"][2] == ""
+    assert wheel["volumes"] == [1.0, 1.0, 0.65, 1.0, 1.0, 1.0, 1.0, 1.0]
+    saved_config = tomllib.loads((tmp_path / "wordy" / "config.toml").read_text(encoding="utf-8"))
+    assert saved_config["chat_wheel_volumes"][2] == 0.65
     assert (tmp_path / "wordy" / "audio_clips" / filename).is_file()
     assert source.is_file(), "临时源文件由调用方决定何时删除"
 
@@ -103,8 +107,8 @@ def test_save_buffer_clip_replaces_old_audio_and_keeps_referenced_clips(tmp_path
     settings.update_wheel(1, slots=[shared.name] + [""] * 7)
     source = _wav(tmp_path / "snapshot.wav")
 
-    save_buffer_clip(settings, source, 0, 2, "录音 120000")
-    save_buffer_clip(settings, source, 0, 3, "录音 120001")
+    save_buffer_clip(settings, source, 0, 2, "录音 120000", volume=1.0)
+    save_buffer_clip(settings, source, 0, 3, "录音 120001", volume=1.0)
 
     assert not replaced.exists()
     assert shared.exists(), "其他轮盘仍在引用，不能删除"
@@ -113,17 +117,17 @@ def test_save_buffer_clip_replaces_old_audio_and_keeps_referenced_clips(tmp_path
 def test_save_buffer_clip_failure_keeps_old_slot_and_temp(tmp_path, monkeypatch):
     settings = _settings(tmp_path)
     source = _wav(tmp_path / "snapshot.wav")
-    old_slots = list(settings.get_wheel(0)["slots"])
+    old_wheel = settings.get_wheel(0)
 
     def fail(*_args: object, **_values: object) -> None:
         raise OSError("磁盘已满")
 
-    monkeypatch.setattr(settings, "update_wheel", fail)
+    monkeypatch.setattr(settings, "_save_to_disk_inner", fail)
 
     with pytest.raises(OSError):
-        save_buffer_clip(settings, source, 0, 0, "录音 120000")
+        save_buffer_clip(settings, source, 0, 0, "录音 120000", volume=0.4)
 
-    assert settings.get_wheel(0)["slots"] == old_slots
+    assert settings.get_wheel(0) == old_wheel
     assert source.is_file()
     clips = tmp_path / "wordy" / "audio_clips"
     assert not clips.exists() or not list(clips.iterdir()), "失败时不能留下托管副本"
@@ -148,7 +152,7 @@ def test_toggle_starts_then_stops_and_opens_picker(qapp, tmp_path, monkeypatch):
     controller = RollingBufferController(
         settings,
         dialog_parent=lambda: None,
-        play_preview=lambda _path, _done, _progress: None,
+        play_preview=lambda *_args: None,
         stop_preview=lambda: None,
         on_state_changed=states.append,
         on_notify=notices.append,
@@ -167,22 +171,24 @@ def test_toggle_starts_then_stops_and_opens_picker(qapp, tmp_path, monkeypatch):
     assert notices
 
 
-def test_open_dialog_saves_with_edited_label(qapp, tmp_path, monkeypatch):
-    """保存使用弹窗里改写的名称，并把新增轮盘回调传给目标选择器。"""
+def test_open_dialog_previews_and_saves_with_edited_volume(qapp, tmp_path, monkeypatch):
+    """试听和保存分别使用操作时的音量，并保留用户输入的名称。"""
     import wordy.rolling_buffer_controller as module
     from PySide6.QtWidgets import QDialog
 
     settings = _settings(tmp_path)
     snapshot = _wav(tmp_path / "snapshot.wav")
     added: list[str] = []
+    previewed: list[tuple[Path, float]] = []
     controller = RollingBufferController(
         settings,
         dialog_parent=lambda: None,
-        play_preview=lambda _path, _done, _progress: None,
+        play_preview=lambda path, _done, _progress, volume: previewed.append((path, volume)),
         stop_preview=lambda: None,
         on_add_wheel=added.append,
     )
     captured: dict[str, object] = {}
+    volume = 0.4
 
     class FakePicker:
         def __init__(self, *_args: object, on_add_wheel=None, default_label: str = "", **_kwargs: object):
@@ -198,14 +204,20 @@ def test_open_dialog_saves_with_edited_label(qapp, tmp_path, monkeypatch):
         def label(self) -> str:
             return "自定义名称"
 
+        def volume(self) -> float:
+            return volume
+
     class FakeDialog:
         def __init__(self, *_args: object, **_kwargs: object) -> None:
             pass
 
-        def set_play_preview(self, _play: object) -> None:
-            pass
+        def set_play_preview(self, play) -> None:
+            self.play = play
 
         def exec(self) -> QDialog.DialogCode:
+            nonlocal volume
+            self.play(snapshot)
+            volume = 1.25
             return QDialog.DialogCode.Accepted
 
         def take_clip(self) -> Path:
@@ -216,8 +228,8 @@ def test_open_dialog_saves_with_edited_label(qapp, tmp_path, monkeypatch):
 
     saved: dict[str, object] = {}
 
-    def fake_save(_settings: object, _clip: Path, wheel: int, slot: int, label: str) -> str:
-        saved.update(wheel=wheel, slot=slot, label=label)
+    def fake_save(_settings: object, _clip: Path, wheel: int, slot: int, label: str, *, volume: float) -> str:
+        saved.update(wheel=wheel, slot=slot, label=label, volume=volume)
         return "saved.wav"
 
     class InlineThread:
@@ -234,7 +246,8 @@ def test_open_dialog_saves_with_edited_label(qapp, tmp_path, monkeypatch):
 
     controller._open_dialog(snapshot)
 
-    assert saved == {"wheel": 0, "slot": 2, "label": "自定义名称"}
+    assert previewed == [(snapshot, 0.4)]
+    assert saved == {"wheel": 0, "slot": 2, "label": "自定义名称", "volume": 1.25}
     assert str(captured["default_label"]).startswith("录音 ")
     assert callable(captured["on_add_wheel"])
 
@@ -258,7 +271,7 @@ def test_stop_failure_keeps_recorder_for_retry(qapp, tmp_path, monkeypatch):
     controller = RollingBufferController(
         settings,
         dialog_parent=lambda: None,
-        play_preview=lambda _path, _done, _progress: None,
+        play_preview=lambda *_args: None,
         stop_preview=lambda: None,
         on_notify=notices.append,
         recorder_factory=lambda: recorder,

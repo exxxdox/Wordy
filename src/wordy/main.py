@@ -454,8 +454,8 @@ class WordyApp:
             rolling_controller = RollingBufferController(
                 self._settings,
                 dialog_parent=lambda: self.overlay.root,
-                play_preview=lambda path, done, progress: self.tts_manager.play_audio_file(
-                    path, self._on_tts_error, done, on_progress=progress, preview_local=True),
+                play_preview=lambda path, done, progress, volume: self.tts_manager.play_audio_file(
+                    path, self._on_tts_error, done, volume=volume, on_progress=progress, preview_local=True),
                 stop_preview=self.tts_manager.stop_audio_file,
                 on_state_changed=self._rolling_state_changed,
                 on_notify=self._rolling_notify,

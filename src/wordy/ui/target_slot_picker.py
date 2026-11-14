@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
 )
 
 from wordy.config import AppSettings, ChatWheelConfig
-from wordy.ui.settings_widgets import NoWheelComboBox
+from wordy.ui.settings_widgets import NoWheelComboBox, NoWheelSlider
 from wordy.ui.wheel_picker import WheelPicker
 
 SLOTS_PER_WHEEL = 8
@@ -68,6 +68,20 @@ class TargetSlotPicker(QWidget):
         label_row.addWidget(self.label_input, 1)
         layout.addLayout(label_row)
 
+        # 音量属于待保存片段，切换目标时沿用这次编辑值。
+        volume_row = QHBoxLayout()
+        volume_row.addWidget(QLabel("音量"))
+        self.volume_slider = NoWheelSlider(Qt.Orientation.Horizontal)
+        self.volume_slider.setAccessibleName("片段音量")
+        self.volume_slider.setRange(0, 200)
+        self.volume_slider.setValue(100)
+        volume_row.addWidget(self.volume_slider, 1)
+        self.volume_value_label = QLabel("100%")
+        self.volume_value_label.setMinimumWidth(self.volume_value_label.fontMetrics().horizontalAdvance("200%"))
+        self.volume_slider.valueChanged.connect(lambda value: self.volume_value_label.setText(f"{value}%"))
+        volume_row.addWidget(self.volume_value_label)
+        layout.addLayout(volume_row)
+
         self.picker = WheelPicker(self._select_slot, size=_PICKER_SIZE)
         self.picker.wheel_style = settings.chat_wheel_style
         layout.addWidget(self.picker, 0, Qt.AlignmentFlag.AlignHCenter)
@@ -96,6 +110,9 @@ class TargetSlotPicker(QWidget):
     def label(self) -> str:
         """保存时使用的槽位名称；留空由调用方回退默认名称。"""
         return self.label_input.text().strip()
+
+    def volume(self) -> float:
+        return self.volume_slider.value() / 100
 
     def add_wheel_with_hotkey(self, hotkey: str) -> bool:
         """注册新轮盘并选中它；弹窗与测试共用，失败返回 False。"""
