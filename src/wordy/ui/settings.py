@@ -902,14 +902,8 @@ class SettingsWindow:
         elif listen_state.enabled:
             self._set_label(
                 self.mic_listen_status_label,
-                "Windows 侦听：已开启" + ("，音频侦听生效中" if s.audio_routing_enabled else ""),
+                "Windows 侦听：已开启",
                 INPUT_TEXT_COLOR,
-            )
-        elif s.audio_routing_enabled:
-            self._set_label(
-                self.mic_listen_status_label,
-                "麦克风侦听未生效（Windows 侦听：未开启）",
-                TEXT_ERROR,
             )
         else:
             self._set_label(

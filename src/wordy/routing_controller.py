@@ -53,13 +53,14 @@ class RoutingController:
         router = self._try_create_router(
             virtual_output=s.virtual_output_device,
             mic_device=s.mic_input_device,
+            configure_listen=False,
         )
         if router is None:
             # 保存值必须反映真实运行态，避免启动失败后设置页仍显示已启用。
             s.audio_routing_enabled = False
 
     def _try_create_router(
-        self, *, virtual_output: object, mic_device: object = None
+        self, *, virtual_output: object, mic_device: object = None, configure_listen: bool = True
     ) -> AudioRouter | None:
         """创建并启动 AudioRouter，失败返回 None。"""
         if not VBCableDriverManager.is_installed():
@@ -71,6 +72,7 @@ class RoutingController:
             )
             if router.start(
                 mic_device=mic_device if isinstance(mic_device, str) else None,
+                configure_listen=configure_listen,
             ):
                 self._enable_routing(router)
                 return router
@@ -89,12 +91,6 @@ class RoutingController:
             self._player.set_output_device(cast(OutputDeviceSelection, cable_device))
             logger.debug("音频输出已切换为 CABLE Input")
         self._notify_output_device_changed()
-        if router.get_stats().listen_configured:
-            logger.debug("麦克风侦听已自动配置并验证")
-        else:
-            logger.warning(
-                "麦克风侦听未自动生效，请在 Windows 声音设置中手动配置到 CABLE Input"
-            )
 
     def _disable_routing(self, *, notify_output_change: bool = True) -> None:
         """停用路由：恢复路由启用前保存的本地输出设备。"""
@@ -123,10 +119,6 @@ class RoutingController:
         virtual_device = route_config.get("virtual_output_device")
         mic_device = route_config.get("mic_input_device")
 
-        # 停用后的对象可能仍保存恢复失败的快照；恢复成功后才可重新创建。
-        if self._router is not None and not self._router.is_running():
-            if not self.stop():
-                return False
         if self._router is None:
             if mic_device is None:
                 mic_device = self._settings.mic_input_device
@@ -147,8 +139,8 @@ class RoutingController:
                     virtual_device if isinstance(virtual_device, str) else None
                 ):
                     if not self._router.is_running():
-                        self._disable_routing()
-                    logger.error("虚拟输出切换失败，原麦克风状态仍需恢复")
+                        self.stop(preserve_listen=True)
+                    logger.error("虚拟输出切换失败")
                     return False
                 cable_device = self._router.get_output_device()
                 if cable_device is not None:
@@ -197,7 +189,7 @@ class RoutingController:
         """读取 Windows 当前的麦克风侦听状态，供设置页回显真实结果。
 
         不读路由内部标志：设置页要显示系统里实际生效的状态，
-        无论侦听是本应用接管还是用户手动开启。"""
+        包括用户直接在 Windows 中修改的状态。"""
         device = self._settings.mic_input_device
         if not device:
             return None
@@ -209,20 +201,13 @@ class RoutingController:
 
     # ── 停止 ───────────────────────────────────────────────────────────────
 
-    def stop(self, *, notify_output_change: bool = True, restore_mic: bool = True) -> bool:
-        """停用路由并恢复本地输出；侦听恢复失败时保留对象供重试。
-
-        restore_mic=False 供应用退出使用：保留 Windows 侦听现状。"""
+    def stop(self, *, notify_output_change: bool = True, preserve_listen: bool = False) -> bool:
+        """侦听关闭成功后才切回本地输出，失败时可再次尝试。"""
         if self._router is None:
             return True
-        was_running = self._router.is_running()
-        restored = self._router.stop(restore_listen=restore_mic) is not False
-        # 本地输出只恢复一次；重试系统侦听时不能用已清空的设备快照覆盖它。
-        if was_running:
-            self._disable_routing(notify_output_change=notify_output_change)
-        if restored:
-            self._router = None
-            logger.debug("音频侦听已禁用")
-        else:
-            logger.error("麦克风原侦听状态恢复失败，保留路由对象等待重试")
-        return restored
+        if not self._router.stop(preserve_listen=preserve_listen):
+            return False
+        self._router = None
+        self._disable_routing(notify_output_change=notify_output_change)
+        logger.debug("音频侦听已禁用")
+        return True

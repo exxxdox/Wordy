@@ -439,7 +439,7 @@ class WordyApp:
                 self._rolling_controller.stop()
             # 退出后不会继续播放，避免先重开音频流再由 shutdown 立即关闭。
             # 不恢复麦克风侦听：退出后保持现有系统侦听，下次启动直接沿用。
-            self.routing.stop(notify_output_change=False, restore_mic=False)
+            self.routing.stop(notify_output_change=False, preserve_listen=True)
             self.tts_manager.shutdown()
 
         try:

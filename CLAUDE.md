@@ -18,6 +18,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 「播放设备」保存本地输出选择，默认跟随系统。F10 裁剪试听与启用路由后的文件、流式返听共用该设备，拒绝向 VB-CABLE 返听。「麦克风输入」在检测到 VB-CABLE 后仅显示 CABLE Input，音频侦听开启时使用系统枚举的 WASAPI 端点。更改播放设备后重建音频流。
 
+应用启动沿用 Windows 当前的麦克风侦听和输出目标，设置页打开时读回实际状态。主动打开「音频侦听」时将所选麦克风侦听到 CABLE Input，主动关闭时关闭该麦克风的 Windows 侦听并切回本地播放设备。应用退出时保留 Windows 当前状态，不记录或恢复进入应用前的快照，也不重放旧版恢复日志。关闭失败时保留 Wordy 路由和开关以便重试。
+
 ## 轮盘 UI 一致性
 
 设置中的轮盘 UI 与快捷键唤出的轮盘 UI 必须保持一致。调整轮盘布局、材质、槽位编号、名称呈现、空槽或选中状态时，须同步检查并更新两处，避免视觉规则分叉。
@@ -94,7 +96,6 @@ driver.py(VBCableDriverManager) → config.py(AppSettings) → main.py(生命周
 1. `AudioRouter` 将 TTS 输出重定向到 VB-CABLE Input（通过 `player.set_output_device`）
 2. 麦克风通过 Windows "侦听此设备" 功能直通到 CABLE Input（`listen_policy.py` 通过 COM/WASAPI `IPropertyStore` 读写 `PKEY_ListenTo`）
 3. 系统层叠加后从 CABLE Output 输出——零延迟、零 CPU 混音开销
-4. 用户在设置页关闭路由时恢复麦克风原侦听状态；应用退出时**不恢复**，`RoutingController.stop(restore_mic=False)` 只停路由并丢弃恢复日志，Windows 侦听状态保留给下次启动沿用
 
 **侦听状态回显**：设置页读取 Windows 实际状态（`listen_policy.get_listen_policy`）而不是路由内部标志，显示「已开启 / 未开启 / 无法读取」；切换开关或麦克风后，`InputOverlay._report_audio_route_result` 以读回结果回显成功、失败或未生效，失败时设置页同时还原控件与配置。
 

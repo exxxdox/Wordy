@@ -469,8 +469,11 @@ def test_run_prepares_overlay_tray_hook_and_disposes_tray_before_overlay_run(app
 
     instance.tts_manager._janitor_thread = FakeJanitorThread()  # type: ignore[assignment]
 
+    stop_routing = MagicMock()
+    monkeypatch.setattr(instance.routing, "stop", stop_routing)
     instance.run()
 
+    stop_routing.assert_called_once_with(notify_output_change=False, preserve_listen=True)
     assert events.count("tray.app.dispose") == 1, (
         f"tray.dispose must be registered as overlay pre-stop hook and called once, got {events!r}"
     )
@@ -1207,15 +1210,17 @@ class _FakeAudioRouter:
         self.set_virtual_output_calls: list[str | None] = []
         type(self).instances.append(self)
 
-    def start(self, *, mic_device: str | None = None) -> bool:  # noqa: ARG002
+    def start(self, *, mic_device: str | None = None, configure_listen: bool = True) -> bool:
         self.started = True
         self.start_mic_device = mic_device
+        self.configure_listen = configure_listen
         return True
 
-    def stop(self, *, restore_listen: bool = True) -> None:
+    def stop(self, *, preserve_listen: bool = False) -> bool:
         self.started = False
         self.stopped = True
-        self.stop_restore_listen = restore_listen
+        self.preserve_listen = preserve_listen
+        return True
 
     def is_running(self) -> bool:
         return self.started
@@ -1273,6 +1278,7 @@ def test_enabling_audio_route_runtime_switches_player_output(monkeypatch):
     assert router_cls.instances
     router = router_cls.instances[-1]
     assert router.started is True
+    assert router.configure_listen is True
     # 运行时 AudioPlayer 已被 fake factory 替换为 MagicMock
     cast(MagicMock, app.player).set_output_device.assert_called_once()
 
@@ -1343,6 +1349,7 @@ def test_disabling_audio_route_runtime_stops_router(monkeypatch):
     app.routing.apply_config({"audio_routing_enabled": False})
 
     assert router.stopped is True
+    assert router.preserve_listen is False
     assert app.routing._router is None
 
 

@@ -1003,13 +1003,13 @@ class InputOverlay:
             return
         if not applied:
             settings.set_status(
-                "启用音频侦听失败，麦克风侦听未改变。"
-                if enabled else "关闭音频侦听失败，麦克风侦听仍保持原状。",
+                "启用音频侦听失败。"
+                if enabled else "关闭音频侦听失败，请检查 Windows 麦克风侦听状态。",
                 TEXT_ERROR,
             )
             return
         if not enabled:
-            settings.set_status("音频侦听已关闭，麦克风侦听已恢复。", INPUT_TEXT_COLOR)
+            settings.set_status("音频侦听已关闭。", INPUT_TEXT_COLOR)
             return
         if not self._cfg.mic_input_device:
             settings.set_status(

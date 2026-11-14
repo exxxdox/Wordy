@@ -59,6 +59,7 @@ class TestRoutingControllerInit:
 
             ctrl = RoutingController(mock_settings, mock_player)
             assert ctrl.is_running is True
+            router.start.assert_called_once_with(mic_device="Test Mic", configure_listen=False)
 
     def test_init_router_start_failure_sets_not_running(
         self, mock_player, mock_settings,
@@ -137,7 +138,7 @@ class TestRoutingControllerStop:
             )
             callback.reset_mock()
 
-            ctrl.stop(notify_output_change=False)
+            ctrl.stop(notify_output_change=False, preserve_listen=True)
 
         callback.assert_not_called()
         assert mock_player.set_output_device.call_args_list[-1].args[0] is None
@@ -322,75 +323,58 @@ class TestRoutingControllerProperties:
         callback.assert_called_once()
 
 
-def test_stop_keeps_router_for_restore_retry_and_restores_local_output_once(mock_player, mock_settings):
+def test_failed_explicit_disable_keeps_route_active_until_retry(mock_player, mock_settings):
     from wordy.audio.router import AudioRouter
-    from wordy.audio.listen_policy import ListenPolicyState
 
     ctrl = RoutingController(mock_settings, mock_player)
     router = AudioRouter(virtual_output="CABLE Input")
     router._active = True
     router._mic_device = "Mic"
     router._listen_configured = True
-    router._listen_original_state = ListenPolicyState(enabled=False, output_id="old-output")
-    router._listen_original_device = "Mic"
     ctrl._router = router
     local_output: OutputDeviceSelection = {"name": "Speakers", "host_api_name": "Windows WASAPI"}
     ctrl._saved_output_device = local_output
-    with patch("wordy.audio.listen_policy.restore_listen_policy", side_effect=[False, True]) as restore:
-        assert ctrl.stop() is False
+    with patch("wordy.audio.listen_policy.set_listen_policy", side_effect=[False, True]) as write:
+        assert ctrl.apply_config({"audio_routing_enabled": False}) is False
         assert ctrl._router is router
-        assert ctrl.is_running is False
-        mock_player.set_output_device.assert_called_once_with(local_output)
-        assert ctrl.stop() is True
-    assert restore.call_count == 2
+        assert ctrl.is_running is True
+        mock_player.set_output_device.assert_not_called()
+        assert ctrl.apply_config({"audio_routing_enabled": False}) is True
+    assert write.call_count == 2
+    assert write.call_args.args[0] == "Mic"
+    assert write.call_args.kwargs["enabled"] is False
     assert ctrl._router is None
     mock_player.set_output_device.assert_called_once_with(local_output)
 
 
-def test_stop_without_restore_mic_leaves_system_listening(mock_player, mock_settings):
-    """退出应用时不要求 AudioRouter 回滚系统侦听状态。"""
+def test_stop_for_shutdown_preserves_system_listening(mock_player, mock_settings):
     ctrl = RoutingController(mock_settings, mock_player)
     router = MagicMock()
     router.is_running.return_value = True
     router.stop.return_value = True
     ctrl._router = router
 
-    assert ctrl.stop(restore_mic=False) is True
+    assert ctrl.stop(preserve_listen=True) is True
 
-    router.stop.assert_called_once_with(restore_listen=False)
-
-
-def test_enable_does_not_replace_router_with_pending_restore(mock_player, mock_settings):
-    ctrl = RoutingController(mock_settings, mock_player)
-    router = MagicMock()
-    router.is_running.return_value = False
-    router.stop.return_value = False
-    ctrl._router = router
-    with patch("wordy.routing_controller.AudioRouter") as create:
-        ctrl.apply_config({"audio_routing_enabled": True, "mic_input_device": "New Mic"})
-    assert ctrl._router is router
-    router.stop.assert_called_once()
-    router.set_mic_device.assert_not_called()
-    create.assert_not_called()
+    router.stop.assert_called_once_with(preserve_listen=True)
 
 
-def test_virtual_output_change_restore_failure_returns_to_local_output(mock_player, mock_settings):
+def test_virtual_output_change_start_failure_returns_to_local_output(mock_player, mock_settings):
     from wordy.audio.router import AudioRouter
-    from wordy.audio.listen_policy import ListenPolicyState
 
     ctrl = RoutingController(mock_settings, mock_player)
     router = AudioRouter(virtual_output="CABLE Input")
     router._active = True
     router._mic_device = "Mic"
     router._listen_configured = True
-    router._listen_original_state = ListenPolicyState(enabled=False, output_id="old-output")
-    router._listen_original_device = "Mic"
     ctrl._router = router
     local_output: OutputDeviceSelection = {"name": "Speakers", "host_api_name": "Windows WASAPI"}
     ctrl._saved_output_device = local_output
-    with patch("wordy.audio.listen_policy.restore_listen_policy", return_value=False):
-        ctrl.apply_config({"virtual_output_device": "New Output"})
-    assert ctrl._router is router
-    assert router.virtual_output == "CABLE Input"
+    with (
+        patch.object(router, "get_output_device", return_value=None),
+        patch("wordy.audio.listen_policy.set_listen_policy") as write,
+    ):
+        assert ctrl.apply_config({"virtual_output_device": "New Output"}) is False
+    write.assert_not_called()
     assert ctrl.is_running is False
     mock_player.set_output_device.assert_called_once_with(local_output)

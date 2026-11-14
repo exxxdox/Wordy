@@ -181,7 +181,7 @@ def set_listen_policy(input_device_name: str, output_device_name: str,
 
 
 def get_listen_policy(input_device_name: str) -> ListenPolicyState | None:
-    """读取指定输入设备当前状态，供调用方在接管前保存快照。"""
+    """读取指定输入设备当前状态，供界面回显或单次操作回退。"""
     try:
         enumerator = type_cast(Any, CoCreateInstance(
             CLSID_MMDeviceEnumerator,
@@ -208,7 +208,7 @@ def restore_listen_policy(
     input_device_name: str,
     state: ListenPolicyState,
 ) -> bool:
-    """恢复接管前的启用状态，并在存在历史目标时一并恢复目标端点。"""
+    """回退至指定的启用状态，并在存在历史目标时一并恢复目标端点。"""
     try:
         enumerator = type_cast(Any, CoCreateInstance(
             CLSID_MMDeviceEnumerator,
@@ -409,7 +409,7 @@ def _write_listen_properties(
     *,
     restore_output: bool = False,
 ) -> bool:
-    """写入倾听属性并提交；restore_output 用于恢复接管前的目标端点。"""
+    """写入倾听属性并提交；restore_output 用于恢复指定的目标端点。"""
     should_write_output = enabled or restore_output
     if should_write_output and not output_id:
         logger.warning("写入麦克风侦听时缺少目标输出设备 ID")

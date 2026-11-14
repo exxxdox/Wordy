@@ -10,74 +10,6 @@ import pytest
 from wordy.audio.router import AudioRouter
 
 
-@pytest.fixture(autouse=True)
-def _isolated_journal(tmp_path, monkeypatch):
-    """恢复日志必须落在临时目录，别写进真实用户配置目录。"""
-    import wordy.audio.router as router_module
-    monkeypatch.setattr(router_module, "_journal_path", lambda: tmp_path / "journal.json")
-
-
-def test_enable_refuses_to_overwrite_unrecovered_journal(tmp_path, monkeypatch):
-    """上次恢复没消费完的日志是本机原始状态唯一副本，不能被新接管覆盖。"""
-    import wordy.audio.router as router_module
-    from wordy.audio.listen_policy import ListenPolicyState
-
-    journal = tmp_path / "journal.json"
-    monkeypatch.setattr(router_module, "_journal_path", lambda: journal)
-    journal.write_text("{}", encoding="utf-8")
-    router = AudioRouter(virtual_output="CABLE Input")
-
-    with (
-        patch.object(router, "get_output_device",
-                     return_value={"name": "CABLE Input", "host_api_name": "Windows WASAPI"}),
-        patch("wordy.audio.listen_policy.get_listen_policy",
-              return_value=ListenPolicyState(enabled=False, output_id=None)),
-        patch("wordy.audio.listen_policy.restore_listen_policy", return_value=False),
-    ):
-        assert router._enable_mic_listen("Mic") is False
-
-    assert journal.exists()
-
-
-def test_failed_takeover_keeps_pending_restore(tmp_path, monkeypatch):
-    """写入恢复日志后即视为待恢复；设置与回滚都失败时 stop() 仍要能重试。"""
-    import wordy.audio.router as router_module
-    from wordy.audio.listen_policy import ListenPolicyState
-
-    journal = tmp_path / "journal.json"
-    monkeypatch.setattr(router_module, "_journal_path", lambda: journal)
-    router = AudioRouter(virtual_output="CABLE Input")
-
-    with (
-        patch.object(router, "get_output_device",
-                     return_value={"name": "CABLE Input", "host_api_name": "Windows WASAPI"}),
-        patch("wordy.audio.listen_policy.get_listen_policy",
-              return_value=ListenPolicyState(enabled=False, output_id=None)),
-        patch("wordy.audio.listen_policy.set_listen_policy", return_value=False),
-        patch("wordy.audio.listen_policy.restore_listen_policy", return_value=False),
-    ):
-        assert router._enable_mic_listen("Mic") is False
-
-    assert router._listen_configured is True
-    assert journal.exists()
-
-
-def test_listen_recovery_journal_restores_and_clears(tmp_path, monkeypatch):
-    import wordy.audio.router as router_module
-    from wordy.audio.listen_policy import ListenPolicyState
-
-    journal = tmp_path / "listen-policy.json"
-    monkeypatch.setattr(router_module, "_journal_path", lambda: journal)
-    original = ListenPolicyState(enabled=True, output_id="render-id")
-    router_module._write_listen_journal("Mic", original)
-
-    with patch("wordy.audio.listen_policy.restore_listen_policy", return_value=True) as restore:
-        assert router_module._recover_listen_journal() is True
-
-    restore.assert_called_once_with("Mic", original)
-    assert not journal.exists()
-
-
 class TestAudioRouter:
     """AudioRouter 测试集。"""
 
@@ -101,53 +33,45 @@ class TestAudioRouter:
         router.stop()
         assert router.is_running() is False
 
-    def test_stop_without_restore_keeps_system_listening(self, tmp_path, monkeypatch):
-        """退出应用时不回滚 Windows 侦听，并丢弃恢复记录避免下次启动改回旧值。"""
-        import wordy.audio.router as router_module
+    @pytest.mark.parametrize("enabled", [False, True])
+    def test_start_preserves_current_windows_listen(self, enabled, tmp_path, monkeypatch):
         from wordy.audio.listen_policy import ListenPolicyState
 
-        journal = tmp_path / "journal.json"
-        monkeypatch.setattr(router_module, "_journal_path", lambda: journal)
-        journal.write_text("{}", encoding="utf-8")
+        recovery_file = tmp_path / "listen_policy_recovery.json"
+        recovery_file.write_text('{"device":"Mic","enabled":false}', encoding="utf-8")
+        monkeypatch.setattr("wordy.audio.router.config_directory", lambda: tmp_path, raising=False)
+
+        with (
+            patch.object(AudioRouter, "get_output_device", return_value={
+                "name": "CABLE Input", "host_api_name": "Windows WASAPI",
+            }),
+            patch.object(AudioRouter, "_resolve_output_device", return_value=99),
+            patch("wordy.audio.listen_policy.get_listen_policy",
+                  return_value=ListenPolicyState(enabled=enabled, output_id="existing-target")),
+            patch("wordy.audio.listen_policy.restore_listen_policy") as restore,
+            patch("wordy.audio.listen_policy.set_listen_policy") as write,
+        ):
+            router = AudioRouter(virtual_output="CABLE Input")
+            assert router.start(mic_device="Mic", configure_listen=False) is True
+            assert router.stop(preserve_listen=True) is True
+
+        restore.assert_not_called()
+        write.assert_not_called()
+
+    def test_stop_explicitly_disables_mic_regardless_of_initial_state(self):
         router = AudioRouter(virtual_output="CABLE Input")
         router._active = True
         router._mic_device = "Mic"
-        router._listen_configured = True
-        router._listen_original_state = ListenPolicyState(enabled=False, output_id="old")
-        router._listen_original_device = "Mic"
-
-        with patch.object(router, "_disable_mic_listen") as disable:
-            assert router.stop(restore_listen=False) is True
-
-        disable.assert_not_called()
-        assert router.is_running() is False
-        assert router._listen_original_state is None
-        assert router._listen_original_device is None
-        assert not journal.exists()
-
-    def test_listen_takeover_restores_original_state(self):
-        from wordy.audio.listen_policy import ListenPolicyState
-
-        router = AudioRouter(virtual_output="CABLE Input")
-        original = ListenPolicyState(enabled=True, output_id="original-render-id")
-        cable = {"name": "CABLE Input", "host_api_name": "Windows WASAPI"}
 
         with (
-            patch.object(router, "get_output_device", return_value=cable),
-            patch("wordy.audio.listen_policy.get_listen_policy", return_value=original),
-            patch("wordy.audio.listen_policy.set_listen_policy", return_value=True),
+            patch("wordy.audio.listen_policy.set_listen_policy", return_value=True) as write,
+            patch("wordy.audio.listen_policy.restore_listen_policy") as restore,
         ):
-            assert router._enable_mic_listen("Mic") is True
+            assert router.stop() is True
 
-        with patch(
-            "wordy.audio.listen_policy.restore_listen_policy",
-            return_value=True,
-        ) as restore:
-            assert router._disable_mic_listen("Mic") is True
-
-        restore.assert_called_once_with("Mic", original)
-        assert router._listen_original_state is None
-        assert router._listen_original_device is None
+        write.assert_called_once_with("Mic", "", enabled=False)
+        restore.assert_not_called()
+        assert router.is_running() is False
 
     def test_switch_mic_disables_old_device_before_enabling_new(self):
         router = AudioRouter(virtual_output="CABLE Input")
@@ -167,7 +91,7 @@ class TestAudioRouter:
         assert router._mic_device == "New Mic"
         assert router.get_stats().listen_configured is True
 
-    def test_switch_mic_aborts_when_old_state_restore_fails(self):
+    def test_switch_mic_aborts_when_disabling_old_mic_fails(self):
         router = AudioRouter(virtual_output="CABLE Input")
         router._active = True
         router._mic_device = "Old Mic"
@@ -185,23 +109,25 @@ class TestAudioRouter:
         assert router.get_stats().listen_configured is True
 
     def test_switch_mic_rolls_back_when_new_enable_fails(self):
-        """新设备启用失败时保留旧选择，并向调用方报告失败。"""
+        from wordy.audio.listen_policy import ListenPolicyState
+
         router = AudioRouter(virtual_output="CABLE Input")
         router._active = True
         router._mic_device = "Old Mic"
-        router._listen_configured = True
+        current = ListenPolicyState(enabled=True, output_id="current-target")
 
         with (
             patch.object(router, "_disable_mic_listen", return_value=True) as disable,
             patch.object(router, "_enable_mic_listen", return_value=False) as enable,
+            patch("wordy.audio.listen_policy.get_listen_policy", return_value=current),
+            patch("wordy.audio.listen_policy.restore_listen_policy") as restore,
         ):
-            ok = router.set_mic_device("New Mic")
+            assert router.set_mic_device("New Mic") is False
 
-        assert ok is False
         disable.assert_called_once_with("Old Mic")
-        assert enable.call_args_list == [call("New Mic"), call("Old Mic")]
+        enable.assert_called_once_with("New Mic")
+        restore.assert_called_once_with("Old Mic", current)
         assert router._mic_device == "Old Mic"
-        assert router.get_stats().listen_configured is False
 
     def test_switch_mic_no_op_when_same_device(self):
         router = AudioRouter(virtual_output="CABLE Input")
@@ -328,48 +254,15 @@ class TestAudioRouter:
         assert router._mic_device == "test"
 
 
-def test_stop_keeps_original_state_until_restore_retry_succeeds():
-    from wordy.audio.listen_policy import ListenPolicyState
-
+def test_stop_failure_keeps_route_running_for_retry():
     router = AudioRouter(virtual_output="CABLE Input")
-    original = ListenPolicyState(enabled=False, output_id="original-output")
     router._active = True
     router._mic_device = "Mic"
-    router._listen_configured = True
-    router._listen_original_state = original
-    router._listen_original_device = "Mic"
-    with patch("wordy.audio.listen_policy.restore_listen_policy", side_effect=[False, True]) as restore:
+
+    with patch("wordy.audio.listen_policy.set_listen_policy", side_effect=[False, True]) as write:
         assert router.stop() is False
-        assert router.is_running() is False
-        assert router._listen_original_state is original
+        assert router.is_running() is True
         assert router.stop() is True
-    assert restore.call_count == 2
-    assert router._listen_original_state is None
 
-
-@pytest.mark.parametrize("operation", ["start", "set_virtual_output", "set_mic_device"])
-def test_pending_restore_cannot_be_overwritten_by_new_configuration(operation):
-    from wordy.audio.listen_policy import ListenPolicyState
-
-    router = AudioRouter(virtual_output="CABLE Input")
-    original = ListenPolicyState(enabled=True, output_id="original-output")
-    router._mic_device = "Old Mic"
-    router._listen_configured = True
-    router._listen_original_state = original
-    router._listen_original_device = "Old Mic"
-    with (
-        patch("wordy.audio.listen_policy.restore_listen_policy", return_value=False),
-        patch.object(router, "_resolve_output_device", return_value=99),
-        patch.object(router, "_enable_mic_listen") as enable,
-    ):
-        if operation == "start":
-            result = router.start(mic_device="New Mic")
-        elif operation == "set_virtual_output":
-            result = router.set_virtual_output("New Output")
-        else:
-            result = router.set_mic_device("New Mic")
-    assert result is False
-    assert router._mic_device == "Old Mic"
-    assert router.virtual_output == "CABLE Input"
-    assert router._listen_original_state is original
-    enable.assert_not_called()
+    assert write.call_args_list == [call("Mic", "", enabled=False)] * 2
+    assert router.is_running() is False
