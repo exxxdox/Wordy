@@ -49,6 +49,8 @@ def _field_changed_mock(window: SettingsWindow) -> Mock:
 def _new_settings_window(
     monkeypatch: pytest.MonkeyPatch,
     on_close: Callable[[], None] | None = None,
+    mic_input_device: str | None = None,
+    saved_audio_routing: bool = False,
     **state_overrides: Any,
 ) -> tuple[QApplication, SettingsWindow]:
     from wordy.config import AppSettings
@@ -57,11 +59,13 @@ def _new_settings_window(
     settings = AppSettings.load()
     settings.update(hotkey="f6", name="F6", active_tts_provider="Cartesia",
                     cartesia_voice_id="voice-a", cartesia_voice_name="Old Voice",
-                    cartesia_tts_backend="Cartesia Bytes", audio_routing_enabled=False)
+                    cartesia_tts_backend="Cartesia Bytes", audio_routing_enabled=saved_audio_routing)
     # 持久化选择属于 config，运行时枚举属于 SettingsState。
     selected_identity = state_overrides.pop("audio_output_device_identity", None)
     selected_name = state_overrides.pop("audio_output_device_name", None)
     settings.update(audio_output_device=selected_identity, audio_output_device_name=selected_name)
+    if mic_input_device is not None:
+        settings.update(mic_input_device=mic_input_device)
     state = SettingsState(voices_cache=[{"id": "voice-a", "name": "Old Voice"}], **state_overrides)
     app = QApplication.instance()
     assert app is not None
@@ -179,6 +183,20 @@ def test_audio_routing_enable_failure_keeps_setting_disabled(
     callback.assert_called_once_with("audio_routing_enabled", True)
 
 
+@pytest.mark.parametrize("enabled", [False, True])
+def test_audio_routing_initial_checkbox_and_target_follow_windows(monkeypatch, enabled):
+    from wordy.audio.listen_policy import ListenPolicyState
+
+    _, window = _new_settings_window(
+        monkeypatch, vb_cable_installed=True, mic_input_device="Test Mic",
+        saved_audio_routing=not enabled,
+        mic_listen_state=ListenPolicyState(enabled=enabled, output_id="speaker-id", output_name="扬声器"),
+    )
+    assert window.audio_route_enabled_check.isChecked() is enabled
+    assert "扬声器" in window.mic_listen_status_label.text()
+    _field_changed_mock(window).assert_not_called()
+
+
 def test_mic_listen_status_reflects_windows_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -224,6 +242,7 @@ def test_mic_switch_rereads_listen_state_after_saving(
     window._on_mic_input_selected("Test Mic")
 
     assert calls == ["query"]
+    assert window.audio_route_enabled_check.isChecked()
     assert "已开启" in window.mic_listen_status_label.text()
 
 

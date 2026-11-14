@@ -13,7 +13,7 @@ import logging
 from typing import cast
 
 from wordy.audio.driver import VBCableDriverManager
-from wordy.audio.listen_policy import ListenPolicyState, get_listen_policy
+from wordy.audio.listen_policy import ListenPolicyState, get_listen_policy, set_listen_policy
 from wordy.audio.player import AudioPlayer, OutputDeviceSelection
 from wordy.audio.router import AudioRouter
 from wordy.config import AppSettings
@@ -48,7 +48,10 @@ class RoutingController:
     def _init_from_config(self) -> None:
         """根据配置初始化路由引擎（仅启动时调用）。"""
         s = self._settings
-        if not s.audio_routing_enabled:
+        listen_state = self.mic_listen_state
+        # Windows 可读取时优先使用实际状态。无麦克风或读取失败时保留 TTS 路由偏好。
+        enabled = listen_state.enabled if listen_state is not None else s.audio_routing_enabled
+        if not enabled:
             return
         router = self._try_create_router(
             virtual_output=s.virtual_output_device,
@@ -114,6 +117,11 @@ class RoutingController:
             else self._router is not None and self._router.is_running()
         )
         if not enabled:
+            if self._router is None and "audio_routing_enabled" in route_config:
+                device = self._settings.mic_input_device
+                # Windows 可能在 Wordy 未启用路由时被手动打开。
+                if device:
+                    return set_listen_policy(device, "", enabled=False)
             return self.stop()
 
         virtual_device = route_config.get("virtual_output_device")
@@ -127,6 +135,11 @@ class RoutingController:
                 mic_device=mic_device,
             ) is not None
         else:
+            if route_config.get("audio_routing_enabled") is True and self._settings.mic_input_device:
+                cable = self._router.get_output_device()
+                return cable is not None and set_listen_policy(
+                    self._settings.mic_input_device, cable["name"], enabled=True,
+                )
             if "mic_input_device" in route_config:
                 ok = self._router.set_mic_device(
                     mic_device if isinstance(mic_device, str) else None

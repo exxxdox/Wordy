@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from ctypes import (
     POINTER,
     OleDLL,
@@ -40,6 +40,7 @@ class ListenPolicyState:
 
     enabled: bool
     output_id: str | None
+    output_name: str | None = None
 
 
 # ── PROPERTYKEY ctypes struct ─────────────────────────────────────────
@@ -198,10 +199,22 @@ def get_listen_policy(input_device_name: str) -> ListenPolicyState | None:
         if not _hresult_succeeded(hr) or not imm_device:
             logger.warning("读取侦听状态时 GetDevice failed: 0x%08X", int(hr) & 0xFFFFFFFF)
             return None
-        return _read_listen_policy_state(imm_device)
+        state = _read_listen_policy_state(imm_device)
     except Exception:
         logger.exception("读取输入设备侦听状态失败: %s", input_device_name)
         return None
+
+    if state is None or state.output_id is None:
+        return state
+    try:
+        # 目标可能已拔出，此时仍保留已读到的开关和端点 ID。
+        target = POINTER(IMMDevice)()
+        hr = enumerator.GetDevice(c_wchar_p(state.output_id), byref(target))
+        if _hresult_succeeded(hr) and target:
+            return replace(state, output_name=_get_friendly_name(target))
+    except Exception:
+        logger.debug("无法读取麦克风侦听输出目标名称", exc_info=True)
+    return state
 
 
 def restore_listen_policy(

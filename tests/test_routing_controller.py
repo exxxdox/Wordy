@@ -27,6 +27,31 @@ def mock_settings() -> MagicMock:
 class TestRoutingControllerInit:
     """构造时行为。"""
 
+    @pytest.mark.parametrize("enabled", [False, True])
+    def test_startup_uses_windows_listening_instead_of_saved_switch(
+        self, mock_player, mock_settings, enabled,
+    ):
+        from wordy.audio.listen_policy import ListenPolicyState
+
+        mock_settings.audio_routing_enabled = not enabled
+        with (
+            patch("wordy.routing_controller.get_listen_policy",
+                  return_value=ListenPolicyState(enabled=enabled, output_id="windows-target")),
+            patch("wordy.routing_controller.VBCableDriverManager.is_installed", return_value=True),
+            patch("wordy.routing_controller.AudioRouter") as create,
+        ):
+            create.return_value.start.return_value = True
+            create.return_value.is_running.return_value = True
+            controller = RoutingController(mock_settings, mock_player)
+
+        assert controller.is_running is enabled
+        if enabled:
+            create.return_value.start.assert_called_once_with(
+                mic_device="Test Mic", configure_listen=False,
+            )
+        else:
+            create.assert_not_called()
+
     def test_init_with_routing_disabled_does_not_create_router(
         self, mock_player, mock_settings,
     ):
@@ -88,6 +113,18 @@ class TestRoutingControllerInit:
 
 class TestRoutingControllerStop:
     """stop() 行为。"""
+
+    def test_explicit_disable_closes_windows_listening_without_wordy_router(
+        self, mock_player, mock_settings,
+    ):
+        with (
+            patch("wordy.routing_controller.get_listen_policy", return_value=None),
+            patch("wordy.routing_controller.set_listen_policy", return_value=True) as write,
+        ):
+            controller = RoutingController(mock_settings, mock_player)
+            assert controller.apply_config({"audio_routing_enabled": False})
+
+        write.assert_called_once_with("Test Mic", "", enabled=False)
 
     def test_stop_when_not_running_is_noop(self, mock_player, mock_settings):
         ctrl = RoutingController(mock_settings, mock_player)

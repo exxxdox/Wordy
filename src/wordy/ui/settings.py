@@ -805,7 +805,10 @@ class SettingsWindow:
         # 启用开关
         self.audio_route_enabled_check = CheckmarkCheckBox("启用音频侦听")
         self.audio_route_enabled_check.setEnabled(state.vb_cable_installed)
-        self.audio_route_enabled_check.setChecked(s.audio_routing_enabled)
+        listen_state = state.mic_listen_state
+        self.audio_route_enabled_check.setChecked(
+            listen_state.enabled if listen_state is not None else s.audio_routing_enabled
+        )
         self.audio_route_enabled_check.stateChanged.connect(self._on_audio_route_enabled_changed)
         section.addWidget(self.audio_route_enabled_check)
 
@@ -843,12 +846,20 @@ class SettingsWindow:
         s = self._settings
         # 运行态成功后再落盘；否则下次启动仍会显示一个未生效的开关。
         if self.on_field_changed("audio_routing_enabled", enabled) is False:
-            was_blocked = self.audio_route_enabled_check.blockSignals(True)
-            self.audio_route_enabled_check.setChecked(s.audio_routing_enabled)
-            self.audio_route_enabled_check.blockSignals(was_blocked)
+            self._sync_audio_route_checkbox(not enabled)
             return
         s.audio_routing_enabled = enabled  # auto-save
+        self._sync_audio_route_checkbox(enabled)
         self._update_mic_listen_status(s, self._state)
+
+    def _sync_audio_route_checkbox(self, fallback: bool) -> None:
+        """同步 Windows 读回值，避免回显触发第二次写入。"""
+        listen_state = self._state.mic_listen_state if self._state is not None else None
+        was_blocked = self.audio_route_enabled_check.blockSignals(True)
+        self.audio_route_enabled_check.setChecked(
+            listen_state.enabled if listen_state is not None else fallback
+        )
+        self.audio_route_enabled_check.blockSignals(was_blocked)
 
     def _on_sidetone_enabled_changed(self, state: int) -> None:
         enabled = state == Qt.CheckState.Checked.value
@@ -873,6 +884,7 @@ class SettingsWindow:
         # 配置写入后再读一次系统状态，否则回显的是切换前设备的结果。
         if self._state is not None and callable(self.on_query_mic_listen_state):
             self._state.mic_listen_state = self.on_query_mic_listen_state()
+        self._sync_audio_route_checkbox(self._settings.audio_routing_enabled)
         self._update_mic_listen_status(self._settings, self._state)
         if self._settings.audio_routing_enabled and device:
             listen_state = self._state.mic_listen_state if self._state is not None else None
@@ -899,17 +911,18 @@ class SettingsWindow:
                 "无法读取侦听状态——请确认该设备支持系统侦听",
                 TEXT_WARNING,
             )
-        elif listen_state.enabled:
-            self._set_label(
-                self.mic_listen_status_label,
-                "Windows 侦听：已开启",
-                INPUT_TEXT_COLOR,
-            )
         else:
+            text = "Windows 侦听：已开启" if listen_state.enabled else "Windows 侦听：未开启"
+            if listen_state.output_name:
+                text += f" · 输出目标：{listen_state.output_name}"
+            elif listen_state.output_id:
+                text += " · 输出目标：设备不可用"
+            elif listen_state.enabled:
+                text += " · 输出目标：默认播放设备"
             self._set_label(
                 self.mic_listen_status_label,
-                "Windows 侦听：未开启",
-                TEXT_MUTED,
+                text,
+                INPUT_TEXT_COLOR if listen_state.enabled else TEXT_MUTED,
             )
 
     def _populate_input_devices(self, devices: list[dict[str, object]], selected: str | None) -> None:
