@@ -234,7 +234,10 @@ def _validate_value(value: object, template: object) -> None:
 
 def _validate_config(raw: dict[str, object]) -> None:
     template = _values(AppSettings())
-    if not {name for name, value in template.items() if value is not None}.issubset(raw):
+    required = {name for name, value in template.items() if value is not None}
+    # 旧版加密备份没有独立主播放开关，缺省时由配置加载器补默认值。
+    required.discard("main_playback_enabled")
+    if not required.issubset(raw):
         raise ValueError("备份配置不完整")
     template["additional_chat_wheels"] = [config.new_chat_wheel()]
     template["window_position"] = {"x": 0, "y": 0}

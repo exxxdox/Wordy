@@ -131,6 +131,7 @@ class TTSManager:
         self._audio_files_stopped = threading.Event()
         # 单次文件播放的取消句柄：让「停止试听」只打断这一次，不牵连后续播放。
         self._clip_cancel: threading.Event | None = None
+        self._clip_preview_local = False
         self._speech_lock = Lock()
         self._speech_running = False
         self._pending_speech: _SpeechJob | None = None
@@ -359,6 +360,10 @@ class TTSManager:
             logger.warning("提交文本为空，已忽略。")
             self._notify_finished(on_finished)
             return
+        # 两路都关闭时完成请求，避免合成后因没有输出设备报错。
+        if not (self._settings.main_playback_enabled or self._settings.sidetone_enabled):
+            self._notify_finished(on_finished)
+            return
         if not self._get_active_voice_id():
             logger.error("缺少音色配置，请先打开设置，刷新音色列表并选择一个音色。")
             self._notify_finished(on_finished)
@@ -417,7 +422,7 @@ class TTSManager:
 
     def _begin_hold_key(self) -> str | None:
         """开播前自动按住配置的键；返回按下的键名供结束时松开。"""
-        if not self._settings.hold_key_enabled:
+        if not (self._settings.main_playback_enabled and self._settings.hold_key_enabled):
             return None
         key = self._settings.hold_key
         try:
@@ -498,7 +503,11 @@ class TTSManager:
         ``preview_local`` 让试听只走本地扬声器，不进入音频路由的 CABLE Input。"""
         # 新播放顶掉旧播放，避免连点两次后两条音频叠在一起。
         self.stop_audio_file()
+        if not (preview_local or self._settings.main_playback_enabled or self._settings.sidetone_enabled):
+            self._notify_finished(on_finished)
+            return
         cancel = threading.Event()
+        self._clip_preview_local = preview_local
         self._clip_cancel = cancel
         if not self._audio_files_stopped.is_set():
             progress: dict[str, Any] = {"on_progress": on_progress} if on_progress is not None else {}
@@ -514,6 +523,12 @@ class TTSManager:
         cancel = self._clip_cancel
         if cancel is not None:
             cancel.set()
+
+    def stop_main_playback(self) -> None:
+        """停止可能仍在往 CABLE Input 写入的任务，保留本地裁剪试听。"""
+        self.stop_speech()
+        if not self._clip_preview_local:
+            self.stop_audio_file()
 
     def _play_audio_file(self, path: Path, engine: BackendTTSEngine,
                          ready: threading.Event | None, on_error: Callable[[str], None] | None,

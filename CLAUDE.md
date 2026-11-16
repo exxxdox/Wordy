@@ -16,9 +16,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 播放与返听
 
-「播放设备」保存本地输出选择，默认跟随系统。F10 裁剪试听与启用路由后的文件、流式返听共用该设备，拒绝向 VB-CABLE 返听。「麦克风输入」在检测到 VB-CABLE 后仅显示 CABLE Input，音频侦听开启时使用系统枚举的 WASAPI 端点。更改播放设备后重建音频流。
+「启用主播放输出」由 `main_playback_enabled` 持久化，默认开启。轮盘文字、轮盘文件和输入框朗读的主输出固定为 VB-CABLE 的 WASAPI CABLE Input。主端点缺失或无法打开时不回退到系统默认设备。设置页未检测到端点时提供下载入口，启动时已开启主播放且缺少端点则发托盘通知。返听可独立开启，使用「返听播放设备」选择的本地设备（默认跟随系统）；F10 裁剪试听也用该设备，不受主播放和返听开关影响。本地输出拒绝 VB-CABLE。更改播放设备或播放开关后重建音频流。
 
-应用启动沿用 Windows 当前的麦克风侦听和输出目标，设置页打开时用实际状态回显复选框，并显示 Windows 保存的输出目标。未选择麦克风或无法读回状态时，复选框回退至 Wordy 保存的路由偏好。主动打开「音频侦听」时将所选麦克风侦听到 CABLE Input，主动关闭时关闭该麦克风的 Windows 侦听并切回本地播放设备。应用退出时保留 Windows 当前状态，不记录或恢复进入应用前的快照，也不重放旧版恢复日志。关闭失败时保留 Wordy 路由和开关以便重试。
+「音频侦听」只控制所选麦克风的 Windows 侦听，主动打开时将麦克风送到 CABLE Input，主动关闭时关闭该麦克风的侦听。应用启动沿用 Windows 当前状态，设置页回显实际开关状态和输出目标；未选择麦克风或读回失败时回退到 Wordy 保存的侦听偏好。应用退出时保留 Windows 当前状态。关闭失败时保留原侦听状态和开关以便重试。
 
 ## 轮盘 UI 一致性
 
@@ -84,22 +84,22 @@ uv run python -m pyright src/ tests/
 
 ```
 driver.py(VBCableDriverManager) → config.py(AppSettings) → main.py(生命周期)
-  → router.py(AudioRouter: 路由引擎，无软件混音)
+  → router.py(AudioRouter: WASAPI 端点解析和麦克风侦听)
     → listen_policy.py(Windows "侦听此设备" COM/WASAPI 策略管理)
   → player.py(AudioPlayer: TTS 播放到 CABLE Input)
   → capture.py(list_input_devices: sounddevice 输入设备枚举)
   → ui/settings.py(音频侦听设置页签)
 ```
 
-**路由原理**（不再做软件混音）：
+**路由原理**
 
-1. `AudioRouter` 将 TTS 输出重定向到 VB-CABLE Input（通过 `player.set_output_device`）
+1. 主播放独立使用 `AudioRouter.get_output_device()` 解析到的 CABLE Input，返听使用独立的本地播放器。
 2. 麦克风通过 Windows "侦听此设备" 功能直通到 CABLE Input（`listen_policy.py` 通过 COM/WASAPI `IPropertyStore` 读写 `PKEY_ListenTo`）
 3. 系统层叠加后从 CABLE Output 输出——零延迟、零 CPU 混音开销
 
 **侦听状态回显**：设置页读取 Windows 实际状态（`listen_policy.get_listen_policy`）而不是路由内部标志，显示「已开启 / 未开启 / 无法读取」；切换开关或麦克风后，`InputOverlay._report_audio_route_result` 以读回结果回显成功、失败或未生效，失败时设置页同时还原控件与配置。
 
-**AudioPlayer 回退链**：打开流失败时依次尝试 → int16 格式 → int16 + 设备默认采样率 → 系统默认输出设备。VB-CABLE 设备自动做单声道→双声道 upmix（避免 Pa 将相邻样本错拆为 L/R）。
+**AudioPlayer 回退链**：打开流失败时在原设备上依次尝试 int16 格式和 int16 加设备默认采样率。固定 CABLE Input 的主播放器禁用系统默认设备回退。VB-CABLE 设备自动将单声道扩为双声道，避免相邻样本被错拆到左右声道。
 
 ## PortAudio 生命周期
 

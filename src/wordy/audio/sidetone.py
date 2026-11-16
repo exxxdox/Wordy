@@ -37,20 +37,22 @@ _SIDETONE_TAIL_TIMEOUT_SECONDS = 2.0
 class SidetoneAudioPlayer:
     """TTSAudioPlayer 协议包装器，同时输出到主设备和本地播放设备。
 
-    通过 ``set_sidetone_enabled()`` 控制返听开关。
-    开关关闭时所有方法近乎零开销直通主播放器（仅一个 bool 判断）。
-    返听失败不影响主链路：stream 打开失败、写入异常均记录 warning 并继续。
+    主输出与返听各自启用。主设备不可用时，返听仍可单独播放。
 
     返听 write_stream 通过单个后台线程异步执行，提交永不阻塞主链路；
     队列缓存若干块以吸收设备抖动，持续落后时才停用本次返听。
     """
 
     def __init__(self, main_player: AudioPlayer, sidetone_player: AudioPlayer, *,
-                 monitor_index: Callable[[], int | None] | None = None) -> None:
+                 monitor_index: Callable[[], int | None] | None = None,
+                 main_enabled: bool = True) -> None:
         self._main = main_player
         self._sidetone = sidetone_player
         self._monitor_index = monitor_index
+        self._main_enabled = main_enabled
         self._sidetone_enabled = False
+        # 流的 PCM 格式取决于打开的设备，开关改变后需等流重建才能切换。
+        self._sidetone_sync = False
         # 返听流是否已确认不可用（打开失败或写入异常后置位，避免重复报错）
         self._sidetone_stream_dead = False
         self._sidetone_queue: Queue[bytes | object] | None = None
@@ -64,6 +66,10 @@ class SidetoneAudioPlayer:
 
     # ── 开关 ──────────────────────────────────────────────────────────
 
+    def set_main_enabled(self, enabled: bool) -> None:
+        """设置主输出开关，已打开的流由调用方排队重建。"""
+        self._main_enabled = enabled
+
     def set_sidetone_enabled(self, enabled: bool) -> None:
         """启用或停用返听。停用后需调用方自行 reset_audio_output 重建流。"""
         self._sidetone_enabled = enabled
@@ -72,7 +78,6 @@ class SidetoneAudioPlayer:
     def sidetone_enabled(self) -> bool:
         return self._sidetone_enabled
 
-    # 输出设备选择由 RoutingController 直接设置主播放器，包装器只代理 TTS 所需能力。
     # ── 属性代理（主播放器） ──────────────────────────────────────────
 
     @property
@@ -82,11 +87,13 @@ class SidetoneAudioPlayer:
     # ── TTSAudioPlayer 协议方法 ──────────────────────────────────────
 
     def begin_playback(self, cancel_event: Event) -> None:
-        """取消令牌只认一份：主播放器登记，返听由同一句柄驱动停止。"""
+        """同步播放可以使用任一设备，两边共用同一个取消句柄。"""
         self._main.begin_playback(cancel_event)
+        self._sidetone.begin_playback(cancel_event)
 
     def end_playback(self, cancel_event: Event) -> None:
         self._main.end_playback(cancel_event)
+        self._sidetone.end_playback(cancel_event)
 
     def _needs_sidetone(self, device_index: int | None) -> bool:
         # 主输出已经使用系统默认设备时，再返听会叠加同一段声音，造成爆音和回声。
@@ -111,62 +118,79 @@ class SidetoneAudioPlayer:
         on_progress: Callable[[float], None] | None = None,
         preview_local: bool = False,
     ) -> bool:
-        """同时播放主输出和返听；主输出结果决定调用是否成功。
+        """用开启的设备播放 WAV。
 
         主输出在调用线程里同步播完（异常照旧向上传播），返听另起守护线程，
         只在返回前有界地等它收尾。``preview_local`` 是本地试听：调用方已把
         主输出指到本地设备，再返听只会把同一段声音重复播一遍。
         """
-        progress: dict[str, Any] = {"on_progress": on_progress} if on_progress is not None else {}
+        options: dict[str, Any] = {}
+        if on_progress is not None:
+            options["on_progress"] = on_progress
+        if cancel_event is not None:
+            options["cancel_event"] = cancel_event
         # 两路绑定同一次播放的增益，不能读取会被后续槽位覆盖的共享音量。
-        if preview_local or not self._needs_sidetone(device_index):
-            if cancel_event is None:
-                return self._main.play_wav(wav_path, device_index=device_index, volume=volume, **progress)
-            return self._main.play_wav(
-                wav_path, device_index=device_index, cancel_event=cancel_event, volume=volume, **progress
-            )
+        if preview_local:
+            if device_index is None:
+                return False
+            return self._main.play_wav(wav_path, device_index=device_index, volume=volume, **options)
+        tail_is_active = self._sidetone_tail is not None and self._sidetone_tail.is_alive()
+        if not self._main_enabled:
+            if not self._sidetone_enabled or tail_is_active:
+                return False
+            return self._play_sidetone_wav(wav_path, volume, **options)
+        if not self._needs_sidetone(device_index):
+            return self._main.play_wav(wav_path, device_index=device_index, volume=volume, **options)
 
-        if self._sidetone_tail is not None and self._sidetone_tail.is_alive():
+        if tail_is_active:
             # 上一段返听仍在跑（设备落后或卡死）：本次只播主输出，不排队叠加。
             logger.warning("上一段返听尚未收尾，本次跳过返听")
-        else:
-            # 两个播放器不能并发消费同一个 BytesIO 游标。
-            sidetone_path = (
-                BytesIO(wav_path.getvalue()) if isinstance(wav_path, BytesIO) else wav_path
-            )
-            self._sidetone_tail = Thread(
-                target=self._play_sidetone_safe,
-                args=(sidetone_path, cancel_event, volume),
-                name="sidetone-wav",
-                daemon=True,
-            )
-            self._sidetone_tail.start()
+            return self._main.play_wav(wav_path, device_index=device_index, volume=volume, **options)
+
+        # 两个播放器不能并发消费同一个 BytesIO 游标。
+        sidetone_path = BytesIO(wav_path.getvalue()) if isinstance(wav_path, BytesIO) else wav_path
+        sidetone_completed = Event()
+        sidetone_started = False
+
+        def play_monitor() -> None:
+            if self._play_sidetone_wav(sidetone_path, volume, cancel_event=cancel_event):
+                sidetone_completed.set()
+
+        def on_main_progress(seconds: float) -> None:
+            nonlocal sidetone_started
+            if not sidetone_started:
+                # 首次进度回调代表主设备已打开。打不开时，本地整段由当前线程同步播放。
+                self._sidetone_tail = Thread(target=play_monitor, name="sidetone-wav", daemon=True)
+                self._sidetone_tail.start()
+                sidetone_started = True
+            if on_progress is not None:
+                on_progress(seconds)
 
         try:
-            if cancel_event is None:
-                result = self._main.play_wav(wav_path, device_index=device_index, volume=volume, **progress)
-            else:
-                result = self._main.play_wav(
-                    wav_path, device_index=device_index, cancel_event=cancel_event, volume=volume, **progress
-                )
+            result = self._main.play_wav(wav_path, device_index=device_index, volume=volume,
+                                         **{**options, "on_progress": on_main_progress})
         finally:
             # 主输出抛异常时也要等返听：调用方（decoded_audio_clip）随后就会删掉
             # 音源临时文件，返听线程再握着它就是卸载失败加一段仍在响的残音。
-            self._wait_sidetone_tail()
-        return result and (cancel_event is None or not cancel_event.is_set())
+            if sidetone_started:
+                self._wait_sidetone_tail()
+        if cancel_event is not None and cancel_event.is_set():
+            return False
+        if not result and not sidetone_started:
+            return self._play_sidetone_wav(sidetone_path, volume, **options)
+        return result or sidetone_completed.is_set()
 
-    def _play_sidetone_safe(self, wav_path: str | BytesIO, cancel_event: Event | None, volume: float) -> None:
-        """在返听线程中播放；失败只记 warning，不影响主链路。"""
+    def _play_sidetone_wav(self, wav_path: str | BytesIO, volume: float, **options: Any) -> bool:
         try:
             index = self._monitor_index() if self._monitor_index is not None else None
             if self._monitor_index is not None and index is None:
-                return
-            if cancel_event is None:
-                self._sidetone.play_wav(wav_path, device_index=index, volume=volume)
-            else:
-                self._sidetone.play_wav(wav_path, device_index=index, cancel_event=cancel_event, volume=volume)
+                return False
+            if options.get("cancel_event") is None:
+                options.pop("cancel_event", None)
+            return self._sidetone.play_wav(wav_path, device_index=index, volume=volume, **options)
         except Exception:
             logger.warning("返听 WAV 播放失败", exc_info=True)
+            return False
 
     def _wait_sidetone_tail(self) -> None:
         """只等返听收尾，不等整段；超时即放弃，线程是守护线程自会随进程退出。"""
@@ -188,47 +212,46 @@ class SidetoneAudioPlayer:
         device_index: int | None = None,
         frames_per_buffer: int = 1024,
     ) -> bool:
-        """打开流：主设备 → 返听设备（如启用）。
-
-        主设备打开失败直接返回 False。返听设备失败仅记录 warning，
-        置位 _sidetone_stream_dead 避免后续 write_stream 重复尝试。
-        """
-        main_ok = self._main.open_stream(
+        """打开已启用的流，至少有一个实际输出设备才成功。"""
+        if self._sidetone_sync or self._sidetone_queue is not None:
+            self.close_stream()
+        main_ok = self._main_enabled and self._main.open_stream(
             audio_format, channels, rate,
             device_index=device_index,
             frames_per_buffer=frames_per_buffer,
         )
-        if not main_ok:
-            return False
-
         self._sidetone_stream_dead = False
-        if not self._needs_sidetone(device_index):
+        if not self._sidetone_enabled or (main_ok and not self._needs_sidetone(device_index)):
             self._sidetone_stream_dead = True
-            return True
+            return main_ok
         # 上一路返听线程仍卡在写入（或正在自行收尾）：此时开新流会与它抢同一个
         # PortAudio 流，宁可本次只走主输出。
         draining = self._sidetone_thread
-        if draining is not None and draining.is_alive():
+        if ((draining is not None and draining.is_alive()) or
+                (self._sidetone_tail is not None and self._sidetone_tail.is_alive())):
             self._sidetone_stream_dead = True
-            logger.warning("上一路返听尚未退出，本次只打开主输出")
-            return True
+            logger.warning("上一路返听尚未退出，本次跳过返听")
+            return main_ok
 
         try:
             # 主设备可能回退了格式或采样率，返听必须按实际 PCM 配置打开。
-            main_config = self._main.get_stream_config()
+            main_config = self._main.get_stream_config() if main_ok else {}
             index = self._monitor_index() if self._monitor_index is not None else None
             if self._monitor_index is not None and index is None:
                 self._sidetone_stream_dead = True
-                return True
+                return main_ok
             sidetone_ok = self._sidetone.open_stream(
                 main_config.get("format") or audio_format, channels,
                 main_config.get("rate") or rate,
                 device_index=index,
                 frames_per_buffer=frames_per_buffer,
             )
+            if not main_ok and sidetone_ok:
+                self._sidetone_sync = True
+                return True
             if not sidetone_ok:
                 self._sidetone_stream_dead = True
-                logger.warning("返听设备流打开失败，仅主链路工作")
+                logger.warning("返听设备流打开失败")
             elif self._sidetone.get_stream_config() != main_config:
                 # 不把同一 PCM 当作另一种格式播放；不兼容时保留主输出。
                 self._sidetone_stream_dead = True
@@ -251,10 +274,13 @@ class SidetoneAudioPlayer:
             self._sidetone_thread = thread
             self._sidetone_owned = True
             thread.start()
-        return True
+        return main_ok
 
     def write_stream(self, data: bytes) -> None:
         """写入流数据：返听先提交到后台线程 → 主设备同步写入。两者并行执行。"""
+        if self._sidetone_sync:
+            self._sidetone.write_stream(data)
+            return
         # 提交永不等待：返听拖慢主输出比返听漏一段更糟。队列满说明返听已持续落后。
         if self._sidetone_enabled and not self._sidetone_stream_dead:
             queue = self._sidetone_queue
@@ -320,17 +346,28 @@ class SidetoneAudioPlayer:
             logger.warning("返听线程仍在收尾，返听流交给该线程关闭")
             return
         # 有 worker 时流已由它关闭；只有从未启动 worker 的路径才需要这里补关。
-        if not self._sidetone_owned and (self._sidetone_enabled or thread is not None):
+        if not self._sidetone_owned and (self._sidetone_sync or self._sidetone_enabled or thread is not None):
             try:
                 self._sidetone.close_stream()
             except Exception:
                 logger.warning("返听流关闭失败", exc_info=True)
         self._sidetone_owned = False
+        self._sidetone_sync = False
 
     def get_stream_config(self) -> dict[str, int | None]:
-        """返回主设备当前流的实际格式与采样率。"""
-        return self._main.get_stream_config()
+        """返回实际同步输出的流格式与采样率。"""
+        output = self._sidetone if self._sidetone_sync else self._main
+        return output.get_stream_config()
 
     def query_output_device_default_rate(self) -> int | None:
-        """查询主设备默认采样率。"""
-        return self._main.query_output_device_default_rate()
+        """流打开前优先采用主设备采样率，本地单路则采用返听设备。"""
+        if self._main_enabled:
+            rate = self._main.query_output_device_default_rate()
+            if rate is not None:
+                return rate
+        if not self._sidetone_enabled:
+            return None
+        index = self._monitor_index() if self._monitor_index is not None else None
+        if self._monitor_index is not None and index is None:
+            return None
+        return self._sidetone.query_output_device_default_rate(device_index=index)

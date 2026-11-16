@@ -40,6 +40,32 @@ def test_audio_file_waits_for_worker_handoff_without_voice(manager, mock_player,
     manager.shutdown()
 
 
+def test_both_playback_switches_off_finish_without_submitting(manager):
+    manager._settings.main_playback_enabled = False
+    manager._settings.sidetone_enabled = False
+    finished = MagicMock()
+
+    manager.speak("测试", on_finished=finished)
+    manager.play_audio_file(Path("clip.wav"), on_finished=finished)
+
+    assert finished.call_count == 2
+    manager.executor.submit.assert_not_called()
+
+
+@pytest.mark.parametrize("preview_local", [True, False])
+def test_stopping_main_playback_does_not_cancel_local_preview(manager, monkeypatch, preview_local):
+    stop_speech = MagicMock()
+    monkeypatch.setattr(manager, "stop_speech", stop_speech)
+    manager.play_audio_file(Path("clip.wav"), preview_local=preview_local)
+    cancel = manager._clip_cancel
+    assert cancel is not None
+
+    manager.stop_main_playback()
+
+    stop_speech.assert_called_once_with()
+    assert cancel.is_set() is (not preview_local)
+
+
 def test_audio_file_preview_local_plays_on_local_device(manager, mock_player, monkeypatch):
     """试听必须用本地输出索引，不能退回路由中的 CABLE Input。"""
     from contextlib import contextmanager
@@ -49,6 +75,8 @@ def test_audio_file_preview_local_plays_on_local_device(manager, mock_player, mo
         yield path
     monkeypatch.setattr("wordy.tts_manager.decoded_audio_clip", decoded)
     manager._local_output_index = lambda: 7
+    manager._settings.main_playback_enabled = False
+    manager._settings.sidetone_enabled = False
     hold_key = MagicMock(return_value="g")
     monkeypatch.setattr(manager, "_begin_hold_key", hold_key)
 

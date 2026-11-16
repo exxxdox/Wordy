@@ -20,7 +20,6 @@ import pytest
 sys.path.insert(0, str(__file__).replace("/tests/test_main_app.py", ""))
 
 from wordy.config import AppSettings
-from wordy.identity import AudioIdentity
 from wordy.tts.constants import TTS_BACKEND_CARTESIA_BYTES, TTS_BACKEND_CARTESIA_REALTIME
 from wordy.tts.engine import BackendTTSEngine
 # 直接测试生命周期所属对象，不要求主应用保留测试专用转发属性。
@@ -416,11 +415,15 @@ def test_configure_logging_installs_log_stream_pipeline(monkeypatch):
     assert file_calls == [None]
 
 
-def test_run_prepares_overlay_tray_hook_and_disposes_tray_before_overlay_run(app, monkeypatch):
+@pytest.mark.parametrize("main_enabled,has_cable", [(True, False), (True, True), (False, False)])
+def test_run_prepares_overlay_tray_hook_and_disposes_tray_before_overlay_run(
+    app, monkeypatch, main_enabled, has_cable,
+):
     """run() must prepare overlay UI, wire TrayApp, hook tray disposal, then enter overlay.run()."""
     import wordy.main as main_mod
 
     events: list[str] = []
+    notifications: list[str] = []
 
     class RecordingOverlay(FakeInputOverlay):
         def __init__(self, **kwargs: Any) -> None:
@@ -451,11 +454,18 @@ def test_run_prepares_overlay_tray_hook_and_disposes_tray_before_overlay_run(app
         def dispose(self) -> None:
             events.append("tray.app.dispose")
 
+        def notify(self, message: str) -> None:
+            notifications.append(message)
+
     monkeypatch.setattr(main_mod, "InputOverlay", RecordingOverlay)
     assert hasattr(main_mod, "TrayApp"), "main must import TrayApp for tray lifecycle wiring"
     monkeypatch.setattr(main_mod, "TrayApp", RecordingTrayApp)
 
     instance = main_mod.WordyApp()
+    instance._settings.main_playback_enabled = main_enabled
+    instance.player.set_output_device(
+        {"name": "CABLE Input", "host_api_name": "Windows WASAPI"} if has_cable else None,
+    )
     instance.tts_manager.engine = app.tts_manager.engine
     instance.tts_manager._executor = app.tts_manager._executor
     instance.tts_manager._janitor_queue = queue.SimpleQueue()
@@ -473,7 +483,10 @@ def test_run_prepares_overlay_tray_hook_and_disposes_tray_before_overlay_run(app
     monkeypatch.setattr(instance.routing, "stop", stop_routing)
     instance.run()
 
-    stop_routing.assert_called_once_with(notify_output_change=False, preserve_listen=True)
+    stop_routing.assert_called_once_with(preserve_listen=True)
+    assert bool(notifications) is (main_enabled and not has_cable)
+    if notifications:
+        assert "VB-CABLE" in notifications[0] and "下载" in notifications[0]
     assert events.count("tray.app.dispose") == 1, (
         f"tray.dispose must be registered as overlay pre-stop hook and called once, got {events!r}"
     )
@@ -506,6 +519,9 @@ def test_run_disposes_tray_in_finally_when_overlay_run_raises(app, monkeypatch):
 
         def dispose(self) -> None:
             events.append("tray.app.dispose")
+
+        def notify(self, message: str) -> None:
+            pass
 
     monkeypatch.setattr(main_mod, "InputOverlay", RaisingOverlay)
     assert hasattr(main_mod, "TrayApp"), "main must import TrayApp for tray lifecycle wiring"
@@ -1053,148 +1069,36 @@ def _patch_audio_player_factory(monkeypatch) -> list[dict[str, Any]]:
     return calls
 
 
-def test_app_constructs_audio_player_with_loaded_output_device_name(monkeypatch):
-    """WordyApp must call AudioPlayer with output_device_name from AppSettings."""
-    s = AppSettings()
-    s.tts_backend = TTS_BACKEND_CARTESIA_BYTES
-    s.voice_id = "fake-voice"
-    s.voice_name = "Fake"
-    s.volume = 1.0
-    s.audio_output_device = {"name": "USB Headphones", "host_api_name": "WASAPI"}
-    s.audio_output_device_name = "USB Headphones"
-    monkeypatch.setattr(AppSettings, "load", lambda **kw: s)
-    audio_player_calls = _patch_audio_player_factory(monkeypatch)
-
+def test_main_playback_is_fixed_and_playback_device_only_changes_monitor(monkeypatch):
     import wordy.main as main_mod
 
-    engine = FakeTTSEngine(voice_id="fake-voice")
-    monkeypatch.setattr("wordy.tts_manager.create_tts_engine", lambda *a, **kw: engine)
+    settings = AppSettings()
+    settings.audio_output_device = {"name": "Headphones", "host_api_name": "Windows WASAPI"}
+    settings.main_playback_enabled = False
+    monkeypatch.setattr(AppSettings, "load", lambda **kw: settings)
+    monkeypatch.setattr(main_mod, "InputOverlay", _RecordingInputOverlay)
+    monkeypatch.setattr("wordy.tts_manager.create_tts_engine", lambda *a, **kw: FakeTTSEngine())
+    cable = {"name": "CABLE Input", "host_api_name": "Windows WASAPI"}
+    monkeypatch.setattr("wordy.audio.router.AudioRouter.get_output_device", staticmethod(lambda: cable))
+    calls = _patch_audio_player_factory(monkeypatch)
 
-    _ = main_mod.WordyApp()
+    app = main_mod.WordyApp()
+    assert calls[0]["kwargs"] == {"output_device": cable, "allow_default_fallback": False}
+    assert calls[1]["kwargs"]["output_device"] == settings.audio_output_device
 
-    assert audio_player_calls, "AudioPlayer must be constructed exactly once at startup"
-    init_kwargs = audio_player_calls[0]["kwargs"]
-    assert init_kwargs.get("output_device", {}).get("name") == "USB Headphones", (
-        f"AudioPlayer must receive output_device with name from load helper, got {init_kwargs!r}"
-    )
+    callbacks = _RecordingInputOverlay.last_kwargs
+    callbacks["on_main_playback_change"](True)
+    assert app.player.output_device == cable
+    assert app._sidetone_wrapper._main_enabled is True
+    callbacks["on_main_playback_change"](False)
+    assert app._sidetone_wrapper._main_enabled is False
 
-
-def test_app_constructs_audio_player_with_none_when_no_stored_device(monkeypatch):
-    """When AppSettings.audio_output_device_name is None, AudioPlayer must receive None."""
-    s = AppSettings()
-    s.tts_backend = TTS_BACKEND_CARTESIA_BYTES
-    s.voice_id = "fake-voice"
-    s.voice_name = "Fake"
-    s.volume = 1.0
-    s.audio_output_device_name = None
-    monkeypatch.setattr(AppSettings, "load", lambda **kw: s)
-    audio_player_calls = _patch_audio_player_factory(monkeypatch)
-
-    import wordy.main as main_mod
-
-    engine = FakeTTSEngine(voice_id="fake-voice")
-    monkeypatch.setattr("wordy.tts_manager.create_tts_engine", lambda *a, **kw: engine)
-
-    _ = main_mod.WordyApp()
-
-    assert audio_player_calls
-    init_kwargs = audio_player_calls[0]["kwargs"]
-    assert "output_device" in init_kwargs, (
-        f"AudioPlayer must receive output_device kwarg even when None, got {init_kwargs!r}"
-    )
-    assert init_kwargs.get("output_device") is None
-
-
-def test_on_audio_output_change_updates_player_device_name(monkeypatch):
-    """结构化 dict 音频设备变更应更新 player.output_device 和派生属性 output_device_name。"""
-    s = AppSettings()
-    s.tts_backend = TTS_BACKEND_CARTESIA_BYTES
-    s.voice_id = "fake-voice"
-    s.voice_name = "Fake"
-    s.volume = 1.0
-    s.audio_output_device_name = None
-    monkeypatch.setattr(AppSettings, "load", lambda **kw: s)
-    _ = _patch_audio_player_factory(monkeypatch)
-
-    import wordy.main as main_mod
-
-    engine = FakeTTSEngine(voice_id="fake-voice")
-    monkeypatch.setattr("wordy.tts_manager.create_tts_engine", lambda *a, **kw: engine)
-
-    instance = main_mod.WordyApp()
-
-    handler = getattr(instance.routing, "on_output_device_change", None)
-    assert callable(handler), "RoutingController must expose on_output_device_change callable"
-
-    handler({"name": "VB-Audio Virtual Cable", "host_api_name": "WASAPI"})
-
-    player = instance.player
-    assert getattr(player, "output_device_name", None) == "VB-Audio Virtual Cable", (
-        f"player.output_device_name must update to selected name, got {getattr(player, 'output_device_name', None)!r}"
-    )
-
-
-def test_on_audio_output_change_to_none_clears_player_device_name(monkeypatch):
-    """_on_audio_output_change(None) must clear the player's output device name."""
-    s = AppSettings()
-    s.tts_backend = TTS_BACKEND_CARTESIA_BYTES
-    s.voice_id = "fake-voice"
-    s.voice_name = "Fake"
-    s.volume = 1.0
-    s.audio_output_device_name = "Initial"
-    monkeypatch.setattr(AppSettings, "load", lambda **kw: s)
-    _ = _patch_audio_player_factory(monkeypatch)
-
-    import wordy.main as main_mod
-
-    engine = FakeTTSEngine(voice_id="fake-voice")
-    monkeypatch.setattr("wordy.tts_manager.create_tts_engine", lambda *a, **kw: engine)
-
-    instance = main_mod.WordyApp()
-    handler = getattr(instance.routing, "on_output_device_change", None)
-    assert callable(handler), "RoutingController must expose on_output_device_change callable"
-
-    handler(None)
-
-    player = instance.player
-    assert getattr(player, "output_device_name", "MISSING") is None, (
-        f"player.output_device_name must be None after clear, got {getattr(player, 'output_device_name', 'MISSING')!r}"
-    )
-
-
-def test_app_wires_on_audio_output_change_callback_to_overlay(monkeypatch):
-    """WordyApp must pass _on_audio_output_change to InputOverlay constructor."""
-    s = AppSettings()
-    s.tts_backend = TTS_BACKEND_CARTESIA_BYTES
-    s.voice_id = "fake-voice"
-    s.voice_name = "Fake"
-    s.volume = 1.0
-    s.audio_output_device_name = None
-    monkeypatch.setattr(AppSettings, "load", lambda **kw: s)
-    _ = _patch_audio_player_factory(monkeypatch)
-    monkeypatch.setattr("wordy.main.InputOverlay", _RecordingInputOverlay)
-    _RecordingInputOverlay.last_kwargs = {}
-
-    import wordy.main as main_mod
-
-    engine = FakeTTSEngine(voice_id="fake-voice")
-    monkeypatch.setattr("wordy.tts_manager.create_tts_engine", lambda *a, **kw: engine)
-
-    instance = main_mod.WordyApp()
-
-    overlay_kwargs = _RecordingInputOverlay.last_kwargs
-    assert "on_audio_output_change" in overlay_kwargs, (
-        f"InputOverlay must receive on_audio_output_change kwarg, got {overlay_kwargs!r}"
-    )
-    assert overlay_kwargs["on_audio_output_change"] == instance.routing.on_output_device_change, (
-        "on_audio_output_change kwarg must be bound to RoutingController.on_output_device_change"
-    )
-    assert "audio_player" in overlay_kwargs, (
-        f"InputOverlay must receive audio_player kwarg, got {overlay_kwargs!r}"
-    )
-    assert overlay_kwargs["audio_player"] is instance.player, (
-        "audio_player kwarg must be the WordyApp.player instance"
-    )
+    local = {"name": "Speakers", "host_api_name": "Windows WASAPI"}
+    callbacks["on_audio_output_change"](local)
+    assert app._sidetone_player.output_device == local
+    callbacks["on_audio_output_change"](None)
+    assert app._sidetone_player.output_device is None
+    assert app.player.output_device == cable
 
 
 class _FakeAudioRouter:
@@ -1258,8 +1162,8 @@ def _patch_audio_router_for_runtime_change(monkeypatch) -> type[_FakeAudioRouter
     return _FakeAudioRouter
 
 
-def test_enabling_audio_route_runtime_switches_player_output(monkeypatch):
-    """Runtime audio-route enable must switch player output to CABLE Input."""
+def test_enabling_audio_route_runtime_keeps_main_output(monkeypatch):
+    """Enabling microphone listen must leave main playback alone."""
     router_cls = _patch_audio_router_for_runtime_change(monkeypatch)
 
     import wordy.main as main_mod
@@ -1280,7 +1184,7 @@ def test_enabling_audio_route_runtime_switches_player_output(monkeypatch):
     assert router.started is True
     assert router.configure_listen is True
     # 运行时 AudioPlayer 已被 fake factory 替换为 MagicMock
-    cast(MagicMock, app.player).set_output_device.assert_called_once()
+    cast(MagicMock, app.player).set_output_device.assert_not_called()
 
 
 def test_enabling_audio_route_uses_stored_mic_when_not_in_route_config(monkeypatch):
@@ -1308,34 +1212,8 @@ def test_enabling_audio_route_uses_stored_mic_when_not_in_route_config(monkeypat
     )
 
 
-def test_audio_route_keeps_cable_output_when_local_output_changes(monkeypatch):
-    """路由运行时本地输出变更只能更新恢复目标，不能覆盖 CABLE Input。"""
-    _patch_audio_router_for_runtime_change(monkeypatch)
-
-    import wordy.main as main_mod
-
-    engine = FakeTTSEngine(voice_id="fake-voice")
-    monkeypatch.setattr("wordy.tts_manager.create_tts_engine", lambda *a, **kw: engine)
-    app = main_mod.WordyApp()
-    app.routing.apply_config({"audio_routing_enabled": True})
-    # 运行时 AudioPlayer 已被 fake factory 替换为 MagicMock
-    player_mock = cast(MagicMock, app.player)
-    player_mock.set_output_device.reset_mock()
-
-    local_output = {"name": "Speakers", "host_api_name": "Windows WASAPI"}
-    app.routing.on_output_device_change(local_output)
-
-    player_mock.set_output_device.assert_not_called()
-    assert app.routing._saved_output_device == local_output
-    assert app.routing._saved_output_device == local_output
-
-    app.routing.apply_config({"audio_routing_enabled": False})
-
-    player_mock.set_output_device.assert_called_once_with(local_output)
-
-
 def test_disabling_audio_route_runtime_stops_router(monkeypatch):
-    """Disabling audio routing must stop router and reset output device."""
+    """Disabling microphone listen must leave main playback alone."""
     router_cls = _patch_audio_router_for_runtime_change(monkeypatch)
 
     import wordy.main as main_mod
@@ -1351,6 +1229,7 @@ def test_disabling_audio_route_runtime_stops_router(monkeypatch):
     assert router.stopped is True
     assert router.preserve_listen is False
     assert app.routing._router is None
+    cast(MagicMock, app.player).set_output_device.assert_not_called()
 
 
 def test_audio_route_runtime_update_can_clear_optional_devices(monkeypatch):
@@ -1380,203 +1259,6 @@ def test_audio_route_runtime_update_can_clear_optional_devices(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# RED contract tests for STRUCTURED audio output device identity (S3 follow-up).
-#
-# New requirement: WordyApp consumes ``load_audio_output_device()`` (structured
-# dict ``{"name": ..., "host_api_name": ...}`` or ``None``) and propagates the
-# structured value to AudioPlayer construction and to ``player.set_output_device``
-# on change. Legacy ``load_audio_output_device_name`` / ``set_output_device_name``
-# remain available but are no longer the wiring surface.
-# ---------------------------------------------------------------------------
-
-
-def _patch_structured_audio_player_factory(monkeypatch) -> list[dict[str, Any]]:
-    """Patch main.AudioPlayer with a factory that records all kwargs and tracks set_output_device."""
-    calls: list[dict[str, Any]] = []
-
-    def factory(*args: Any, **kwargs: Any) -> MagicMock:
-        calls.append({"args": args, "kwargs": kwargs})
-        player = MagicMock(name="AudioPlayer")
-        player.set_output_device_calls = []
-
-        def set_output_device(device: Any) -> None:
-            player.set_output_device_calls.append(device)
-            player.output_device = device
-            player.output_device_name = device.get("name") if isinstance(device, dict) else None
-
-        player.set_output_device.side_effect = set_output_device
-        player.output_device = kwargs.get("output_device")
-        player.output_device_name = (
-            kwargs["output_device"].get("name")
-            if isinstance(kwargs.get("output_device"), dict)
-            else None
-        )
-        return player
-
-    monkeypatch.setattr("wordy.main.AudioPlayer", factory)
-    return calls
-
-
-def test_app_constructs_audio_player_with_structured_load_audio_output_device(monkeypatch):
-    """WordyApp must construct AudioPlayer using AppSettings.audio_output_device (structured dict).
-
-    Contract:
-      * AppSettings.load() is called and the settings instance provides audio_output_device.
-      * AudioPlayer receives the structured value via an ``output_device`` kwarg
-        (not the legacy ``output_device_name`` flattened to a string).
-    """
-    structured: AudioIdentity = {"name": "Speakers (Realtek)", "host_api_name": "WASAPI"}
-    load_calls: list[None] = []
-    s = AppSettings()
-    s.tts_backend = TTS_BACKEND_CARTESIA_BYTES
-    s.voice_id = "fake-voice"
-    s.voice_name = "Fake"
-    s.volume = 1.0
-    s.audio_output_device = structured
-    s.audio_output_device_name = None
-
-    def fake_load(**kw: Any) -> AppSettings:
-        load_calls.append(None)
-        return s
-
-    monkeypatch.setattr(AppSettings, "load", fake_load)
-
-    audio_player_calls = _patch_structured_audio_player_factory(monkeypatch)
-
-    import wordy.main as main_mod
-
-    engine = FakeTTSEngine(voice_id="fake-voice")
-    monkeypatch.setattr("wordy.tts_manager.create_tts_engine", lambda *a, **kw: engine)
-
-    _ = main_mod.WordyApp()
-
-    assert load_calls, (
-        "WordyApp must call load_audio_output_device() during construction"
-    )
-    assert audio_player_calls, "AudioPlayer must be constructed exactly once at startup"
-    init_kwargs = audio_player_calls[0]["kwargs"]
-    assert "output_device" in init_kwargs, (
-        f"AudioPlayer must receive the structured value via 'output_device' kwarg, "
-        f"got kwargs={init_kwargs!r}"
-    )
-    received = init_kwargs["output_device"]
-    assert isinstance(received, dict), (
-        f"AudioPlayer.output_device must be a structured dict, got {received!r}"
-    )
-    assert received == {"name": "Speakers (Realtek)", "host_api_name": "WASAPI"}, (
-        f"AudioPlayer.output_device must equal load_audio_output_device() result, got {received!r}"
-    )
-
-
-def test_app_constructs_audio_player_with_none_when_load_returns_none(monkeypatch):
-    """When AppSettings.audio_output_device is None, AudioPlayer's output_device must be None."""
-    s = AppSettings()
-    s.tts_backend = TTS_BACKEND_CARTESIA_BYTES
-    s.voice_id = "fake-voice"
-    s.voice_name = "Fake"
-    s.volume = 1.0
-    s.audio_output_device = None
-    s.audio_output_device_name = None
-    monkeypatch.setattr(AppSettings, "load", lambda **kw: s)
-
-    audio_player_calls = _patch_structured_audio_player_factory(monkeypatch)
-
-    import wordy.main as main_mod
-
-    engine = FakeTTSEngine(voice_id="fake-voice")
-    monkeypatch.setattr("wordy.tts_manager.create_tts_engine", lambda *a, **kw: engine)
-
-    _ = main_mod.WordyApp()
-
-    assert audio_player_calls
-    init_kwargs = audio_player_calls[0]["kwargs"]
-    assert "output_device" in init_kwargs, (
-        f"AudioPlayer must receive 'output_device' kwarg even when None, got {init_kwargs!r}"
-    )
-    assert init_kwargs["output_device"] is None, (
-        f"AudioPlayer 'output_device' must be None when load returns None, got {init_kwargs!r}"
-    )
-
-
-def test_on_audio_output_change_with_structured_device_calls_set_output_device(monkeypatch):
-    """_on_audio_output_change(structured_dict) must call player.set_output_device(structured_dict).
-
-    Contract: the handler propagates the *structured* identity to the player via
-    ``set_output_device`` (not the legacy ``set_output_device_name`` with just the
-    bare ``name`` string).
-    """
-    s = AppSettings()
-    s.tts_backend = TTS_BACKEND_CARTESIA_BYTES
-    s.voice_id = "fake-voice"
-    s.voice_name = "Fake"
-    s.volume = 1.0
-    s.audio_output_device = None
-    s.audio_output_device_name = None
-    monkeypatch.setattr(AppSettings, "load", lambda **kw: s)
-    _ = _patch_structured_audio_player_factory(monkeypatch)
-
-    import wordy.main as main_mod
-
-    engine = FakeTTSEngine(voice_id="fake-voice")
-    monkeypatch.setattr("wordy.tts_manager.create_tts_engine", lambda *a, **kw: engine)
-
-    instance = main_mod.WordyApp()
-    handler = getattr(instance.routing, "on_output_device_change", None)
-    assert callable(handler), "RoutingController must expose on_output_device_change callable"
-
-    structured = {"name": "VB-Audio Virtual Cable", "host_api_name": "WASAPI"}
-    handler(structured)
-
-    player = instance.player
-    set_calls = getattr(player, "set_output_device_calls", None)
-    assert set_calls, (
-        f"player.set_output_device must be invoked with the structured device, "
-        f"got set_output_device_calls={set_calls!r}, "
-        f"output_device={getattr(player, 'output_device', None)!r}"
-    )
-    assert set_calls[-1] == structured, (
-        f"player.set_output_device must receive the exact structured dict, got {set_calls[-1]!r}"
-    )
-    assert isinstance(set_calls[-1], dict), (
-        f"player.set_output_device argument must be a dict, got {type(set_calls[-1]).__name__}"
-    )
-
-
-def test_on_audio_output_change_with_none_clears_via_set_output_device(monkeypatch):
-    """_on_audio_output_change(None) must call player.set_output_device(None)."""
-    initial_structured: AudioIdentity = {"name": "Initial Device", "host_api_name": "MME"}
-    s = AppSettings()
-    s.tts_backend = TTS_BACKEND_CARTESIA_BYTES
-    s.voice_id = "fake-voice"
-    s.voice_name = "Fake"
-    s.volume = 1.0
-    s.audio_output_device = initial_structured
-    s.audio_output_device_name = "Initial Device"
-    monkeypatch.setattr(AppSettings, "load", lambda **kw: s)
-    _ = _patch_structured_audio_player_factory(monkeypatch)
-
-    import wordy.main as main_mod
-
-    engine = FakeTTSEngine(voice_id="fake-voice")
-    monkeypatch.setattr("wordy.tts_manager.create_tts_engine", lambda *a, **kw: engine)
-
-    instance = main_mod.WordyApp()
-    handler = getattr(instance.routing, "on_output_device_change", None)
-    assert callable(handler), "RoutingController must expose on_output_device_change callable"
-
-    handler(None)
-
-    player = instance.player
-    set_calls = getattr(player, "set_output_device_calls", None)
-    assert set_calls, (
-        f"player.set_output_device must be invoked when clearing, "
-        f"got set_output_device_calls={set_calls!r}"
-    )
-    assert set_calls[-1] is None, (
-        f"player.set_output_device must receive None to clear selection, got {set_calls[-1]!r}"
-    )
-
-
 def test_on_submit_rejects_blank_text(app, caplog):
     """RED characterization: _on_submit must NOT submit blank/whitespace-only text.
 

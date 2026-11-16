@@ -6,10 +6,20 @@
 from pathlib import Path
 
 import pytest
-
 import wordy.config
 from wordy.config import AppSettings
 
+
+@pytest.mark.parametrize("enabled,listen", [(False, True), (True, False)])
+def test_main_playback_setting_persists_independently(tmp_path, monkeypatch, enabled, listen):
+    config_file = tmp_path / "config.toml"
+    settings = AppSettings.load(config_file=config_file)
+    assert settings.main_playback_enabled is True
+    settings.update(main_playback_enabled=enabled, audio_routing_enabled=listen)
+    monkeypatch.setattr(wordy.config, "_cached_settings", None)
+    restored = AppSettings.load(config_file=config_file)
+    assert restored.main_playback_enabled is enabled
+    assert restored.audio_routing_enabled is listen
 
 class TestAudioRoutingPersistence:
     """验证所有音频侦听字段能正确保存并在重新加载后恢复。"""

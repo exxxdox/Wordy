@@ -219,6 +219,34 @@ def test_resolve_falls_back_to_default_when_named_device_missing(_patch_pyaudio)
     assert result == 0  # falls back to default
 
 
+@pytest.mark.parametrize("device", [None, {"name": "Missing CABLE Input"}])
+def test_strict_output_never_resolves_to_default_but_allows_explicit_preview(_patch_pyaudio, device):
+    player = AudioPlayer(output_device=device, allow_default_fallback=False)
+
+    assert not player.open_stream(8, 2, 48000)
+    assert not _patch_pyaudio.open_calls
+    assert player.open_stream(8, 2, 48000, device_index=0)
+    assert _patch_pyaudio.open_calls[-1]["output_device_index"] == 0
+    player.close_stream()
+
+
+def test_unavailable_strict_output_never_opens_default_device(_patch_pyaudio, monkeypatch):
+    attempted = []
+    original_open = _patch_pyaudio.open
+
+    def open_device(**options):
+        attempted.append(options["output_device_index"])
+        if options["output_device_index"] == 1:
+            raise OSError(-9996, "Invalid device")
+        return original_open(**options)
+
+    monkeypatch.setattr(_patch_pyaudio, "open", open_device)
+    player = AudioPlayer(output_device={"name": "VB-Cable Output"}, allow_default_fallback=False)
+
+    assert not player.open_stream(8, 2, 48000)
+    assert set(attempted) == {1}
+
+
 def test_resolve_returns_none_when_default_device_lookup_raises(monkeypatch):
     """When get_default_output_device_info raises, _resolve_output_device returns None."""
     pa = FakePyAudio()

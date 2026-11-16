@@ -12,7 +12,7 @@ from pathlib import Path
 if TYPE_CHECKING:
     from wordy.audio.listen_policy import ListenPolicyState
 
-from PySide6.QtCore import QEvent, Qt, QTimer
+from PySide6.QtCore import QEvent, QSignalBlocker, Qt, QTimer
 from PySide6.QtGui import QFont, QFontDatabase
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QFileDialog, QFontComboBox, QFrame, QHBoxLayout, QLabel, QMessageBox,
@@ -167,10 +167,9 @@ class SettingsWindow:
         self.opacity_value_label: QLabel = QLabel()
         self.opacity_slider: QSlider = NoWheelSlider(Qt.Orientation.Horizontal)
         self.fixed_center_check: QCheckBox = QCheckBox()
-        # 音频侦听 UI
+        # 播放与麦克风侦听各有独立的设置。
         self.audio_route_enabled_check: QCheckBox = QCheckBox()
-        self.audio_route_status_label: QLabel = QLabel()
-        self.vb_cable_install_button: QPushButton = QPushButton()
+        self.vb_cable_install_button: QPushButton | None = None
         # TTS 服务商专属设置容器
         self._tts_provider_container: QFrame | None = None
 
@@ -457,10 +456,11 @@ class SettingsWindow:
 
         route_layout = self._create_tab_page(tab_widget, "音频设置")
         output_column, route_column = self._create_columns(
-            route_layout, ("播放与返听", "麦克风与路由"))
-        self._build_audio_output_section(output_column, state, s)
+            route_layout, ("播放与返听", "麦克风与侦听"))
+        self._build_main_playback_section(output_column, state, s)
         self._add_inner_gap(output_column)
         self._build_sidetone_section(output_column, s)
+        self._build_audio_output_section(output_column, state, s)
         self._build_audio_route_section(route_column, state, s)
         output_column.addStretch(1)
         route_column.addStretch(1)
@@ -708,8 +708,10 @@ class SettingsWindow:
 
     def _build_audio_output_section(self, parent_layout: QVBoxLayout, state: SettingsState, s: AppSettings) -> None:
         section = self._create_section(parent_layout)
-        section.addWidget(self._section_title("播放设备"))
+        section.addWidget(self._section_title("返听播放设备"))
         self.audio_output_combo = NoWheelComboBox()
+        self.audio_output_combo.setAccessibleName("返听播放设备")
+        self.audio_output_combo.setToolTip("用于本地返听和 F10 裁剪试听。")
         self.audio_output_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContentsOnFirstShow)
         self.audio_output_combo.setMinimumContentsLength(24)
         self.audio_output_combo.view().setTextElideMode(Qt.TextElideMode.ElideRight)
@@ -774,33 +776,41 @@ class SettingsWindow:
         section.addWidget(self.fixed_center_check)
         section.addWidget(self._hint_label("取消勾选后，可拖动输入窗口；松开鼠标后自动记住位置。", TEXT_MUTED))
 
+    def _build_main_playback_section(
+        self, parent_layout: QVBoxLayout, state: SettingsState, s: AppSettings,
+    ) -> None:
+        section = self._create_section(parent_layout)
+        section.addWidget(self._section_title("主播放输出"))
+        self.main_playback_check = CheckmarkCheckBox("启用主播放输出")
+        self.main_playback_check.setChecked(s.main_playback_enabled)
+        self.main_playback_check.stateChanged.connect(self._on_main_playback_enabled_changed)
+        section.addWidget(self.main_playback_check)
+        if state.vb_cable_installed:
+            self.main_playback_status_label = self._hint_label(
+                "输出至 CABLE Input。游戏或语音软件的输入设备选 CABLE Output。",
+                TEXT_MUTED,
+            )
+        else:
+            self.main_playback_status_label = self._hint_label(
+                "未检测到 VB-CABLE。安装后即可输出至 CABLE Input。",
+                TEXT_WARNING,
+            )
+        section.addWidget(self.main_playback_status_label)
+        if not state.vb_cable_installed:
+            self.vb_cable_install_button = QPushButton("下载并安装 VB-CABLE")
+            self.vb_cable_install_button.clicked.connect(self._on_open_vb_cable_download)
+            section.addWidget(self.vb_cable_install_button, 0, Qt.AlignmentFlag.AlignLeft)
+
     def _build_audio_route_section(self, parent_layout: QVBoxLayout, state: SettingsState, s: AppSettings) -> None:
         section = self._create_section(parent_layout)
         section.addWidget(self._section_title("音频侦听"))
-
-        # VB-CABLE 状态
-        if state.vb_cable_installed:
-            self.audio_route_status_label = self._hint_label(
-                "VB-CABLE 已安装。TTS + 麦克风 → CABLE Input，其他应用的输入设备选 CABLE Output 即可。",
-                INPUT_TEXT_COLOR,
-            )
-        else:
-            self.audio_route_status_label = self._hint_label(
-                "需安装 VB-CABLE 驱动才能让其他应用听到 TTS 和麦克风。",
-                TEXT_WARNING,
-            )
-        section.addWidget(self.audio_route_status_label)
+        section.addWidget(self._hint_label("通过 Windows 将所选麦克风送至 CABLE Input。", TEXT_MUTED))
         section.addWidget(self._section_title("麦克风输入"))
         # 设备由路由自动选定，设置页仅显示驱动检测结果。
         self.virtual_mic_field = QLineEdit("CABLE Input" if state.vb_cable_installed else "未检测到 VB-CABLE")
         self.virtual_mic_field.setAccessibleName("麦克风输入")
         self.virtual_mic_field.setEnabled(False)
         section.addWidget(self.virtual_mic_field)
-
-        if not state.vb_cable_installed:
-            self.vb_cable_install_button = QPushButton("下载并安装 VB-CABLE")
-            self.vb_cable_install_button.clicked.connect(self._on_open_vb_cable_download)
-            section.addWidget(self.vb_cable_install_button, 0, Qt.AlignmentFlag.AlignLeft)
 
         # 启用开关
         self.audio_route_enabled_check = CheckmarkCheckBox("启用音频侦听")
@@ -832,14 +842,22 @@ class SettingsWindow:
         self.sidetone_enabled_check.setChecked(s.sidetone_enabled)
         self.sidetone_enabled_check.stateChanged.connect(self._on_sidetone_enabled_changed)
         section.addWidget(self.sidetone_enabled_check)
-        section.addWidget(self._hint_label(
-            "启用音频侦听时，同时通过上方播放设备听到朗读和音频。",
-            TEXT_MUTED,
-        ))
 
     def _on_open_vb_cable_download(self, _checked: bool = False) -> None:
         from wordy.audio.driver import VBCableDriverManager
         VBCableDriverManager.open_download_page()
+
+    def _on_main_playback_enabled_changed(self, state: int) -> None:
+        enabled = state == Qt.CheckState.Checked.value
+        # 保存失败时，运行中的主输出须继续遵循已持久化的偏好。
+        try:
+            self._settings.update(main_playback_enabled=enabled)
+        except OSError:
+            with QSignalBlocker(self.main_playback_check):
+                self.main_playback_check.setChecked(self._settings.main_playback_enabled)
+            self.set_status("主播放设置保存失败。", TEXT_ERROR)
+            return
+        self.on_field_changed("main_playback_enabled", enabled)
 
     def _on_audio_route_enabled_changed(self, state: int) -> None:
         enabled = state == Qt.CheckState.Checked.value
@@ -1253,7 +1271,7 @@ class SettingsWindow:
         # 页面标题说明当前任务，分组用留白区分，避免窄窗口被边框和卡片切碎。
         page_titles = {
             "本地设置": ("输入与显示", "调整快捷键、提示文字和输入栏外观。"),
-            "音频设置": ("声音与路由", "选择播放设备，控制侦听与返听。"),
+            "音频设置": ("声音与路由", "管理主播放、返听与麦克风侦听。"),
             "TTS 设置": ("语音生成", "选择服务商，配置密钥与音色。"),
             "聊天轮盘": ("音频轮盘", "按住快捷键，移向音频，松开播放；回到中心或按 Esc 取消。"),
             "后台录制": ("后台录制", "持续保留最近的系统声音，停止后用片段填入轮盘槽位。"),

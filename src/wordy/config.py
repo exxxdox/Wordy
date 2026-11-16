@@ -213,7 +213,8 @@ class AppSettings:
     log_level: str = "INFO"
     window_position: dict[str, int] | None = None
 
-    # ---- 音频输出 ----
+    # 主播放固定走虚拟麦克风，所选本地设备仅供返听和裁剪试听。
+    main_playback_enabled: bool = True
     audio_output_device_name: str | None = None
     audio_output_device: AudioIdentity | None = None
 
@@ -522,6 +523,7 @@ class AppSettings:
         _apply_if_present(raw, "audio_output_device_name", settings, _nonempty_str)
         _apply_if_present(raw, "audio_output_device", settings, _parse_audio_output_device)
         _apply_if_present(raw, "audio_routing_enabled", settings, lambda v: v if isinstance(v, bool) else None)
+        _apply_if_present(raw, "main_playback_enabled", settings, lambda v: v if isinstance(v, bool) else None)
         _apply_if_present(raw, "sidetone_enabled", settings, lambda v: v if isinstance(v, bool) else None)
 
         for dev_key in ("mic_input_device", "virtual_output_device"):

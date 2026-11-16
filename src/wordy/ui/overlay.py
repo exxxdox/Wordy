@@ -22,7 +22,7 @@ from wordy.tts.constants import (
     TTS_API_PROVIDER_VOLCENGINE,
 )
 from wordy.audio.capture import list_input_devices
-from wordy.audio.driver import VBCableDriverManager
+from wordy.audio.router import AudioRouter
 from wordy.ui.app_icon import app_icon
 from wordy.ui.settings_state import SettingsState
 from wordy.ui.settings import SettingsWindow
@@ -81,6 +81,7 @@ class InputOverlay:
         on_rolling_buffer_hotkey_change: Callable[[str], bool] | None = None,
         on_rolling_hotkey_recording: Callable[[bool], None] | None = None,
         on_backup_import_ready: Callable[[], bool] | None = None,
+        on_main_playback_change: Callable[[bool], None] | None = None,
     ):
         if sys.platform != "win32":
             raise RuntimeError("InputOverlay 仅支持 Windows")
@@ -96,6 +97,7 @@ class InputOverlay:
         self.on_tts_backend_change = on_tts_backend_change
         self.on_fetch_voices = on_fetch_voices
         self.on_audio_output_change = on_audio_output_change
+        self.on_main_playback_change = on_main_playback_change
         self.on_cartesia_api_key_change = on_cartesia_api_key_change
         self.on_tts_api_provider_change = on_tts_api_provider_change
         self.on_volcengine_credentials_change = on_volcengine_credentials_change
@@ -593,7 +595,7 @@ class InputOverlay:
             input_devices=self._enumerate_input_devices(),
             cartesia_api_key_saved=cartesia_api_key_saved,
             volcengine_access_key_saved=volcengine_access_key_saved,
-            vb_cable_installed=VBCableDriverManager.is_installed(),
+            vb_cable_installed=AudioRouter.get_output_device() is not None,
             mic_listen_state=mic_listen_state,
         )
         self._recording_hotkey = False
@@ -929,6 +931,10 @@ class InputOverlay:
 
         elif field_name == "audio_output_device":
             self._handle_audio_output_change(value)
+
+        elif field_name == "main_playback_enabled":
+            if self.on_main_playback_change:
+                self.on_main_playback_change(bool(value))
 
         elif field_name == "audio_routing_enabled":
             enabled = bool(value)

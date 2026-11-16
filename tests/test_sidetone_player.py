@@ -6,13 +6,19 @@
 from __future__ import annotations
 
 from io import BytesIO
-from threading import Barrier, Event, Thread
+from threading import Barrier, Event, Thread, current_thread
 from time import perf_counter
-from unittest.mock import MagicMock
+from unittest.mock import ANY, DEFAULT, MagicMock
 
-from pytest import MonkeyPatch, raises
+from pytest import MonkeyPatch, mark, raises
 
 from wordy.audio.sidetone import SidetoneAudioPlayer
+
+
+def _start_wav(*_args, on_progress=None, **_kwargs):
+    if on_progress is not None:
+        on_progress(0.0)
+    return DEFAULT
 
 
 def test_real_players_write_identical_scaled_samples_to_main_and_sidetone(monkeypatch):
@@ -64,7 +70,7 @@ class TestSidetoneAudioPlayer:
         wrapper = SidetoneAudioPlayer(main, sidetone)
         wrapper.set_sidetone_enabled(True)
         assert wrapper.play_wav("test.wav", device_index=3, volume=0.35)
-        main.play_wav.assert_called_once_with("test.wav", device_index=3, volume=0.35)
+        main.play_wav.assert_called_once_with("test.wav", device_index=3, volume=0.35, on_progress=ANY)
         sidetone.play_wav.assert_called_once_with("test.wav", device_index=None, volume=0.35)
 
     @staticmethod
@@ -75,6 +81,7 @@ class TestSidetoneAudioPlayer:
         main.output_device = {"name": "Test Device", "host_api_name": "Windows WASAPI"}
         main.get_stream_config.return_value = {"format": 8, "rate": 48000}
         main.resolved_device_is_default.return_value = False
+        main.play_wav.side_effect = _start_wav
         sidetone = MagicMock()
         sidetone.output_device_name = None
         sidetone.get_stream_config.return_value = {"format": 8, "rate": 48000}
@@ -128,14 +135,41 @@ class TestSidetoneAudioPlayer:
         sidetone.open_stream.assert_called_once_with(8, 1, 48000,
                                                       device_index=None, frames_per_buffer=1024)
 
-    def test_open_stream_main_fails_returns_false(self):
+    def test_open_stream_main_fails_returns_false_without_sidetone(self):
         main, sidetone = self._make_players()
         main.open_stream.return_value = False
         wrapper = SidetoneAudioPlayer(main, sidetone)
-        wrapper.set_sidetone_enabled(True)
         result = wrapper.open_stream(8, 1, 48000)
         assert result is False
         sidetone.open_stream.assert_not_called()
+
+    @mark.parametrize("main_enabled", [False, True])
+    def test_stream_uses_local_output_when_main_unavailable(self, main_enabled):
+        main, sidetone = self._make_players()
+        main.open_stream.return_value = False
+        main.query_output_device_default_rate.return_value = None
+        sidetone.query_output_device_default_rate.return_value = 44100
+        sidetone.open_stream.return_value = True
+        sidetone.get_stream_config.return_value = {"format": 8, "rate": 44100}
+        wrapper = SidetoneAudioPlayer(main, sidetone, monitor_index=lambda: 7,
+                                      main_enabled=main_enabled)
+        assert not wrapper.open_stream(8, 1, 48000)
+        wrapper.set_sidetone_enabled(True)
+        assert wrapper.query_output_device_default_rate() == 44100
+        sidetone.query_output_device_default_rate.assert_called_once_with(device_index=7)
+        assert wrapper.open_stream(8, 1, 48000)
+        assert main.open_stream.call_count == (2 if main_enabled else 0)
+        sidetone.open_stream.assert_called_once_with(8, 1, 48000,
+                                                     device_index=7, frames_per_buffer=1024)
+        # 更改开关后，PCM 仍写入已经打开并协商过的流，直到 worker 关闭它。
+        wrapper.set_main_enabled(True)
+        wrapper.set_sidetone_enabled(False)
+        assert wrapper.get_stream_config() == {"format": 8, "rate": 44100}
+        wrapper.write_stream(b"sample")
+        sidetone.write_stream.assert_called_once_with(b"sample")
+        main.write_stream.assert_not_called()
+        wrapper.close_stream()
+        sidetone.close_stream.assert_called_once()
 
     def test_open_stream_sidetone_fails_main_ok_returns_true(self):
         main, sidetone = self._make_players()
@@ -405,6 +439,33 @@ class TestSidetoneAudioPlayer:
         main.play_wav.assert_called_once_with("test.wav", device_index=3, volume=1.0)
         sidetone.play_wav.assert_not_called()
 
+    def test_local_preview_still_works_when_both_outputs_are_off(self):
+        main, sidetone = self._make_players()
+        main.play_wav.return_value = True
+        wrapper = SidetoneAudioPlayer(main, sidetone, main_enabled=False)
+
+        assert not wrapper.play_wav("test.wav")
+        assert not wrapper.play_wav("test.wav", preview_local=True)
+        assert wrapper.play_wav("test.wav", device_index=7, preview_local=True)
+        main.play_wav.assert_called_once_with("test.wav", device_index=7, volume=1.0)
+        sidetone.play_wav.assert_not_called()
+
+    def test_wav_uses_synchronous_sidetone_when_main_is_off(self):
+        main, sidetone = self._make_players()
+        sidetone.play_wav.return_value = True
+        wrapper = SidetoneAudioPlayer(main, sidetone, monitor_index=lambda: 7,
+                                      main_enabled=False)
+        wrapper.set_sidetone_enabled(True)
+        cancelled = Event()
+        progress = MagicMock()
+
+        assert wrapper.play_wav("test.wav", cancel_event=cancelled, on_progress=progress,
+                                volume=0.5)
+        sidetone.play_wav.assert_called_once_with("test.wav", device_index=7,
+                                                  cancel_event=cancelled, on_progress=progress,
+                                                  volume=0.5)
+        main.play_wav.assert_not_called()
+
     def test_configured_monitor_is_used_for_wav_and_stream(self):
         main, sidetone = self._make_players()
         main.play_wav.return_value = True
@@ -427,7 +488,7 @@ class TestSidetoneAudioPlayer:
         wrapper.set_sidetone_enabled(True)
         result = wrapper.play_wav("test.wav", device_index=3)
         assert result is True
-        main.play_wav.assert_called_once_with("test.wav", device_index=3, volume=1.0)
+        main.play_wav.assert_called_once_with("test.wav", device_index=3, volume=1.0, on_progress=ANY)
         sidetone.play_wav.assert_called_once_with("test.wav", device_index=None, volume=1.0)
 
     def test_play_wav_starts_main_and_sidetone_concurrently_and_waits_for_both(self):
@@ -435,7 +496,9 @@ class TestSidetoneAudioPlayer:
         started = Barrier(3)
         release = Event()
 
-        def wait_for_other(*_args, **_kwargs):
+        def wait_for_other(*_args, on_progress=None, **_kwargs):
+            if on_progress is not None:
+                on_progress(0.0)
             started.wait(timeout=1)
             release.wait()
             return True
@@ -455,14 +518,34 @@ class TestSidetoneAudioPlayer:
 
         assert result == [True]
 
-    def test_play_wav_main_failure_still_returns_false(self):
+    @mark.parametrize("local_ok", [False, True])
+    def test_play_wav_main_failure_uses_sidetone_result(self, local_ok):
         main, sidetone = self._make_players()
         main.play_wav.return_value = False
+        sidetone.play_wav.return_value = local_ok
         wrapper = SidetoneAudioPlayer(main, sidetone)
         wrapper.set_sidetone_enabled(True)
         result = wrapper.play_wav("missing.wav")
-        assert result is False
+        assert result is local_ok
         sidetone.play_wav.assert_called_once()
+
+    def test_main_wav_open_failure_runs_local_playback_to_completion_on_worker(self):
+        main, sidetone = self._make_players()
+        main.play_wav.side_effect = None  # 没有打开流，不会报告开始播放。
+        main.play_wav.return_value = False
+        wrapper = SidetoneAudioPlayer(main, sidetone, monitor_index=lambda: 7)
+        wrapper.set_sidetone_enabled(True)
+        worker = current_thread()
+        progress = MagicMock()
+
+        def play_locally(*_args, **options):
+            assert current_thread() == worker
+            options["on_progress"](5.0)
+            return True
+
+        sidetone.play_wav.side_effect = play_locally
+        assert wrapper.play_wav("test.wav", on_progress=progress)
+        progress.assert_called_once_with(5.0)
 
     def test_play_wav_bytesio_resets_position(self):
         main, sidetone = self._make_players()
@@ -511,7 +594,12 @@ class TestSidetoneAudioPlayer:
     def test_play_wav_waits_for_sidetone_tail_when_main_raises(self):
         """主输出抛异常也必须等返听：调用方随后就会删掉音源临时文件。"""
         main, sidetone = self._make_players()
-        main.play_wav.side_effect = RuntimeError("device gone")
+        def fail_midstream(*_args, on_progress=None, **_kwargs):
+            if on_progress is not None:
+                on_progress(0.0)
+            raise RuntimeError("device gone")
+
+        main.play_wav.side_effect = fail_midstream
         finished = Event()
 
         def slow(*_args, **_kwargs):
@@ -637,6 +725,7 @@ def test_cancelled_concurrent_playback_returns_false_and_shares_event():
     cancelled = Event()
 
     def play_then_cancel(*args, **kwargs):
+        kwargs["on_progress"](0.0)
         cancelled.set()
         return True
 
@@ -644,7 +733,8 @@ def test_cancelled_concurrent_playback_returns_false_and_shares_event():
     wrapper = SidetoneAudioPlayer(main, sidetone)
     wrapper.set_sidetone_enabled(True)
     assert wrapper.play_wav("test.wav", cancel_event=cancelled) is False
-    main.play_wav.assert_called_once_with("test.wav", device_index=None, cancel_event=cancelled, volume=1.0)
+    main.play_wav.assert_called_once_with("test.wav", device_index=None, cancel_event=cancelled,
+                                         volume=1.0, on_progress=ANY)
     sidetone.play_wav.assert_called_once_with(
         "test.wav", device_index=None, cancel_event=cancelled, volume=1.0
     )

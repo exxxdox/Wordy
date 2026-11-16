@@ -3,7 +3,7 @@
 
 """
 常驻模式：按配置的全局快捷键弹出输入框，输入文本后生成并播放语音。
-默认播放到系统默认输出设备。
+主播放固定送到 VB-CABLE，返听使用所选本地设备。
 """
 
 from collections.abc import Callable
@@ -15,6 +15,7 @@ from typing import cast
 
 from wordy.audio.player import AudioPlayer, OutputDeviceSelection, is_vb_cable_device_name
 from wordy.audio.recorder import cancel_active_recording, cancel_active_rolling_recording
+from wordy.audio.router import AudioRouter
 from wordy.audio.sidetone import SidetoneAudioPlayer
 from wordy.config import AppSettings, USER_CONFIG_FILE
 from wordy.log import install_file_logging, install_log_stream
@@ -75,11 +76,11 @@ class WordyApp:
         self.player = self._create_audio_player()
 
         # ── 返听 ───────────────────────────────────────────────────────
-        self._sidetone_player = AudioPlayer()
+        self._sidetone_player = AudioPlayer(output_device=self._configured_playback_device())
         self._sidetone_wrapper = SidetoneAudioPlayer(
             self.player, self._sidetone_player,
-            # 没走虚拟麦克风时，主播放已经在本地设备上。
-            monitor_index=self._routed_monitor_index,
+            monitor_index=self._local_playback_index,
+            main_enabled=self._settings.main_playback_enabled,
         )
         self._sidetone_wrapper.set_sidetone_enabled(
             self._settings.sidetone_enabled
@@ -105,11 +106,7 @@ class WordyApp:
         )
 
         # ── 路由控制器 ─────────────────────────────────────────────────
-        self.routing = RoutingController(
-            settings=self._settings,
-            player=self.player,
-            on_output_device_changed=self.tts_manager.reset_audio_output,
-        )
+        self.routing = RoutingController(settings=self._settings)
 
         # ── UI ─────────────────────────────────────────────────────────
         self._chat_wheel_controller: ChatWheelController | None = None
@@ -123,11 +120,12 @@ class WordyApp:
             on_tts_backend_change=self._on_tts_backend_change,
             # 绑定具体引擎，后台请求延迟启动时也不会跨服务商读取。
             on_fetch_voices=self.tts_manager.engine.fetch_voices,
-            on_audio_output_change=self.routing.on_output_device_change,
+            on_audio_output_change=self._on_audio_output_change,
             on_cartesia_api_key_change=self._on_cartesia_api_key_change,
             on_tts_api_provider_change=self._on_tts_api_provider_change,
             on_volcengine_credentials_change=self._on_volcengine_credentials_change,
             on_audio_route_change=self.routing.apply_config,
+            on_main_playback_change=self._on_main_playback_change,
             on_sidetone_change=self._on_sidetone_change,
             on_query_mic_listen_state=lambda: self.routing.mic_listen_state,
             audio_player=self.player,
@@ -296,11 +294,7 @@ class WordyApp:
     # ── 音频播放器 ────────────────────────────────────────────────────────
 
     def _local_playback_index(self) -> int | None:
-        return self.player.resolve_output_device_index(self._configured_playback_device())
-
-    def _routed_monitor_index(self) -> int | None:
-        name = self.player.output_device_name
-        return self._local_playback_index() if name and is_vb_cable_device_name(name) else None
+        return self._sidetone_player.resolve_output_device_index(self._sidetone_player.output_device)
 
     def _configured_playback_device(self) -> OutputDeviceSelection | None:
         device = self._settings.audio_output_device
@@ -309,8 +303,13 @@ class WordyApp:
         # 旧版可以把 CABLE Input 保存为本地设备，升级后使用系统默认播放设备。
         return None
 
-    def _create_audio_player(self) -> AudioPlayer:
-        return AudioPlayer(output_device=self._configured_playback_device())
+    @staticmethod
+    def _create_audio_player() -> AudioPlayer:
+        # 虚拟端点缺失或失效时，不能把正式播放泄漏到系统默认设备。
+        return AudioPlayer(
+            output_device=cast(OutputDeviceSelection | None, AudioRouter.get_output_device()),
+            allow_default_fallback=False,
+        )
 
     # ── UI 回调 ───────────────────────────────────────────────────────────
 
@@ -386,6 +385,24 @@ class WordyApp:
             self.volcengine_access_key = previous
             raise
 
+    def _on_audio_output_change(self, device: object) -> None:
+        # 即便旧配置带虚拟端点，也不能让本地返听进入虚拟麦克风。
+        selection = cast(OutputDeviceSelection, device) if isinstance(device, dict) else None
+        if selection is not None and is_vb_cable_device_name(selection.get("name", "")):
+            selection = None
+        self._sidetone_player.set_output_device(selection)
+        self.tts_manager.reset_audio_output()
+
+    def _on_main_playback_change(self, enabled: bool) -> None:
+        if enabled:
+            # 允许安装驱动后重新启用主播放，重新解析 WASAPI 端点。
+            self.player.set_output_device(cast(OutputDeviceSelection | None, AudioRouter.get_output_device()))
+        else:
+            # 已打开的流要等 worker 收尾才会重建，先取消可能仍在向 CABLE 写入的任务。
+            self.tts_manager.stop_main_playback()
+        self._sidetone_wrapper.set_main_enabled(enabled)
+        self.tts_manager.reset_audio_output()
+
     def _on_sidetone_change(self, enabled: bool) -> None:
         """返听开关。"""
         self._sidetone_wrapper.set_sidetone_enabled(enabled)
@@ -439,7 +456,7 @@ class WordyApp:
                 self._rolling_controller.stop()
             # 退出后不会继续播放，避免先重开音频流再由 shutdown 立即关闭。
             # 不恢复麦克风侦听：退出后保持现有系统侦听，下次启动直接沿用。
-            self.routing.stop(notify_output_change=False, preserve_listen=True)
+            self.routing.stop(preserve_listen=True)
             self.tts_manager.shutdown()
 
         try:
@@ -480,6 +497,8 @@ class WordyApp:
             # TrayApp 已负责托盘生命周期，无需再创建仅保存引用的控制器。
             tray_app = TrayApp(self.overlay)
             self._tray_app = tray_app
+            if self._settings.main_playback_enabled and self.player.output_device is None:
+                tray_app.notify("未检测到 VB-CABLE，请在 Wordy 的音频设置中下载并安装。")
             # 界面已经起来，趁空闲先把设置窗口的一次性构建成本付掉。
             QTimer.singleShot(SETTINGS_PREWARM_DELAY_MS, self.overlay.prewarm_settings_window)
 

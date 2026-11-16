@@ -26,7 +26,7 @@ def _encrypted_zip(path, contents):
 def test_backup_roundtrip_includes_audio_and_secrets(tmp_path, fake_keyring):
     settings = config.AppSettings.load(config_file=tmp_path / "source" / "config.toml")
     assert settings._config_file is not None
-    settings.update(volume=1.4, overlay_placeholder="备份测试",
+    settings.update(volume=1.4, overlay_placeholder="备份测试", main_playback_enabled=False,
                     audio_output_device={"name": "扬声器", "host_api_name": None},
                     window_position={"x": -120, "y": 240})
     settings.volcengine_voice_list = [{"id": "speaker", "name": "自定义音色"}]
@@ -42,6 +42,7 @@ def test_backup_roundtrip_includes_audio_and_secrets(tmp_path, fake_keyring):
     secret.save_api_key(secret.CARTESIA_USERNAME, "different-key")
     backup.import_backup(target, archive, PASSWORD)
     assert target.volume == 1.4
+    assert target.main_playback_enabled is False
     assert target.overlay_placeholder == "备份测试"
     assert target.audio_output_device == {"name": "扬声器", "host_api_name": None}
     assert target.window_position == {"x": -120, "y": 240}
@@ -52,6 +53,20 @@ def test_backup_roundtrip_includes_audio_and_secrets(tmp_path, fake_keyring):
     assert b"fake-key" not in target._config_file.read_bytes()
     target.flush()
     assert b"\xe5\xa4\x87\xe4\xbb\xbd\xe6\xb5\x8b\xe8\xaf\x95" in target._config_file.read_bytes()
+
+
+def test_import_legacy_backup_without_main_playback_switch(tmp_path, fake_keyring):
+    settings = config.AppSettings.load(config_file=tmp_path / "config.toml")
+    legacy = tmp_path / "legacy.wordybackup"
+    backup.export_backup(settings, legacy, PASSWORD)
+    contents = _contents(legacy)
+    contents["config.toml"] = contents["config.toml"].replace(b"main_playback_enabled = true\n", b"")
+    _encrypted_zip(legacy, contents)
+    settings.update(main_playback_enabled=False)
+
+    backup.import_backup(settings, legacy, PASSWORD)
+
+    assert settings.main_playback_enabled is True
 
 
 def test_export_missing_audio_preserves_existing_backup(tmp_path, fake_keyring):

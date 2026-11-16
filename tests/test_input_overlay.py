@@ -21,6 +21,8 @@ from tests._stubs import PYside6_STUBS, patch_module_stubs
 
 def import_input_overlay_with_stubs(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
     # 保存原始模块引用，测试结束后恢复
+    ui_package = importlib.import_module("wordy.ui")
+    saved_overlay = getattr(ui_package, "overlay", None)
     _STUBBED_MODULES = (
         *PYside6_STUBS,
         "wordy.ui.settings",
@@ -47,6 +49,11 @@ def import_input_overlay_with_stubs(monkeypatch: pytest.MonkeyPatch) -> ModuleTy
                 sys.modules.pop(name, None)
             else:
                 sys.modules[name] = original
+        # importlib 也会更新父包上的引用，避免真实 Qt 测试命中 stub。
+        if saved_overlay is not None:
+            ui_package.__dict__["overlay"] = saved_overlay
+        else:
+            ui_package.__dict__.pop("overlay", None)
 
 
 class ThreadStub:
@@ -123,6 +130,7 @@ class _OverlayStub(Protocol):
     on_tts_backend_change: Callable[[str], None] | None
     on_audio_output_change: Callable[[object], None] | None
     on_audio_route_change: Callable[[dict[str, object]], bool] | None
+    on_main_playback_change: Callable[[bool], None] | None
     on_cartesia_api_key_change: Callable[[str | None], None] | None
 
 
@@ -465,6 +473,18 @@ def test_audio_routing_callback_result_is_forwarded(monkeypatch: pytest.MonkeyPa
 
     assert overlay._on_settings_field_changed("audio_routing_enabled", True) is False
     assert payloads == [{"audio_routing_enabled": True}]
+
+
+def test_main_playback_change_uses_separate_callback(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = import_input_overlay_with_stubs(monkeypatch)
+    overlay = _new_apply_overlay(module)
+    payloads: list[bool] = []
+    overlay.on_main_playback_change = payloads.append
+
+    overlay._on_settings_field_changed("main_playback_enabled", False)
+    overlay._on_settings_field_changed("main_playback_enabled", True)
+
+    assert payloads == [False, True]
 
 
 def test_apply_cartesia_callback_failure_appends_status_and_does_not_raise(monkeypatch: pytest.MonkeyPatch) -> None:

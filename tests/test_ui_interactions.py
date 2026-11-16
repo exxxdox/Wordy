@@ -465,12 +465,13 @@ def test_output_scan_only_runs_on_first_audio_tab_visit(qapp, monkeypatch):
     scan = Mock(return_value=(["测试输出"], None))
     monkeypatch.setattr(overlay, "_enumerate_audio_output_devices", scan)
     monkeypatch.setattr(overlay, "_enumerate_input_devices", lambda: [])
-    driver = cast(FunctionType, overlay._create_settings_window).__globals__["VBCableDriverManager"]
-    monkeypatch.setattr(driver, "is_installed", lambda: False)
+    router = cast(FunctionType, overlay._create_settings_window).__globals__["AudioRouter"]
+    monkeypatch.setattr(router, "get_output_device", lambda: None)
     try:
         overlay._open_settings()
         settings = overlay._settings_window
         assert settings is not None
+        assert settings.vb_cable_install_button is not None
         window = settings.window
         assert window is not None and window.isVisible()
         scan.assert_not_called()
@@ -534,8 +535,8 @@ def test_prewarm_settings_window_leaves_no_open_window(qapp, fake_keyring, monke
     overlay = InputOverlay(lambda text: None)
     overlay._ensure_ui()
     monkeypatch.setattr(overlay, "_enumerate_input_devices", lambda: [])
-    driver = cast(FunctionType, overlay._create_settings_window).__globals__["VBCableDriverManager"]
-    monkeypatch.setattr(driver, "is_installed", lambda: False)
+    router = cast(FunctionType, overlay._create_settings_window).__globals__["AudioRouter"]
+    monkeypatch.setattr(router, "get_output_device", lambda: None)
     try:
         overlay.prewarm_settings_window()
 
@@ -753,8 +754,8 @@ def test_settings_click_keeps_windows_visible_without_native_focus_reentry(qapp,
     overlay._cfg.active_tts_provider = provider
     overlay._ensure_ui()
     monkeypatch.setattr(overlay, "_enumerate_input_devices", lambda: [])
-    driver = cast(FunctionType, overlay._create_settings_window).__globals__["VBCableDriverManager"]
-    monkeypatch.setattr(driver, "is_installed", lambda: False)
+    router = cast(FunctionType, overlay._create_settings_window).__globals__["AudioRouter"]
+    monkeypatch.setattr(router, "get_output_device", lambda: None)
     native_focus = Mock()
     monkeypatch.setitem(SettingsWindow.lift_and_focus.__globals__, "activate_window", native_focus)
     transitions = []

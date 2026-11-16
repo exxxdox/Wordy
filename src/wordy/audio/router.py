@@ -3,9 +3,8 @@
 
 """音频侦听引擎。
 
-不捕获麦克风——由 Windows "侦听此设备" 功能将 mic 直通到 VB-CABLE Input。
-本模块只负责：启用时将 TTS 音频输出重定向到 VB-CABLE Input，
-让 TTS 语音和 mic 在系统层叠加后从 CABLE Output 输出。
+通过 Windows「侦听此设备」将所选麦克风送到 VB-CABLE Input，
+并提供 Windows WASAPI 的 VB-CABLE 播放端点信息。
 """
 
 from __future__ import annotations
@@ -29,23 +28,14 @@ class RouterOutputDevice(TypedDict):
 
 @dataclass
 class RouterStats:
-    """音频侦听状态，区分 TTS 路由与麦克风侦听是否均已就绪。"""
+    """记录引擎运行状态和本次是否成功配置麦克风侦听。"""
 
     is_running: bool = False
     listen_configured: bool = False
 
 
 class AudioRouter:
-    """音频侦听引擎。
-
-    启用时 TTS 输出重定向到 VB-CABLE Input。
-    麦克风直通由 Windows 系统"侦听此设备"功能处理——零延迟、零 CPU。
-
-    使用方式：
-        router = AudioRouter()
-        if router.start():
-            player.set_output_device(router.get_output_device())
-    """
+    """通过 Windows 系统侦听管理麦克风到 VB-CABLE Input 的直通。"""
 
     def __init__(self, virtual_output: str | None = None):
         self.virtual_output = virtual_output or VBCableDriverManager.get_status().get("output_device_name")
@@ -56,10 +46,10 @@ class AudioRouter:
     # ── 生命周期 ─────────────────────────────────────────────────────────
 
     def start(self, *, mic_device: str | None = None, configure_listen: bool = True) -> bool:
-        """启用 TTS 路由，仅在用户主动开启时配置 Windows 侦听。"""
+        """启用侦听引擎，仅在用户主动开启时配置 Windows 侦听。"""
         if self._active:
             return True
-        # Windows 侦听策略与播放器都依赖 WASAPI 端点，不能用其他 Host API 假启动。
+        # Windows 侦听策略要求使用与 MMDevice 命名域一致的 WASAPI 端点。
         if self.get_output_device() is None:
             logger.error("无法找到 Windows WASAPI 的 VB-CABLE 输出设备")
             return False
@@ -73,7 +63,7 @@ class AudioRouter:
         if configure_listen and mic_device is not None:
             self._listen_configured = self._enable_mic_listen(mic_device)
 
-        logger.info("TTS 音频侦听已启用（TTS → CABLE Input）")
+        logger.info("麦克风侦听引擎已启动")
         return True
 
     def stop(self, *, preserve_listen: bool = False) -> bool:
@@ -84,7 +74,7 @@ class AudioRouter:
                 return False
         self._listen_configured = False
         self._active = False
-        logger.info("TTS 音频路由已停用")
+        logger.info("麦克风侦听引擎已停止")
         return True
 
     def set_mic_device(self, device_name: str | None) -> bool:
@@ -142,7 +132,8 @@ class AudioRouter:
 
     # ── 设备查询 ─────────────────────────────────────────────────────────
 
-    def get_output_device(self) -> RouterOutputDevice | None:
+    @staticmethod
+    def get_output_device() -> RouterOutputDevice | None:
         """返回与 MMDevice 命名域一致的 WASAPI CABLE Input。"""
         status = VBCableDriverManager.get_status()
         index = status.get("output_device_index")

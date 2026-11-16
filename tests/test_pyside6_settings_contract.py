@@ -183,6 +183,66 @@ def test_audio_routing_enable_failure_keeps_setting_disabled(
     callback.assert_called_once_with("audio_routing_enabled", True)
 
 
+@pytest.mark.parametrize("installed", [False, True])
+def test_main_playback_switch_persists_independently(monkeypatch, installed):
+    from wordy.config import AppSettings
+
+    _, window = _new_settings_window(
+        monkeypatch, vb_cable_installed=installed, saved_audio_routing=True,
+    )
+    try:
+        callback = _field_changed_mock(window)
+        assert window.main_playback_check.isChecked()
+        assert window.main_playback_check.isEnabled()
+        assert "CABLE Input" in window.main_playback_status_label.text()
+        assert (window.vb_cable_install_button is None) == installed
+
+        window.main_playback_check.setChecked(False)
+
+        assert not AppSettings.load().main_playback_enabled
+        assert window.audio_route_enabled_check.isChecked()
+        assert AppSettings.load().audio_routing_enabled
+        assert not window.sidetone_enabled_check.isChecked()
+        callback.assert_called_once_with("main_playback_enabled", False)
+    finally:
+        window.close()
+
+
+def test_main_playback_save_failure_restores_check_without_notifying(monkeypatch):
+    _, window = _new_settings_window(monkeypatch, vb_cable_installed=True)
+    try:
+        status = Mock()
+        monkeypatch.setattr(window, "set_status", status)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(type(window._settings), "save", Mock(side_effect=OSError("磁盘不可写")))
+            window.main_playback_check.setChecked(False)
+
+        assert window.main_playback_check.isChecked()
+        assert window._settings.main_playback_enabled
+        _field_changed_mock(window).assert_not_called()
+        status.assert_called_once()
+    finally:
+        window.close()
+
+
+def test_missing_cable_keeps_download_action_in_main_playback_section(monkeypatch):
+    from wordy.audio.driver import VBCableDriverManager
+
+    _, window = _new_settings_window(monkeypatch, vb_cable_installed=False)
+    try:
+        assert "未检测到 VB-CABLE" in window.main_playback_status_label.text()
+        button = window.vb_cable_install_button
+        assert button is not None
+        assert button.parentWidget() is window.main_playback_check.parentWidget()
+        open_download = Mock()
+        monkeypatch.setattr(VBCableDriverManager, "open_download_page", open_download)
+        button.click()
+        open_download.assert_called_once_with()
+    finally:
+        window.close()
+
+
 @pytest.mark.parametrize("enabled", [False, True])
 def test_audio_routing_initial_checkbox_and_target_follow_windows(monkeypatch, enabled):
     from wordy.audio.listen_policy import ListenPolicyState

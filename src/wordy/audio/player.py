@@ -263,8 +263,10 @@ class AudioPlayer:
         self,
         *,
         output_device: OutputDeviceSelection | None = None,
+        allow_default_fallback: bool = True,
     ):
         self.output_device: OutputDeviceSelection | None = output_device
+        self._allow_default_fallback = allow_default_fallback
         self._stream_p = None
         self._stream = None
         # 记录最近一次 open_stream 的实际格式/采样率（回退后可能与请求值不同）
@@ -375,8 +377,11 @@ class AudioPlayer:
                 if idx is not None:
                     logger.debug("找到设备 [%s]: %s @ %s", idx, name, host_api_name or "<any>")
                     return idx
-                logger.warning("未找到输出设备 %r @ host_api=%r, 回退到默认输出设备", name, host_api_name)
+                logger.warning("未找到输出设备 %r @ host_api=%r", name, host_api_name)
 
+        # 固定主输出找不到端点时，不能把声音送到另一个设备。
+        if not self._allow_default_fallback:
+            return None
         default_idx = self._default_output_device_index(p)
         if default_idx is not None:
             try:
@@ -533,7 +538,7 @@ class AudioPlayer:
             if stream is None:
                 # 设备无效（-9996 / paInvalidDevice）：已选择设备无法打开，
                 # 回退到系统默认输出后重试，避免因无效配置导致完全无声。
-                if _is_device_invalid_error(e) and device_index is None:
+                if self._allow_default_fallback and _is_device_invalid_error(e) and device_index is None:
                     default_index = self._default_output_device_index(p)
                     if default_index is not None and default_index != resolved_index:
                         stream = self._try_open_default_device(
@@ -657,7 +662,7 @@ class AudioPlayer:
                 except Exception:
                     pass
 
-    def query_output_device_default_rate(self) -> int | None:
+    def query_output_device_default_rate(self, *, device_index: int | None = None) -> int | None:
         """查询当前选定输出设备的默认采样率，失败返回 None。
 
         创建临时 PyAudio 实例完成查询后立即释放，不影响活跃流。
@@ -665,7 +670,7 @@ class AudioPlayer:
         p = None
         try:
             p = _new_pyaudio()
-            resolved_index = self._resolve_output_device(p, None)
+            resolved_index = self._resolve_output_device(p, device_index)
             if resolved_index is None:
                 return None
             info = p.get_device_info_by_index(resolved_index)
