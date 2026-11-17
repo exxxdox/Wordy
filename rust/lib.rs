@@ -25,6 +25,8 @@ pub mod playback;
 pub mod settings_window;
 #[cfg(windows)]
 mod status_toast;
+#[cfg(windows)]
+mod tray_menu;
 pub mod tts;
 pub mod wheel;
 #[cfg(windows)]

@@ -355,20 +355,18 @@ impl App {
             let result = match message.message {
                 WM_HOTKEY => self.hotkey(message.wParam),
                 WM_TIMER if message.hwnd == self.host => self.tick(),
-                TRAY_MESSAGE if message.hwnd == self.host => {
-                    let action = match message.lParam as u32 {
-                        WM_RBUTTONUP | WM_CONTEXTMENU => self.tray.show_menu(),
-                        WM_LBUTTONDBLCLK => TRAY_SETTINGS,
-                        _ => 0,
-                    };
-                    match action {
-                        TRAY_OVERLAY => self.toggle_overlay(),
-                        TRAY_SETTINGS => self.show_settings(),
-                        TRAY_LOGS => self.show_logs(),
-                        TRAY_EXIT => break,
-                        _ => Ok(()),
-                    }
-                }
+                TRAY_MESSAGE if message.hwnd == self.host => match message.lParam as u32 {
+                    WM_RBUTTONUP | WM_CONTEXTMENU => self.tray.open_menu(),
+                    WM_LBUTTONDBLCLK => self.show_settings(),
+                    _ => Ok(()),
+                },
+                TRAY_COMMAND if message.hwnd == self.host => match message.wParam {
+                    TRAY_OVERLAY => self.toggle_overlay(),
+                    TRAY_SETTINGS => self.show_settings(),
+                    TRAY_LOGS => self.show_logs(),
+                    TRAY_EXIT => break,
+                    _ => Ok(()),
+                },
                 OVERLAY_MESSAGE if message.hwnd == self.host => self.overlay_action(message.wParam),
                 SETTINGS_ACTION_MESSAGE if message.hwnd == self.host => {
                     let action = self.settings_window.action(message.wParam as u16);

@@ -36,6 +36,7 @@ pub const TRAY_OVERLAY: usize = 1;
 pub const TRAY_SETTINGS: usize = 2;
 pub const TRAY_EXIT: usize = 3;
 pub const TRAY_LOGS: usize = 4;
+pub const TRAY_COMMAND: u32 = WM_APP + 4;
 
 const PROMPT: i32 = 10;
 const ENTRY: i32 = 11;
@@ -175,34 +176,8 @@ impl Tray {
         self.notify(message);
     }
 
-    pub fn show_menu(&self) -> usize {
-        // A transient menu is owned here and destroyed immediately after selection.
-        unsafe {
-            let menu = CreatePopupMenu();
-            if menu.is_null() {
-                return 0;
-            }
-            AppendMenuW(menu, MF_STRING, TRAY_OVERLAY, w!("显示输入框"));
-            AppendMenuW(menu, MF_STRING, TRAY_SETTINGS, w!("设置"));
-            AppendMenuW(menu, MF_STRING, TRAY_LOGS, w!("打开日志窗口"));
-            AppendMenuW(menu, MF_SEPARATOR, 0, ptr::null());
-            AppendMenuW(menu, MF_STRING, TRAY_EXIT, w!("退出"));
-            let mut position = POINT::default();
-            GetCursorPos(&mut position);
-            SetForegroundWindow(self.host);
-            let action = TrackPopupMenu(
-                menu,
-                TPM_RIGHTBUTTON | TPM_RETURNCMD | TPM_NONOTIFY,
-                position.x,
-                position.y,
-                0,
-                self.host,
-                ptr::null(),
-            );
-            PostMessageW(self.host, WM_NULL, 0, 0);
-            DestroyMenu(menu);
-            action as usize
-        }
+    pub fn open_menu(&self) -> io::Result<()> {
+        crate::tray_menu::open(self.host)
     }
 
     fn data(&self) -> NOTIFYICONDATAW {
