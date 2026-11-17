@@ -22,6 +22,8 @@ mod panels;
 #[cfg(windows)]
 pub mod playback;
 #[cfg(windows)]
+mod selector;
+#[cfg(windows)]
 pub mod settings_window;
 #[cfg(windows)]
 mod status_toast;

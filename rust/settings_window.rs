@@ -1032,6 +1032,8 @@ impl SettingsWindow {
                 scaled(28, self.scale) as isize,
             );
             send(hwnd, CB_SETITEMHEIGHT, 0, scaled(28, self.scale) as isize);
+            // Same rounded dark field as the wheel editor's selectors.
+            crate::selector::style_selector(hwnd);
         }
         self.widgets.push(Widget {
             hwnd,
@@ -1092,6 +1094,9 @@ impl SettingsWindow {
 
     fn show_page(&self) {
         let provider = self.settings.active_tts_provider;
+        // Batch the visibility swap: otherwise every ShowWindow exposes a
+        // half-painted page, which reads as a stutter on fast clicks.
+        unsafe { SendMessageW(self.hwnd, WM_SETREDRAW, 0, 0) };
         for widget in &self.widgets {
             let correct_page = widget.page.is_none_or(|page| page == self.page);
             let visible = match widget.field {
@@ -1146,6 +1151,15 @@ impl SettingsWindow {
                     ShowWindow(self.wheel_panel, SW_HIDE);
                 }
             };
+        }
+        unsafe {
+            SendMessageW(self.hwnd, WM_SETREDRAW, 1, 0);
+            RedrawWindow(
+                self.hwnd,
+                ptr::null(),
+                ptr::null_mut(),
+                RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_FRAME | RDW_UPDATENOW,
+            );
         }
     }
 
@@ -1447,9 +1461,20 @@ unsafe extern "system" fn window_proc(
             return 1;
         }
         WM_COMMAND if lparam != 0 => {
+            let id = wparam as u16;
             let notification = ((wparam >> 16) & 0xffff) as u32;
+            if notification == BN_CLICKED as u32
+                && (Field::TabLocal as u16..=Field::TabRolling as u16).contains(&id)
+            {
+                // The page swap runs after the posted action; paint the selected
+                // tab now so the click has immediate feedback.
+                unsafe { SetPropW(hwnd, SELECTED_TAB, id as usize as _) };
+                for tab in Field::TabLocal as u16..=Field::TabRolling as u16 {
+                    unsafe { InvalidateRect(GetDlgItem(hwnd, i32::from(tab)), ptr::null(), 0) };
+                }
+            }
             if [BN_CLICKED, CBN_SELCHANGE, EN_KILLFOCUS].contains(&notification) {
-                post(wparam as u16);
+                post(id);
                 return 0;
             }
         }

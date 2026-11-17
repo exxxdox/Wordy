@@ -3,9 +3,9 @@ use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM}
 use windows_sys::Win32::Graphics::Dwm::{DWMWA_USE_IMMERSIVE_DARK_MODE, DwmSetWindowAttribute};
 use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::UI::Controls::{
-    COMBOBOXINFO, DRAWITEMSTRUCT, EM_SETLIMITTEXT, EM_SETMARGINS, GetComboBoxInfo, ODS_DISABLED,
-    ODS_FOCUS, ODS_SELECTED, ODT_BUTTON, TB_ENDTRACK, TBM_GETCHANNELRECT, TBM_GETTHUMBRECT,
-    TBM_SETPAGESIZE, TBM_SETPOS, TBM_SETRANGE, TBS_NOTICKS, TRACKBAR_CLASSW, WM_MOUSELEAVE,
+    DRAWITEMSTRUCT, EM_SETLIMITTEXT, EM_SETMARGINS, ODS_DISABLED, ODS_FOCUS, ODS_SELECTED,
+    ODT_BUTTON, TB_ENDTRACK, TBM_GETCHANNELRECT, TBM_GETTHUMBRECT, TBM_SETPAGESIZE, TBM_SETPOS,
+    TBM_SETRANGE, TBS_NOTICKS, TRACKBAR_CLASSW, WM_MOUSELEAVE,
 };
 use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
@@ -19,6 +19,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::*;
 use crate::config::{Settings, Wheel};
 use crate::desktop::{frame_edit_text, wide, window_text};
 use crate::dialog::{Panel, Template};
+use crate::selector::style_selector;
 use crate::settings_window::paint_embedded_backdrop;
 use crate::wheel::{CANVAS_HEIGHT, CANVAS_WIDTH, Point, WheelStyle, picker_slot_at};
 use crate::wheel_paint::{WheelBitmap, WheelFrame, WheelRenderer};
@@ -58,7 +59,6 @@ const GAIN_VALUE: u16 = 227;
 // The real GAIN edit stays hidden behind the slider, so the slider carries its own id.
 const GAIN_SLIDER: u16 = 228;
 const RENAME: u16 = 229;
-const STYLED_COMBO: usize = 10;
 const GAIN_SUBCLASS: usize = 11;
 const TBM_GETPOS: u32 = WM_USER;
 
@@ -185,7 +185,7 @@ impl Chrome {
         for id in [WHEEL, STYLE] {
             let combo = panel.child(id);
             if !combo.is_null() {
-                style_combo(combo);
+                style_selector(combo);
             }
         }
         if trim || !state.gain.is_null() {
@@ -275,143 +275,6 @@ fn suppress_button_erase(panel: HWND) {
                 SetWindowSubclass(child, Some(no_erase_proc), 8, 0);
             }
             child = GetWindow(child, GW_HWNDNEXT);
-        }
-    }
-}
-
-fn style_combo(hwnd: HWND) {
-    unsafe {
-        SetWindowSubclass(hwnd, Some(combo_chrome_proc), STYLED_COMBO, 0);
-        // Apply the rounded region before the first paint.
-        SetWindowPos(
-            hwnd,
-            ptr::null_mut(),
-            0,
-            0,
-            0,
-            0,
-            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
-        );
-    }
-}
-
-/// Replaces the system combo frame and arrow with the panel's rounded field,
-/// keeping the native dropdown list and keyboard behaviour.
-unsafe extern "system" fn combo_chrome_proc(
-    hwnd: HWND,
-    message: u32,
-    wparam: WPARAM,
-    lparam: LPARAM,
-    _id: usize,
-    _data: usize,
-) -> LRESULT {
-    unsafe {
-        match message {
-            WM_SIZE => {
-                let mut size = RECT::default();
-                GetWindowRect(hwnd, &mut size);
-                let region = CreateRoundRectRgn(
-                    0,
-                    0,
-                    size.right - size.left + 1,
-                    size.bottom - size.top + 1,
-                    12,
-                    12,
-                );
-                SetWindowRgn(hwnd, region, 1);
-                DefSubclassProc(hwnd, message, wparam, lparam)
-            }
-            WM_NCPAINT => {
-                let dc = GetWindowDC(hwnd);
-                if !dc.is_null() {
-                    let mut size = RECT::default();
-                    GetWindowRect(hwnd, &mut size);
-                    fill(
-                        dc,
-                        RECT {
-                            left: 0,
-                            top: 0,
-                            right: size.right - size.left,
-                            bottom: size.bottom - size.top,
-                        },
-                        ELEVATED,
-                    );
-                    ReleaseDC(hwnd, dc);
-                }
-                0
-            }
-            WM_PAINT => {
-                let result = DefSubclassProc(hwnd, message, wparam, lparam);
-                paint_combo_chrome(hwnd);
-                result
-            }
-            WM_SETFOCUS | WM_KILLFOCUS => {
-                let result = DefSubclassProc(hwnd, message, wparam, lparam);
-                InvalidateRect(hwnd, ptr::null(), 0);
-                result
-            }
-            _ => DefSubclassProc(hwnd, message, wparam, lparam),
-        }
-    }
-}
-
-unsafe fn paint_combo_chrome(hwnd: HWND) {
-    unsafe {
-        let mut info = COMBOBOXINFO {
-            cbSize: mem::size_of::<COMBOBOXINFO>() as u32,
-            ..Default::default()
-        };
-        if GetComboBoxInfo(hwnd, &mut info) == 0 {
-            return;
-        }
-        let dc = GetWindowDC(hwnd);
-        if !dc.is_null() {
-            let mut size = RECT::default();
-            GetWindowRect(hwnd, &mut size);
-            rounded(
-                dc,
-                RECT {
-                    left: 0,
-                    top: 0,
-                    right: size.right - size.left,
-                    bottom: size.bottom - size.top,
-                },
-                12,
-                None,
-                if GetFocus() == hwnd {
-                    ACCENT
-                } else {
-                    SEPARATOR
-                },
-            );
-            ReleaseDC(hwnd, dc);
-        }
-        let button = info.rcButton;
-        if button.right > button.left {
-            let dc = GetDC(hwnd);
-            if !dc.is_null() {
-                let mut client = RECT::default();
-                GetClientRect(hwnd, &mut client);
-                // The themed button paints an arrow well plus a light edge; cover
-                // the whole right side up to the client edge.
-                fill(
-                    dc,
-                    RECT {
-                        left: button.left.saturating_sub(1),
-                        top: 0,
-                        right: client.right,
-                        bottom: client.bottom,
-                    },
-                    ELEVATED,
-                );
-                let x = (button.left + button.right) / 2;
-                let y = (button.top + button.bottom) / 2;
-                with_pen(dc, 2, MUTED, || {
-                    line(dc, x - 4, y - 2, x, y + 2);
-                    line(dc, x, y + 2, x + 5, y - 3);
-                });
-                ReleaseDC(hwnd, dc);
-            }
         }
     }
 }
