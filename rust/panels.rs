@@ -188,7 +188,7 @@ impl Chrome {
             }
         }
         // Style the selectors as rounded dark fields instead of system chrome.
-        let item_height = logical_px(panel.0, 29);
+        let item_height = logical_px(panel.0, 28);
         for id in [WHEEL, STYLE] {
             let combo = panel.child(id);
             if !combo.is_null() {
