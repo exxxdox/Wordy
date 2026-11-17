@@ -183,7 +183,42 @@ impl Tray {
     }
 
     pub fn open_menu(&self) -> io::Result<()> {
-        crate::tray_menu::open(self.host)
+        // Native popup: `enable_dark_mode` already opted the process into the
+        // Windows 11 dark menu theme, so no custom drawing is needed. Tray
+        // callbacks now reach the event loop, so the modal menu is safe here.
+        unsafe {
+            let menu = CreatePopupMenu();
+            if menu.is_null() {
+                return Err(io::Error::last_os_error());
+            }
+            AppendMenuW(menu, MF_STRING, TRAY_OVERLAY, w!("显示输入框"));
+            AppendMenuW(menu, MF_STRING, TRAY_SETTINGS, w!("设置"));
+            AppendMenuW(menu, MF_STRING, TRAY_LOGS, w!("打开日志窗口"));
+            AppendMenuW(menu, MF_SEPARATOR, 0, ptr::null());
+            AppendMenuW(menu, MF_STRING, TRAY_EXIT, w!("退出"));
+            let mut position = POINT::default();
+            GetCursorPos(&mut position);
+            // The menu needs its owner in the foreground to dismiss when the
+            // user clicks elsewhere, so try before showing it.
+            SetForegroundWindow(self.host);
+            let command = TrackPopupMenu(
+                menu,
+                TPM_RIGHTBUTTON | TPM_RETURNCMD | TPM_NONOTIFY | TPM_WORKAREA,
+                position.x,
+                position.y,
+                0,
+                self.host,
+                ptr::null(),
+            );
+            // Documented workaround so the menu's owner can be activated again.
+            PostMessageW(self.host, WM_NULL, 0, 0);
+            DestroyMenu(menu);
+            if command != 0 {
+                // Same queue as the dismissed custom menu: actions stay in the loop.
+                PostMessageW(self.host, TRAY_COMMAND, command as usize, 0);
+            }
+        }
+        Ok(())
     }
 
     fn data(&self) -> NOTIFYICONDATAW {
