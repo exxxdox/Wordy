@@ -1579,7 +1579,6 @@ fn paint_shell(hwnd: HWND) {
     let dc = unsafe { BeginPaint(hwnd, &mut paint) };
     let mut window = RECT::default();
     unsafe { GetClientRect(hwnd, &mut window) };
-    fill(dc, &window, COLOR_KEY);
     let maximized = unsafe { IsZoomed(hwnd) != 0 };
     let scale = unsafe { GetDpiForWindow(hwnd) }.max(96) as i32;
     let pad = if maximized {
@@ -1595,6 +1594,38 @@ fn paint_shell(hwnd: HWND) {
         bottom: window.bottom - pad,
     };
     if body.right > body.left && body.bottom > body.top {
+        // Clear only the transparent margin. Flooding the whole client with the
+        // color key would composite a fully transparent frame before the glass
+        // lands, which flashes on every page switch; margin pixels are already
+        // transparent, so repainting them is invisible.
+        for margin in [
+            RECT {
+                left: 0,
+                top: 0,
+                right: window.right,
+                bottom: body.top,
+            },
+            RECT {
+                left: 0,
+                top: body.bottom,
+                right: window.right,
+                bottom: window.bottom,
+            },
+            RECT {
+                left: 0,
+                top: body.top,
+                right: body.left,
+                bottom: body.bottom,
+            },
+            RECT {
+                left: body.right,
+                top: body.top,
+                right: window.right,
+                bottom: body.bottom,
+            },
+        ] {
+            fill(dc, &margin, COLOR_KEY);
+        }
         let clip = unsafe {
             CreateRoundRectRgn(
                 body.left,
@@ -1639,6 +1670,8 @@ fn paint_shell(hwnd: HWND) {
             &[[body.left + 1, footer], [body.right - 1, footer]],
             SEPARATOR,
         );
+    } else {
+        fill(dc, &window, COLOR_KEY);
     }
     unsafe { EndPaint(hwnd, &paint) };
 }
@@ -2188,7 +2221,8 @@ unsafe extern "system" fn style_control(
             | WM_MOUSELEAVE
             | WM_SETTEXT
     ) {
-        unsafe { InvalidateRect(hwnd, ptr::null(), 1) };
+        // Skip the class-brush erase: it flashes light before the custom paint runs.
+        unsafe { InvalidateRect(hwnd, ptr::null(), 0) };
     }
     result
 }
