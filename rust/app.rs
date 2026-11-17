@@ -1420,6 +1420,10 @@ impl App {
                     }
                     _ => return Ok(()),
                 }
+                if action == NAME {
+                    // The selector lists wheel names, so it has to follow the rename.
+                    self.refresh_editor()?;
+                }
             }
             AUDIO_MODE | TEXT_MODE if notification == 0 => {
                 let to_text = action == TEXT_MODE;

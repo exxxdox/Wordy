@@ -3,9 +3,9 @@ use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM}
 use windows_sys::Win32::Graphics::Dwm::{DWMWA_USE_IMMERSIVE_DARK_MODE, DwmSetWindowAttribute};
 use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::UI::Controls::{
-    DRAWITEMSTRUCT, EM_SETLIMITTEXT, ODS_DISABLED, ODS_FOCUS, ODS_SELECTED, ODT_BUTTON,
-    TB_ENDTRACK, TBM_SETPAGESIZE, TBM_SETPOS, TBM_SETRANGE, TBS_NOTICKS, TRACKBAR_CLASSW,
-    WM_MOUSELEAVE,
+    COMBOBOXINFO, DRAWITEMSTRUCT, EM_SETLIMITTEXT, EM_SETMARGINS, GetComboBoxInfo, ODS_DISABLED,
+    ODS_FOCUS, ODS_SELECTED, ODT_BUTTON, TB_ENDTRACK, TBM_GETCHANNELRECT, TBM_GETTHUMBRECT,
+    TBM_SETPAGESIZE, TBM_SETPOS, TBM_SETRANGE, TBS_NOTICKS, TRACKBAR_CLASSW, WM_MOUSELEAVE,
 };
 use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
@@ -17,7 +17,7 @@ use windows_sys::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWi
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 use crate::config::{Settings, Wheel};
-use crate::desktop::{center_edit_text, wide, window_text};
+use crate::desktop::{frame_edit_text, wide, window_text};
 use crate::dialog::{Panel, Template};
 use crate::settings_window::paint_embedded_backdrop;
 use crate::wheel::{CANVAS_HEIGHT, CANVAS_WIDTH, Point, WheelStyle, picker_slot_at};
@@ -57,6 +57,9 @@ const END_LABEL: u16 = 302;
 const GAIN_VALUE: u16 = 227;
 // The real GAIN edit stays hidden behind the slider, so the slider carries its own id.
 const GAIN_SLIDER: u16 = 228;
+const RENAME: u16 = 229;
+const STYLED_COMBO: usize = 10;
+const GAIN_SUBCLASS: usize = 11;
 const TBM_GETPOS: u32 = WM_USER;
 
 // COLORREF stores red, green, blue in least-to-most-significant byte order.
@@ -81,13 +84,8 @@ fn label(template: &mut Template, id: u16, label: &str, bounds: [u16; 4]) {
 }
 
 fn edit(template: &mut Template, id: u16, bounds: [u16; 4]) {
-    template.control(
-        0x81,
-        id,
-        "",
-        BASE | TABS | WS_BORDER | ES_AUTOHSCROLL as u32,
-        bounds,
-    );
+    // No WS_BORDER: the shared edit helper paints a dark 1px frame instead.
+    template.control(0x81, id, "", BASE | TABS | ES_AUTOHSCROLL as u32, bounds);
 }
 
 fn combo(template: &mut Template, id: u16, bounds: [u16; 4]) {
@@ -96,16 +94,6 @@ fn combo(template: &mut Template, id: u16, bounds: [u16; 4]) {
         id,
         "",
         BASE | TABS | WS_VSCROLL | CBS_DROPDOWNLIST as u32,
-        bounds,
-    );
-}
-
-fn editable_combo(template: &mut Template, id: u16, bounds: [u16; 4]) {
-    template.control(
-        0x85,
-        id,
-        "",
-        BASE | TABS | WS_VSCROLL | CBS_DROPDOWN as u32,
         bounds,
     );
 }
@@ -192,17 +180,42 @@ impl Chrome {
                     ShowWindow(panel.child(LABEL), SW_HIDE);
                 }
             }
-        } else {
-            unsafe { SendMessageW(panel.child(WHEEL), CB_LIMITTEXT, 20, 0) };
+        }
+        // Style the selectors as rounded dark fields instead of system chrome.
+        for id in [WHEEL, STYLE] {
+            let combo = panel.child(id);
+            if !combo.is_null() {
+                style_combo(combo);
+            }
         }
         if trim || !state.gain.is_null() {
             unsafe { ShowWindow(panel.child(GAIN), SW_HIDE) };
+            if !state.gain.is_null() {
+                let background = if trim { PANEL_SURFACE } else { EDITOR_CARD };
+                unsafe {
+                    SetWindowSubclass(
+                        state.gain,
+                        Some(slider_proc),
+                        GAIN_SUBCLASS,
+                        background as usize,
+                    )
+                };
+            }
         }
         // Single-line edits draw their text at the top; center it in the field.
         for id in [GAIN, NAME, LABEL, TEXT, START, END] {
             let child = panel.child(id);
             if !child.is_null() {
-                center_edit_text(child, ELEVATED);
+                frame_edit_text(child, ELEVATED, SEPARATOR);
+                let margin = logical_px(panel.0, 8);
+                unsafe {
+                    SendMessageW(
+                        child,
+                        EM_SETMARGINS,
+                        (EC_LEFTMARGIN | EC_RIGHTMARGIN) as usize,
+                        (margin | (margin << 16)) as isize,
+                    )
+                };
             }
         }
         // Ownerdraw buttons paint their full face, so the class-brush erase only flashes.
@@ -266,6 +279,220 @@ fn suppress_button_erase(panel: HWND) {
     }
 }
 
+fn style_combo(hwnd: HWND) {
+    unsafe {
+        SetWindowSubclass(hwnd, Some(combo_chrome_proc), STYLED_COMBO, 0);
+        // Apply the rounded region before the first paint.
+        SetWindowPos(
+            hwnd,
+            ptr::null_mut(),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+        );
+    }
+}
+
+/// Replaces the system combo frame and arrow with the panel's rounded field,
+/// keeping the native dropdown list and keyboard behaviour.
+unsafe extern "system" fn combo_chrome_proc(
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    _id: usize,
+    _data: usize,
+) -> LRESULT {
+    unsafe {
+        match message {
+            WM_SIZE => {
+                let mut size = RECT::default();
+                GetWindowRect(hwnd, &mut size);
+                let region = CreateRoundRectRgn(
+                    0,
+                    0,
+                    size.right - size.left + 1,
+                    size.bottom - size.top + 1,
+                    12,
+                    12,
+                );
+                SetWindowRgn(hwnd, region, 1);
+                DefSubclassProc(hwnd, message, wparam, lparam)
+            }
+            WM_NCPAINT => {
+                let dc = GetWindowDC(hwnd);
+                if !dc.is_null() {
+                    let mut size = RECT::default();
+                    GetWindowRect(hwnd, &mut size);
+                    fill(
+                        dc,
+                        RECT {
+                            left: 0,
+                            top: 0,
+                            right: size.right - size.left,
+                            bottom: size.bottom - size.top,
+                        },
+                        ELEVATED,
+                    );
+                    ReleaseDC(hwnd, dc);
+                }
+                0
+            }
+            WM_PAINT => {
+                let result = DefSubclassProc(hwnd, message, wparam, lparam);
+                paint_combo_chrome(hwnd);
+                result
+            }
+            WM_SETFOCUS | WM_KILLFOCUS => {
+                let result = DefSubclassProc(hwnd, message, wparam, lparam);
+                InvalidateRect(hwnd, ptr::null(), 0);
+                result
+            }
+            _ => DefSubclassProc(hwnd, message, wparam, lparam),
+        }
+    }
+}
+
+unsafe fn paint_combo_chrome(hwnd: HWND) {
+    unsafe {
+        let mut info = COMBOBOXINFO {
+            cbSize: mem::size_of::<COMBOBOXINFO>() as u32,
+            ..Default::default()
+        };
+        if GetComboBoxInfo(hwnd, &mut info) == 0 {
+            return;
+        }
+        let dc = GetWindowDC(hwnd);
+        if !dc.is_null() {
+            let mut size = RECT::default();
+            GetWindowRect(hwnd, &mut size);
+            rounded(
+                dc,
+                RECT {
+                    left: 0,
+                    top: 0,
+                    right: size.right - size.left,
+                    bottom: size.bottom - size.top,
+                },
+                12,
+                None,
+                if GetFocus() == hwnd {
+                    ACCENT
+                } else {
+                    SEPARATOR
+                },
+            );
+            ReleaseDC(hwnd, dc);
+        }
+        let button = info.rcButton;
+        if button.right > button.left {
+            let dc = GetDC(hwnd);
+            if !dc.is_null() {
+                let mut client = RECT::default();
+                GetClientRect(hwnd, &mut client);
+                // The themed button paints an arrow well plus a light edge; cover
+                // the whole right side up to the client edge.
+                fill(
+                    dc,
+                    RECT {
+                        left: button.left.saturating_sub(1),
+                        top: 0,
+                        right: client.right,
+                        bottom: client.bottom,
+                    },
+                    ELEVATED,
+                );
+                let x = (button.left + button.right) / 2;
+                let y = (button.top + button.bottom) / 2;
+                with_pen(dc, 2, MUTED, || {
+                    line(dc, x - 4, y - 2, x, y + 2);
+                    line(dc, x, y + 2, x + 5, y - 3);
+                });
+                ReleaseDC(hwnd, dc);
+            }
+        }
+    }
+}
+
+fn paint_gain(hwnd: HWND, dc: HDC, rect: RECT, background: u32) {
+    fill(dc, rect, background);
+    let mut channel = RECT::default();
+    let mut thumb = RECT::default();
+    unsafe {
+        SendMessageW(
+            hwnd,
+            TBM_GETCHANNELRECT,
+            0,
+            ptr::from_mut(&mut channel) as LPARAM,
+        );
+        SendMessageW(
+            hwnd,
+            TBM_GETTHUMBRECT,
+            0,
+            ptr::from_mut(&mut thumb) as LPARAM,
+        );
+    }
+    let y = (rect.top + rect.bottom) / 2;
+    let x = (thumb.left + thumb.right) / 2;
+    let track = RECT {
+        left: channel.left,
+        top: y - 3,
+        right: channel.right,
+        bottom: y + 3,
+    };
+    let progress = RECT {
+        right: x.max(channel.left + 1),
+        ..track
+    };
+    rounded(dc, track, 6, Some(SEPARATOR), SEPARATOR);
+    rounded(dc, progress, 6, Some(ACCENT), ACCENT);
+    let thumb = RECT {
+        left: x - 8,
+        top: y - 8,
+        right: x + 8,
+        bottom: y + 8,
+    };
+    let ring = if unsafe { GetFocus() } == hwnd {
+        ACCENT
+    } else {
+        PRIMARY
+    };
+    rounded(dc, thumb, 16, Some(PRIMARY), ring);
+}
+
+unsafe extern "system" fn slider_proc(
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    _id: usize,
+    background: usize,
+) -> LRESULT {
+    unsafe {
+        match message {
+            WM_ERASEBKGND => 1,
+            WM_PAINT => {
+                let mut paint = PAINTSTRUCT::default();
+                let dc = BeginPaint(hwnd, &mut paint);
+                let mut rect = RECT::default();
+                GetClientRect(hwnd, &mut rect);
+                paint_gain(hwnd, dc, rect, background as u32);
+                EndPaint(hwnd, &paint);
+                0
+            }
+            WM_SETFOCUS | WM_KILLFOCUS | WM_LBUTTONDOWN | WM_LBUTTONUP | WM_MOUSEMOVE
+            | WM_KEYDOWN => {
+                let result = DefSubclassProc(hwnd, message, wparam, lparam);
+                InvalidateRect(hwnd, ptr::null(), 0);
+                result
+            }
+            _ => DefSubclassProc(hwnd, message, wparam, lparam),
+        }
+    }
+}
+
 unsafe extern "system" fn no_erase_proc(
     hwnd: HWND,
     message: u32,
@@ -314,12 +541,11 @@ unsafe extern "system" fn chrome_proc(
             WM_CTLCOLORDLG => state.surface as LRESULT,
             WM_CTLCOLORSTATIC | WM_CTLCOLORBTN | WM_CTLCOLOREDIT | WM_CTLCOLORLISTBOX => {
                 let dc = wp as HDC;
-                let field = matches!(msg, WM_CTLCOLOREDIT | WM_CTLCOLORLISTBOX);
-                let card = !state.trim
-                    && matches!(
-                        GetDlgCtrlID(lp as HWND) as u16,
-                        INFO | GAIN_SLIDER | GAIN_VALUE | 302..=305
-                    );
+                let control = GetDlgCtrlID(lp as HWND) as u16;
+                let field = matches!(msg, WM_CTLCOLOREDIT | WM_CTLCOLORLISTBOX)
+                    || matches!(control, WHEEL | STYLE);
+                let card =
+                    !state.trim && matches!(control, INFO | GAIN_SLIDER | GAIN_VALUE | 302..=305);
                 SetTextColor(dc, PRIMARY);
                 SetBkMode(dc, if field { OPAQUE } else { TRANSPARENT } as i32);
                 SetBkColor(
@@ -381,30 +607,22 @@ unsafe extern "system" fn chrome_proc(
                 PostMessageW(hwnd, WM_COMMAND, usize::from(STOP), 0);
                 1
             }
-            WM_COMMAND
-                if !state.trim && wp as u16 == WHEEL && (wp >> 16) as u32 == CBN_KILLFOCUS =>
-            {
-                let combo = GetDlgItem(hwnd, i32::from(WHEEL));
-                let name = window_text(combo);
-                let selected = SendMessageW(combo, CB_GETCURSEL, 0, 0);
-                // An untouched default title is an empty persisted name.
+            WM_COMMAND if !state.trim && wp as u16 == RENAME => {
                 let current = window_text(GetDlgItem(hwnd, i32::from(NAME)));
-                let name = if current.is_empty()
-                    && selected >= 0
-                    && name == format!("轮盘 {}", selected + 1)
+                if let Some(name) =
+                    crate::dialog::prompt(hwnd, "重命名轮盘", "轮盘名称", &current, false)
                 {
-                    ""
-                } else {
-                    &name
-                };
-                if name != current {
-                    set_control_text(hwnd, NAME, name);
-                    PostMessageW(
-                        hwnd,
-                        WM_COMMAND,
-                        usize::from(NAME) | ((EN_KILLFOCUS as usize) << 16),
-                        0,
-                    );
+                    let name = name.trim().to_owned();
+                    if name != current {
+                        // Reuse the NAME edit's commit path so the app owns persistence.
+                        set_control_text(hwnd, NAME, &name);
+                        PostMessageW(
+                            hwnd,
+                            WM_COMMAND,
+                            usize::from(NAME) | ((EN_KILLFOCUS as usize) << 16),
+                            0,
+                        );
+                    }
                 }
                 1
             }
@@ -775,11 +993,12 @@ impl Editor {
     pub fn new_embedded(host: HWND, parent: HWND, settings: &Settings) -> io::Result<Self> {
         let mut template = Template::embedded(500, 264);
         label(&mut template, 300, "轮盘", [4, 11, 27, 14]);
-        editable_combo(&mut template, WHEEL, [31, 7, 108, 100]);
+        combo(&mut template, WHEEL, [31, 7, 108, 100]);
         label(&mut template, 301, "快捷键", [144, 11, 28, 14]);
         button(&mut template, HOTKEY, "录制快捷键", [172, 7, 80, 18]);
         button(&mut template, ADD, "新增", [256, 7, 34, 18]);
         button(&mut template, REMOVE, "删除", [294, 7, 34, 18]);
+        button(&mut template, RENAME, "重命名", [0, 0, 1, 1]);
         label(&mut template, 307, "样式", [407, 11, 28, 14]);
         combo(&mut template, STYLE, [435, 7, 63, 100]);
         template.control(0x82, PICK, "", BASE | TABS | 0x0000_0100, [3, 33, 198, 212]);
@@ -991,6 +1210,7 @@ fn layout_editor(hwnd: HWND, state: &ChromeState) {
         (HOTKEY, 310, 0, 160, 32),
         (ADD, 478, 0, 52, 32),
         (REMOVE, 538, 0, 52, 32),
+        (RENAME, 598, 0, 58, 32),
         (PICK, 0, 44, 400, 400),
     ] {
         at(i32::from(id), px(x), y, px(w), h);
