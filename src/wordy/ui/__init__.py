@@ -1,4 +1,0 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
-"""UI 组件：输入悬浮窗、设置窗口、托盘、主题。"""

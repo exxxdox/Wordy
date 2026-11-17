@@ -21,6 +21,8 @@ pub fn acquire_single_instance() -> io::Result<bool> {
 }
 
 pub fn show_duplicate_instance_message() {
+    // TaskDialogIndirect only exists in comctl32 v6; loading it without a v6
+    // manifest fails before main runs, so the duplicate prompt stays a MessageBox.
     show_native_message("Wordy 已在运行，请勿重复启动。");
 }
 

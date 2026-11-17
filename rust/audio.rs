@@ -64,9 +64,28 @@ pub fn is_cable_device(name: &str) -> bool {
 }
 
 pub fn cable_endpoint(outputs: &[Endpoint]) -> Option<&Endpoint> {
+    cable_endpoint_for(outputs, None)
+}
+
+/// Legacy builds stored a custom VB-CABLE friendly name; keep it working when
+/// the endpoint no longer contains the default "CABLE Input" marker.
+pub fn cable_endpoint_for<'a>(
+    outputs: &'a [Endpoint],
+    preferred: Option<&str>,
+) -> Option<&'a Endpoint> {
     outputs
         .iter()
         .find(|endpoint| endpoint.name.to_lowercase().contains("cable input"))
+        .or_else(|| {
+            let preferred = preferred?.trim().to_lowercase();
+            if preferred.is_empty() {
+                None
+            } else {
+                outputs
+                    .iter()
+                    .find(|endpoint| endpoint.name.to_lowercase().contains(&preferred))
+            }
+        })
 }
 
 pub fn route<'a>(
@@ -75,9 +94,10 @@ pub fn route<'a>(
     preview_local: bool,
     selected_name: Option<&str>,
     outputs: &'a [Endpoint],
+    preferred_main: Option<&str>,
 ) -> PlaybackRoute<'a> {
     let main = if main_enabled && !preview_local {
-        cable_endpoint(outputs)
+        cable_endpoint_for(outputs, preferred_main)
     } else {
         None
     };

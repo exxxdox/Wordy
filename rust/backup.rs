@@ -245,7 +245,7 @@ fn set_secret(
 }
 
 fn validate_password(password: &str) -> io::Result<()> {
-    if password.is_empty() {
+    if password.trim().is_empty() {
         Err(invalid("备份密码不能为空"))
     } else {
         Ok(())

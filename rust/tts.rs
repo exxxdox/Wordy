@@ -21,7 +21,7 @@ use crate::{
 };
 
 mod realtime;
-use realtime::{CartesiaSocket, StreamError};
+use realtime::{RealtimeConnection, StreamError};
 
 const CARTESIA_BYTES_URL: &str = "https://api.cartesia.ai/tts/bytes";
 const CARTESIA_VOICES_URL: &str = "https://api.cartesia.ai/voices?is_owner=true";
@@ -70,7 +70,7 @@ pub struct TtsEngine {
     volume: f64,
     sample_rate: u32,
     http: Option<Client>,
-    socket: Option<CartesiaSocket>,
+    socket: Option<RealtimeConnection>,
 }
 
 impl TtsEngine {
@@ -107,26 +107,37 @@ impl TtsEngine {
     }
 
     pub fn connect(&mut self) -> io::Result<()> {
-        if self.backend == Backend::CartesiaRealtime && self.socket.is_none() {
+        if self.backend != Backend::CartesiaRealtime {
+            return Ok(());
+        }
+        // The background keepalive may have observed a server close while a
+        // local clip was playing; replace the dead socket on the next speech.
+        if self
+            .socket
+            .as_ref()
+            .is_some_and(RealtimeConnection::is_dead)
+        {
+            self.close();
+        }
+        if self.socket.is_none() {
             let key = self.require_key()?;
             self.require_voice()?;
-            self.socket = Some(CartesiaSocket::connect(key)?);
+            self.socket = Some(RealtimeConnection::connect(key)?);
         }
         Ok(())
     }
 
     pub fn close(&mut self) {
-        if let Some(mut socket) = self.socket.take() {
-            socket.close();
+        if let Some(mut connection) = self.socket.take() {
+            connection.close();
         }
     }
 
     pub fn poll_keepalive(&mut self) {
-        if self
-            .socket
-            .as_mut()
-            .is_some_and(|socket| socket.poll_keepalive().is_err())
-        {
+        let failed = self.socket.as_ref().is_some_and(|connection| {
+            connection.is_dead() || connection.lock().poll_keepalive().is_err()
+        });
+        if failed {
             self.close();
         }
     }
@@ -278,14 +289,18 @@ impl TtsEngine {
         cancel: &AtomicBool,
         emit: &mut impl FnMut(TtsAudio<'_>) -> io::Result<()>,
     ) -> Result<bool, StreamError> {
-        let voice = self
-            .voice_id
-            .as_deref()
-            .expect("voice validated before connecting");
-        let key = self
-            .api_key
-            .as_deref()
-            .expect("key validated before connecting");
+        let voice = self.voice_id.as_deref().ok_or_else(|| {
+            StreamError::Connection(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "缺少音色配置，请先在设置中刷新音色列表并选择一个音色",
+            ))
+        })?;
+        let key = self.api_key.as_deref().ok_or_else(|| {
+            StreamError::Connection(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "缺少 Cartesia API Key，请先在设置中配置",
+            ))
+        })?;
         let id = format!("cartesia-tts-{}", uuid::Uuid::new_v4());
         let start = cartesia_request(
             text,
@@ -295,9 +310,12 @@ impl TtsEngine {
             Some((&id, true)),
         );
         let end = cartesia_request("", voice, self.volume, self.sample_rate, Some((&id, false)));
-        self.socket
-            .as_mut()
-            .expect("connect established a socket")
+        let connection = self
+            .socket
+            .as_ref()
+            .ok_or_else(|| StreamError::Connection(io::Error::other("Cartesia 实时连接未建立")))?;
+        connection
+            .lock()
             .play(&id, key, [&start, &end], cancel, emit)
     }
 
@@ -338,20 +356,13 @@ impl TtsEngine {
         }
         let client = Client::builder()
             .connect_timeout(Duration::from_secs(10))
-            .timeout(Duration::from_secs(60))
-            // Custom provider headers also contain credentials. Keep redirects on
-            // the original HTTPS origin even when a provider changes its route.
-            .redirect(Policy::custom(|attempt| {
-                if attempt.previous().len() > 10
-                    || attempt
-                        .previous()
-                        .first()
-                        .is_some_and(|from| from.origin() != attempt.url().origin())
-                {
-                    return attempt.stop();
-                }
-                attempt.follow()
-            }))
+            // Python's requests timeout is per socket operation, not a whole-request
+            // deadline. reqwest's blocking builder has no read_timeout (only the
+            // async builder does), so bound the connect phase and rely on per-read
+            // socket behavior for the body.
+            // Match requests: follow redirects; reqwest strips Authorization on a
+            // cross-origin hop, as requests does.
+            .redirect(Policy::limited(10))
             .build()
             .map_err(|error| transport_error("无法初始化 TTS HTTP 客户端", error))?;
         self.http = Some(client.clone());

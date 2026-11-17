@@ -210,7 +210,7 @@ struct App {
     settings_window: SettingsWindow,
     toasts: Toasts,
     recording: Option<Recording>,
-    slot_recording: Option<(Recording, usize, usize)>,
+    slot_recording: Option<(Recording, usize, usize, Instant)>,
     trim: Option<TrimSession>,
     previews: HashMap<u64, tempfile::NamedTempFile>,
     editor_preview: Option<(u64, bool)>,
@@ -238,11 +238,13 @@ enum Background {
         result: io::Result<audio::StagedClip>,
         source: Option<tempfile::NamedTempFile>,
         trim: Option<u64>,
+        rolling: bool,
     },
     TrimInput {
         target: (usize, usize),
         result: io::Result<tempfile::NamedTempFile>,
     },
+    NotificationFailed(String),
 }
 
 struct TrimSession {
@@ -314,10 +316,11 @@ impl App {
         for failure in failures {
             app.notify(failure);
         }
+        let legacy_main = app.config.settings().virtual_output_device.clone();
         if app.config.settings().main_playback_enabled
-            && audio::list_outputs()
-                .ok()
-                .is_none_or(|outputs| audio::cable_endpoint(&outputs).is_none())
+            && audio::list_outputs().ok().is_none_or(|outputs| {
+                audio::cable_endpoint_for(&outputs, legacy_main.as_deref()).is_none()
+            })
         {
             app.notify("未检测到 VB-CABLE，请在 Wordy 的音频设置中下载并安装。".into());
         }
@@ -434,11 +437,21 @@ impl App {
             self.toasts.clear();
             self.log_at("WARNING", format!("设置反馈显示失败：{error}"));
         }
-        if let Some((recording, _, _)) = &self.slot_recording
+        if let Some((recording, ..)) = &self.slot_recording
             && !recording.is_running()
         {
             self.editor_action(usize::from(panels::RECORD), self.editor.panel.0)?;
+        } else if let Some((_, _, _, started)) = &self.slot_recording {
+            let seconds = started.elapsed().as_secs().min(60);
+            self.editor
+                .panel
+                .set_text(panels::RECORD, &format!("停止 {seconds}s"));
         }
+        let busy = self.slot_recording.is_some()
+            || self.pending_saves > 0
+            || self.trim.is_some()
+            || self.editor_preview.is_some();
+        self.editor.busy(busy);
         if let Some(slot) = self.wheel.tick()
             && let Some(wheel) = self.active_wheel.take()
         {
@@ -477,11 +490,22 @@ impl App {
                 Event::Voices { id, result } if Some(id) == self.voices_request => {
                     self.voices_request = None;
                     match result {
-                        Ok(voices) => self.settings_window.set_cartesia_voices(voices),
+                        Ok(voices) => {
+                            let count = voices.len();
+                            self.settings_window.set_cartesia_voices(voices);
+                            self.status(format!("已加载 {count} 个音色"));
+                        }
                         Err(error) => self.failure(format!("获取音色列表失败：{error}")),
                     }
                 }
-                Event::Warning(message) => self.log_at("WARNING", message),
+                Event::Warning { target, message } => {
+                    self.log_target("WARNING", target, message);
+                }
+                Event::Log {
+                    target,
+                    level,
+                    message,
+                } => self.log_target(level, target, message),
                 _ => (),
             }
         }
@@ -493,6 +517,11 @@ impl App {
 
     fn complete_background(&mut self, result: Background, exiting: bool) -> io::Result<()> {
         match result {
+            Background::NotificationFailed(message) => {
+                // Fall back to the tray when the notification-center sender is unavailable.
+                self.tray.notify_balloon(&message);
+                self.log_at("WARNING", "Windows 通知发送失败，已改用托盘提示".into());
+            }
             Background::Rolling(result) => {
                 self.pending_saves -= 1;
                 if !exiting {
@@ -524,6 +553,7 @@ impl App {
                 result,
                 source,
                 trim,
+                rolling,
             } => {
                 self.pending_saves -= 1;
                 let result = result.and_then(|staged| {
@@ -554,9 +584,18 @@ impl App {
                 {
                     self.trim = None;
                 }
+                if rolling {
+                    self.config
+                        .update(|settings| settings.rolling_buffer_target = [wheel, slot])?;
+                }
                 if !exiting {
                     self.refresh_editor()?;
-                    self.notify(format!("已保存到轮盘 {} · 音频 {}", wheel + 1, slot + 1));
+                    // In-settings operations report where the user is looking.
+                    if self.settings_visible() {
+                        self.status(format!("已保存到轮盘 {} · 音频 {}", wheel + 1, slot + 1));
+                    } else {
+                        self.notify(format!("已保存到轮盘 {} · 音频 {}", wheel + 1, slot + 1));
+                    }
                 }
             }
         }
@@ -686,12 +725,23 @@ impl App {
         Ok(())
     }
 
+    fn edit_debounced(&mut self, update: impl FnOnce(&mut Settings)) -> io::Result<()> {
+        self.config.update_debounced(update)?;
+        self.settings_window.refresh(self.config.settings());
+        Ok(())
+    }
+
     fn settings_action(&mut self, action: SettingsAction) -> io::Result<()> {
         use SettingsAction::*;
         match action {
             SetProvider(provider) => {
+                let previous = self.config.settings().clone();
                 self.edit(|s| s.active_tts_provider = provider)?;
-                self.rebuild_engine()?;
+                if let Err(error) = self.rebuild_engine() {
+                    // Do not leave a provider active when its engine cannot start.
+                    self.edit(|s| *s = previous)?;
+                    return Err(error);
+                }
                 if provider == Provider::Cartesia {
                     self.refresh_voices();
                 }
@@ -703,13 +753,13 @@ impl App {
                 })?;
                 self.rebuild_engine()?;
             }
-            SetVolume(volume) => self.edit(|s| s.volume = volume)?,
+            SetVolume(volume) => self.edit_debounced(|s| s.volume = volume)?,
             SetOpacity(opacity) => {
-                self.edit(|s| s.overlay_opacity = opacity)?;
+                self.edit_debounced(|s| s.overlay_opacity = opacity)?;
                 self.overlay.apply_visual_settings(self.config.settings())?;
             }
             SetPlaceholder(value) => {
-                self.edit(|s| s.overlay_placeholder = value)?;
+                self.edit_debounced(|s| s.overlay_placeholder = value)?;
                 self.overlay.apply_visual_settings(self.config.settings())?;
             }
             SetUiFont(value) => {
@@ -763,7 +813,10 @@ impl App {
                 self.change_key(provider, Some(value))?;
             }
             DeleteKey(provider) => self.change_key(provider, None)?,
-            RefreshVoices => self.refresh_voices(),
+            RefreshVoices => {
+                self.status("正在加载音色…".into());
+                self.refresh_voices();
+            }
             SelectVoice(Provider::Cartesia, voice) => self.edit(|s| {
                 s.tts_providers.cartesia.voice_id = (!voice.id.is_empty()).then_some(voice.id);
                 s.tts_providers.cartesia.voice_name =
@@ -837,10 +890,13 @@ impl App {
     }
 
     fn load_audio_settings(&mut self) -> io::Result<()> {
-        let outputs = audio::list_outputs()?;
-        let inputs = audio::list_inputs()?;
-        self.settings_window
-            .set_vb_cable_available(audio::cable_endpoint(&outputs).is_some());
+        // A transient WASAPI failure must not empty the whole settings page.
+        let outputs = audio::list_outputs().unwrap_or_default();
+        let inputs = audio::list_inputs().unwrap_or_default();
+        let legacy_main = self.config.settings().virtual_output_device.clone();
+        self.settings_window.set_vb_cable_available(
+            audio::cable_endpoint_for(&outputs, legacy_main.as_deref()).is_some(),
+        );
         self.settings_window.set_output_devices(
             outputs
                 .into_iter()
@@ -860,8 +916,9 @@ impl App {
             .and_then(|input| audio::read_listen(input).ok());
         self.settings_window
             .set_input_devices(inputs.into_iter().map(|e| e.name).collect());
-        self.settings_window
-            .set_listen_state(state.map(|state| state.enabled));
+        self.settings_window.set_listen_state(
+            state.map(|state| (state.enabled, state.output_name, state.output_id.is_some())),
+        );
         Ok(())
     }
 
@@ -876,9 +933,10 @@ impl App {
             .unwrap_or_default();
         let input = find(&inputs, name).ok_or_else(|| io::Error::other("请先选择麦克风"))?;
         let before = audio::read_listen(input)?;
+        let legacy_main = self.config.settings().virtual_output_device.clone();
         let target = if enabled {
             Some(
-                audio::cable_endpoint(&outputs)
+                audio::cable_endpoint_for(&outputs, legacy_main.as_deref())
                     .ok_or_else(|| io::Error::other("未检测到 VB-CABLE"))?,
             )
         } else {
@@ -889,7 +947,7 @@ impl App {
             audio::restore_listen(input, &before)?;
             return Err(error);
         }
-        self.log(
+        self.status(
             if enabled {
                 "音频侦听已启用"
             } else {
@@ -914,13 +972,11 @@ impl App {
         }
         let old_state = old.map(audio::read_listen).transpose()?;
         let new_state = new.map(audio::read_listen).transpose()?;
-        let enabled = old_state
-            .as_ref()
-            .map_or(self.config.settings().audio_routing_enabled, |state| {
-                state.enabled
-            });
-        let outputs = audio::list_outputs()?;
-        let cable = audio::cable_endpoint(&outputs);
+        // Follow Wordy's routing switch, not a possibly manual Windows listen state.
+        let enabled = self.config.settings().audio_routing_enabled;
+        let outputs = audio::list_outputs().unwrap_or_default();
+        let legacy_main = self.config.settings().virtual_output_device.clone();
+        let cable = audio::cable_endpoint_for(&outputs, legacy_main.as_deref());
         if enabled && new.is_some() && cable.is_none() {
             return Err(io::Error::other("未检测到 VB-CABLE"));
         }
@@ -1041,11 +1097,12 @@ impl App {
             self.pending_saves += 1;
             self.notify("后台录制已结束".into());
         } else if self.pending_saves == 0 && self.trim.is_none() {
-            self.recording = Some(Recording::start(Some(Duration::from_secs_f64(
-                self.config.settings().rolling_buffer_seconds,
-            )))?);
+            let seconds = self.config.settings().rolling_buffer_seconds;
+            self.recording = Some(Recording::start(Some(Duration::from_secs_f64(seconds)))?);
             self.tray.set_recording(true);
-            self.notify("后台录制已开始".into());
+            self.notify(format!(
+                "后台录制已开始（保留最近 {seconds:.0} 秒；再按一次结束并截取）"
+            ));
         }
         Ok(())
     }
@@ -1084,6 +1141,8 @@ impl App {
             && let Some(wheel) = self.config.settings().wheel(wheel)
         {
             window.panel.set_text(panels::LABEL, &wheel.labels[slot]);
+        } else {
+            window.panel.set_text(panels::LABEL, &recording_label());
         }
         let source = Arc::new(source);
         let cancel = Arc::new(AtomicBool::new(false));
@@ -1094,7 +1153,7 @@ impl App {
         std::thread::Builder::new()
             .name("WordyWaveform".into())
             .spawn(move || {
-                let result = audio::waveform_peaks(file.path(), &cancel_waveform, 600);
+                let result = audio::waveform_peaks(file.path(), &cancel_waveform, 1600);
                 let _ = events.send(Background::Waveform { id, result });
             })?;
         self.trim = Some(TrimSession {
@@ -1130,15 +1189,21 @@ impl App {
                 session.window.refresh(self.config.settings())?;
             }
             ADD if notification == 0 => {
-                if let Some(hotkey) = capture_binding(&mut self.hotkeys, hwnd, false)? {
-                    let mut next = self.config.settings().clone();
-                    next.additional_chat_wheels
-                        .push(crate::config::Wheel::new(hotkey));
-                    self.hotkeys.update(&mut self.config, next)?;
-                    session.window.wheel = self.config.settings().wheel_count() - 1;
-                    session.window.slot = 0;
-                    session.window.refresh(self.config.settings())?;
-                }
+                let Some(value) =
+                    dialog::prompt(hwnd, "新增轮盘", "快捷键（例如 f9）", "f9", false)
+                else {
+                    return Ok(());
+                };
+                let hotkey = value.trim().to_owned();
+                parse_hotkey(&hotkey)
+                    .map_err(|error| io::Error::other(format!("快捷键无效：{error}")))?;
+                let mut next = self.config.settings().clone();
+                next.additional_chat_wheels
+                    .push(crate::config::Wheel::new(hotkey));
+                self.hotkeys.update(&mut self.config, next)?;
+                session.window.wheel = self.config.settings().wheel_count() - 1;
+                session.window.slot = 0;
+                session.window.refresh(self.config.settings())?;
             }
             WAVE | STOP => {
                 if session.preview.take().is_some() {
@@ -1184,6 +1249,7 @@ impl App {
                 let (wheel, slot) = (session.window.wheel, session.window.slot);
                 let source = session.source.clone();
                 let id = session.id;
+                let rolling = session.window.rolling;
                 let config = self.config.path().to_path_buf();
                 let events = self.jobs.clone();
                 std::thread::Builder::new()
@@ -1209,6 +1275,7 @@ impl App {
                             result,
                             source,
                             trim: Some(id),
+                            rolling,
                         });
                     })?;
                 session.busy = true;
@@ -1226,8 +1293,11 @@ impl App {
     }
 
     fn close_editor(&mut self) -> io::Result<()> {
-        if let Some((recording, ..)) = self.slot_recording.take() {
-            recording.cancel()?;
+        if let Some((recording, ..)) = self.slot_recording.take()
+            && let Err(error) = recording.cancel()
+        {
+            // A stuck capture keeps device ownership; closing the editor must still finish.
+            self.log_at("WARNING", format!("停止录制失败：{error}"));
         }
         if let Some((_, text)) = self.editor_preview.take() {
             if text {
@@ -1283,9 +1353,14 @@ impl App {
                 self.config.update(|s| s.chat_wheel_style = style.into())?;
             }
             ADD if notification == 0 => {
-                let Some(hotkey) = capture_binding(&mut self.hotkeys, hwnd, false)? else {
+                let Some(value) =
+                    dialog::prompt(hwnd, "新增轮盘", "快捷键（例如 f9）", "f9", false)
+                else {
                     return Ok(());
                 };
+                let hotkey = value.trim().to_owned();
+                parse_hotkey(&hotkey)
+                    .map_err(|error| io::Error::other(format!("快捷键无效：{error}")))?;
                 let mut next = self.config.settings().clone();
                 next.additional_chat_wheels
                     .push(crate::config::Wheel::new(hotkey));
@@ -1375,7 +1450,6 @@ impl App {
                     wheel.slots[slot].clear();
                     wheel.labels[slot].clear();
                     wheel.texts[slot].clear();
-                    wheel.volumes[slot] = 1.0;
                 })?;
                 if !old.is_empty() {
                     let _ = audio::remove_unreferenced_clip(&self.config, &old);
@@ -1409,13 +1483,14 @@ impl App {
                             result,
                             source: None,
                             trim: None,
+                            rolling: false,
                         });
                     })?;
                 self.pending_saves += 1;
                 return Ok(());
             }
             RECORD if notification == 0 => {
-                if let Some((recording, wheel, slot)) = self.slot_recording.take() {
+                if let Some((recording, wheel, slot, _)) = self.slot_recording.take() {
                     let config = self.config.path().to_path_buf();
                     let label = recording_label();
                     let events = self.jobs.clone();
@@ -1442,6 +1517,7 @@ impl App {
                                 result,
                                 source,
                                 trim: None,
+                                rolling: false,
                             });
                         })?;
                     self.pending_saves += 1;
@@ -1451,16 +1527,21 @@ impl App {
                         return Ok(());
                     }
                     self.playback.stop_clip();
-                    self.slot_recording = Some((Recording::start(None)?, wheel, slot));
+                    self.slot_recording =
+                        Some((Recording::start(None)?, wheel, slot, Instant::now()));
                     editor.recording(true);
                 }
                 return Ok(());
             }
             CANCEL_RECORDING if notification == 0 => {
-                if let Some((recording, ..)) = self.slot_recording.take() {
-                    recording.cancel()?;
-                }
+                let stopped = self
+                    .slot_recording
+                    .take()
+                    .and_then(|(recording, ..)| recording.cancel().err());
                 editor.recording(false);
+                if let Some(error) = stopped {
+                    self.log_at("WARNING", format!("停止录制失败：{error}"));
+                }
                 return Ok(());
             }
             CROP if notification == 0 => {
@@ -1525,6 +1606,10 @@ impl App {
     }
 
     fn log_at(&mut self, level: &str, message: String) {
+        self.log_target(level, "wordy", message);
+    }
+
+    fn log_target(&mut self, level: &str, target: &str, message: String) {
         let levels = crate::config::LOG_LEVELS;
         let rank = |value| levels.iter().position(|item| *item == value).unwrap_or(1);
         if rank(level) < rank(self.config.settings().log_level.as_str()) {
@@ -1532,7 +1617,7 @@ impl App {
         }
         let now = local_time();
         let message = format!(
-            "{:04}-{:02}-{:02} {:02}:{:02}:{:02} [{level}] wordy: {message}",
+            "{:04}-{:02}-{:02} {:02}:{:02}:{:02} [{level}] {target}: {message}",
             now.wYear, now.wMonth, now.wDay, now.wHour, now.wMinute, now.wSecond
         );
         eprintln!("{message}");
@@ -1556,18 +1641,53 @@ impl App {
     }
 
     fn failure(&mut self, message: String) {
+        // A hidden settings page would swallow the toast; bring it up like Python does.
+        if !self.settings_visible()
+            && let Err(error) = self.show_settings()
+        {
+            self.log_at("WARNING", format!("打开设置失败：{error}"));
+        }
         self.toasts.push(&message, Tone::Error);
         self.log_at("ERROR", message);
     }
 
+    fn settings_visible(&self) -> bool {
+        unsafe { IsWindowVisible(self.settings_window.hwnd()) != 0 }
+    }
+
     fn notify(&mut self, message: String) {
-        self.tray.notify(&message);
+        let events = self.jobs.clone();
+        let text = message.clone();
+        // Native toasts shell out through PowerShell; keep the GUI thread free.
+        let _ = std::thread::Builder::new()
+            .name("WordyToast".into())
+            .spawn(move || {
+                if notify_toast(&text).is_err() {
+                    let _ = events.send(Background::NotificationFailed(text));
+                }
+            });
         self.log(message);
     }
 }
 
 fn find<'a>(endpoints: &'a [Endpoint], name: &str) -> Option<&'a Endpoint> {
-    endpoints.iter().find(|endpoint| endpoint.name == name)
+    let target = name.trim().to_lowercase();
+    if target.is_empty() {
+        return None;
+    }
+    let normalized = |endpoint: &Endpoint| endpoint.name.trim().to_lowercase();
+    if let Some(exact) = endpoints
+        .iter()
+        .find(|endpoint| normalized(endpoint) == target)
+    {
+        return Some(exact);
+    }
+    // A renamed device keeps working when the saved name is still a unique fragment.
+    let mut partial = endpoints
+        .iter()
+        .filter(|endpoint| normalized(endpoint).contains(&target));
+    let found = partial.next()?;
+    partial.next().is_none().then_some(found)
 }
 
 fn set_volc_voice(voices: &mut Vec<Voice>, voice: Voice) {

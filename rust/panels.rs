@@ -655,6 +655,7 @@ pub struct Editor {
     pub wheel: usize,
     pub slot: usize,
     pub empty_text_mode: bool,
+    busy: bool,
 }
 
 impl Editor {
@@ -698,6 +699,7 @@ impl Editor {
             wheel: settings.chat_wheel_last_index,
             slot: 0,
             empty_text_mode: false,
+            busy: false,
         };
         for (id, limit) in [(NAME, 20), (LABEL, 40), (TEXT, 200), (GAIN, 8)] {
             unsafe { SendMessageW(editor.panel.child(id), EM_SETLIMITTEXT, limit, 0) };
@@ -791,6 +793,24 @@ impl Editor {
             WheelStyle::from_config(&settings.chat_wheel_style),
             self.slot,
         )
+    }
+
+    /// Disables editing while a sample is being imported, saved, or previewed,
+    /// leaving the recording and preview buttons available.
+    pub fn busy(&mut self, active: bool) {
+        if self.busy == active {
+            return;
+        }
+        self.busy = active;
+        unsafe {
+            for id in [
+                WHEEL, PICK, ADD, REMOVE, HOTKEY, STYLE, LABEL, TEXT, AUDIO_MODE, TEXT_MODE,
+                IMPORT, CROP, CLEAR,
+            ] {
+                EnableWindow(self.panel.child(id), i32::from(!active));
+            }
+            EnableWindow(self.chrome.state.gain, i32::from(!active));
+        }
     }
 
     pub fn recording(&self, active: bool) {

@@ -11,10 +11,13 @@ fn endpoint(id: &str, name: &str, is_default: bool) -> Endpoint {
 #[test]
 fn absent_main_endpoint_keeps_only_independently_enabled_local_output() {
     let endpoints = [endpoint("speakers", "Speakers", true)];
-    let selected = route(true, true, false, None, &endpoints);
+    let selected = route(true, true, false, None, &endpoints, None);
     assert_eq!(selected.main, None);
     assert_eq!(selected.local, Some(&endpoints[0]));
-    assert_eq!(route(true, false, false, None, &endpoints).local, None);
+    assert_eq!(
+        route(true, false, false, None, &endpoints, None).local,
+        None
+    );
 }
 
 #[test]
@@ -23,14 +26,14 @@ fn preview_bypasses_switches_and_never_uses_cable() {
         endpoint("cable", "CABLE Input (VB-Audio Virtual Cable)", true),
         endpoint("speakers", "Speakers", false),
     ];
-    let selected = route(true, true, false, None, &endpoints);
+    let selected = route(true, true, false, None, &endpoints, None);
     assert_eq!(selected.main, Some(&endpoints[0]));
     assert_eq!(selected.local, None);
-    let preview = route(false, false, true, Some("Speakers"), &endpoints);
+    let preview = route(false, false, true, Some("Speakers"), &endpoints, None);
     assert_eq!(preview.main, None);
     assert_eq!(preview.local, Some(&endpoints[1]));
     assert_eq!(
-        route(false, false, true, Some("Unplugged"), &endpoints).local,
+        route(false, false, true, Some("Unplugged"), &endpoints, None).local,
         None
     );
 }

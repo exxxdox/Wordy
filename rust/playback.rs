@@ -29,7 +29,15 @@ pub enum Event {
         id: u64,
         result: io::Result<Vec<Voice>>,
     },
-    Warning(String),
+    Warning {
+        target: &'static str,
+        message: String,
+    },
+    Log {
+        target: &'static str,
+        level: &'static str,
+        message: String,
+    },
 }
 
 struct Speech {
@@ -205,7 +213,15 @@ impl Drop for Playback {
         drop(queue);
         self.shared.1.notify_one();
         if let Some(worker) = self.worker.take() {
-            let _ = worker.join();
+            // Never let exit wait for the full HTTP timeout; 30s matches Python's janitor cap.
+            let deadline = std::time::Instant::now() + Duration::from_secs(30);
+            while !worker.is_finished() && std::time::Instant::now() < deadline {
+                thread::sleep(Duration::from_millis(50));
+            }
+            if worker.is_finished() {
+                let _ = worker.join();
+            }
+            // Otherwise detach: the worker still owns the socket and exits on its own.
         }
     }
 }
@@ -272,7 +288,10 @@ fn run(shared: &(Mutex<Queue>, Condvar), events: &mpsc::Sender<Event>) {
             }
             Some(Work::Prewarm(spec)) => {
                 if let Err(error) = engine_for(&mut current, &spec).connect() {
-                    let _ = events.send(Event::Warning(format!("预热失败：{error}")));
+                    let _ = events.send(Event::Warning {
+                        target: "wordy.tts",
+                        message: format!("预热失败：{error}"),
+                    });
                 }
             }
             Some(Work::Voices(id, spec)) => {
@@ -320,6 +339,7 @@ fn select_route<'a>(
         preview,
         preferred,
         endpoints,
+        settings.virtual_output_device.as_deref(),
     )
 }
 
@@ -334,13 +354,21 @@ fn hold_key(
     match PressedKey::press(&settings.hold_key) {
         Ok(handle) => Some(handle),
         Err(error) => {
-            let _ = events.send(Event::Warning(format!("自动按住语音按键失败：{error}")));
+            let _ = events.send(Event::Warning {
+                target: "wordy.hotkey",
+                message: format!("自动按住语音按键失败：{error}"),
+            });
             None
         }
     }
 }
 
 fn speak(engine: &mut TtsEngine, job: &Speech, events: &mpsc::Sender<Event>) -> io::Result<()> {
+    let _ = events.send(Event::Log {
+        target: "wordy.tts",
+        level: "INFO",
+        message: format!("开始朗读 {} 字", job.text.chars().count()),
+    });
     let output = audio::list_outputs()?;
     let route = select_route(&job.settings, false, &output);
     engine.set_volume(job.settings.volume);
@@ -388,6 +416,15 @@ fn speak(engine: &mut TtsEngine, job: &Speech, events: &mpsc::Sender<Event>) -> 
 }
 
 fn play_clip(job: &Clip, events: &mpsc::Sender<Event>) -> io::Result<()> {
+    let _ = events.send(Event::Log {
+        target: "wordy.audio",
+        level: "INFO",
+        message: if job.preview {
+            "开始播放试听片段".into()
+        } else {
+            "开始播放音频片段".into()
+        },
+    });
     let endpoints = audio::list_outputs()?;
     let route = select_route(&job.settings, job.preview, &endpoints);
     let _pressed = hold_key(&job.settings, job.preview, events);

@@ -23,7 +23,7 @@ use windows_sys::{
             HiDpi::{GetDpiForMonitor, GetDpiForWindow, MDT_EFFECTIVE_DPI},
             Input::KeyboardAndMouse::{
                 EnableWindow, GetFocus, IsWindowEnabled, TME_LEAVE, TRACKMOUSEEVENT,
-                TrackMouseEvent,
+                TrackMouseEvent, VK_ESCAPE,
             },
             Shell::{DefSubclassProc, SetWindowSubclass},
             WindowsAndMessaging::*,
@@ -142,6 +142,7 @@ enum Field {
     RefreshVoices,
     VoiceId,
     VoiceName,
+    VoiceHint,
     SaveVoice,
     DeleteVoice,
     Wheels,
@@ -276,7 +277,7 @@ pub struct SettingsWindow {
     microphones: Vec<String>,
     cartesia_voices: Vec<Voice>,
     font_families: Vec<String>,
-    listen_state: Option<bool>,
+    listen_state: Option<(bool, Option<String>, bool)>,
     cable_available: bool,
     audio_devices_requested: bool,
     page: Page,
@@ -517,7 +518,7 @@ impl SettingsWindow {
         }
     }
 
-    pub fn set_listen_state(&mut self, state: Option<bool>) {
+    pub fn set_listen_state(&mut self, state: Option<(bool, Option<String>, bool)>) {
         self.listen_state = state;
         self.refresh_audio_status();
     }
@@ -909,12 +910,18 @@ impl SettingsWindow {
                 "删除音色",
                 [984, 376, 88, 32],
             ),
-            (Tts, None, Label, "添加音色", [495, 437, 577, 22]),
+            (Tts, Some(VoiceHint), Muted, "", [495, 437, 577, 22]),
             (Tts, None, Muted, "Speaker ID", [495, 463, 124, 32]),
             (Tts, Some(VoiceId), Edit, "", [624, 465, 448, 32]),
             (Tts, None, Muted, "名称", [495, 504, 76, 32]),
             (Tts, Some(VoiceName), Edit, "", [576, 505, 496, 32]),
-            (Tts, Some(SaveVoice), Button, "添加音色", [981, 545, 91, 32]),
+            (
+                Tts,
+                Some(SaveVoice),
+                Button,
+                "添加 / 保存音色",
+                [955, 545, 117, 32],
+            ),
             (
                 Page::Wheels,
                 Some(Wheels),
@@ -1090,9 +1097,13 @@ impl SettingsWindow {
                 Some(Field::Wheels) => self.wheel_panel.is_null(),
                 Some(Field::Download) => !self.cable_available,
                 Some(Field::RefreshVoices) => provider == Provider::Cartesia,
-                Some(Field::VoiceId | Field::VoiceName | Field::SaveVoice | Field::DeleteVoice) => {
-                    provider == Provider::Volcengine
-                }
+                Some(
+                    Field::VoiceId
+                    | Field::VoiceName
+                    | Field::VoiceHint
+                    | Field::SaveVoice
+                    | Field::DeleteVoice,
+                ) => provider == Provider::Volcengine,
                 // Speaker ID and its name labels sit beside Volcengine's two edits.
                 None if widget.page == Some(Page::Tts) && widget.bounds[1] >= 437 => {
                     provider == Provider::Volcengine
@@ -1222,16 +1233,32 @@ impl SettingsWindow {
         );
         let listen = self
             .listen_state
-            .unwrap_or(self.settings.audio_routing_enabled);
+            .as_ref()
+            .map_or(self.settings.audio_routing_enabled, |state| state.0);
         self.check(Field::Listen, listen);
         unsafe { EnableWindow(self.control(Field::Listen), i32::from(self.cable_available)) };
-        let status = match self.listen_state {
-            Some(true) => "Windows 麦克风侦听已开启",
-            Some(false) => "Windows 麦克风侦听未开启",
-            None if self.settings.mic_input_device.is_some() => "无法读取 Windows 麦克风侦听状态",
-            None => "未选择侦听麦克风",
+        let status = match &self.listen_state {
+            Some((enabled, output, has_target)) => {
+                let mut text = if *enabled {
+                    "Windows 侦听：已开启".to_string()
+                } else {
+                    "Windows 侦听：未开启".to_string()
+                };
+                if let Some(output) = output {
+                    text.push_str(&format!(" · 输出目标：{output}"));
+                } else if *has_target {
+                    text.push_str(" · 输出目标：设备不可用");
+                } else if *enabled {
+                    text.push_str(" · 输出目标：默认播放设备");
+                }
+                text
+            }
+            None if self.settings.mic_input_device.is_some() => {
+                "无法读取侦听状态——请确认该设备支持系统侦听".into()
+            }
+            None => "选择麦克风后自动配置".into(),
         };
-        set_text(self.control(Field::MicStatus), status);
+        set_text(self.control(Field::MicStatus), &status);
     }
 
     fn refresh_provider(&self) {
@@ -1268,6 +1295,17 @@ impl SettingsWindow {
             self.control(Field::Voices),
             voice_labels(voices),
             selected_voice(voices, self.settings.active_voice_id()),
+        );
+        let active_volc = self
+            .settings
+            .tts_providers
+            .volcengine
+            .voice_list
+            .first()
+            .map_or("无", |voice| voice.id.as_str());
+        set_text(
+            self.control(Field::VoiceHint),
+            &format!("当前 Speaker ID：{active_volc}"),
         );
         self.show_page();
     }
@@ -1348,6 +1386,11 @@ unsafe extern "system" fn window_proc(
             toggle_zoom(hwnd);
             return 0;
         }
+        WM_KEYDOWN if wparam as u16 == VK_ESCAPE => {
+            unsafe { ShowWindow(hwnd, SW_HIDE) };
+            post(Field::Close as u16);
+            return 0;
+        }
         WM_CLOSE => {
             unsafe { ShowWindow(hwnd, SW_HIDE) };
             post(Field::Close as u16);
@@ -1369,7 +1412,8 @@ unsafe extern "system" fn window_proc(
             }
             let scale = scale_at_cursor();
             limits.ptMinTrackSize.x = scaled(960, scale);
-            limits.ptMinTrackSize.y = scaled(636, scale);
+            // The fixed two-column layout has no scrollbars; keep the full height usable.
+            limits.ptMinTrackSize.y = scaled(820, scale);
         }
         WM_PAINT => {
             paint_shell(hwnd);

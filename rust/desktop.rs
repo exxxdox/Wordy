@@ -1,8 +1,15 @@
 use std::{io, iter, mem, ptr};
 use windows_sys::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::*;
+use windows_sys::Win32::System::Registry::{
+    HKEY_CURRENT_USER, KEY_WRITE, REG_OPTION_NON_VOLATILE, REG_SZ, RegCloseKey, RegCreateKeyExW,
+    RegSetValueExW,
+};
 use windows_sys::Win32::System::SystemServices::SS_CENTERIMAGE;
-use windows_sys::Win32::UI::Controls::DRAWITEMSTRUCT;
+use windows_sys::Win32::UI::Controls::{
+    DRAWITEMSTRUCT, TOOLTIPS_CLASSW, TTF_IDISHWND, TTF_SUBCLASS, TTM_ADDTOOLW, TTS_ALWAYSTIP,
+    TTTOOLINFOW,
+};
 use windows_sys::Win32::UI::HiDpi::{GetDpiForMonitor, GetDpiForWindow, MDT_EFFECTIVE_DPI};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     GetCapture, GetFocus, IsWindowEnabled, ReleaseCapture, SetCapture, SetFocus, VK_ESCAPE,
@@ -130,8 +137,16 @@ impl Tray {
     pub fn set_recording(&mut self, active: bool) {
         self.recording = active;
         let mut data = self.data();
-        data.uFlags = NIF_ICON;
+        data.uFlags = NIF_ICON | NIF_TIP;
         data.hIcon = self.current_icon();
+        copy_wide(
+            &mut data.szTip,
+            if active {
+                "Wordy · 后台录制中"
+            } else {
+                "Wordy"
+            },
+        );
         unsafe { Shell_NotifyIconW(NIM_MODIFY, &data) };
     }
 
@@ -150,6 +165,10 @@ impl Tray {
         copy_wide(&mut data.szInfoTitle, "Wordy");
         copy_wide(&mut data.szInfo, message);
         unsafe { Shell_NotifyIconW(NIM_MODIFY, &data) };
+    }
+
+    pub fn notify_balloon(&self, message: &str) {
+        self.notify(message);
     }
 
     pub fn show_menu(&self) -> usize {
@@ -202,6 +221,124 @@ impl Drop for Tray {
             }
         }
     }
+}
+
+const APP_ID: &str = "Wordy.Desktop";
+const SHOW_TOAST: &str = r#"
+$ErrorActionPreference = 'Stop'
+$payload = [Console]::In.ReadToEnd() | ConvertFrom-Json
+$xml = [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom, ContentType=WindowsRuntime]::new()
+$xml.LoadXml($payload.xml)
+$toast = [Windows.UI.Notifications.ToastNotification, Windows.UI.Notifications, ContentType=WindowsRuntime]::new($xml)
+[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType=WindowsRuntime]::CreateToastNotifier($payload.app_id).Show($toast)
+"#;
+
+/// Register the notification sender and show a toast through the Windows
+/// notification center. Falls back to the tray balloon in the caller.
+pub fn notify_toast(message: &str) -> io::Result<()> {
+    use std::io::Write;
+    use std::os::windows::process::CommandExt;
+    use std::process::{Command, Stdio};
+
+    let directory = crate::config::config_directory();
+    std::fs::create_dir_all(&directory)?;
+    let icon = directory.join("notification-icon.ico");
+    let bytes = include_bytes!("assets/wordy.ico");
+    if std::fs::read(&icon).as_deref().ok() != Some(bytes) {
+        let temporary = icon.with_extension("tmp");
+        std::fs::write(&temporary, bytes)?;
+        std::fs::rename(temporary, &icon)?;
+    }
+    let display = wide("Wordy");
+    let icon_uri = wide(&icon.to_string_lossy());
+    let subkey = wide(r"Software\Classes\AppUserModelId\Wordy.Desktop");
+    let name = wide("DisplayName");
+    let uri = wide("IconUri");
+    unsafe {
+        let mut key = ptr::null_mut();
+        let mut disposition = 0;
+        let result = RegCreateKeyExW(
+            HKEY_CURRENT_USER,
+            subkey.as_ptr(),
+            0,
+            ptr::null(),
+            REG_OPTION_NON_VOLATILE,
+            KEY_WRITE,
+            ptr::null(),
+            &mut key,
+            &mut disposition,
+        );
+        if result != 0 {
+            return Err(io::Error::from_raw_os_error(result as i32));
+        }
+        for (value_name, value) in [(&name, &display), (&uri, &icon_uri)] {
+            let result = RegSetValueExW(
+                key,
+                value_name.as_ptr(),
+                0,
+                REG_SZ,
+                value.as_ptr().cast(),
+                (value.len() * 2) as u32,
+            );
+            if result != 0 {
+                RegCloseKey(key);
+                return Err(io::Error::from_raw_os_error(result as i32));
+            }
+        }
+        RegCloseKey(key);
+    }
+    let xml = format!(
+        "<toast><visual><binding template=\"ToastGeneric\"><text>{}</text></binding></visual><audio silent=\"true\"/></toast>",
+        xml_text(message)
+    );
+    let payload = format!(
+        "{{\"app_id\":\"{}\",\"xml\":\"{}\"}}",
+        APP_ID,
+        json_text(&xml)
+    );
+    let powershell = format!(
+        r"{}\System32\WindowsPowerShell\v1.0\powershell.exe",
+        std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into())
+    );
+    let mut child = Command::new(powershell)
+        .args(["-NoProfile", "-NonInteractive", "-Command", SHOW_TOAST])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .creation_flags(0x0800_0000)
+        .spawn()?;
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin.write_all(payload.as_bytes())?;
+    }
+    if child.wait()?.success() {
+        Ok(())
+    } else {
+        Err(io::Error::other("Windows 通知发送失败"))
+    }
+}
+
+fn xml_text(text: &str) -> String {
+    let mut escaped = String::with_capacity(text.len());
+    for unit in text.chars() {
+        match unit {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            '"' => escaped.push_str("&quot;"),
+            '\'' => escaped.push_str("&apos;"),
+            // Keep the PowerShell stdin payload ASCII; XML accepts numeric refs.
+            unit if !unit.is_ascii() => escaped.push_str(&format!("&#x{:X};", unit as u32)),
+            unit => escaped.push(unit),
+        }
+    }
+    escaped
+}
+
+fn json_text(text: &str) -> String {
+    text.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
 }
 
 fn recording_icon(icon: HICON) -> HICON {
@@ -282,7 +419,7 @@ fn recording_icon(icon: HICON) -> HICON {
 }
 
 fn wordy_icon() -> io::Result<HICON> {
-    let bytes = include_bytes!("../src/wordy/ui/icons/wordy.ico");
+    let bytes = include_bytes!("assets/wordy.ico");
     let count = u16::from_le_bytes([bytes[4], bytes[5]]) as usize;
     let icon = bytes[6..6 + count * 16]
         .as_chunks::<16>()
@@ -417,6 +554,37 @@ impl Overlay {
             for button in [read, settings] {
                 if SetWindowSubclass(button, Some(overlay_button_proc), 1, hwnd as usize) == 0 {
                     return Err(io::Error::last_os_error());
+                }
+            }
+            let tip = CreateWindowExW(
+                WS_EX_TOPMOST,
+                TOOLTIPS_CLASSW,
+                ptr::null(),
+                WS_POPUP | TTS_ALWAYSTIP,
+                0,
+                0,
+                0,
+                0,
+                hwnd,
+                ptr::null_mut(),
+                instance,
+                ptr::null(),
+            );
+            if !tip.is_null() {
+                for (child, text) in [
+                    (overlay.entry, w!("Enter 朗读 · Esc 收起")),
+                    (read, w!("朗读并保留输入框")),
+                    (settings, w!("打开设置")),
+                ] {
+                    let mut tool = TTTOOLINFOW {
+                        cbSize: mem::size_of::<TTTOOLINFOW>() as u32,
+                        uFlags: TTF_IDISHWND | TTF_SUBCLASS,
+                        hwnd,
+                        uId: child as usize,
+                        lpszText: text.cast_mut(),
+                        ..Default::default()
+                    };
+                    SendMessageW(tip, TTM_ADDTOOLW, 0, ptr::from_mut(&mut tool) as isize);
                 }
             }
             Ok(overlay)
