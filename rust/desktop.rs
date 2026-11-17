@@ -7,12 +7,10 @@ use windows_sys::Win32::System::Registry::{
 };
 use windows_sys::Win32::System::SystemServices::SS_CENTERIMAGE;
 use windows_sys::Win32::UI::Controls::{
-    DRAWITEMSTRUCT, MEASUREITEMSTRUCT, ODS_GRAYED, ODS_SELECTED, ODT_MENU, TOOLTIPS_CLASSW,
-    TTF_IDISHWND, TTF_SUBCLASS, TTM_ADDTOOLW, TTS_ALWAYSTIP, TTTOOLINFOW,
+    DRAWITEMSTRUCT, TOOLTIPS_CLASSW, TTF_IDISHWND, TTF_SUBCLASS, TTM_ADDTOOLW, TTS_ALWAYSTIP,
+    TTTOOLINFOW,
 };
-use windows_sys::Win32::UI::HiDpi::{
-    GetDpiForMonitor, GetDpiForSystem, GetDpiForWindow, MDT_EFFECTIVE_DPI,
-};
+use windows_sys::Win32::UI::HiDpi::{GetDpiForMonitor, GetDpiForWindow, MDT_EFFECTIVE_DPI};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     GetCapture, GetFocus, IsWindowEnabled, ReleaseCapture, SetCapture, SetFocus, VK_ESCAPE,
     VK_RETURN, VK_TAB,
@@ -87,103 +85,12 @@ pub(crate) fn host_window(instance: HINSTANCE) -> io::Result<HWND> {
     }
 }
 
-const MENU_FONT: windows_sys::core::PCWSTR = w!("WordyMenuFont");
-const MENU_BG: u32 = 0x0030_2f2e;
-const MENU_HOVER: u32 = 0x0045_4442;
-const MENU_TEXT: u32 = 0x00f7_f5f5;
-const MENU_MUTED: u32 = 0x0098_989a;
-
 unsafe extern "system" fn host_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
-    unsafe {
-        match msg {
-            WM_CLOSE => {
-                PostQuitMessage(0);
-                0
-            }
-            WM_MEASUREITEM => {
-                let item = &mut *(lp as *mut MEASUREITEMSTRUCT);
-                if item.CtlType != ODT_MENU {
-                    return DefWindowProcW(hwnd, msg, wp, lp);
-                }
-                let text = item.itemData as *const u16;
-                if text.is_null() {
-                    item.itemWidth = 170;
-                    item.itemHeight = 10;
-                    return 1;
-                }
-                let mut bounds = RECT::default();
-                let dc = GetDC(hwnd);
-                let font = GetPropW(hwnd, MENU_FONT);
-                let old = if font.is_null() {
-                    SelectObject(dc, GetStockObject(DEFAULT_GUI_FONT))
-                } else {
-                    SelectObject(dc, font)
-                };
-                DrawTextW(
-                    dc,
-                    text,
-                    -1,
-                    &mut bounds,
-                    DT_CALCRECT | DT_SINGLELINE | DT_NOPREFIX,
-                );
-                let height = bounds.bottom.max(16);
-                SelectObject(dc, old);
-                ReleaseDC(hwnd, dc);
-                item.itemWidth = (bounds.right + 36).max(170) as u32;
-                item.itemHeight = (height + 14) as u32;
-                1
-            }
-            WM_DRAWITEM => {
-                let item = &*(lp as *const DRAWITEMSTRUCT);
-                if item.CtlType != ODT_MENU {
-                    return DefWindowProcW(hwnd, msg, wp, lp);
-                }
-                let brush = CreateSolidBrush(MENU_BG);
-                FillRect(item.hDC, &item.rcItem, brush);
-                DeleteObject(brush);
-                if item.itemData == 0 {
-                    let y = (item.rcItem.top + item.rcItem.bottom) / 2;
-                    let mut line = item.rcItem;
-                    line.left += 12;
-                    line.right -= 12;
-                    line.top = y;
-                    line.bottom = y + 1;
-                    let pen = CreateSolidBrush(MENU_HOVER);
-                    FillRect(item.hDC, &line, pen);
-                    DeleteObject(pen);
-                    return 1;
-                }
-                let selected = item.itemState & ODS_SELECTED != 0;
-                let disabled = item.itemState & ODS_GRAYED != 0;
-                if selected {
-                    let hover = CreateSolidBrush(MENU_HOVER);
-                    FillRect(item.hDC, &item.rcItem, hover);
-                    DeleteObject(hover);
-                }
-                let font = GetPropW(hwnd, MENU_FONT);
-                let old = if font.is_null() {
-                    SelectObject(item.hDC, GetStockObject(DEFAULT_GUI_FONT))
-                } else {
-                    SelectObject(item.hDC, font)
-                };
-                SetBkMode(item.hDC, TRANSPARENT as i32);
-                SetTextColor(item.hDC, if disabled { MENU_MUTED } else { MENU_TEXT });
-                let mut text_rect = item.rcItem;
-                text_rect.left += 18;
-                text_rect.right -= 12;
-                DrawTextW(
-                    item.hDC,
-                    item.itemData as *const u16,
-                    -1,
-                    &mut text_rect,
-                    DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
-                );
-                SelectObject(item.hDC, old);
-                1
-            }
-            _ => DefWindowProcW(hwnd, msg, wp, lp),
-        }
+    if msg == WM_CLOSE {
+        unsafe { PostQuitMessage(0) };
+        return 0;
     }
+    unsafe { DefWindowProcW(hwnd, msg, wp, lp) }
 }
 
 unsafe fn lookup_class(class: &WNDCLASSW) -> io::Result<()> {
@@ -207,10 +114,6 @@ pub struct Tray {
 impl Tray {
     pub fn install(host: HWND) -> io::Result<Self> {
         let icon = wordy_icon()?;
-        let font = menu_font();
-        if !font.is_null() {
-            unsafe { SetPropW(host, MENU_FONT, font as _) };
-        }
         let tray = Self {
             host,
             icon,
@@ -279,20 +182,11 @@ impl Tray {
             if menu.is_null() {
                 return 0;
             }
-            AppendMenuW(menu, MF_OWNERDRAW, TRAY_OVERLAY, w!("显示输入框"));
-            AppendMenuW(menu, MF_OWNERDRAW, TRAY_SETTINGS, w!("设置"));
-            AppendMenuW(menu, MF_OWNERDRAW, TRAY_LOGS, w!("打开日志窗口"));
-            AppendMenuW(menu, MF_OWNERDRAW | MF_DISABLED, 0, ptr::null());
-            AppendMenuW(menu, MF_OWNERDRAW, TRAY_EXIT, w!("退出"));
-            // Fill the native menu frame with the same dark tone as the items.
-            let background = CreateSolidBrush(MENU_BG);
-            let info = MENUINFO {
-                cbSize: mem::size_of::<MENUINFO>() as u32,
-                fMask: MIM_BACKGROUND,
-                hbrBack: background,
-                ..Default::default()
-            };
-            SetMenuInfo(menu, &info);
+            AppendMenuW(menu, MF_STRING, TRAY_OVERLAY, w!("显示输入框"));
+            AppendMenuW(menu, MF_STRING, TRAY_SETTINGS, w!("设置"));
+            AppendMenuW(menu, MF_STRING, TRAY_LOGS, w!("打开日志窗口"));
+            AppendMenuW(menu, MF_SEPARATOR, 0, ptr::null());
+            AppendMenuW(menu, MF_STRING, TRAY_EXIT, w!("退出"));
             let mut position = POINT::default();
             GetCursorPos(&mut position);
             SetForegroundWindow(self.host);
@@ -307,7 +201,6 @@ impl Tray {
             );
             PostMessageW(self.host, WM_NULL, 0, 0);
             DestroyMenu(menu);
-            DeleteObject(background);
             action as usize
         }
     }
@@ -330,35 +223,7 @@ impl Drop for Tray {
             if !self.active_icon.is_null() {
                 DestroyIcon(self.active_icon);
             }
-            let font = RemovePropW(self.host, MENU_FONT);
-            if !font.is_null() {
-                DeleteObject(font);
-            }
         }
-    }
-}
-
-fn menu_font() -> HFONT {
-    let dpi = unsafe { GetDpiForSystem() }.max(96) as i32;
-    let height = (13 * dpi + 48) / 96;
-    let family = w!("Segoe UI Variable");
-    unsafe {
-        CreateFontW(
-            -height,
-            0,
-            0,
-            0,
-            FW_NORMAL as i32,
-            0,
-            0,
-            0,
-            DEFAULT_CHARSET as u32,
-            OUT_DEFAULT_PRECIS as u32,
-            CLIP_DEFAULT_PRECIS as u32,
-            CLEARTYPE_QUALITY as u32,
-            DEFAULT_PITCH as u32,
-            family,
-        )
     }
 }
 
@@ -374,6 +239,22 @@ $toast = [Windows.UI.Notifications.ToastNotification, Windows.UI.Notifications, 
 
 /// Register the notification sender and show a toast through the Windows
 /// notification center. Falls back to the tray balloon in the caller.
+/// Opt into Windows 11 dark menus; unsupported builds keep the system menu.
+pub fn enable_dark_mode() {
+    use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
+    unsafe {
+        let module = LoadLibraryW(w!("uxtheme.dll"));
+        if module.is_null() {
+            return;
+        }
+        let set_mode = GetProcAddress(module, 135usize as *const u8);
+        if let Some(set_mode) = set_mode {
+            let set_mode: unsafe extern "system" fn(i32) -> i32 = std::mem::transmute(set_mode);
+            set_mode(2);
+        }
+    }
+}
+
 pub fn notify_toast(message: &str) -> io::Result<()> {
     use std::io::Write;
     use std::os::windows::process::CommandExt;

@@ -47,6 +47,7 @@ pub fn run() -> io::Result<()> {
         return Ok(());
     }
     unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
+    enable_dark_mode();
     let instance = unsafe { GetModuleHandleW(ptr::null()) };
     if instance.is_null() {
         return Err(io::Error::last_os_error());
