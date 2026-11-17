@@ -1737,3 +1737,125 @@ mod overlay_visual_tests {
         }
     }
 }
+
+const CENTERED_EDIT: usize = 9;
+
+/// Win32 draws single-line edit text at the top of the client area. Shrink the
+/// client to one text line so the text sits vertically centered, and paint the
+/// rest of the field with `background`; editing behaviour stays single-line.
+pub fn center_edit_text(hwnd: HWND, background: u32) {
+    unsafe {
+        SetWindowSubclass(
+            hwnd,
+            Some(centered_edit_proc),
+            CENTERED_EDIT,
+            background as usize,
+        );
+        // Force NCCALCSIZE so the text band is in place before the control is shown.
+        SetWindowPos(
+            hwnd,
+            ptr::null_mut(),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+        );
+    }
+}
+
+unsafe extern "system" fn centered_edit_proc(
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    _id: usize,
+    background: usize,
+) -> LRESULT {
+    unsafe {
+        match message {
+            WM_NCCALCSIZE if wparam != 0 => {
+                let result = DefSubclassProc(hwnd, message, wparam, lparam);
+                let bounds = &mut (*(lparam as *mut NCCALCSIZE_PARAMS)).rgrc[0];
+                let height = edit_line_height(hwnd).max(1);
+                let top = bounds.top + ((bounds.bottom - bounds.top - height) / 2).max(0);
+                bounds.top = top;
+                bounds.bottom = (top + height).min(bounds.bottom);
+                result
+            }
+            WM_NCPAINT => {
+                // Only the bands outside the centered client belong here; the
+                // client itself paints the text with the edit's brush.
+                let mut window = RECT::default();
+                let mut client = RECT::default();
+                GetWindowRect(hwnd, &mut window);
+                GetClientRect(hwnd, &mut client);
+                let mut origin = POINT::default();
+                ClientToScreen(hwnd, &mut origin);
+                let left = origin.x - window.left;
+                let top = origin.y - window.top;
+                let right = left + client.right;
+                let bottom = top + client.bottom;
+                let (width, height) = (window.right - window.left, window.bottom - window.top);
+                let dc = GetWindowDC(hwnd);
+                if !dc.is_null() {
+                    let brush = CreateSolidBrush(background as u32);
+                    for band in [
+                        RECT {
+                            left: 0,
+                            top: 0,
+                            right: width,
+                            bottom: top,
+                        },
+                        RECT {
+                            left: 0,
+                            top: bottom,
+                            right: width,
+                            bottom: height,
+                        },
+                        RECT {
+                            left: 0,
+                            top,
+                            right: left,
+                            bottom,
+                        },
+                        RECT {
+                            left: right,
+                            top,
+                            right: width,
+                            bottom,
+                        },
+                    ] {
+                        FillRect(dc, &band, brush);
+                    }
+                    DeleteObject(brush);
+                    ReleaseDC(hwnd, dc);
+                }
+                DefSubclassProc(hwnd, message, wparam, lparam)
+            }
+            // The whole field must focus the edit, not only the centered band.
+            WM_NCHITTEST => HTCLIENT as LRESULT,
+            _ => DefSubclassProc(hwnd, message, wparam, lparam),
+        }
+    }
+}
+
+unsafe fn edit_line_height(hwnd: HWND) -> i32 {
+    let mut metrics = TEXTMETRICW::default();
+    let dc = unsafe { GetDC(hwnd) };
+    if dc.is_null() {
+        return 0;
+    }
+    let font = unsafe { SendMessageW(hwnd, WM_GETFONT, 0, 0) } as HFONT;
+    let previous = if font.is_null() {
+        ptr::null_mut()
+    } else {
+        unsafe { SelectObject(dc, font) }
+    };
+    let measured = unsafe { GetTextMetricsW(dc, &mut metrics) };
+    if !previous.is_null() {
+        unsafe { SelectObject(dc, previous) };
+    }
+    unsafe { ReleaseDC(hwnd, dc) };
+    if measured != 0 { metrics.tmHeight } else { 0 }
+}

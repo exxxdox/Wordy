@@ -1022,6 +1022,7 @@ impl SettingsWindow {
                 (EC_LEFTMARGIN | EC_RIGHTMARGIN) as usize,
                 (scaled(10, self.scale) | (scaled(10, self.scale) << 16)) as isize,
             );
+            crate::desktop::center_edit_text(hwnd, CONTROL_BG);
         }
         if matches!(kind, Kind::Combo) {
             send(
@@ -2203,9 +2204,17 @@ unsafe extern "system" fn style_control(
     }
     let result = unsafe { DefSubclassProc(hwnd, message, wparam, lparam) };
     if message == WM_PAINT && edit {
-        let dc = unsafe { GetDC(hwnd) };
-        let mut rect = RECT::default();
-        unsafe { GetClientRect(hwnd, &mut rect) };
+        // The centered text lives in a shrunken client, so outline the whole
+        // field window; GetClientRect would only cover the text band.
+        let dc = unsafe { GetWindowDC(hwnd) };
+        let mut size = RECT::default();
+        unsafe { GetWindowRect(hwnd, &mut size) };
+        let rect = RECT {
+            left: 0,
+            top: 0,
+            right: size.right - size.left,
+            bottom: size.bottom - size.top,
+        };
         let border = if unsafe { GetFocus() } == hwnd {
             HOVER_ACCENT
         } else if cursor_over(hwnd) {

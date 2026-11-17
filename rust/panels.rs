@@ -17,7 +17,7 @@ use windows_sys::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWi
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 use crate::config::{Settings, Wheel};
-use crate::desktop::{wide, window_text};
+use crate::desktop::{center_edit_text, wide, window_text};
 use crate::dialog::{Panel, Template};
 use crate::settings_window::paint_embedded_backdrop;
 use crate::wheel::{CANVAS_HEIGHT, CANVAS_WIDTH, Point, WheelStyle, picker_slot_at};
@@ -55,6 +55,8 @@ const LOADING: u16 = 226;
 const START_LABEL: u16 = 301;
 const END_LABEL: u16 = 302;
 const GAIN_VALUE: u16 = 227;
+// The real GAIN edit stays hidden behind the slider, so the slider carries its own id.
+const GAIN_SLIDER: u16 = 228;
 const TBM_GETPOS: u32 = WM_USER;
 
 // COLORREF stores red, green, blue in least-to-most-significant byte order.
@@ -155,7 +157,7 @@ impl Chrome {
                     rect.right - rect.left,
                     rect.bottom - rect.top,
                     panel.0,
-                    ptr::null_mut(),
+                    GAIN_SLIDER as isize as HMENU,
                     ptr::null_mut(),
                     ptr::null_mut(),
                 );
@@ -196,6 +198,15 @@ impl Chrome {
         if trim || !state.gain.is_null() {
             unsafe { ShowWindow(panel.child(GAIN), SW_HIDE) };
         }
+        // Single-line edits draw their text at the top; center it in the field.
+        for id in [GAIN, NAME, LABEL, TEXT, START, END] {
+            let child = panel.child(id);
+            if !child.is_null() {
+                center_edit_text(child, ELEVATED);
+            }
+        }
+        // Ownerdraw buttons paint their full face, so the class-brush erase only flashes.
+        suppress_button_erase(panel.0);
         Ok(Self {
             hwnd: panel.0,
             state,
@@ -242,6 +253,33 @@ unsafe fn precise_controls(hwnd: HWND, visible: bool) {
     }
 }
 
+fn suppress_button_erase(panel: HWND) {
+    unsafe {
+        let mut child = GetWindow(panel, GW_CHILD);
+        while !child.is_null() {
+            let style = GetWindowLongPtrW(child, GWL_STYLE) as u32;
+            if style & BS_TYPEMASK as u32 == BS_OWNERDRAW as u32 {
+                SetWindowSubclass(child, Some(no_erase_proc), 8, 0);
+            }
+            child = GetWindow(child, GW_HWNDNEXT);
+        }
+    }
+}
+
+unsafe extern "system" fn no_erase_proc(
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    _id: usize,
+    _data: usize,
+) -> LRESULT {
+    if message == WM_ERASEBKGND {
+        return 1;
+    }
+    unsafe { DefSubclassProc(hwnd, message, wparam, lparam) }
+}
+
 unsafe extern "system" fn chrome_proc(
     hwnd: HWND,
     msg: u32,
@@ -280,7 +318,7 @@ unsafe extern "system" fn chrome_proc(
                 let card = !state.trim
                     && matches!(
                         GetDlgCtrlID(lp as HWND) as u16,
-                        INFO | GAIN_VALUE | 302..=305
+                        INFO | GAIN_SLIDER | GAIN_VALUE | 302..=305
                     );
                 SetTextColor(dc, PRIMARY);
                 SetBkMode(dc, if field { OPAQUE } else { TRANSPARENT } as i32);
