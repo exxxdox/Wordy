@@ -20,6 +20,7 @@ use windows_sys::{
                 ODS_FOCUS, ODS_SELECTED, ODT_BUTTON, ODT_COMBOBOX, ODT_STATIC, TBM_GETCHANNELRECT,
                 TBM_GETTHUMBRECT, TBM_SETPOS, TBM_SETRANGEMAX, TRACKBAR_CLASSW, WM_MOUSELEAVE,
             },
+            HiDpi::{GetDpiForMonitor, GetDpiForWindow, MDT_EFFECTIVE_DPI},
             Input::KeyboardAndMouse::{
                 EnableWindow, GetFocus, IsWindowEnabled, TME_LEAVE, TRACKMOUSEEVENT,
                 TrackMouseEvent,
@@ -267,6 +268,8 @@ pub struct SettingsWindow {
     instance: windows_sys::Win32::Foundation::HINSTANCE,
     widgets: Vec<Widget>,
     fonts: [HFONT; 4],
+    // The shell is laid out in 96-DPI units; this factor also feeds per-monitor windows.
+    scale: i32,
     wheel_panel: HWND,
     settings: Settings,
     outputs: Vec<AudioIdentity>,
@@ -303,7 +306,9 @@ impl SettingsWindow {
         }
         let font_families = installed_fonts();
         let current_font = usable_font(&font_families, &settings.ui_font);
-        let top_left = centered_position();
+        let scale = scale_at_cursor();
+        let (width, height) = (scaled(1120, scale), scaled(820, scale));
+        let top_left = centered_position(width, height);
         let hwnd = unsafe {
             CreateWindowExW(
                 WS_EX_CONTROLPARENT | WS_EX_LAYERED,
@@ -317,8 +322,8 @@ impl SettingsWindow {
                     | WS_CLIPCHILDREN,
                 top_left.x,
                 top_left.y,
-                1120,
-                820,
+                width,
+                height,
                 host,
                 ptr::null_mut(),
                 instance,
@@ -337,7 +342,8 @@ impl SettingsWindow {
             hwnd,
             instance,
             widgets: Vec::new(),
-            fonts: create_fonts(current_font),
+            fonts: create_fonts(current_font, scale),
+            scale,
             wheel_panel: ptr::null_mut(),
             settings: settings.clone(),
             outputs: Vec::new(),
@@ -408,11 +414,12 @@ impl SettingsWindow {
         {
             return None;
         }
+        let pad = scaled(EDGE_PAD, self.scale);
         Some(RECT {
-            left: origin.x + EDGE_PAD,
-            top: origin.y + EDGE_PAD,
-            right: origin.x + client.right - EDGE_PAD,
-            bottom: origin.y + client.bottom - EDGE_PAD - FOOTER_HEIGHT,
+            left: origin.x + pad,
+            top: origin.y + pad,
+            right: origin.x + client.right - pad,
+            bottom: origin.y + client.bottom - pad - scaled(FOOTER_HEIGHT, self.scale),
         })
     }
 
@@ -423,7 +430,7 @@ impl SettingsWindow {
     pub fn refresh(&mut self, settings: &Settings) {
         if self.settings.ui_font != settings.ui_font {
             let family = usable_font(&self.font_families, &settings.ui_font);
-            let old = std::mem::replace(&mut self.fonts, create_fonts(family));
+            let old = std::mem::replace(&mut self.fonts, create_fonts(family, self.scale));
             for widget in &self.widgets {
                 apply_font(widget.hwnd, widget.kind, &self.fonts);
             }
@@ -983,10 +990,10 @@ impl SettingsWindow {
                 class,
                 caption.as_ptr(),
                 WS_CHILD | WS_CLIPSIBLINGS | style,
-                bounds[0],
-                bounds[1],
-                bounds[2],
-                bounds[3],
+                scaled(bounds[0], self.scale),
+                scaled(bounds[1], self.scale),
+                scaled(bounds[2], self.scale),
+                scaled(bounds[3], self.scale),
                 self.hwnd,
                 id as HMENU,
                 self.instance,
@@ -1006,12 +1013,17 @@ impl SettingsWindow {
                 hwnd,
                 EM_SETMARGINS,
                 (EC_LEFTMARGIN | EC_RIGHTMARGIN) as usize,
-                10 | (10 << 16),
+                (scaled(10, self.scale) | (scaled(10, self.scale) << 16)) as isize,
             );
         }
         if matches!(kind, Kind::Combo) {
-            send(hwnd, CB_SETITEMHEIGHT, usize::MAX, 28);
-            send(hwnd, CB_SETITEMHEIGHT, 0, 28);
+            send(
+                hwnd,
+                CB_SETITEMHEIGHT,
+                usize::MAX,
+                scaled(28, self.scale) as isize,
+            );
+            send(hwnd, CB_SETITEMHEIGHT, 0, scaled(28, self.scale) as isize);
         }
         self.widgets.push(Widget {
             hwnd,
@@ -1029,8 +1041,17 @@ impl SettingsWindow {
         let width = client.right.max(1);
         for widget in &self.widgets {
             let [x, y, w, h] = widget.bounds;
-            let top = if y < 0 { client.bottom + y } else { y };
-            let height = if h < 0 { client.bottom + h } else { h };
+            // Horizontal coordinates stretch with the client; vertical rhythm follows DPI.
+            let top = if y < 0 {
+                client.bottom + scaled(y, self.scale)
+            } else {
+                scaled(y, self.scale)
+            };
+            let height = if h < 0 {
+                client.bottom + scaled(h, self.scale)
+            } else {
+                scaled(h, self.scale)
+            };
             unsafe {
                 SetWindowPos(
                     widget.hwnd,
@@ -1045,7 +1066,7 @@ impl SettingsWindow {
         }
         if !self.wheel_panel.is_null() {
             let x = 48 * width / CLIENT_WIDTH;
-            let top = 187;
+            let top = scaled(187, self.scale);
             unsafe {
                 SetWindowPos(
                     self.wheel_panel,
@@ -1053,7 +1074,7 @@ impl SettingsWindow {
                     x,
                     top,
                     width - 2 * x,
-                    (client.bottom - top - EDGE_PAD - FOOTER_HEIGHT - 8).max(1),
+                    (client.bottom - top - scaled(EDGE_PAD + FOOTER_HEIGHT + 8, self.scale)).max(1),
                     SWP_NOZORDER | SWP_NOACTIVATE,
                 );
             }
@@ -1314,9 +1335,14 @@ unsafe extern "system" fn window_proc(
                 ScreenToClient(hwnd, &mut point);
                 GetClientRect(hwnd, &mut client);
             }
-            return shell_hit(point.x, point.y, client.right, client.bottom, unsafe {
-                IsZoomed(hwnd) != 0
-            });
+            return shell_hit(
+                point.x,
+                point.y,
+                client.right,
+                client.bottom,
+                unsafe { IsZoomed(hwnd) != 0 },
+                unsafe { GetDpiForWindow(hwnd) }.max(96) as i32,
+            );
         }
         WM_NCLBUTTONDBLCLK if wparam == HTCAPTION as usize => {
             toggle_zoom(hwnd);
@@ -1341,8 +1367,9 @@ unsafe extern "system" fn window_proc(
                 limits.ptMaxSize.x = info.rcWork.right - info.rcWork.left;
                 limits.ptMaxSize.y = info.rcWork.bottom - info.rcWork.top;
             }
-            limits.ptMinTrackSize.x = 960;
-            limits.ptMinTrackSize.y = 636;
+            let scale = scale_at_cursor();
+            limits.ptMinTrackSize.x = scaled(960, scale);
+            limits.ptMinTrackSize.y = scaled(636, scale);
         }
         WM_PAINT => {
             paint_shell(hwnd);
@@ -1391,11 +1418,15 @@ unsafe extern "system" fn window_proc(
     unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
 }
 
-fn shell_hit(x: i32, y: i32, width: i32, height: i32, maximized: bool) -> LRESULT {
-    let pad = if maximized { 0 } else { EDGE_PAD };
+fn shell_hit(x: i32, y: i32, width: i32, height: i32, maximized: bool, scale: i32) -> LRESULT {
+    let pad = if maximized {
+        0
+    } else {
+        scaled(EDGE_PAD, scale)
+    };
     if !maximized {
         // The first opaque pixels inside the transparent margin also resize.
-        let hot_zone = EDGE_PAD + 4;
+        let hot_zone = scaled(EDGE_PAD + 4, scale);
         let column = if x < hot_zone {
             -1
         } else if x >= width - hot_zone {
@@ -1425,7 +1456,7 @@ fn shell_hit(x: i32, y: i32, width: i32, height: i32, maximized: bool) -> LRESUL
             return hit as LRESULT;
         }
     }
-    if y >= pad && y < pad + TITLE_HEIGHT {
+    if y >= pad && y < pad + scaled(TITLE_HEIGHT, scale) {
         HTCAPTION as LRESULT
     } else {
         HTCLIENT as LRESULT
@@ -1445,7 +1476,7 @@ fn toggle_zoom(hwnd: HWND) {
     };
 }
 
-fn centered_position() -> POINT {
+fn centered_position(width: i32, height: i32) -> POINT {
     let mut cursor = POINT::default();
     unsafe { GetCursorPos(&mut cursor) };
     let monitor = unsafe { MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST) };
@@ -1456,12 +1487,30 @@ fn centered_position() -> POINT {
     if unsafe { GetMonitorInfoW(monitor, &mut info) } != 0 {
         let work = info.rcWork;
         POINT {
-            x: work.left + ((work.right - work.left - 1120) / 2).max(0),
-            y: work.top + ((work.bottom - work.top - 820) / 2).max(0),
+            x: work.left + ((work.right - work.left - width) / 2).max(0),
+            y: work.top + ((work.bottom - work.top - height) / 2).max(0),
         }
     } else {
         POINT::default()
     }
+}
+
+/// Settings runs per-monitor DPI aware, so every 96-DPI unit must be converted
+/// before reaching Win32 controls. The cursor monitor decides the initial size.
+fn scale_at_cursor() -> i32 {
+    let mut cursor = POINT::default();
+    unsafe { GetCursorPos(&mut cursor) };
+    let monitor = unsafe { MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST) };
+    let (mut x, mut y) = (96, 96);
+    if unsafe { GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut x, &mut y) } >= 0 && x >= 96 {
+        x as i32
+    } else {
+        96
+    }
+}
+
+fn scaled(units: i32, dpi: i32) -> i32 {
+    (units * dpi.max(96) + 48) / 96
 }
 
 unsafe fn set_dwm(hwnd: HWND, attribute: i32, value: i32) {
@@ -1486,8 +1535,13 @@ fn paint_shell(hwnd: HWND) {
     unsafe { GetClientRect(hwnd, &mut window) };
     fill(dc, &window, COLOR_KEY);
     let maximized = unsafe { IsZoomed(hwnd) != 0 };
-    let pad = if maximized { 0 } else { EDGE_PAD };
-    let radius = if maximized { 0 } else { RADIUS };
+    let scale = unsafe { GetDpiForWindow(hwnd) }.max(96) as i32;
+    let pad = if maximized {
+        0
+    } else {
+        scaled(EDGE_PAD, scale)
+    };
+    let radius = if maximized { 0 } else { scaled(RADIUS, scale) };
     let body = RECT {
         left: pad,
         top: pad,
@@ -1533,7 +1587,7 @@ fn paint_shell(hwnd: HWND) {
             bottom: body.bottom - 1,
         };
         outline(dc, &inset, (radius - 1).max(0), rgb(56, 59, 64));
-        let footer = body.bottom - FOOTER_HEIGHT;
+        let footer = body.bottom - scaled(FOOTER_HEIGHT, scale);
         stroke(
             dc,
             &[[body.left + 1, footer], [body.right - 1, footer]],
@@ -1660,7 +1714,7 @@ fn usable_font<'a>(families: &[String], configured: &'a str) -> &'a str {
     }
 }
 
-fn create_fonts(family: &str) -> [HFONT; 4] {
+fn create_fonts(family: &str, scale: i32) -> [HFONT; 4] {
     let family = wide(if family.is_empty() {
         "Segoe UI Variable"
     } else {
@@ -1668,7 +1722,7 @@ fn create_fonts(family: &str) -> [HFONT; 4] {
     });
     [(13, 400), (16, 600), (30, 700), (13, 600)].map(|(size, weight)| unsafe {
         CreateFontW(
-            -size,
+            -scaled(size, scale),
             0,
             0,
             0,
@@ -2330,11 +2384,42 @@ mod tests {
 
     #[test]
     fn glass_shell_keeps_eight_way_resize_and_title_drag() {
-        assert_eq!(shell_hit(12, 12, 1120, 820, false), HTTOPLEFT as LRESULT);
-        assert_eq!(shell_hit(1110, 420, 1120, 820, false), HTRIGHT as LRESULT);
-        assert_eq!(shell_hit(600, 810, 1120, 820, false), HTBOTTOM as LRESULT);
-        assert_eq!(shell_hit(600, 35, 1120, 820, false), HTCAPTION as LRESULT);
-        assert_eq!(shell_hit(600, 160, 1120, 820, false), HTCLIENT as LRESULT);
-        assert_eq!(shell_hit(0, 200, 1120, 820, true), HTCLIENT as LRESULT);
+        assert_eq!(
+            shell_hit(12, 12, 1120, 820, false, 96),
+            HTTOPLEFT as LRESULT
+        );
+        assert_eq!(
+            shell_hit(1110, 420, 1120, 820, false, 96),
+            HTRIGHT as LRESULT
+        );
+        assert_eq!(
+            shell_hit(600, 810, 1120, 820, false, 96),
+            HTBOTTOM as LRESULT
+        );
+        assert_eq!(
+            shell_hit(600, 35, 1120, 820, false, 96),
+            HTCAPTION as LRESULT
+        );
+        assert_eq!(
+            shell_hit(600, 160, 1120, 820, false, 96),
+            HTCLIENT as LRESULT
+        );
+        assert_eq!(shell_hit(0, 200, 1120, 820, true, 96), HTCLIENT as LRESULT);
+    }
+
+    #[test]
+    fn dpi_scale_matches_logical_units() {
+        assert_eq!(scaled(1120, 96), 1120);
+        assert_eq!(scaled(1120, 120), 1400);
+        assert_eq!(scaled(13, 120), 16);
+        // Resize hot zones follow the same factor as the rendered shell.
+        assert_eq!(
+            shell_hit(19, 420, 1400, 1025, false, 120),
+            HTLEFT as LRESULT
+        );
+        assert_eq!(
+            shell_hit(200, 60, 1400, 1025, false, 120),
+            HTCAPTION as LRESULT
+        );
     }
 }

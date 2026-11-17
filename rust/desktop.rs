@@ -28,6 +28,7 @@ pub const OVERLAY_DEACTIVATED: usize = 6;
 pub const TRAY_OVERLAY: usize = 1;
 pub const TRAY_SETTINGS: usize = 2;
 pub const TRAY_EXIT: usize = 3;
+pub const TRAY_LOGS: usize = 4;
 
 const PROMPT: i32 = 10;
 const ENTRY: i32 = 11;
@@ -160,6 +161,7 @@ impl Tray {
             }
             AppendMenuW(menu, MF_STRING, TRAY_OVERLAY, w!("显示输入框"));
             AppendMenuW(menu, MF_STRING, TRAY_SETTINGS, w!("设置"));
+            AppendMenuW(menu, MF_STRING, TRAY_LOGS, w!("打开日志窗口"));
             AppendMenuW(menu, MF_SEPARATOR, 0, ptr::null());
             AppendMenuW(menu, MF_STRING, TRAY_EXIT, w!("退出"));
             let mut position = POINT::default();

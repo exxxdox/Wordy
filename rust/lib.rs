@@ -16,6 +16,8 @@ pub mod hotkey;
 #[cfg(windows)]
 pub mod instance;
 #[cfg(windows)]
+mod log_window;
+#[cfg(windows)]
 mod panels;
 #[cfg(windows)]
 pub mod playback;

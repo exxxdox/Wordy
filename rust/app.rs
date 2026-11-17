@@ -25,6 +25,7 @@ use crate::desktop::*;
 use crate::file_log::FileLog;
 use crate::hotkey::{display_hotkey, parse_hotkey, windows::Registration};
 use crate::instance::{acquire_single_instance, show_duplicate_instance_message};
+use crate::log_window::LogWindow;
 use crate::panels::{self, Editor, Trim};
 use crate::playback::{EngineSettings, Event, Playback};
 use crate::settings_window::{SETTINGS_ACTION_MESSAGE, SettingsAction, SettingsWindow};
@@ -34,6 +35,7 @@ use crate::wheel_window::WheelWindow;
 use crate::{backup, dialog};
 
 const CONTROLS_TIMER: usize = 1;
+const LOG_LIMIT: usize = 5000;
 const BACKUP_FILTER: &str = "Wordy 加密备份 (*.wordybackup)\0*.wordybackup\0";
 
 pub fn run() -> io::Result<()> {
@@ -219,6 +221,7 @@ struct App {
     next_job: u64,
     logs: VecDeque<String>,
     file_log: Option<FileLog>,
+    log_window: Option<LogWindow>,
 }
 
 enum Background {
@@ -300,6 +303,7 @@ impl App {
             next_job: 0,
             logs: VecDeque::new(),
             file_log: None,
+            log_window: None,
         };
         if cfg!(feature = "packaged") {
             match FileLog::beside_executable() {
@@ -320,7 +324,13 @@ impl App {
         if app.config.settings().active_voice_id().is_some() && app.engine.api_key.is_some() {
             app.playback.prewarm(app.engine.clone());
         }
-        app.log("Wordy 已启动".into());
+        let settings = app.config.settings().clone();
+        app.log(format!(
+            "Wordy 已启动（输入框 {}，轮盘 {} 个，后台录制 {}）",
+            settings.hotkey,
+            settings.wheel_count(),
+            settings.rolling_buffer_hotkey
+        ));
         Ok(app)
     }
 
@@ -350,6 +360,7 @@ impl App {
                     match action {
                         TRAY_OVERLAY => self.toggle_overlay(),
                         TRAY_SETTINGS => self.show_settings(),
+                        TRAY_LOGS => self.show_logs(),
                         TRAY_EXIT => break,
                         _ => Ok(()),
                     }
@@ -572,6 +583,7 @@ impl App {
                         .map_err(io::Error::other)?
                     {
                         self.active_wheel = Some(index);
+                        self.log(format!("打开轮盘 {}", index + 1));
                     }
                 }
                 Ok(())
@@ -580,6 +592,7 @@ impl App {
     }
 
     fn play_slot(&mut self, index: usize, slot: usize) -> io::Result<()> {
+        self.log(format!("播放轮盘 {} · 音频 {}", index + 1, slot + 1));
         if let Some(wheel) = self.config.settings().wheel(index) {
             let id = self.id();
             if !wheel.texts[slot].is_empty() {
@@ -607,9 +620,12 @@ impl App {
     fn toggle_overlay(&mut self) -> io::Result<()> {
         if self.overlay.is_visible() {
             self.overlay.hide(true);
+            self.log("收起输入框".into());
             Ok(())
         } else {
-            self.overlay.show(self.config.settings())
+            self.overlay.show(self.config.settings())?;
+            self.log("打开输入框".into());
+            Ok(())
         }
     }
 
@@ -624,6 +640,7 @@ impl App {
                     self.overlay.hide(true);
                 }
                 let id = self.id();
+                self.log(format!("提交朗读（{} 字）", text.chars().count()));
                 self.playback
                     .speak(id, text, self.engine.clone(), self.config.settings());
             }
@@ -647,6 +664,19 @@ impl App {
         self.settings_window.refresh(self.config.settings());
         self.refresh_editor()?;
         self.settings_window.show();
+        Ok(())
+    }
+
+    fn show_logs(&mut self) -> io::Result<()> {
+        match &self.log_window {
+            Some(window) => window.show_existing(),
+            None => {
+                let window = LogWindow::open(self.host)?;
+                let lines = self.logs.iter().cloned().collect::<Vec<_>>();
+                window.set_lines(&lines);
+                self.log_window = Some(window);
+            }
+        }
         Ok(())
     }
 
@@ -752,15 +782,7 @@ impl App {
             ImportBackup => self.backup(false)?,
             EditWheels => self.refresh_editor()?,
             DownloadVbCable => self.open_url("https://vb-audio.com/Cable/")?,
-            OpenLogs => {
-                let lines = self
-                    .logs
-                    .iter()
-                    .map(String::as_str)
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                crate::instance::show_native_message(&lines);
-            }
+            OpenLogs => self.show_logs()?,
             RequestAudioDevices => self.load_audio_settings()?,
             Feedback(message) => self.failure(message),
             Closed => {
@@ -867,6 +889,14 @@ impl App {
             audio::restore_listen(input, &before)?;
             return Err(error);
         }
+        self.log(
+            if enabled {
+                "音频侦听已启用"
+            } else {
+                "音频侦听已关闭"
+            }
+            .into(),
+        );
         self.load_audio_settings()
     }
 
@@ -1506,13 +1536,16 @@ impl App {
             now.wYear, now.wMonth, now.wDay, now.wHour, now.wMinute, now.wSecond
         );
         eprintln!("{message}");
-        if self.logs.len() == 300 {
+        if self.logs.len() == LOG_LIMIT {
             self.logs.pop_front();
         }
         if let Some(log) = &mut self.file_log
             && let Err(error) = log.append(&message)
         {
             eprintln!("写入日志失败：{error}");
+        }
+        if let Some(window) = &self.log_window {
+            window.append(&message);
         }
         self.logs.push_back(message);
     }

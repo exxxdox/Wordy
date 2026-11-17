@@ -815,10 +815,8 @@ impl Editor {
 }
 
 fn logical_px(hwnd: HWND, units: i32) -> i32 {
-    // The embedded page uses the settings shell's coordinate space; only dialogs scale their own controls.
-    if unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) } as u32 & WS_CHILD != 0 {
-        return units;
-    }
+    // The embedded editor page shares the settings shell's 96-DPI coordinate
+    // space; both it and standalone dialogs must scale to the window's DPI.
     let dpi = unsafe { GetDpiForWindow(hwnd) }.max(96) as i32;
     (units * dpi + 48) / 96
 }
