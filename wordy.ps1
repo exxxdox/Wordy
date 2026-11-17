@@ -30,7 +30,13 @@ Push-Location -LiteralPath $PSScriptRoot
 try {
     $cargoCommand = Get-Command cargo -ErrorAction SilentlyContinue
     if (-not $cargoCommand) {
-        throw 'cargo not found. Install the Rust toolchain first.'
+        # Explorer may start with a stale PATH right after installing Rust.
+        $fallback = Join-Path $env:USERPROFILE '.cargo\bin\cargo.exe'
+        if (Test-Path -LiteralPath $fallback) {
+            $cargoCommand = $fallback
+        } else {
+            throw 'cargo not found. Install the Rust toolchain first.'
+        }
     }
 
     switch ($Action) {
@@ -62,7 +68,8 @@ try {
     Invoke-Pause
 } catch {
     Write-Host "[ERROR] $($_.Exception.Message)"
-    Invoke-Pause
+    # A double-clicked dev session must not close before the error is readable.
+    if (-not $NoPause) { Read-Host 'Press Enter to continue' }
     exit 1
 } finally {
     Pop-Location

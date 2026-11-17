@@ -1,4 +1,7 @@
 @echo off
-rem Resolve the script beside this launcher and forward optional action flags.
-powershell.exe -NoProfile -File "%~dp0wordy.ps1" %*
-exit /b %errorlevel%
+rem Run from the project root so relative paths match wordy.ps1.
+pushd "%~dp0"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0wordy.ps1" %*
+set "code=%errorlevel%"
+popd
+exit /b %code%
