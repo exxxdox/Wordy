@@ -7,10 +7,12 @@ use windows_sys::Win32::System::Registry::{
 };
 use windows_sys::Win32::System::SystemServices::SS_CENTERIMAGE;
 use windows_sys::Win32::UI::Controls::{
-    DRAWITEMSTRUCT, TOOLTIPS_CLASSW, TTF_IDISHWND, TTF_SUBCLASS, TTM_ADDTOOLW, TTS_ALWAYSTIP,
-    TTTOOLINFOW,
+    DRAWITEMSTRUCT, MEASUREITEMSTRUCT, ODS_GRAYED, ODS_SELECTED, ODT_MENU, TOOLTIPS_CLASSW,
+    TTF_IDISHWND, TTF_SUBCLASS, TTM_ADDTOOLW, TTS_ALWAYSTIP, TTTOOLINFOW,
 };
-use windows_sys::Win32::UI::HiDpi::{GetDpiForMonitor, GetDpiForWindow, MDT_EFFECTIVE_DPI};
+use windows_sys::Win32::UI::HiDpi::{
+    GetDpiForMonitor, GetDpiForSystem, GetDpiForWindow, MDT_EFFECTIVE_DPI,
+};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     GetCapture, GetFocus, IsWindowEnabled, ReleaseCapture, SetCapture, SetFocus, VK_ESCAPE,
     VK_RETURN, VK_TAB,
@@ -48,6 +50,10 @@ const WIDTH: i32 = BODY_WIDTH + SHADOW_PAD * 2;
 const HEIGHT: i32 = BODY_HEIGHT + SHADOW_PAD * 2;
 const GLASS_TIMER: usize = 4;
 const GLOW_STEPS: usize = 10;
+// LWA_COLORKEY treats exactly this RGB as transparent; the input surface paints it everywhere text is not.
+// Matches the capsule mid-tone, so antialiased glyph edges blend into the backdrop.
+const OVERLAY_KEY: u32 = 0x002a_3038;
+const OVERLAY_OPACITY: windows_sys::core::PCWSTR = w!("WordyOpacity");
 
 pub(crate) fn host_window(instance: HINSTANCE) -> io::Result<HWND> {
     let class = WNDCLASSW {
@@ -81,12 +87,103 @@ pub(crate) fn host_window(instance: HINSTANCE) -> io::Result<HWND> {
     }
 }
 
+const MENU_FONT: windows_sys::core::PCWSTR = w!("WordyMenuFont");
+const MENU_BG: u32 = 0x0030_2f2e;
+const MENU_HOVER: u32 = 0x0045_4442;
+const MENU_TEXT: u32 = 0x00f7_f5f5;
+const MENU_MUTED: u32 = 0x0098_989a;
+
 unsafe extern "system" fn host_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
-    if msg == WM_CLOSE {
-        unsafe { PostQuitMessage(0) };
-        return 0;
+    unsafe {
+        match msg {
+            WM_CLOSE => {
+                PostQuitMessage(0);
+                0
+            }
+            WM_MEASUREITEM => {
+                let item = &mut *(lp as *mut MEASUREITEMSTRUCT);
+                if item.CtlType != ODT_MENU {
+                    return DefWindowProcW(hwnd, msg, wp, lp);
+                }
+                let text = item.itemData as *const u16;
+                if text.is_null() {
+                    item.itemWidth = 170;
+                    item.itemHeight = 10;
+                    return 1;
+                }
+                let mut bounds = RECT::default();
+                let dc = GetDC(hwnd);
+                let font = GetPropW(hwnd, MENU_FONT);
+                let old = if font.is_null() {
+                    SelectObject(dc, GetStockObject(DEFAULT_GUI_FONT))
+                } else {
+                    SelectObject(dc, font)
+                };
+                DrawTextW(
+                    dc,
+                    text,
+                    -1,
+                    &mut bounds,
+                    DT_CALCRECT | DT_SINGLELINE | DT_NOPREFIX,
+                );
+                let height = bounds.bottom.max(16);
+                SelectObject(dc, old);
+                ReleaseDC(hwnd, dc);
+                item.itemWidth = (bounds.right + 36).max(170) as u32;
+                item.itemHeight = (height + 14) as u32;
+                1
+            }
+            WM_DRAWITEM => {
+                let item = &*(lp as *const DRAWITEMSTRUCT);
+                if item.CtlType != ODT_MENU {
+                    return DefWindowProcW(hwnd, msg, wp, lp);
+                }
+                let brush = CreateSolidBrush(MENU_BG);
+                FillRect(item.hDC, &item.rcItem, brush);
+                DeleteObject(brush);
+                if item.itemData == 0 {
+                    let y = (item.rcItem.top + item.rcItem.bottom) / 2;
+                    let mut line = item.rcItem;
+                    line.left += 12;
+                    line.right -= 12;
+                    line.top = y;
+                    line.bottom = y + 1;
+                    let pen = CreateSolidBrush(MENU_HOVER);
+                    FillRect(item.hDC, &line, pen);
+                    DeleteObject(pen);
+                    return 1;
+                }
+                let selected = item.itemState & ODS_SELECTED != 0;
+                let disabled = item.itemState & ODS_GRAYED != 0;
+                if selected {
+                    let hover = CreateSolidBrush(MENU_HOVER);
+                    FillRect(item.hDC, &item.rcItem, hover);
+                    DeleteObject(hover);
+                }
+                let font = GetPropW(hwnd, MENU_FONT);
+                let old = if font.is_null() {
+                    SelectObject(item.hDC, GetStockObject(DEFAULT_GUI_FONT))
+                } else {
+                    SelectObject(item.hDC, font)
+                };
+                SetBkMode(item.hDC, TRANSPARENT as i32);
+                SetTextColor(item.hDC, if disabled { MENU_MUTED } else { MENU_TEXT });
+                let mut text_rect = item.rcItem;
+                text_rect.left += 18;
+                text_rect.right -= 12;
+                DrawTextW(
+                    item.hDC,
+                    item.itemData as *const u16,
+                    -1,
+                    &mut text_rect,
+                    DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
+                );
+                SelectObject(item.hDC, old);
+                1
+            }
+            _ => DefWindowProcW(hwnd, msg, wp, lp),
+        }
     }
-    unsafe { DefWindowProcW(hwnd, msg, wp, lp) }
 }
 
 unsafe fn lookup_class(class: &WNDCLASSW) -> io::Result<()> {
@@ -110,6 +207,10 @@ pub struct Tray {
 impl Tray {
     pub fn install(host: HWND) -> io::Result<Self> {
         let icon = wordy_icon()?;
+        let font = menu_font();
+        if !font.is_null() {
+            unsafe { SetPropW(host, MENU_FONT, font as _) };
+        }
         let tray = Self {
             host,
             icon,
@@ -178,11 +279,11 @@ impl Tray {
             if menu.is_null() {
                 return 0;
             }
-            AppendMenuW(menu, MF_STRING, TRAY_OVERLAY, w!("显示输入框"));
-            AppendMenuW(menu, MF_STRING, TRAY_SETTINGS, w!("设置"));
-            AppendMenuW(menu, MF_STRING, TRAY_LOGS, w!("打开日志窗口"));
-            AppendMenuW(menu, MF_SEPARATOR, 0, ptr::null());
-            AppendMenuW(menu, MF_STRING, TRAY_EXIT, w!("退出"));
+            AppendMenuW(menu, MF_OWNERDRAW, TRAY_OVERLAY, w!("显示输入框"));
+            AppendMenuW(menu, MF_OWNERDRAW, TRAY_SETTINGS, w!("设置"));
+            AppendMenuW(menu, MF_OWNERDRAW, TRAY_LOGS, w!("打开日志窗口"));
+            AppendMenuW(menu, MF_OWNERDRAW | MF_DISABLED, 0, ptr::null());
+            AppendMenuW(menu, MF_OWNERDRAW, TRAY_EXIT, w!("退出"));
             let mut position = POINT::default();
             GetCursorPos(&mut position);
             SetForegroundWindow(self.host);
@@ -219,7 +320,35 @@ impl Drop for Tray {
             if !self.active_icon.is_null() {
                 DestroyIcon(self.active_icon);
             }
+            let font = RemovePropW(self.host, MENU_FONT);
+            if !font.is_null() {
+                DeleteObject(font);
+            }
         }
+    }
+}
+
+fn menu_font() -> HFONT {
+    let dpi = unsafe { GetDpiForSystem() }.max(96) as i32;
+    let height = (13 * dpi + 48) / 96;
+    let family = w!("Segoe UI Variable");
+    unsafe {
+        CreateFontW(
+            -height,
+            0,
+            0,
+            0,
+            FW_NORMAL as i32,
+            0,
+            0,
+            0,
+            DEFAULT_CHARSET as u32,
+            OUT_DEFAULT_PRECIS as u32,
+            CLIP_DEFAULT_PRECIS as u32,
+            CLEARTYPE_QUALITY as u32,
+            DEFAULT_PITCH as u32,
+            family,
+        )
     }
 }
 
@@ -453,7 +582,6 @@ fn wordy_icon() -> io::Result<HICON> {
 pub struct Overlay {
     hwnd: HWND,
     backdrop: HWND,
-    shadow: Option<(u32, u32, LayeredSurface)>,
     entry: HWND,
     font: HFONT,
     prompt_font: HFONT,
@@ -493,7 +621,6 @@ impl Overlay {
             let mut overlay = Self {
                 hwnd,
                 backdrop: ptr::null_mut(),
-                shadow: None,
                 entry: ptr::null_mut(),
                 font: ptr::null_mut(),
                 prompt_font: ptr::null_mut(),
@@ -680,6 +807,16 @@ impl Overlay {
                 },
             );
             SetWindowPos(self.hwnd, HWND_TOPMOST, x, y, width, height, SWP_SHOWWINDOW);
+            // The capsule now lives on the backdrop window; keep it directly under the text layer.
+            SetWindowPos(
+                self.backdrop,
+                self.hwnd,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            );
             SetForegroundWindow(self.hwnd);
             SetFocus(self.entry);
             SetTimer(self.hwnd, 1, 30, None);
@@ -716,10 +853,17 @@ impl Overlay {
         } else {
             &settings.ui_font
         });
-        let alpha = (settings.overlay_opacity * 255.0).round() as u8;
+        let alpha = (settings.overlay_opacity.clamp(0.0, 1.0) * 1000.0).round() as usize;
         let placeholder = wide(&settings.overlay_placeholder);
         unsafe {
-            if SetLayeredWindowAttributes(self.hwnd, 0, alpha, LWA_ALPHA) == 0
+            SetPropW(
+                self.hwnd,
+                OVERLAY_OPACITY,
+                ptr::without_provenance_mut(alpha),
+            );
+            // The capsule background is a separate layered window, so text and
+            // icons keep full opacity while only the background dims.
+            if SetLayeredWindowAttributes(self.hwnd, OVERLAY_KEY, 255, LWA_COLORKEY) == 0
                 || SetPropW(
                     self.entry,
                     w!("WordyPlaceholder"),
@@ -747,7 +891,6 @@ impl Overlay {
                     }
                 }
             }
-            reset_overlay_brush(self.hwnd);
             RedrawWindow(
                 self.hwnd,
                 ptr::null(),
@@ -766,26 +909,9 @@ impl Overlay {
         height: i32,
         opacity: f64,
     ) -> io::Result<()> {
-        let bitmap = shadow_bitmap(width as u32, height as u32, opacity as f32);
-        if self
-            .shadow
-            .as_ref()
-            .is_none_or(|&(w, h, _)| (w, h) != (bitmap.width, bitmap.height))
-        {
-            let surface =
-                LayeredSurface::new(bitmap.width, bitmap.height).map_err(io::Error::other)?;
-            self.shadow = Some((bitmap.width, bitmap.height, surface));
-        }
-        self.shadow
-            .as_mut()
-            .unwrap()
-            .2
-            .present(
-                self.backdrop,
-                Point::new(f64::from(x), f64::from(y)),
-                &bitmap,
-            )
-            .map_err(io::Error::other)
+        draw_backdrop(self.backdrop, x, y, width, height, opacity, unsafe {
+            capsule_glow(self.hwnd)
+        })
     }
 
     pub fn is_visible(&self) -> bool {
@@ -911,7 +1037,9 @@ unsafe extern "system" fn overlay_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPA
                 let dc = BeginPaint(hwnd, &mut paint);
                 let mut bounds = RECT::default();
                 GetClientRect(hwnd, &mut bounds);
-                paint_capsule(hwnd, dc, bounds, 0, 0, None, false);
+                let brush = CreateSolidBrush(OVERLAY_KEY);
+                FillRect(dc, &bounds, brush);
+                DeleteObject(brush);
                 EndPaint(hwnd, &paint);
                 return 0;
             }
@@ -932,6 +1060,7 @@ unsafe extern "system" fn overlay_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPA
                     origin.y,
                     Some(color),
                     wp == SETTINGS as usize,
+                    true,
                 );
                 return 1;
             }
@@ -944,13 +1073,19 @@ unsafe extern "system" fn overlay_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPA
                 };
                 SetTextColor(dc, colorref(text));
                 SetBkMode(dc, TRANSPARENT as i32);
-                let brush = overlay_background_brush(hwnd, lp as HWND, dc);
-                return brush as isize;
+                if msg == WM_CTLCOLORSTATIC {
+                    // Let the key-colored parent surface show through the prompt.
+                    return GetStockObject(NULL_BRUSH) as isize;
+                }
+                SetBkColor(dc, OVERLAY_KEY);
+                return overlay_key_brush(hwnd) as isize;
             }
             WM_NCDESTROY => {
-                let brush = RemovePropW(hwnd, w!("WordyGlassBrush"));
-                if !brush.is_null() {
-                    DeleteObject(brush);
+                for prop in [w!("WordyGlassBrush"), w!("WordyKeyBrush")] {
+                    let brush = RemovePropW(hwnd, prop);
+                    if !brush.is_null() {
+                        DeleteObject(brush);
+                    }
                 }
                 None
             }
@@ -1184,22 +1319,20 @@ unsafe fn sync_overlay_glass(hwnd: HWND) {
                     ptr::without_provenance_mut(step),
                 );
             }
-            reset_overlay_brush(hwnd);
-            RedrawWindow(
-                hwnd,
-                ptr::null(),
-                ptr::null_mut(),
-                RDW_INVALIDATE | RDW_ALLCHILDREN,
-            );
-        }
-    }
-}
-
-unsafe fn reset_overlay_brush(hwnd: HWND) {
-    unsafe {
-        let brush = RemovePropW(hwnd, w!("WordyGlassBrush"));
-        if !brush.is_null() {
-            DeleteObject(brush);
+            let backdrop = GetPropW(hwnd, w!("WordyShadow")) as HWND;
+            let opacity = GetPropW(hwnd, OVERLAY_OPACITY) as usize as f64 / 1000.0;
+            let mut rect = RECT::default();
+            if GetWindowRect(hwnd, &mut rect) != 0 {
+                let _ = draw_backdrop(
+                    backdrop,
+                    rect.left,
+                    rect.top,
+                    rect.right - rect.left,
+                    rect.bottom - rect.top,
+                    opacity,
+                    capsule_glow(hwnd),
+                );
+            }
         }
     }
 }
@@ -1209,59 +1342,17 @@ unsafe fn capsule_glow(hwnd: HWND) -> f32 {
     1.0 - (1.0 - step as f32 / GLOW_STEPS as f32).powi(3)
 }
 
-unsafe fn overlay_background_brush(hwnd: HWND, child: HWND, dc: HDC) -> HBRUSH {
+unsafe fn overlay_key_brush(hwnd: HWND) -> HBRUSH {
     unsafe {
-        let mut origin = POINT::default();
-        ClientToScreen(child, &mut origin);
-        ScreenToClient(hwnd, &mut origin);
-        SetBrushOrgEx(dc, 0, -origin.y, ptr::null_mut());
-        let cached = GetPropW(hwnd, w!("WordyGlassBrush"));
+        let cached = GetPropW(hwnd, w!("WordyKeyBrush"));
         if !cached.is_null() {
             return cached;
         }
-        let mut bounds = RECT::default();
-        GetClientRect(hwnd, &mut bounds);
-        let height = bounds.bottom.max(1);
-        let scale = height as f32 / HEIGHT as f32;
-        let glow = capsule_glow(hwnd);
-        let rows: Vec<_> = (0..height)
-            .map(|y| dib_rgb(capsule_color(270.0, (y as f32 + 0.5) / scale, glow)))
-            .collect();
-        let bitmap = CreateCompatibleBitmap(dc, 1, height);
-        let memory = CreateCompatibleDC(dc);
-        if !bitmap.is_null() && !memory.is_null() {
-            let previous = SelectObject(memory, bitmap);
-            blit_pixels(
-                memory,
-                RECT {
-                    left: 0,
-                    top: 0,
-                    right: 1,
-                    bottom: height,
-                },
-                &rows,
-            );
-            SelectObject(memory, previous);
+        let brush = CreateSolidBrush(OVERLAY_KEY);
+        if !brush.is_null() && SetPropW(hwnd, w!("WordyKeyBrush"), brush) != 0 {
+            return brush;
         }
-        if !memory.is_null() {
-            DeleteDC(memory);
-        }
-        let brush = if bitmap.is_null() {
-            ptr::null_mut()
-        } else {
-            CreatePatternBrush(bitmap)
-        };
-        if !bitmap.is_null() {
-            DeleteObject(bitmap);
-        }
-        if !brush.is_null() {
-            if SetPropW(hwnd, w!("WordyGlassBrush"), brush) != 0 {
-                return brush;
-            }
-            DeleteObject(brush);
-        }
-        SetDCBrushColor(dc, colorref(capsule_color(270.0, 37.0, glow)));
-        GetStockObject(DC_BRUSH)
+        GetStockObject(NULL_BRUSH)
     }
 }
 
@@ -1273,6 +1364,7 @@ unsafe fn paint_capsule(
     origin_y: i32,
     icon: Option<[u8; 3]>,
     gear: bool,
+    transparent: bool,
 ) {
     let mut bounds = RECT::default();
     unsafe { GetClientRect(hwnd, &mut bounds) };
@@ -1288,7 +1380,15 @@ unsafe fn paint_capsule(
         let y = (origin_y as f32 + row as f32 + 0.5) / scale;
         for col in 0..width {
             let x = (origin_x as f32 + col as f32 + 0.5) / scale;
-            let mut color = capsule_color(x, y, glow);
+            let mut color = if transparent {
+                [
+                    (OVERLAY_KEY & 0xff) as u8,
+                    ((OVERLAY_KEY >> 8) & 0xff) as u8,
+                    ((OVERLAY_KEY >> 16) & 0xff) as u8,
+                ]
+            } else {
+                capsule_color(x, y, glow)
+            };
             if let Some(icon) = icon {
                 let x = x - center;
                 let y = y - 37.0;
@@ -1406,19 +1506,81 @@ fn capsule_shadow(x: f32, y: f32, opacity: f32) -> u8 {
     (alpha * 255.0).round() as u8
 }
 
-fn shadow_bitmap(width: u32, height: u32, opacity: f32) -> WheelBitmap {
+fn draw_backdrop(
+    backdrop: HWND,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    opacity: f64,
+    glow: f32,
+) -> io::Result<()> {
+    if backdrop.is_null() || width <= 0 || height <= 0 {
+        return Ok(());
+    }
+    let bitmap = overlay_bitmap(width as u32, height as u32, opacity as f32, glow);
+    BACKDROP_SURFACE.with_borrow_mut(|cache| {
+        if cache
+            .as_ref()
+            .is_none_or(|&(w, h, _)| (w, h) != (bitmap.width, bitmap.height))
+        {
+            let surface =
+                LayeredSurface::new(bitmap.width, bitmap.height).map_err(io::Error::other)?;
+            *cache = Some((bitmap.width, bitmap.height, surface));
+        }
+        cache
+            .as_mut()
+            .expect("backdrop surface is initialized above")
+            .2
+            .present(backdrop, Point::new(f64::from(x), f64::from(y)), &bitmap)
+            .map_err(io::Error::other)
+    })
+}
+
+thread_local! {
+    static BACKDROP_SURFACE: std::cell::RefCell<Option<(u32, u32, LayeredSurface)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+fn overlay_bitmap(width: u32, height: u32, opacity: f32, glow: f32) -> WheelBitmap {
     let mut pixels = vec![0; (width * height * 4) as usize];
     let scale = width as f32 / WIDTH as f32;
     for (index, pixel) in pixels.as_chunks_mut::<4>().0.iter_mut().enumerate() {
         let x = index % width as usize;
         let y = index / width as usize;
-        pixel[3] = capsule_shadow((x as f32 + 0.5) / scale, (y as f32 + 0.5) / scale, opacity);
+        let px = (x as f32 + 0.5) / scale;
+        let py = (y as f32 + 0.5) / scale;
+        let shadow = u32::from(capsule_shadow(px, py, opacity.clamp(0.0, 1.0)));
+        let inside = capsule_alpha(px, py);
+        let background = (opacity.clamp(0.0, 1.0) * inside * 255.0).round() as u32;
+        // Both layers are dark; premultiplied color is the capsule tint only.
+        let [red, green, blue] = capsule_color(px, py, glow);
+        let alpha = background + shadow * (255 - background) / 255;
+        if alpha == 0 {
+            continue;
+        }
+        pixel[0] = (u32::from(blue) * background / 255) as u8;
+        pixel[1] = (u32::from(green) * background / 255) as u8;
+        pixel[2] = (u32::from(red) * background / 255) as u8;
+        pixel[3] = alpha as u8;
     }
     WheelBitmap {
         width,
         height,
         pixels,
     }
+}
+
+fn capsule_alpha(x: f32, y: f32) -> f32 {
+    const LEFT: f32 = 9.0;
+    const TOP: f32 = 9.0;
+    const RIGHT: f32 = 547.0;
+    const BOTTOM: f32 = 65.0;
+    const RADIUS: f32 = 20.0;
+    let dx = (LEFT + RADIUS - x).max(x - (RIGHT - RADIUS)).max(0.0);
+    let dy = (TOP + RADIUS - y).max(y - (BOTTOM - RADIUS)).max(0.0);
+    let distance = (dx * dx + dy * dy).sqrt() - RADIUS;
+    (0.5 - distance).clamp(0.0, 1.0)
 }
 
 fn capsule_icon_color(gear: bool, hovered: bool, enabled: bool) -> [u8; 3] {

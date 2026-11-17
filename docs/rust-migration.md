@@ -17,3 +17,4 @@ Rust 版使用 Win32 消息循环和 WASAPI。设置、轮盘和录制截取共�
 - 实机核对中文输入法、抢焦点和混合 DPI。用 VB-CABLE、非虚拟返听设备及可用麦克风核对播放、侦听读回、普通录制和 F10 截取保存。
 - 使用各自的有效凭据核对三种合成模式。检验切换引擎与停止播放时，队列隔离并释放已按下的语音键。
 - 迁移已完成：`wordy.ps1`、发布工作流与 `dist/Wordy.exe` 均使用 Rust。
+- 仅影响观感的三项差异记录见 [visual-parity-gaps.md](visual-parity-gaps.md)。

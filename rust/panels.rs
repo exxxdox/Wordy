@@ -5,11 +5,13 @@ use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::UI::Controls::{
     DRAWITEMSTRUCT, EM_SETLIMITTEXT, ODS_DISABLED, ODS_FOCUS, ODS_SELECTED, ODT_BUTTON,
     TB_ENDTRACK, TBM_SETPAGESIZE, TBM_SETPOS, TBM_SETRANGE, TBS_NOTICKS, TRACKBAR_CLASSW,
+    WM_MOUSELEAVE,
 };
 use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    EnableWindow, GetFocus, GetKeyState, ReleaseCapture, SetCapture, SetFocus, VK_LEFT, VK_RIGHT,
-    VK_SHIFT, VK_SPACE,
+    EnableWindow, GetFocus, GetKeyState, ReleaseCapture, SetCapture, SetFocus, TME_LEAVE,
+    TRACKMOUSEEVENT, TrackMouseEvent, VK_DOWN, VK_LEFT, VK_RETURN, VK_RIGHT, VK_SHIFT, VK_SPACE,
+    VK_UP,
 };
 use windows_sys::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
@@ -477,13 +479,16 @@ pub fn wheel_labels(wheel: &Wheel) -> [String; 8] {
 
 struct Preview {
     child: HWND,
-    renderer: WheelRenderer,
     state: Box<PreviewState>,
 }
 
 struct PreviewState {
     bitmap: Option<WheelBitmap>,
     selected: Option<usize>,
+    hover: Option<usize>,
+    labels: [String; 8],
+    style: WheelStyle,
+    renderer: WheelRenderer,
     embedded: bool,
 }
 
@@ -493,6 +498,10 @@ impl Preview {
         let mut state = Box::new(PreviewState {
             bitmap: None,
             selected: None,
+            hover: None,
+            labels: std::array::from_fn(|_| String::new()),
+            style: WheelStyle::Classic,
+            renderer,
             embedded,
         });
         if unsafe {
@@ -506,29 +515,38 @@ impl Preview {
         {
             return Err(io::Error::last_os_error());
         }
-        Ok(Self {
-            child,
-            renderer,
-            state,
-        })
+        Ok(Self { child, state })
     }
 
     fn draw(&mut self, labels: &[String; 8], style: WheelStyle, slot: usize) -> io::Result<()> {
-        let mut frame = WheelFrame::new(labels, style);
-        frame.editing = true;
-        frame.selected = Some(slot);
-        let mut highlights = [0.0; 8];
-        highlights[slot] = 1.0;
-        frame.highlights = Some(highlights);
-        let (width, height) = dimensions(self.child);
-        let scale = (f64::from(width) / CANVAS_WIDTH).min(f64::from(height) / CANVAS_HEIGHT);
-        let bitmap = self
-            .renderer
-            .render(frame, scale)
-            .map_err(io::Error::other)?;
-        self.state.bitmap = Some(bitmap);
-        unsafe { InvalidateRect(self.child, ptr::null(), 1) };
+        self.state.labels = labels.clone();
+        self.state.style = style;
+        self.state.selected = Some(slot);
+        render_preview(self.child, &mut self.state);
         Ok(())
+    }
+}
+
+fn render_preview(child: HWND, state: &mut PreviewState) {
+    let labels = state.labels.clone();
+    let mut frame = WheelFrame::new(&labels, state.style);
+    frame.editing = true;
+    frame.selected = state.selected;
+    let mut highlights = [0.0; 8];
+    if let Some(slot) = state.selected {
+        highlights[slot] = 1.0;
+    }
+    if let Some(slot) = state.hover
+        && Some(slot) != state.selected
+    {
+        highlights[slot] = 0.45;
+    }
+    frame.highlights = Some(highlights);
+    let (width, height) = dimensions(child);
+    let scale = (f64::from(width) / CANVAS_WIDTH).min(f64::from(height) / CANVAS_HEIGHT);
+    if let Ok(bitmap) = state.renderer.render(frame, scale) {
+        state.bitmap = Some(bitmap);
+        unsafe { InvalidateRect(child, ptr::null(), 1) };
     }
 }
 
@@ -573,12 +591,60 @@ unsafe extern "system" fn preview_proc(
                 EndPaint(hwnd, &paint);
                 0
             }
+            WM_MOUSEMOVE => {
+                let slot = preview_slot(width, height, lp);
+                if slot != state.hover {
+                    state.hover = slot;
+                    render_preview(hwnd, state);
+                }
+                let mut track = TRACKMOUSEEVENT {
+                    cbSize: mem::size_of::<TRACKMOUSEEVENT>() as u32,
+                    dwFlags: TME_LEAVE,
+                    hwndTrack: hwnd,
+                    dwHoverTime: 0,
+                };
+                TrackMouseEvent(&mut track);
+                0
+            }
+            WM_MOUSELEAVE => {
+                if state.hover.take().is_some() {
+                    render_preview(hwnd, state);
+                }
+                0
+            }
+            WM_GETDLGCODE => (DLGC_WANTARROWS | DLGC_WANTCHARS) as LRESULT,
+            WM_KEYDOWN => {
+                let step = match wp as u16 {
+                    VK_LEFT | VK_UP => -1,
+                    VK_RIGHT | VK_DOWN => 1,
+                    VK_RETURN | VK_SPACE => {
+                        if state.selected.is_some() {
+                            PostMessageW(
+                                GetParent(hwnd),
+                                WM_COMMAND,
+                                usize::from(PICK),
+                                hwnd as isize,
+                            );
+                        }
+                        return 0;
+                    }
+                    _ => return DefSubclassProc(hwnd, msg, wp, lp),
+                };
+                let current = state.selected.unwrap_or(0) as isize;
+                let next = (current + step).rem_euclid(8) as usize;
+                state.selected = Some(next);
+                render_preview(hwnd, state);
+                PostMessageW(
+                    GetParent(hwnd),
+                    WM_COMMAND,
+                    usize::from(PICK),
+                    hwnd as isize,
+                );
+                0
+            }
             WM_LBUTTONDOWN => {
-                let size = (f64::from(width) / CANVAS_WIDTH).min(f64::from(height) / CANVAS_HEIGHT)
-                    * CANVAS_WIDTH;
-                let x = f64::from(lp as i16) - (f64::from(width) - size) / 2.0;
-                let y = f64::from((lp >> 16) as i16) - (f64::from(height) - size) / 2.0;
-                if let Some(slot) = picker_slot_at(Point::new(x, y), size) {
+                SetFocus(hwnd);
+                if let Some(slot) = preview_slot(width, height, lp) {
                     state.selected = Some(slot);
                     PostMessageW(
                         GetParent(hwnd),
@@ -592,6 +658,14 @@ unsafe extern "system" fn preview_proc(
             _ => DefSubclassProc(hwnd, msg, wp, lp),
         }
     }
+}
+
+fn preview_slot(width: i32, height: i32, lp: LPARAM) -> Option<usize> {
+    let size =
+        (f64::from(width) / CANVAS_WIDTH).min(f64::from(height) / CANVAS_HEIGHT) * CANVAS_WIDTH;
+    let x = f64::from(lp as i16) - (f64::from(width) - size) / 2.0;
+    let y = f64::from((lp >> 16) as i16) - (f64::from(height) - size) / 2.0;
+    picker_slot_at(Point::new(x, y), size)
 }
 
 fn blend_preview(dc: HDC, bitmap: &WheelBitmap, width: i32, height: i32) {
@@ -669,7 +743,7 @@ impl Editor {
         button(&mut template, REMOVE, "删除", [294, 7, 34, 18]);
         label(&mut template, 307, "样式", [407, 11, 28, 14]);
         combo(&mut template, STYLE, [435, 7, 63, 100]);
-        label(&mut template, PICK, "", [3, 33, 198, 212]);
+        template.control(0x82, PICK, "", BASE | TABS | 0x0000_0100, [3, 33, 198, 212]);
         edit(&mut template, NAME, [0, 0, 1, 1]);
         label(&mut template, INFO, "", [217, 42, 252, 16]);
         label(&mut template, 302, "内容", [217, 64, 26, 15]);
@@ -1065,7 +1139,13 @@ impl Trim {
             label(&mut template, 305, "音量", [12, 234, 32, 14]);
             edit(&mut template, GAIN, [47, 229, 333, 17]);
             label(&mut template, GAIN_VALUE, "100%", [387, 233, 41, 14]);
-            label(&mut template, PICK, "", [145, 250, 150, 90]);
+            template.control(
+                0x82,
+                PICK,
+                "",
+                BASE | TABS | 0x0000_0100,
+                [145, 250, 150, 90],
+            );
             label(&mut template, INFO, "", [12, 342, 416, 14]);
         } else {
             // Regular trims keep their current slot label and volume via the shared action contract.
