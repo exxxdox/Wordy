@@ -699,6 +699,8 @@ impl App {
     }
 
     fn show_settings(&mut self) -> io::Result<()> {
+        // Settings takes over the foreground; the floating bar must not stay on top of it.
+        self.overlay.hide(false);
         self.settings_window.refresh(self.config.settings());
         self.refresh_editor()?;
         self.settings_window.show();
