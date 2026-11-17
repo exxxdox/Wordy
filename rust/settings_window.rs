@@ -2155,6 +2155,12 @@ unsafe extern "system" fn style_control(
         .into_iter()
         .any(|control| kind == control as usize);
     match message {
+        // Every custom-painted control supplies its own backdrop, so the class
+        // brush (light in the system colours) must never erase it first. The
+        // flash showed on slider drags and button hover because those repaints
+        // arrive with the erase flag set by the control itself. Edits keep the
+        // default erase: their brush is already the dark WM_CTLCOLOREDIT one.
+        WM_ERASEBKGND if !edit => return 1,
         WM_MOUSEMOVE => {
             let mut tracking = TRACKMOUSEEVENT {
                 cbSize: size_of::<TRACKMOUSEEVENT>() as u32,
