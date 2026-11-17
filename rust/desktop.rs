@@ -37,6 +37,7 @@ pub const TRAY_SETTINGS: usize = 2;
 pub const TRAY_EXIT: usize = 3;
 pub const TRAY_LOGS: usize = 4;
 pub const TRAY_COMMAND: u32 = WM_APP + 4;
+pub const TRAY_EVENT: u32 = WM_APP + 5;
 
 const PROMPT: i32 = 10;
 const ENTRY: i32 = 11;
@@ -87,6 +88,11 @@ pub(crate) fn host_window(instance: HINSTANCE) -> io::Result<HWND> {
 }
 
 unsafe extern "system" fn host_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+    if msg == TRAY_MESSAGE {
+        // Shell callbacks can bypass GetMessage's queue; defer app actions without reentrant handling.
+        unsafe { PostMessageW(hwnd, TRAY_EVENT, wp, lp) };
+        return 0;
+    }
     if msg == WM_CLOSE {
         unsafe { PostQuitMessage(0) };
         return 0;
@@ -1597,6 +1603,32 @@ fn copy_wide(target: &mut [u16], text: &str) {
 #[cfg(test)]
 mod overlay_visual_tests {
     use super::*;
+
+    #[test]
+    fn tray_callbacks_reach_the_event_queue_without_reposting_forever() {
+        unsafe {
+            let instance = windows_sys::Win32::System::LibraryLoader::GetModuleHandleW(ptr::null());
+            let host = host_window(instance).unwrap();
+            for event in [WM_RBUTTONUP, WM_CONTEXTMENU, WM_LBUTTONDBLCLK] {
+                SendMessageW(host, TRAY_MESSAGE, 1, event as isize);
+                let mut message = MSG::default();
+                let received = PeekMessageW(&mut message, host, TRAY_EVENT, TRAY_EVENT, PM_REMOVE);
+                if received == 0 {
+                    DestroyWindow(host);
+                }
+                assert_ne!(received, 0, "tray callback {event:#x} was swallowed");
+                assert_eq!(message.wParam, 1);
+                assert_eq!(message.lParam, event as isize);
+                DispatchMessageW(&message);
+                assert_eq!(
+                    PeekMessageW(&mut message, host, TRAY_EVENT, TRAY_EVENT, PM_REMOVE),
+                    0,
+                    "dispatching the internal event must not enqueue it again"
+                );
+            }
+            DestroyWindow(host);
+        }
+    }
 
     #[test]
     fn glass_panel_is_brighter_at_the_top_and_gets_focus_glow_at_the_bottom() {

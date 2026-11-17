@@ -355,7 +355,7 @@ impl App {
             let result = match message.message {
                 WM_HOTKEY => self.hotkey(message.wParam),
                 WM_TIMER if message.hwnd == self.host => self.tick(),
-                TRAY_MESSAGE if message.hwnd == self.host => match message.lParam as u32 {
+                TRAY_EVENT if message.hwnd == self.host => match message.lParam as u32 {
                     WM_RBUTTONUP | WM_CONTEXTMENU => self.tray.open_menu(),
                     WM_LBUTTONDBLCLK => self.show_settings(),
                     _ => Ok(()),
