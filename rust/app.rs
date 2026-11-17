@@ -1137,6 +1137,7 @@ impl App {
             duration,
             gain,
         )?;
+        self.settings_window.apply_panel_font(window.panel.0);
         window.panel.show();
         if let Some((wheel, slot)) = target
             && let Some(wheel) = self.config.settings().wheel(wheel)

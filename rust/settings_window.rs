@@ -402,8 +402,40 @@ impl SettingsWindow {
 
     pub fn set_wheel_panel(&mut self, hwnd: HWND) {
         self.wheel_panel = hwnd;
+        self.apply_panel_font(hwnd);
         self.layout();
         self.show_page();
+    }
+
+    /// Dialog templates carry their own DS_SETFONT, so embedded editors would
+    /// otherwise render smaller text than the settings pages around them.
+    pub fn apply_panel_font(&self, root: HWND) {
+        let body = self.fonts[0];
+        if body.is_null() {
+            return;
+        }
+        let emphasis = if self.fonts[3].is_null() {
+            body
+        } else {
+            self.fonts[3]
+        };
+        unsafe {
+            send(root, WM_SETFONT, body as usize, 1);
+            let mut child = GetWindow(root, GW_CHILD);
+            while !child.is_null() {
+                let mut name = [0u16; 32];
+                let length = GetClassNameW(child, name.as_mut_ptr(), name.len() as i32);
+                let button =
+                    length > 0 && String::from_utf16_lossy(&name[..length as usize]) == "Button";
+                send(
+                    child,
+                    WM_SETFONT,
+                    if button { emphasis } else { body } as usize,
+                    1,
+                );
+                child = GetWindow(child, GW_HWNDNEXT);
+            }
+        }
     }
 
     pub fn toast_anchor(&self) -> Option<RECT> {

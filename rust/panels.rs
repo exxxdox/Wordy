@@ -3,9 +3,9 @@ use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM}
 use windows_sys::Win32::Graphics::Dwm::{DWMWA_USE_IMMERSIVE_DARK_MODE, DwmSetWindowAttribute};
 use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::UI::Controls::{
-    DRAWITEMSTRUCT, EM_SETLIMITTEXT, EM_SETMARGINS, ODS_DISABLED, ODS_FOCUS, ODS_SELECTED,
-    ODT_BUTTON, TB_ENDTRACK, TBM_GETCHANNELRECT, TBM_GETTHUMBRECT, TBM_SETPAGESIZE, TBM_SETPOS,
-    TBM_SETRANGE, TBS_NOTICKS, TRACKBAR_CLASSW, WM_MOUSELEAVE,
+    DRAWITEMSTRUCT, EM_SETLIMITTEXT, EM_SETMARGINS, ODS_COMBOBOXEDIT, ODS_DISABLED, ODS_FOCUS,
+    ODS_SELECTED, ODT_BUTTON, ODT_COMBOBOX, TB_ENDTRACK, TBM_GETCHANNELRECT, TBM_GETTHUMBRECT,
+    TBM_SETPAGESIZE, TBM_SETPOS, TBM_SETRANGE, TBS_NOTICKS, TRACKBAR_CLASSW, WM_MOUSELEAVE,
 };
 use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
@@ -69,7 +69,6 @@ const EDITOR_CARD: u32 = 0x3e3b3b;
 const SEPARATOR: u32 = 0x3a3838;
 const PRIMARY: u32 = 0xf7f5f5;
 const MUTED: u32 = 0x9d9898;
-const CAPTION: u32 = 0xc9c6c6;
 const ACCENT: u32 = 0xff840a;
 const ERROR: u32 = 0x3a45ff;
 
@@ -90,11 +89,17 @@ fn edit(template: &mut Template, id: u16, bounds: [u16; 4]) {
 }
 
 fn combo(template: &mut Template, id: u16, bounds: [u16; 4]) {
+    // Ownerdraw is what makes CB_SETITEMHEIGHT size the closed field, so the
+    // selector can match the 32px toolbar buttons.
     template.control(
         0x85,
         id,
         "",
-        BASE | TABS | WS_VSCROLL | CBS_DROPDOWNLIST as u32,
+        BASE | TABS
+            | WS_VSCROLL
+            | CBS_DROPDOWNLIST as u32
+            | CBS_OWNERDRAWFIXED as u32
+            | CBS_HASSTRINGS as u32,
         bounds,
     );
 }
@@ -183,9 +188,14 @@ impl Chrome {
             }
         }
         // Style the selectors as rounded dark fields instead of system chrome.
+        let item_height = logical_px(panel.0, 29);
         for id in [WHEEL, STYLE] {
             let combo = panel.child(id);
             if !combo.is_null() {
+                unsafe {
+                    SendMessageW(combo, CB_SETITEMHEIGHT, usize::MAX, item_height as isize);
+                    SendMessageW(combo, CB_SETITEMHEIGHT, 0, item_height as isize);
+                }
                 style_selector(combo);
             }
         }
@@ -438,8 +448,7 @@ unsafe extern "system" fn chrome_proc(
                     !state.trim && matches!(control, INFO | GAIN_SLIDER | GAIN_VALUE | 302..=305);
                 // Values read bright; captions stay muted. Captions sit straight
                 // on the glass, so they must not erase a solid surface rectangle.
-                let value = matches!(control, INFO | GAIN_VALUE | RANGE_SUMMARY);
-                SetTextColor(dc, if value { PRIMARY } else { CAPTION });
+                SetTextColor(dc, PRIMARY);
                 SetBkMode(dc, if field { OPAQUE } else { TRANSPARENT } as i32);
                 SetBkColor(
                     dc,
@@ -461,10 +470,11 @@ unsafe extern "system" fn chrome_proc(
             }
             WM_DRAWITEM if lp != 0 => {
                 let item = &*(lp as *const DRAWITEMSTRUCT);
-                if item.CtlType != ODT_BUTTON {
-                    return DefSubclassProc(hwnd, msg, wp, lp);
+                match item.CtlType {
+                    ODT_BUTTON => draw_button(item, state),
+                    ODT_COMBOBOX if item.itemState & ODS_COMBOBOXEDIT == 0 => draw_combo_item(item),
+                    _ => return DefSubclassProc(hwnd, msg, wp, lp),
                 }
-                draw_button(item, state);
                 1
             }
             WM_HSCROLL if lp != 0 && lp as HWND == state.gain => {
@@ -568,6 +578,14 @@ fn draw_button(item: &DRAWITEMSTRUCT, state: &ChromeState) {
     let text = wide(&window_text(item.hwndItem));
     let mut area = item.rcItem;
     unsafe {
+        // Ownerdraw DCs do not guarantee the control font; select it so the
+        // settings UI font applies here too.
+        let font = SendMessageW(item.hwndItem, WM_GETFONT, 0, 0) as HFONT;
+        let previous = if font.is_null() {
+            ptr::null_mut()
+        } else {
+            SelectObject(item.hDC, font)
+        };
         SetBkMode(item.hDC, TRANSPARENT as i32);
         SetTextColor(
             item.hDC,
@@ -586,6 +604,58 @@ fn draw_button(item: &DRAWITEMSTRUCT, state: &ChromeState) {
             &mut area,
             DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
         );
+        if !previous.is_null() {
+            SelectObject(item.hDC, previous);
+        }
+    }
+}
+
+fn combo_item(combo: HWND, index: u32) -> String {
+    let length = unsafe { SendMessageW(combo, CB_GETLBTEXTLEN, index as usize, 0) };
+    if length < 0 {
+        return String::new();
+    }
+    let mut buffer = vec![0u16; length as usize + 1];
+    let written = unsafe {
+        SendMessageW(
+            combo,
+            CB_GETLBTEXT,
+            index as usize,
+            buffer.as_mut_ptr() as LPARAM,
+        )
+    };
+    String::from_utf16_lossy(&buffer[..written.max(0) as usize])
+}
+
+fn draw_combo_item(item: &DRAWITEMSTRUCT) {
+    let selected = item.itemState & ODS_SELECTED != 0;
+    fill(
+        item.hDC,
+        item.rcItem,
+        if selected { 0x764e25 } else { ELEVATED },
+    );
+    let mut area = item.rcItem;
+    area.left += logical_px(item.hwndItem, 8);
+    let text = wide(&combo_item(item.hwndItem, item.itemID));
+    unsafe {
+        let font = SendMessageW(item.hwndItem, WM_GETFONT, 0, 0) as HFONT;
+        let previous = if font.is_null() {
+            ptr::null_mut()
+        } else {
+            SelectObject(item.hDC, font)
+        };
+        SetBkMode(item.hDC, TRANSPARENT as i32);
+        SetTextColor(item.hDC, PRIMARY);
+        DrawTextW(
+            item.hDC,
+            text.as_ptr(),
+            -1,
+            &mut area,
+            DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
+        );
+        if !previous.is_null() {
+            SelectObject(item.hDC, previous);
+        }
     }
 }
 

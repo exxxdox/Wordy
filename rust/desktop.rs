@@ -1860,6 +1860,21 @@ unsafe extern "system" fn centered_edit_proc(
                 RemovePropW(hwnd, EDIT_BORDER);
                 DefSubclassProc(hwnd, message, wparam, lparam)
             }
+            // The centred band depends on the font height; recompute when the
+            // caller applies the settings font after construction.
+            WM_SETFONT => {
+                let result = DefSubclassProc(hwnd, message, wparam, lparam);
+                SetWindowPos(
+                    hwnd,
+                    ptr::null_mut(),
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+                );
+                result
+            }
             // The whole field must focus the edit, not only the centered band.
             WM_NCHITTEST => HTCLIENT as LRESULT,
             _ => DefSubclassProc(hwnd, message, wparam, lparam),
