@@ -316,7 +316,7 @@ unsafe extern "system" fn window_proc(
     unsafe { DefWindowProcW(window, message, wparam, lparam) }
 }
 
-struct LayeredSurface {
+pub(crate) struct LayeredSurface {
     dc: HDC,
     bitmap: HBITMAP,
     previous: HGDIOBJ,
@@ -326,7 +326,7 @@ struct LayeredSurface {
 }
 
 impl LayeredSurface {
-    fn new(width: u32, height: u32) -> Result<Self> {
+    pub(crate) fn new(width: u32, height: u32) -> Result<Self> {
         let info = BITMAPINFO {
             bmiHeader: BITMAPINFOHEADER {
                 biSize: size_of::<BITMAPINFOHEADER>() as u32,
@@ -373,7 +373,12 @@ impl LayeredSurface {
         })
     }
 
-    fn present(&mut self, window: HWND, position: Point, bitmap: &WheelBitmap) -> Result<()> {
+    pub(crate) fn present(
+        &mut self,
+        window: HWND,
+        position: Point,
+        bitmap: &WheelBitmap,
+    ) -> Result<()> {
         debug_assert_eq!((self.width, self.height), (bitmap.width, bitmap.height));
         let dest = POINT {
             x: position.x.round() as i32,

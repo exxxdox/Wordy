@@ -28,6 +28,7 @@ use crate::instance::{acquire_single_instance, show_duplicate_instance_message};
 use crate::panels::{self, Editor, Trim};
 use crate::playback::{EngineSettings, Event, Playback};
 use crate::settings_window::{SETTINGS_ACTION_MESSAGE, SettingsAction, SettingsWindow};
+use crate::status_toast::{Toasts, Tone};
 use crate::wheel::WheelStyle;
 use crate::wheel_window::WheelWindow;
 use crate::{backup, dialog};
@@ -58,12 +59,16 @@ fn smoke_test() -> io::Result<()> {
     let instance = unsafe { GetModuleHandleW(ptr::null()) };
     let host = Host(host_window(instance)?);
     let settings = Settings::default();
-    let settings_window = SettingsWindow::new(host.0, &settings)?;
+    let mut settings_window = SettingsWindow::new(host.0, &settings)?;
     let _input = Overlay::new(instance, host.0)?;
     let _wheel = WheelWindow::new(instance).map_err(io::Error::other)?;
-    let editor = Editor::new(host.0, settings_window.hwnd(), &settings)?;
+    let editor = Editor::new_embedded(host.0, settings_window.hwnd(), &settings)?;
+    settings_window.set_wheel_panel(editor.panel.0);
     let trim = Trim::new(host.0, settings_window.hwnd(), &settings, None, 1.0, 1.0)?;
-    if editor.panel.text(panels::GAIN) != "100" || trim.panel.text(panels::END) != "1.000" {
+    if unsafe { IsChild(settings_window.hwnd(), editor.panel.0) } == 0
+        || editor.panel.text(panels::GAIN) != "100"
+        || trim.panel.text(panels::END) != "1.000"
+    {
         return Err(io::Error::other("设置或截取窗口未正确初始化"));
     }
     Ok(())
@@ -199,10 +204,11 @@ struct App {
     overlay: Overlay,
     wheel: WheelWindow,
     active_wheel: Option<usize>,
+    editor: Editor,
     settings_window: SettingsWindow,
+    toasts: Toasts,
     recording: Option<Recording>,
     slot_recording: Option<(Recording, usize, usize)>,
-    editor: Option<Editor>,
     trim: Option<TrimSession>,
     previews: HashMap<u64, tempfile::NamedTempFile>,
     editor_preview: Option<(u64, bool)>,
@@ -264,7 +270,9 @@ impl App {
         let tray = Tray::install(host)?;
         let overlay = Overlay::new(instance, host)?;
         let wheel = WheelWindow::new(instance).map_err(io::Error::other)?;
-        let settings_window = SettingsWindow::new(host, config.settings())?;
+        let mut settings_window = SettingsWindow::new(host, config.settings())?;
+        let editor = Editor::new_embedded(host, settings_window.hwnd(), config.settings())?;
+        settings_window.set_wheel_panel(editor.panel.0);
         let (jobs, results) = mpsc::channel();
         let mut app = Self {
             host,
@@ -277,10 +285,11 @@ impl App {
             overlay,
             wheel,
             active_wheel: None,
+            editor,
             settings_window,
+            toasts: Toasts::new(),
             recording: None,
             slot_recording: None,
-            editor: None,
             trim: None,
             previews: HashMap::new(),
             editor_preview: None,
@@ -365,11 +374,7 @@ impl App {
                     let handled = self
                         .trim
                         .as_ref()
-                        .is_some_and(|trim| trim.window.panel.accepts(&message))
-                        || self
-                            .editor
-                            .as_ref()
-                            .is_some_and(|editor| editor.panel.accepts(&message))
+                        .is_some_and(|trim| trim.window.accepts(&message))
                         || self.settings_window.handle_message(&message);
                     if !handled {
                         unsafe {
@@ -411,11 +416,17 @@ impl App {
     }
 
     fn tick(&mut self) -> io::Result<()> {
+        if let Err(error) = self.toasts.tick(
+            self.settings_window.hwnd(),
+            self.settings_window.toast_anchor(),
+        ) {
+            self.toasts.clear();
+            self.log_at("WARNING", format!("设置反馈显示失败：{error}"));
+        }
         if let Some((recording, _, _)) = &self.slot_recording
             && !recording.is_running()
-            && let Some(editor) = &self.editor
         {
-            self.editor_action(usize::from(panels::RECORD), editor.panel.0)?;
+            self.editor_action(usize::from(panels::RECORD), self.editor.panel.0)?;
         }
         if let Some(slot) = self.wheel.tick()
             && let Some(wheel) = self.active_wheel.take()
@@ -439,9 +450,7 @@ impl App {
                         .is_some_and(|(preview, _)| preview == id)
                     {
                         self.editor_preview = None;
-                        if let Some(editor) = &self.editor {
-                            editor.panel.set_text(panels::PLAY, "试听");
-                        }
+                        self.editor.panel.set_text(panels::PLAY, "试听");
                     }
                     if let Err(error) = result {
                         self.failure(format!("播放失败：{error}"));
@@ -620,6 +629,9 @@ impl App {
             }
             OVERLAY_SETTINGS => self.show_settings()?,
             OVERLAY_DISMISS => self.overlay.hide(false),
+            OVERLAY_DEACTIVATED if unsafe { IsWindowVisible(self.settings_window.hwnd()) } == 0 => {
+                self.overlay.hide(false);
+            }
             OVERLAY_POSITION => {
                 if let Some(position) = self.overlay.position() {
                     self.config
@@ -633,8 +645,9 @@ impl App {
 
     fn show_settings(&mut self) -> io::Result<()> {
         self.settings_window.refresh(self.config.settings());
+        self.refresh_editor()?;
         self.settings_window.show();
-        self.load_audio_settings()
+        Ok(())
     }
 
     fn edit(&mut self, update: impl FnOnce(&mut Settings)) -> io::Result<()> {
@@ -661,9 +674,18 @@ impl App {
                 self.rebuild_engine()?;
             }
             SetVolume(volume) => self.edit(|s| s.volume = volume)?,
-            SetOpacity(opacity) => self.edit(|s| s.overlay_opacity = opacity)?,
-            SetPlaceholder(value) => self.edit(|s| s.overlay_placeholder = value)?,
-            SetUiFont(value) => self.edit(|s| s.ui_font = value)?,
+            SetOpacity(opacity) => {
+                self.edit(|s| s.overlay_opacity = opacity)?;
+                self.overlay.apply_visual_settings(self.config.settings())?;
+            }
+            SetPlaceholder(value) => {
+                self.edit(|s| s.overlay_placeholder = value)?;
+                self.overlay.apply_visual_settings(self.config.settings())?;
+            }
+            SetUiFont(value) => {
+                self.edit(|s| s.ui_font = value)?;
+                self.overlay.apply_visual_settings(self.config.settings())?;
+            }
             SetFixedCenter(fixed) => self.edit(|s| s.fixed_center = fixed)?,
             SetLogLevel(level) => self.edit(|s| s.log_level = level)?,
             SetHoldKeyEnabled(enabled) => self.edit(|s| s.hold_key_enabled = enabled)?,
@@ -728,7 +750,7 @@ impl App {
             })?,
             ExportBackup => self.backup(true)?,
             ImportBackup => self.backup(false)?,
-            EditWheels => self.edit_wheel()?,
+            EditWheels => self.refresh_editor()?,
             DownloadVbCable => self.open_url("https://vb-audio.com/Cable/")?,
             OpenLogs => {
                 let lines = self
@@ -740,7 +762,11 @@ impl App {
                 crate::instance::show_native_message(&lines);
             }
             RequestAudioDevices => self.load_audio_settings()?,
-            Closed => self.close_editor()?,
+            Feedback(message) => self.failure(message),
+            Closed => {
+                self.toasts.clear();
+                self.close_editor()?;
+            }
         }
         Ok(())
     }
@@ -1108,6 +1134,7 @@ impl App {
                 self.next_job += 1;
                 let id = self.next_job;
                 session.preview = Some(id);
+                session.window.set_previewing(true);
                 self.previews.insert(id, clip);
                 self.playback.play_clip(
                     id,
@@ -1168,21 +1195,6 @@ impl App {
         Ok(())
     }
 
-    fn edit_wheel(&mut self) -> io::Result<()> {
-        if let Some(editor) = &self.editor {
-            editor.panel.show();
-        } else {
-            let editor = Editor::new(
-                self.host,
-                self.settings_window.hwnd(),
-                self.config.settings(),
-            )?;
-            editor.panel.show();
-            self.editor = Some(editor);
-        }
-        Ok(())
-    }
-
     fn close_editor(&mut self) -> io::Result<()> {
         if let Some((recording, ..)) = self.slot_recording.take() {
             recording.cancel()?;
@@ -1194,23 +1206,19 @@ impl App {
                 self.playback.stop_clip();
             }
         }
-        self.editor = None;
+        self.editor.recording(false);
+        self.editor.panel.set_text(panels::PLAY, "试听");
         Ok(())
     }
 
     fn refresh_editor(&mut self) -> io::Result<()> {
-        if let Some(editor) = &mut self.editor {
-            editor.refresh(self.config.settings())?;
-        }
-        Ok(())
+        self.editor.refresh(self.config.settings())
     }
 
     fn editor_action(&mut self, command: usize, hwnd: HWND) -> io::Result<()> {
         use panels::*;
         const CANCEL: u16 = IDCANCEL as u16;
-        let Some(editor) = &mut self.editor else {
-            return Ok(());
-        };
+        let editor = &mut self.editor;
         if editor.panel.0 != hwnd {
             return Ok(());
         }
@@ -1510,12 +1518,12 @@ impl App {
     }
 
     fn status(&mut self, message: String) {
-        self.settings_window.set_status(&message);
+        self.toasts.push(&message, Tone::Success);
         self.log(message);
     }
 
     fn failure(&mut self, message: String) {
-        self.settings_window.set_status(&message);
+        self.toasts.push(&message, Tone::Error);
         self.log_at("ERROR", message);
     }
 

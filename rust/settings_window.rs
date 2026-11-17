@@ -1,19 +1,30 @@
-use std::{collections::HashSet, io, mem::size_of, ptr};
+use std::{cell::RefCell, collections::HashSet, io, mem::size_of, ptr};
 
 use windows_sys::{
     Win32::{
         Foundation::{
-            ERROR_CLASS_ALREADY_EXISTS, GetLastError, HWND, LPARAM, LRESULT, RECT, WPARAM,
+            ERROR_CLASS_ALREADY_EXISTS, GetLastError, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
         },
-        Graphics::Gdi::{COLOR_WINDOW, DEFAULT_GUI_FONT, GetStockObject},
-        System::LibraryLoader::GetModuleHandleW,
+        Graphics::{
+            Dwm::{
+                DWMWA_CLOAK, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND,
+                DwmSetWindowAttribute,
+            },
+            Gdi::*,
+        },
+        System::{LibraryLoader::GetModuleHandleW, SystemServices::SS_OWNERDRAW},
         UI::{
             Controls::{
-                EM_SETLIMITTEXT, ICC_BAR_CLASSES, ICC_TAB_CLASSES, INITCOMMONCONTROLSEX,
-                InitCommonControlsEx, NMHDR, TBM_SETPOS, TBM_SETRANGEMAX, TCIF_TEXT, TCITEMW,
-                TCM_GETCURSEL, TCM_INSERTITEMW, TCN_SELCHANGE, TRACKBAR_CLASSW, WC_TABCONTROLW,
+                DRAWITEMSTRUCT, EM_SETLIMITTEXT, EM_SETMARGINS, ICC_BAR_CLASSES,
+                INITCOMMONCONTROLSEX, InitCommonControlsEx, ODS_COMBOBOXEDIT, ODS_DISABLED,
+                ODS_FOCUS, ODS_SELECTED, ODT_BUTTON, ODT_COMBOBOX, ODT_STATIC, TBM_GETCHANNELRECT,
+                TBM_GETTHUMBRECT, TBM_SETPOS, TBM_SETRANGEMAX, TRACKBAR_CLASSW, WM_MOUSELEAVE,
             },
-            Input::KeyboardAndMouse::{EnableWindow, GetFocus},
+            Input::KeyboardAndMouse::{
+                EnableWindow, GetFocus, IsWindowEnabled, TME_LEAVE, TRACKMOUSEEVENT,
+                TrackMouseEvent,
+            },
+            Shell::{DefSubclassProc, SetWindowSubclass},
             WindowsAndMessaging::*,
         },
     },
@@ -31,7 +42,21 @@ use crate::{
 pub const SETTINGS_ACTION_MESSAGE: u32 = WM_APP + 10;
 const TBM_GETPOS: u32 = WM_USER;
 const CLASS: PCWSTR = w!("Wordy.Rust.Settings");
-const CLIENT_WIDTH: i32 = 1088;
+const CLIENT_WIDTH: i32 = 1120;
+const EDGE_PAD: i32 = 12;
+const RADIUS: i32 = 20;
+const TITLE_HEIGHT: i32 = 44;
+const FOOTER_HEIGHT: i32 = 54;
+const SELECTED_TAB: PCWSTR = w!("Wordy.Settings.Tab");
+const CONTROL_KIND: PCWSTR = w!("Wordy.Settings.Kind");
+const COLOR_KEY: u32 = rgb(255, 0, 255);
+const PRIMARY: u32 = rgb(245, 245, 247);
+const MUTED: u32 = rgb(152, 152, 157);
+const ACCENT: u32 = rgb(10, 132, 255);
+const HOVER_ACCENT: u32 = rgb(64, 156, 255);
+const SEPARATOR: u32 = rgb(56, 56, 58);
+const CONTROL_BG: u32 = rgb(44, 44, 46);
+const CONTROL_BORDER: u32 = rgb(72, 72, 74);
 const EMPTY_VOICE: &str = "无";
 
 pub enum SettingsAction {
@@ -66,21 +91,32 @@ pub enum SettingsAction {
     OpenLogs,
     RequestAudioDevices,
     Closed,
+    Feedback(String),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[repr(u16)]
 enum Field {
-    Tab = 100,
+    TabLocal = 100,
+    TabAudio,
+    TabTts,
+    TabWheels,
+    TabRolling,
+    Minimize,
+    Maximize,
+    TitleClose,
     Resize,
     Close,
     Hotkey,
+    HotkeyValue,
     HoldKey,
+    HoldKeyValue,
     HoldKeyEnabled,
     Volume,
     VolumeValue,
     Placeholder,
     UiFont,
+    FontHint,
     Opacity,
     OpacityValue,
     FixedCenter,
@@ -88,7 +124,9 @@ enum Field {
     MainPlayback,
     Sidetone,
     Output,
+    OutputStatus,
     Mic,
+    VirtualMic,
     Listen,
     CableStatus,
     MicStatus,
@@ -107,11 +145,11 @@ enum Field {
     DeleteVoice,
     Wheels,
     RollingHotkey,
+    RollingHotkeyValue,
     RollingSeconds,
     OpenLogs,
     Import,
     Export,
-    Status,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -124,19 +162,56 @@ enum Page {
     Rolling,
 }
 
-const PAGES: [(Page, &str); 5] = [
-    (Page::Local, "本地设置"),
-    (Page::Audio, "音频设置"),
-    (Page::Tts, "TTS 设置"),
-    (Page::Wheels, "聊天轮盘"),
-    (Page::Rolling, "后台录制"),
+const PAGES: [(Page, Field, &str, &str, &str); 5] = [
+    (
+        Page::Local,
+        Field::TabLocal,
+        "本地设置",
+        "输入与显示",
+        "调整快捷键、提示文字和输入栏外观。",
+    ),
+    (
+        Page::Audio,
+        Field::TabAudio,
+        "音频设置",
+        "声音与路由",
+        "管理主播放、返听与麦克风侦听。",
+    ),
+    (
+        Page::Tts,
+        Field::TabTts,
+        "TTS 设置",
+        "语音生成",
+        "选择服务商，配置密钥与音色。",
+    ),
+    (
+        Page::Wheels,
+        Field::TabWheels,
+        "聊天轮盘",
+        "音频轮盘",
+        "按住快捷键，移向音频，松开播放；回到中心或按 Esc 取消。",
+    ),
+    (
+        Page::Rolling,
+        Field::TabRolling,
+        "后台录制",
+        "后台录制",
+        "持续保留最近的系统声音，停止后用片段填入轮盘槽位。",
+    ),
 ];
 
 type Bounds = [i32; 4];
 
 #[derive(Clone, Copy)]
+#[repr(usize)]
 enum Kind {
     Label,
+    Muted,
+    Heading,
+    Column,
+    Current,
+    Value,
+    DisabledField,
     Button,
     Check,
     Edit,
@@ -144,33 +219,37 @@ enum Kind {
     Number,
     Combo,
     Slider,
-    Tabs,
 }
 
 impl Kind {
     fn window(self) -> (PCWSTR, u32, u32) {
         match self {
-            Self::Label => (w!("STATIC"), 0, 0),
-            Self::Button => (w!("BUTTON"), WS_TABSTOP | BS_PUSHBUTTON as u32, 0),
+            Self::Label
+            | Self::Muted
+            | Self::Heading
+            | Self::Column
+            | Self::Current
+            | Self::Value
+            | Self::DisabledField => (w!("STATIC"), SS_OWNERDRAW, 0),
+            Self::Button => (w!("BUTTON"), WS_TABSTOP | BS_OWNERDRAW as u32, 0),
             Self::Check => (w!("BUTTON"), WS_TABSTOP | BS_AUTOCHECKBOX as u32, 0),
-            Self::Edit => (
-                w!("EDIT"),
-                WS_TABSTOP | ES_AUTOHSCROLL as u32,
-                WS_EX_CLIENTEDGE,
-            ),
+            Self::Edit => (w!("EDIT"), WS_TABSTOP | ES_AUTOHSCROLL as u32, 0),
             Self::Password => (
                 w!("EDIT"),
                 WS_TABSTOP | ES_AUTOHSCROLL as u32 | ES_PASSWORD as u32,
-                WS_EX_CLIENTEDGE,
+                0,
             ),
-            Self::Number => (w!("EDIT"), WS_TABSTOP | ES_NUMBER as u32, WS_EX_CLIENTEDGE),
+            Self::Number => (w!("EDIT"), WS_TABSTOP | ES_NUMBER as u32, 0),
             Self::Combo => (
                 w!("COMBOBOX"),
-                WS_TABSTOP | WS_VSCROLL | CBS_DROPDOWNLIST as u32,
+                WS_TABSTOP
+                    | WS_VSCROLL
+                    | CBS_DROPDOWNLIST as u32
+                    | CBS_OWNERDRAWFIXED as u32
+                    | CBS_HASSTRINGS as u32,
                 0,
             ),
             Self::Slider => (TRACKBAR_CLASSW, WS_TABSTOP, 0),
-            Self::Tabs => (WC_TABCONTROLW, WS_TABSTOP, 0),
         }
     }
 }
@@ -187,10 +266,13 @@ pub struct SettingsWindow {
     hwnd: HWND,
     instance: windows_sys::Win32::Foundation::HINSTANCE,
     widgets: Vec<Widget>,
+    fonts: [HFONT; 4],
+    wheel_panel: HWND,
     settings: Settings,
     outputs: Vec<AudioIdentity>,
     microphones: Vec<String>,
     cartesia_voices: Vec<Voice>,
+    font_families: Vec<String>,
     listen_state: Option<bool>,
     cable_available: bool,
     audio_devices_requested: bool,
@@ -201,7 +283,7 @@ impl SettingsWindow {
     pub(crate) fn new(host: HWND, settings: &Settings) -> io::Result<Self> {
         let classes = INITCOMMONCONTROLSEX {
             dwSize: size_of::<INITCOMMONCONTROLSEX>() as u32,
-            dwICC: ICC_TAB_CLASSES | ICC_BAR_CLASSES,
+            dwICC: ICC_BAR_CLASSES,
         };
         if unsafe { InitCommonControlsEx(&classes) } == 0 {
             return Err(io::Error::last_os_error());
@@ -211,7 +293,6 @@ impl SettingsWindow {
             lpfnWndProc: Some(window_proc),
             hInstance: instance,
             hCursor: unsafe { LoadCursorW(ptr::null_mut(), IDC_ARROW) },
-            hbrBackground: (COLOR_WINDOW as usize + 1) as _,
             lpszClassName: CLASS,
             ..Default::default()
         };
@@ -220,14 +301,22 @@ impl SettingsWindow {
         {
             return Err(io::Error::last_os_error());
         }
+        let font_families = installed_fonts();
+        let current_font = usable_font(&font_families, &settings.ui_font);
+        let top_left = centered_position();
         let hwnd = unsafe {
             CreateWindowExW(
-                WS_EX_CONTROLPARENT,
+                WS_EX_CONTROLPARENT | WS_EX_LAYERED,
                 CLASS,
                 w!("Wordy 设置"),
-                WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
-                CW_USEDEFAULT,
-                CW_USEDEFAULT,
+                WS_POPUP
+                    | WS_THICKFRAME
+                    | WS_SYSMENU
+                    | WS_MAXIMIZEBOX
+                    | WS_MINIMIZEBOX
+                    | WS_CLIPCHILDREN,
+                top_left.x,
+                top_left.y,
                 1120,
                 820,
                 host,
@@ -239,14 +328,22 @@ impl SettingsWindow {
         if hwnd.is_null() {
             return Err(io::Error::last_os_error());
         }
+        unsafe {
+            SetLayeredWindowAttributes(hwnd, COLOR_KEY, 247, LWA_COLORKEY | LWA_ALPHA);
+            set_dwm(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND);
+            SetPropW(hwnd, SELECTED_TAB, Field::TabLocal as usize as _);
+        }
         let mut window = Self {
             hwnd,
             instance,
             widgets: Vec::new(),
+            fonts: create_fonts(current_font),
+            wheel_panel: ptr::null_mut(),
             settings: settings.clone(),
             outputs: Vec::new(),
             microphones: Vec::new(),
             cartesia_voices: Vec::new(),
+            font_families,
             listen_state: None,
             cable_available: false,
             audio_devices_requested: false,
@@ -264,6 +361,11 @@ impl SettingsWindow {
 
     pub fn show(&self) {
         unsafe {
+            // DWM must see the finished surface before presenting a layered HWND.
+            let first_frame = IsWindowVisible(self.hwnd) == 0;
+            if first_frame {
+                set_dwm(self.hwnd, DWMWA_CLOAK, 1);
+            }
             ShowWindow(
                 self.hwnd,
                 if IsIconic(self.hwnd) != 0 {
@@ -272,8 +374,46 @@ impl SettingsWindow {
                     SW_SHOW
                 },
             );
+            if first_frame {
+                RedrawWindow(
+                    self.hwnd,
+                    ptr::null(),
+                    ptr::null_mut(),
+                    RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_UPDATENOW,
+                );
+                set_dwm(self.hwnd, DWMWA_CLOAK, 0);
+            }
             SetForegroundWindow(self.hwnd);
+            if first_frame && self.page == Page::Audio {
+                let host = GetWindowLongPtrW(self.hwnd, GWLP_USERDATA) as HWND;
+                if !host.is_null() {
+                    PostMessageW(host, SETTINGS_ACTION_MESSAGE, Field::TabAudio as WPARAM, 0);
+                }
+            }
         }
+    }
+
+    pub fn set_wheel_panel(&mut self, hwnd: HWND) {
+        self.wheel_panel = hwnd;
+        self.layout();
+        self.show_page();
+    }
+
+    pub fn toast_anchor(&self) -> Option<RECT> {
+        let mut client = RECT::default();
+        let mut origin = POINT::default();
+        if unsafe { IsWindowVisible(self.hwnd) } == 0
+            || unsafe { GetClientRect(self.hwnd, &mut client) } == 0
+            || unsafe { ClientToScreen(self.hwnd, &mut origin) } == 0
+        {
+            return None;
+        }
+        Some(RECT {
+            left: origin.x + EDGE_PAD,
+            top: origin.y + EDGE_PAD,
+            right: origin.x + client.right - EDGE_PAD,
+            bottom: origin.y + client.bottom - EDGE_PAD - FOOTER_HEIGHT,
+        })
     }
 
     pub fn handle_message(&self, message: &MSG) -> bool {
@@ -281,18 +421,30 @@ impl SettingsWindow {
     }
 
     pub fn refresh(&mut self, settings: &Settings) {
+        if self.settings.ui_font != settings.ui_font {
+            let family = usable_font(&self.font_families, &settings.ui_font);
+            let old = std::mem::replace(&mut self.fonts, create_fonts(family));
+            for widget in &self.widgets {
+                apply_font(widget.hwnd, widget.kind, &self.fonts);
+            }
+            free_fonts(old);
+        }
         if settings.active_tts_provider != self.settings.active_tts_provider {
             set_text(self.control(Field::Key), "");
         }
         self.settings = settings.clone();
-        for (field, binding) in [
-            (Field::Hotkey, &settings.hotkey),
-            (Field::HoldKey, &settings.hold_key),
-            (Field::RollingHotkey, &settings.rolling_buffer_hotkey),
+        for (field, prefix, binding) in [
+            (Field::HotkeyValue, "当前：", &settings.hotkey),
+            (Field::HoldKeyValue, "当前：", &settings.hold_key),
+            (
+                Field::RollingHotkeyValue,
+                "快捷键：",
+                &settings.rolling_buffer_hotkey,
+            ),
         ] {
             set_text(
                 self.control(field),
-                &format!("录制 · {}", crate::hotkey::display_hotkey(binding)),
+                &format!("{prefix}{}", crate::hotkey::display_hotkey(binding)),
             );
         }
         self.set_edit(
@@ -300,7 +452,21 @@ impl SettingsWindow {
             &format!("{}", settings.rolling_buffer_seconds.round()),
         );
         self.set_edit(Field::Placeholder, &settings.overlay_placeholder);
-        self.set_edit(Field::UiFont, &settings.ui_font);
+        let family = usable_font(&self.font_families, &settings.ui_font);
+        let index = self
+            .font_families
+            .iter()
+            .position(|font| font == family)
+            .unwrap_or(0);
+        fill_choices(self.control(Field::UiFont), &self.font_families, index);
+        let font_hint = if settings.ui_font.is_empty() {
+            "使用内置字体栈。".into()
+        } else if family != settings.ui_font {
+            format!("未安装「{}」，已回退到内置字体。", settings.ui_font)
+        } else {
+            format!("界面使用「{family}」，找不到时回退到内置字体。")
+        };
+        set_text(self.control(Field::FontHint), &font_hint);
         self.check(Field::HoldKeyEnabled, settings.hold_key_enabled);
         self.check(Field::FixedCenter, settings.fixed_center);
         self.check(Field::MainPlayback, settings.main_playback_enabled);
@@ -355,19 +521,36 @@ impl SettingsWindow {
         self.show_page();
     }
 
-    pub fn set_status(&self, status: &str) {
-        set_text(self.control(Field::Status), status);
-    }
-
     pub fn action(&mut self, action_id: u16) -> Option<SettingsAction> {
         use SettingsAction::*;
         if action_id == Field::Resize as u16 {
             self.layout();
             return None;
         }
-        if action_id == Field::Close as u16 {
+        if action_id == Field::Close as u16 || action_id == Field::TitleClose as u16 {
+            unsafe { ShowWindow(self.hwnd, SW_HIDE) };
             set_text(self.control(Field::Key), "");
+            self.audio_devices_requested = false;
             return Some(Closed);
+        }
+        if let Some(&(page, field, ..)) = PAGES
+            .iter()
+            .find(|(_, field, ..)| *field as u16 == action_id)
+        {
+            self.page = page;
+            unsafe { SetPropW(self.hwnd, SELECTED_TAB, field as usize as _) };
+            self.show_page();
+            for (_, field, ..) in PAGES {
+                unsafe { InvalidateRect(self.control(field), ptr::null(), 0) };
+            }
+            if page == Page::Audio && !self.audio_devices_requested {
+                self.audio_devices_requested = true;
+                return Some(RequestAudioDevices);
+            }
+            if page == Page::Wheels && self.wheel_panel.is_null() {
+                return Some(EditWheels);
+            }
+            return None;
         }
         let field = self
             .widgets
@@ -377,14 +560,12 @@ impl SettingsWindow {
         let control = self.control(field);
         let active = self.settings.active_tts_provider;
         match field {
-            Field::Tab => {
-                let current = send(control, TCM_GETCURSEL, 0, 0) as usize;
-                self.page = PAGES.get(current).map_or(Page::Local, |(page, _)| *page);
-                self.show_page();
-                if self.page == Page::Audio && !self.audio_devices_requested {
-                    self.audio_devices_requested = true;
-                    return Some(RequestAudioDevices);
-                }
+            Field::Minimize => {
+                unsafe { ShowWindow(self.hwnd, SW_MINIMIZE) };
+                None
+            }
+            Field::Maximize => {
+                toggle_zoom(self.hwnd);
                 None
             }
             Field::Hotkey => Some(RecordHotkey),
@@ -427,7 +608,10 @@ impl SettingsWindow {
             Field::Placeholder => {
                 changed(text(control), &self.settings.overlay_placeholder).map(SetPlaceholder)
             }
-            Field::UiFont => changed(text(control), &self.settings.ui_font).map(SetUiFont),
+            Field::UiFont => choice(control)
+                .and_then(|index| self.font_families.get(index))
+                .cloned()
+                .map(SetUiFont),
             Field::LogLevel => choice(control)
                 .and_then(|index| LOG_LEVELS.get(index))
                 .map(|&level| SetLogLevel(level.into())),
@@ -464,8 +648,7 @@ impl SettingsWindow {
                     raw.trim()
                 };
                 if key.is_empty() {
-                    self.set_status("请输入 API Key。");
-                    return None;
+                    return Some(Feedback("请输入 API Key。".into()));
                 }
                 set_text(field, "");
                 Some(SaveKey(active, key.to_owned()))
@@ -480,8 +663,7 @@ impl SettingsWindow {
             Field::SaveVoice => {
                 let id = text(self.control(Field::VoiceId)).trim().to_owned();
                 if id.is_empty() {
-                    self.set_status("请输入 Speaker ID。");
-                    return None;
+                    return Some(Feedback("请输入 Speaker ID。".into()));
                 }
                 let name = text(self.control(Field::VoiceName)).trim().to_owned();
                 set_text(self.control(Field::VoiceId), "");
@@ -508,175 +690,278 @@ impl SettingsWindow {
         use Field::*;
         use Kind::*;
         use Page::{Audio, Local, Rolling, Tts};
-        self.add(Some(Tab), None, Tabs, "", [14, 12, 1060, -72])?;
-        let tabs = self.control(Tab);
-        for (index, (_, caption)) in PAGES.iter().enumerate() {
-            let mut caption = wide(caption);
-            let item = TCITEMW {
-                mask: TCIF_TEXT,
-                pszText: caption.as_mut_ptr(),
-                ..Default::default()
-            };
-            send(tabs, TCM_INSERTITEMW, index, ptr::from_ref(&item) as LPARAM);
+
+        self.add(None, None, Column, "设置", [48, 19, 300, 25])?;
+        for (field, caption, x) in [
+            (Minimize, "最小化", 1000),
+            (Maximize, "最大化", 1034),
+            (TitleClose, "关闭", 1068),
+        ] {
+            self.add(Some(field), None, Button, caption, [x, 20, 28, 28])?;
+        }
+        let tab_geometry = [(48, 86), (138, 86), (228, 112), (344, 86), (434, 86)];
+        for ((page, field, caption, heading, description), (x, width)) in
+            PAGES.into_iter().zip(tab_geometry)
+        {
+            self.add(Some(field), None, Button, caption, [x, 56, width, 30])?;
+            self.add(None, Some(page), Heading, heading, [48, 99, 972, 43])?;
+            self.add(None, Some(page), Muted, description, [48, 137, 972, 24])?;
         }
 
-        // Every native control remains on the same top-level owner so focus
-        // and keyboard navigation work across both columns of the active page.
         for (page, field, kind, caption, bounds) in [
-            (Local, None, Label, "快捷键与播放", [36, 73, 470, 24]),
-            (Local, None, Label, "输入框快捷键", [36, 113, 150, 24]),
-            (Local, Some(Hotkey), Button, "", [202, 110, 280, 28]),
+            (Local, None, Column, "快捷键与播放", [48, 171, 440, 38]),
+            (Local, None, Label, "全局快捷键", [48, 222, 300, 22]),
+            (Local, Some(HotkeyValue), Current, "", [48, 249, 335, 32]),
+            (
+                Local,
+                Some(Hotkey),
+                Button,
+                "录制快捷键",
+                [397, 250, 91, 32],
+            ),
+            (
+                Local,
+                None,
+                Muted,
+                "点击录制后按下新的快捷键组合",
+                [48, 282, 440, 24],
+            ),
             (
                 Local,
                 Some(HoldKeyEnabled),
                 Check,
                 "播放时自动按住某键",
-                [36, 156, 195, 26],
+                [48, 310, 154, 32],
             ),
-            (Local, Some(HoldKey), Button, "", [238, 154, 244, 28]),
-            (Local, None, Label, "朗读音量", [36, 207, 160, 24]),
-            (Local, Some(VolumeValue), Label, "", [410, 207, 80, 24]),
-            (Local, Some(Volume), Slider, "", [36, 235, 446, 32]),
-            (Local, None, Label, "界面与显示", [558, 73, 467, 24]),
-            (Local, None, Label, "界面字体", [558, 113, 130, 24]),
-            (Local, Some(UiFont), Edit, "", [710, 110, 312, 28]),
-            (Local, None, Label, "输入框提示文字", [558, 156, 150, 24]),
-            (Local, Some(Placeholder), Edit, "", [710, 153, 312, 28]),
+            (Local, Some(HoldKeyValue), Current, "", [201, 310, 194, 32]),
+            (Local, Some(HoldKey), Button, "录制按键", [410, 310, 78, 32]),
+            (
+                Local,
+                None,
+                Muted,
+                "开启后，播放语音前自动按下该键，结束后松开。",
+                [48, 342, 440, 24],
+            ),
+            (Local, None, Label, "朗读音量", [48, 391, 160, 24]),
+            (Local, Some(VolumeValue), Value, "", [395, 396, 93, 17]),
+            (Local, Some(Volume), Slider, "", [40, 414, 456, 28]),
+            (
+                Local,
+                None,
+                Muted,
+                "范围 0.50x - 2.00x，默认 1.00x",
+                [48, 438, 440, 24],
+            ),
+            (Local, None, Column, "界面与显示", [578, 171, 440, 38]),
+            (Local, None, Label, "界面字体", [578, 222, 440, 22]),
+            (Local, Some(UiFont), Combo, "", [578, 250, 440, 242]),
+            (Local, Some(FontHint), Muted, "", [578, 282, 440, 24]),
+            (Local, None, Label, "输入框提示文字", [578, 314, 440, 24]),
+            (Local, Some(Placeholder), Edit, "", [578, 343, 440, 32]),
             (
                 Local,
                 None,
                 Label,
                 "输入框背景不透明度",
-                [558, 207, 180, 24],
+                [578, 391, 240, 24],
             ),
-            (Local, Some(OpacityValue), Label, "", [960, 207, 60, 24]),
-            (Local, Some(Opacity), Slider, "", [558, 235, 464, 32]),
+            (Local, Some(OpacityValue), Value, "", [937, 396, 81, 17]),
+            (Local, Some(Opacity), Slider, "", [570, 414, 456, 28]),
+            (
+                Local,
+                None,
+                Muted,
+                "30% 更透明，100% 完全不透明；文字保持清晰。",
+                [578, 438, 440, 24],
+            ),
+            (Local, None, Label, "输入栏位置", [578, 469, 440, 22]),
             (
                 Local,
                 Some(FixedCenter),
                 Check,
-                "输入框固定居中",
-                [558, 283, 250, 29],
+                "固定出现在屏幕中心",
+                [578, 491, 440, 25],
             ),
-            (Local, None, Label, "日志等级", [558, 329, 150, 24]),
-            (Local, Some(LogLevel), Combo, "", [710, 326, 312, 175]),
-            (Audio, None, Label, "播放与返听", [36, 73, 470, 24]),
+            (
+                Local,
+                None,
+                Muted,
+                "取消勾选后，可拖动输入窗口；松开鼠标后自动记住位置。",
+                [578, 515, 440, 24],
+            ),
+            (Local, None, Label, "日志等级", [578, 549, 440, 22]),
+            (Local, Some(LogLevel), Combo, "", [578, 575, 440, 180]),
+            (
+                Local,
+                None,
+                Muted,
+                "设置日志记录的详细程度。",
+                [578, 607, 440, 24],
+            ),
+            (Audio, None, Column, "播放与返听", [48, 171, 440, 38]),
+            (Audio, None, Label, "主播放输出", [48, 222, 440, 22]),
             (
                 Audio,
                 Some(MainPlayback),
                 Check,
                 "启用主播放输出",
-                [36, 111, 300, 28],
+                [48, 246, 440, 24],
             ),
-            (Audio, Some(CableStatus), Label, "", [36, 152, 446, 24]),
+            (Audio, Some(CableStatus), Muted, "", [48, 272, 440, 28]),
             (
                 Audio,
                 Some(Download),
                 Button,
-                "下载 VB-CABLE",
-                [36, 182, 160, 30],
+                "下载并安装 VB-CABLE",
+                [48, 304, 169, 30],
             ),
-            (Audio, Some(Sidetone), Check, "启用返听", [36, 232, 300, 30]),
-            (Audio, None, Label, "返听播放设备", [36, 277, 150, 24]),
-            (Audio, Some(Output), Combo, "", [36, 309, 446, 230]),
-            (Audio, None, Label, "麦克风与侦听", [558, 73, 465, 24]),
+            (Audio, None, Label, "返听", [48, 340, 440, 20]),
+            (Audio, Some(Sidetone), Check, "启用返听", [48, 362, 440, 24]),
+            (Audio, None, Label, "返听播放设备", [48, 388, 440, 20]),
+            (Audio, Some(Output), Combo, "", [48, 412, 440, 230]),
+            (Audio, Some(OutputStatus), Muted, "", [48, 445, 440, 24]),
+            (Audio, None, Column, "麦克风与侦听", [578, 171, 440, 38]),
+            (Audio, None, Label, "音频侦听", [578, 222, 440, 22]),
+            (
+                Audio,
+                None,
+                Muted,
+                "通过 Windows 将所选麦克风送至 CABLE Input。",
+                [578, 244, 440, 22],
+            ),
+            (Audio, None, Label, "麦克风输入", [578, 278, 440, 22]),
+            (
+                Audio,
+                Some(VirtualMic),
+                DisabledField,
+                "",
+                [578, 305, 440, 32],
+            ),
             (
                 Audio,
                 Some(Listen),
                 Check,
                 "启用音频侦听",
-                [558, 111, 350, 30],
+                [578, 341, 440, 25],
             ),
-            (Audio, None, Label, "侦听麦克风", [558, 152, 465, 24]),
-            (Audio, Some(Mic), Combo, "", [558, 185, 466, 230]),
-            (Audio, Some(MicStatus), Label, "", [558, 231, 466, 48]),
-            (Tts, None, Label, "生成方式", [36, 73, 365, 24]),
-            (Tts, None, Label, "TTS 服务商", [36, 113, 150, 24]),
-            (Tts, Some(Provider), Combo, "", [36, 146, 400, 160]),
-            (Tts, None, Label, "生成模式", [36, 195, 150, 24]),
-            (Tts, Some(Backend), Combo, "", [36, 226, 400, 160]),
-            (Tts, None, Label, "音色与密钥", [497, 73, 523, 24]),
-            (Tts, None, Label, "API Key", [497, 113, 120, 24]),
-            (Tts, Some(Key), Password, "", [618, 110, 404, 29]),
-            (Tts, Some(KeyStatus), Label, "", [497, 157, 244, 24]),
-            (Tts, Some(SaveKey), Button, "保存密钥", [767, 151, 120, 31]),
+            (Audio, None, Label, "侦听麦克风", [578, 366, 440, 22]),
+            (Audio, Some(Mic), Combo, "", [578, 392, 440, 230]),
+            (Audio, Some(MicStatus), Muted, "", [578, 424, 440, 24]),
+            (Tts, None, Column, "生成方式", [48, 171, 395, 38]),
+            (Tts, None, Label, "TTS 服务商", [48, 222, 395, 22]),
+            (Tts, Some(Provider), Combo, "", [48, 250, 395, 160]),
             (
                 Tts,
-                Some(DeleteKey),
-                Button,
-                "删除密钥",
-                [902, 151, 120, 31],
+                None,
+                Muted,
+                "选择 TTS 服务商，下方设置区同步切换。",
+                [48, 281, 395, 24],
             ),
-            (Tts, None, Label, "音色", [497, 209, 120, 24]),
-            (Tts, Some(Voices), Combo, "", [497, 243, 525, 230]),
+            (Tts, None, Label, "生成模式", [48, 316, 395, 22]),
+            (Tts, Some(Backend), Combo, "", [48, 343, 395, 160]),
+            (
+                Tts,
+                None,
+                Muted,
+                "Bytes：完整生成后播放。Streaming：边生成边播放。",
+                [48, 375, 395, 24],
+            ),
+            (Tts, None, Column, "音色与密钥", [479, 171, 440, 38]),
+            (Tts, None, Label, "API Key", [495, 222, 577, 22]),
+            (Tts, Some(KeyStatus), Muted, "", [495, 244, 576, 22]),
+            (Tts, Some(Key), Password, "", [495, 271, 385, 32]),
+            (Tts, Some(SaveKey), Button, "保存", [888, 271, 88, 32]),
+            (Tts, Some(DeleteKey), Button, "删除", [984, 271, 88, 32]),
+            (
+                Tts,
+                None,
+                Muted,
+                "密钥保存在 Windows 凭据管理器中。",
+                [495, 304, 577, 24],
+            ),
+            (Tts, None, Label, "音色选择", [495, 330, 577, 22]),
+            (
+                Tts,
+                None,
+                Muted,
+                "选择当前用于朗读的音色。",
+                [495, 352, 577, 22],
+            ),
+            (Tts, Some(Voices), Combo, "", [495, 376, 481, 230]),
             (
                 Tts,
                 Some(RefreshVoices),
                 Button,
                 "刷新音色",
-                [497, 281, 140, 30],
-            ),
-            (Tts, None, Label, "Speaker ID", [497, 325, 120, 24]),
-            (Tts, Some(VoiceId), Edit, "", [618, 322, 404, 28]),
-            (Tts, None, Label, "名称", [497, 367, 120, 24]),
-            (Tts, Some(VoiceName), Edit, "", [618, 364, 404, 28]),
-            (
-                Tts,
-                Some(SaveVoice),
-                Button,
-                "添加音色",
-                [767, 410, 120, 31],
+                [984, 376, 88, 32],
             ),
             (
                 Tts,
                 Some(DeleteVoice),
                 Button,
                 "删除音色",
-                [902, 410, 120, 31],
+                [984, 376, 88, 32],
             ),
+            (Tts, None, Label, "添加音色", [495, 437, 577, 22]),
+            (Tts, None, Muted, "Speaker ID", [495, 463, 124, 32]),
+            (Tts, Some(VoiceId), Edit, "", [624, 465, 448, 32]),
+            (Tts, None, Muted, "名称", [495, 504, 76, 32]),
+            (Tts, Some(VoiceName), Edit, "", [576, 505, 496, 32]),
+            (Tts, Some(SaveVoice), Button, "添加音色", [981, 545, 91, 32]),
             (
                 Page::Wheels,
                 Some(Wheels),
                 Button,
                 "编辑聊天轮盘",
-                [36, 73, 200, 36],
+                [48, 181, 200, 32],
             ),
-            (Rolling, None, Label, "后台录制快捷键", [36, 73, 180, 24]),
-            (Rolling, Some(RollingHotkey), Button, "", [237, 70, 245, 28]),
-            (Rolling, None, Label, "保留时长（秒）", [36, 121, 180, 24]),
+            (Rolling, None, Label, "录制设置", [48, 174, 440, 22]),
+            (
+                Rolling,
+                Some(RollingHotkeyValue),
+                Current,
+                "",
+                [48, 201, 333, 32],
+            ),
+            (
+                Rolling,
+                Some(RollingHotkey),
+                Button,
+                "录制快捷键",
+                [397, 201, 91, 32],
+            ),
+            (
+                Rolling,
+                None,
+                Muted,
+                "点击录制后按下新的快捷键组合",
+                [48, 234, 440, 24],
+            ),
+            (Rolling, None, Label, "保留时长", [48, 261, 60, 34]),
             (
                 Rolling,
                 Some(RollingSeconds),
                 Number,
                 "",
-                [237, 118, 120, 28],
+                [108, 261, 140, 34],
             ),
+            (Rolling, None, Muted, "秒", [252, 261, 35, 34]),
         ] {
             self.add(field, Some(page), kind, caption, bounds)?;
         }
         for (field, kind, caption, bounds) in [
-            (Status, Label, "", [20, -46, 558, 28]),
-            (OpenLogs, Button, "查看日志", [620, -49, 127, 34]),
-            (Export, Button, "导出备份", [766, -49, 144, 34]),
-            (Import, Button, "导入备份", [929, -49, 144, 34]),
+            (None, Muted, "设置自动保存", [48, -66, 105, 40]),
+            (Some(OpenLogs), Button, "查看日志", [157, -56, 92, 32]),
+            (Some(Export), Button, "导出备份", [812, -56, 78, 32]),
+            (Some(Import), Button, "导入备份", [898, -56, 78, 32]),
+            (Some(Close), Button, "关闭", [983, -56, 88, 32]),
         ] {
-            self.add(Some(field), None, kind, caption, bounds)?;
+            self.add(field, None, kind, caption, bounds)?;
         }
         send(self.control(Volume), TBM_SETRANGEMAX, 1, 30);
         send(self.control(Opacity), TBM_SETRANGEMAX, 1, 14);
         send(self.control(RollingSeconds), EM_SETLIMITTEXT, 3, 0);
         send(self.control(Key), EM_SETLIMITTEXT, 1280, 0);
-        unsafe {
-            SetWindowPos(
-                tabs,
-                HWND_BOTTOM,
-                0,
-                0,
-                0,
-                0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-            );
-        }
         self.show_page();
         Ok(())
     }
@@ -711,12 +996,23 @@ impl SettingsWindow {
         if hwnd.is_null() {
             return Err(io::Error::last_os_error());
         }
-        send(
-            hwnd,
-            WM_SETFONT,
-            unsafe { GetStockObject(DEFAULT_GUI_FONT) } as WPARAM,
-            0,
-        );
+        apply_font(hwnd, kind, &self.fonts);
+        unsafe {
+            SetPropW(hwnd, CONTROL_KIND, (kind as usize + 1) as _);
+            SetWindowSubclass(hwnd, Some(style_control), 1, kind as usize);
+        }
+        if matches!(kind, Kind::Edit | Kind::Password | Kind::Number) {
+            send(
+                hwnd,
+                EM_SETMARGINS,
+                (EC_LEFTMARGIN | EC_RIGHTMARGIN) as usize,
+                10 | (10 << 16),
+            );
+        }
+        if matches!(kind, Kind::Combo) {
+            send(hwnd, CB_SETITEMHEIGHT, usize::MAX, 28);
+            send(hwnd, CB_SETITEMHEIGHT, 0, 28);
+        }
         self.widgets.push(Widget {
             hwnd,
             field,
@@ -747,6 +1043,22 @@ impl SettingsWindow {
                 );
             }
         }
+        if !self.wheel_panel.is_null() {
+            let x = 48 * width / CLIENT_WIDTH;
+            let top = 187;
+            unsafe {
+                SetWindowPos(
+                    self.wheel_panel,
+                    ptr::null_mut(),
+                    x,
+                    top,
+                    width - 2 * x,
+                    (client.bottom - top - EDGE_PAD - FOOTER_HEIGHT - 8).max(1),
+                    SWP_NOZORDER | SWP_NOACTIVATE,
+                );
+            }
+        }
+        unsafe { InvalidateRect(self.hwnd, ptr::null(), 1) };
     }
 
     fn show_page(&self) {
@@ -754,16 +1066,14 @@ impl SettingsWindow {
         for widget in &self.widgets {
             let correct_page = widget.page.is_none_or(|page| page == self.page);
             let visible = match widget.field {
+                Some(Field::Wheels) => self.wheel_panel.is_null(),
                 Some(Field::Download) => !self.cable_available,
                 Some(Field::RefreshVoices) => provider == Provider::Cartesia,
                 Some(Field::VoiceId | Field::VoiceName | Field::SaveVoice | Field::DeleteVoice) => {
                     provider == Provider::Volcengine
                 }
                 // Speaker ID and its name labels sit beside Volcengine's two edits.
-                None if widget.page == Some(Page::Tts)
-                    && matches!(widget.kind, Kind::Label)
-                    && widget.bounds[1] >= 325 =>
-                {
+                None if widget.page == Some(Page::Tts) && widget.bounds[1] >= 437 => {
                     provider == Provider::Volcengine
                 }
                 _ => true,
@@ -777,6 +1087,29 @@ impl SettingsWindow {
                         SW_HIDE
                     },
                 )
+            };
+        }
+        if !self.wheel_panel.is_null() {
+            unsafe {
+                if self.page == Page::Wheels {
+                    SetWindowPos(
+                        self.wheel_panel,
+                        HWND_TOP,
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                    );
+                    RedrawWindow(
+                        self.wheel_panel,
+                        ptr::null(),
+                        ptr::null_mut(),
+                        RDW_INVALIDATE | RDW_ALLCHILDREN,
+                    );
+                } else {
+                    ShowWindow(self.wheel_panel, SW_HIDE);
+                }
             };
         }
     }
@@ -832,6 +1165,10 @@ impl SettingsWindow {
             outputs,
             selected.map_or(0, |index| index + 1),
         );
+        set_text(
+            self.control(Field::OutputStatus),
+            &format!("已找到 {} 个输出设备。", self.outputs.len()),
+        );
         let selected = self
             .microphones
             .iter()
@@ -849,7 +1186,15 @@ impl SettingsWindow {
         set_text(
             self.control(Field::CableStatus),
             if self.cable_available {
-                "主输出：CABLE Input"
+                "输出至 CABLE Input。语音软件的输入设备选 CABLE Output。"
+            } else {
+                "未检测到 VB-CABLE。安装后即可输出至 CABLE Input。"
+            },
+        );
+        set_text(
+            self.control(Field::VirtualMic),
+            if self.cable_available {
+                "CABLE Input"
             } else {
                 "未检测到 VB-CABLE"
             },
@@ -935,6 +1280,7 @@ impl SettingsWindow {
 impl Drop for SettingsWindow {
     fn drop(&mut self) {
         unsafe { DestroyWindow(self.hwnd) };
+        free_fonts(self.fonts);
     }
 }
 
@@ -957,6 +1303,25 @@ unsafe extern "system" fn window_proc(
         }
     };
     match message {
+        WM_NCCALCSIZE | WM_NCPAINT | WM_ERASEBKGND => return 0,
+        WM_NCACTIVATE => return 1,
+        WM_NCHITTEST => {
+            let x = lparam as i16 as i32;
+            let y = (lparam >> 16) as i16 as i32;
+            let mut point = POINT { x, y };
+            let mut client = RECT::default();
+            unsafe {
+                ScreenToClient(hwnd, &mut point);
+                GetClientRect(hwnd, &mut client);
+            }
+            return shell_hit(point.x, point.y, client.right, client.bottom, unsafe {
+                IsZoomed(hwnd) != 0
+            });
+        }
+        WM_NCLBUTTONDBLCLK if wparam == HTCAPTION as usize => {
+            toggle_zoom(hwnd);
+            return 0;
+        }
         WM_CLOSE => {
             unsafe { ShowWindow(hwnd, SW_HIDE) };
             post(Field::Close as u16);
@@ -965,15 +1330,47 @@ unsafe extern "system" fn window_proc(
         WM_SIZE => post(Field::Resize as u16),
         WM_GETMINMAXINFO => {
             let limits = unsafe { &mut *(lparam as *mut MINMAXINFO) };
-            limits.ptMinTrackSize.x = 960;
-            limits.ptMinTrackSize.y = 560;
-        }
-        WM_NOTIFY if lparam != 0 => {
-            let notification = unsafe { &*(lparam as *const NMHDR) };
-            if notification.idFrom == Field::Tab as usize && notification.code == TCN_SELCHANGE {
-                post(Field::Tab as u16);
-                return 0;
+            let monitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) };
+            let mut info = MONITORINFO {
+                cbSize: size_of::<MONITORINFO>() as u32,
+                ..Default::default()
+            };
+            if unsafe { GetMonitorInfoW(monitor, &mut info) } != 0 {
+                limits.ptMaxPosition.x = info.rcWork.left - info.rcMonitor.left;
+                limits.ptMaxPosition.y = info.rcWork.top - info.rcMonitor.top;
+                limits.ptMaxSize.x = info.rcWork.right - info.rcWork.left;
+                limits.ptMaxSize.y = info.rcWork.bottom - info.rcWork.top;
             }
+            limits.ptMinTrackSize.x = 960;
+            limits.ptMinTrackSize.y = 636;
+        }
+        WM_PAINT => {
+            paint_shell(hwnd);
+            return 0;
+        }
+        WM_CTLCOLORSTATIC | WM_CTLCOLOREDIT | WM_CTLCOLORLISTBOX if wparam != 0 => {
+            let dc = wparam as HDC;
+            let kind = unsafe { GetPropW(lparam as HWND, CONTROL_KIND) } as usize;
+            let color = if kind == Kind::Muted as usize + 1 {
+                MUTED
+            } else {
+                PRIMARY
+            };
+            unsafe {
+                SetTextColor(dc, color);
+                if message == WM_CTLCOLORSTATIC {
+                    SetBkMode(dc, TRANSPARENT as i32);
+                    return GetStockObject(NULL_BRUSH) as LRESULT;
+                }
+                SetBkColor(dc, CONTROL_BG);
+                SetDCBrushColor(dc, CONTROL_BG);
+                return GetStockObject(DC_BRUSH) as LRESULT;
+            }
+        }
+        WM_DRAWITEM if lparam != 0 => {
+            let item = unsafe { &*(lparam as *const DRAWITEMSTRUCT) };
+            paint_item(hwnd, item);
+            return 1;
         }
         WM_COMMAND if lparam != 0 => {
             let notification = ((wparam >> 16) & 0xffff) as u32;
@@ -992,6 +1389,829 @@ unsafe extern "system" fn window_proc(
         _ => {}
     }
     unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+}
+
+fn shell_hit(x: i32, y: i32, width: i32, height: i32, maximized: bool) -> LRESULT {
+    let pad = if maximized { 0 } else { EDGE_PAD };
+    if !maximized {
+        // The first opaque pixels inside the transparent margin also resize.
+        let hot_zone = EDGE_PAD + 4;
+        let column = if x < hot_zone {
+            -1
+        } else if x >= width - hot_zone {
+            1
+        } else {
+            0
+        };
+        let row = if y < hot_zone {
+            -1
+        } else if y >= height - hot_zone {
+            1
+        } else {
+            0
+        };
+        let hit = match (column, row) {
+            (-1, -1) => HTTOPLEFT,
+            (1, -1) => HTTOPRIGHT,
+            (-1, 1) => HTBOTTOMLEFT,
+            (1, 1) => HTBOTTOMRIGHT,
+            (-1, _) => HTLEFT,
+            (1, _) => HTRIGHT,
+            (_, -1) => HTTOP,
+            (_, 1) => HTBOTTOM,
+            _ => HTCLIENT,
+        };
+        if hit != HTCLIENT {
+            return hit as LRESULT;
+        }
+    }
+    if y >= pad && y < pad + TITLE_HEIGHT {
+        HTCAPTION as LRESULT
+    } else {
+        HTCLIENT as LRESULT
+    }
+}
+
+fn toggle_zoom(hwnd: HWND) {
+    unsafe {
+        ShowWindow(
+            hwnd,
+            if IsZoomed(hwnd) != 0 {
+                SW_RESTORE
+            } else {
+                SW_MAXIMIZE
+            },
+        )
+    };
+}
+
+fn centered_position() -> POINT {
+    let mut cursor = POINT::default();
+    unsafe { GetCursorPos(&mut cursor) };
+    let monitor = unsafe { MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST) };
+    let mut info = MONITORINFO {
+        cbSize: size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    if unsafe { GetMonitorInfoW(monitor, &mut info) } != 0 {
+        let work = info.rcWork;
+        POINT {
+            x: work.left + ((work.right - work.left - 1120) / 2).max(0),
+            y: work.top + ((work.bottom - work.top - 820) / 2).max(0),
+        }
+    } else {
+        POINT::default()
+    }
+}
+
+unsafe fn set_dwm(hwnd: HWND, attribute: i32, value: i32) {
+    unsafe {
+        DwmSetWindowAttribute(
+            hwnd,
+            attribute as u32,
+            ptr::from_ref(&value).cast(),
+            size_of::<i32>() as u32,
+        )
+    };
+}
+
+const fn rgb(red: u8, green: u8, blue: u8) -> u32 {
+    red as u32 | ((green as u32) << 8) | ((blue as u32) << 16)
+}
+
+fn paint_shell(hwnd: HWND) {
+    let mut paint = PAINTSTRUCT::default();
+    let dc = unsafe { BeginPaint(hwnd, &mut paint) };
+    let mut window = RECT::default();
+    unsafe { GetClientRect(hwnd, &mut window) };
+    fill(dc, &window, COLOR_KEY);
+    let maximized = unsafe { IsZoomed(hwnd) != 0 };
+    let pad = if maximized { 0 } else { EDGE_PAD };
+    let radius = if maximized { 0 } else { RADIUS };
+    let body = RECT {
+        left: pad,
+        top: pad,
+        right: window.right - pad,
+        bottom: window.bottom - pad,
+    };
+    if body.right > body.left && body.bottom > body.top {
+        let clip = unsafe {
+            CreateRoundRectRgn(
+                body.left,
+                body.top,
+                body.right + 1,
+                body.bottom + 1,
+                radius * 2,
+                radius * 2,
+            )
+        };
+        let saved = unsafe { SaveDC(dc) };
+        unsafe {
+            ExtSelectClipRgn(dc, clip, RGN_AND);
+            DeleteObject(clip);
+        }
+        paint_glass(dc, body);
+        unsafe { RestoreDC(dc, saved) };
+        // The upper edge catches more light than the sides and bottom of the glass.
+        for band in 0..16 {
+            let top = body.top + (body.bottom - body.top) * band / 16;
+            let bottom = body.top + (body.bottom - body.top) * (band + 1) / 16;
+            let level = if band == 0 {
+                249
+            } else {
+                (204 - band * 10).max(91) as u8
+            };
+            let saved = unsafe { SaveDC(dc) };
+            unsafe { IntersectClipRect(dc, body.left, top, body.right + 1, bottom + 1) };
+            outline(dc, &body, radius, rgb(level, level, level));
+            unsafe { RestoreDC(dc, saved) };
+        }
+        let inset = RECT {
+            left: body.left + 1,
+            top: body.top + 1,
+            right: body.right - 1,
+            bottom: body.bottom - 1,
+        };
+        outline(dc, &inset, (radius - 1).max(0), rgb(56, 59, 64));
+        let footer = body.bottom - FOOTER_HEIGHT;
+        stroke(
+            dc,
+            &[[body.left + 1, footer], [body.right - 1, footer]],
+            SEPARATOR,
+        );
+    }
+    unsafe { EndPaint(hwnd, &paint) };
+}
+
+fn paint_glass(dc: HDC, body: RECT) {
+    let (width, height) = (body.right - body.left, body.bottom - body.top);
+    if width <= 0 || height <= 0 {
+        return;
+    }
+    GLASS_PIXELS.with_borrow_mut(|cache| {
+        if cache.0 != width || cache.1 != height {
+            cache.0 = width;
+            cache.1 = height;
+            cache.2.clear();
+            cache.2.reserve(width as usize * height as usize);
+            for y in 0..height {
+                for x in 0..width {
+                    cache.2.push(glass_pixel(x, y, width, height));
+                }
+            }
+        }
+        let mut info = BITMAPINFO::default();
+        info.bmiHeader.biSize = size_of::<BITMAPINFOHEADER>() as u32;
+        info.bmiHeader.biWidth = width;
+        info.bmiHeader.biHeight = -height;
+        info.bmiHeader.biPlanes = 1;
+        info.bmiHeader.biBitCount = 32;
+        // Controls use the same cached surface translated into their client coordinates.
+        unsafe {
+            StretchDIBits(
+                dc,
+                body.left,
+                body.top,
+                width,
+                height,
+                0,
+                0,
+                width,
+                height,
+                cache.2.as_ptr().cast(),
+                &info,
+                DIB_RGB_COLORS,
+                SRCCOPY,
+            )
+        };
+    });
+}
+
+thread_local! {
+    static GLASS_PIXELS: RefCell<(i32, i32, Vec<u32>)> = const { RefCell::new((0, 0, Vec::new())) };
+}
+
+fn glass_pixel(x: i32, y: i32, width: i32, height: i32) -> u32 {
+    let f = y as f32 / height as f32;
+    let radius = width as f32 * 0.62;
+    let light = (1.0 - (x as f32 - width as f32 * 0.18).hypot(y as f32) / radius).max(0.0);
+    let hash =
+        (x as u32).wrapping_mul(0x045d_9f3b).rotate_right(9) ^ (y as u32).wrapping_mul(0x9e37_79b9);
+    let grain = ((hash ^ (hash >> 16)) % 11) as f32 - 5.0;
+    let channel =
+        |offset: f32, tint: f32| (53.0 - 26.0 * f + offset + light * tint + grain).round() as u8;
+    u32::from_le_bytes([channel(2.0, 29.0), channel(0.0, 16.0), channel(0.0, 5.0), 0])
+}
+
+const DEFAULT_FAMILY: &str = "Segoe UI Variable";
+
+fn installed_fonts() -> Vec<String> {
+    let mut family_names: Vec<String> = Vec::new();
+    let query = LOGFONTW {
+        lfCharSet: DEFAULT_CHARSET,
+        ..Default::default()
+    };
+    let dc = unsafe { GetDC(ptr::null_mut()) };
+    if !dc.is_null() {
+        unsafe {
+            EnumFontFamiliesExW(
+                dc,
+                &query,
+                Some(add_font),
+                ptr::from_mut(&mut family_names) as LPARAM,
+                0,
+            );
+            ReleaseDC(ptr::null_mut(), dc);
+        }
+    }
+    if !family_names.iter().any(|name| name == DEFAULT_FAMILY) {
+        family_names.push(DEFAULT_FAMILY.into());
+    }
+    family_names.sort_by_cached_key(|name| name.to_lowercase());
+    family_names.dedup();
+    family_names
+}
+
+unsafe extern "system" fn add_font(
+    font: *const LOGFONTW,
+    _: *const TEXTMETRICW,
+    font_type: u32,
+    data: LPARAM,
+) -> i32 {
+    if font_type & RASTER_FONTTYPE == 0 {
+        let units = &unsafe { &*font }.lfFaceName;
+        let length = units
+            .iter()
+            .position(|&unit| unit == 0)
+            .unwrap_or(units.len());
+        let name = String::from_utf16_lossy(&units[..length]);
+        if !name.is_empty() && !name.starts_with('@') {
+            unsafe { &mut *(data as *mut Vec<String>) }.push(name);
+        }
+    }
+    1
+}
+
+fn usable_font<'a>(families: &[String], configured: &'a str) -> &'a str {
+    if families.iter().any(|family| family == configured) {
+        configured
+    } else {
+        DEFAULT_FAMILY
+    }
+}
+
+fn create_fonts(family: &str) -> [HFONT; 4] {
+    let family = wide(if family.is_empty() {
+        "Segoe UI Variable"
+    } else {
+        family
+    });
+    [(13, 400), (16, 600), (30, 700), (13, 600)].map(|(size, weight)| unsafe {
+        CreateFontW(
+            -size,
+            0,
+            0,
+            0,
+            weight,
+            0,
+            0,
+            0,
+            DEFAULT_CHARSET as u32,
+            OUT_DEFAULT_PRECIS as u32,
+            CLIP_DEFAULT_PRECIS as u32,
+            CLEARTYPE_QUALITY as u32,
+            DEFAULT_PITCH as u32,
+            family.as_ptr(),
+        )
+    })
+}
+
+fn free_fonts(fonts: [HFONT; 4]) {
+    for font in fonts {
+        if !font.is_null() {
+            unsafe { DeleteObject(font) };
+        }
+    }
+}
+
+fn apply_font(hwnd: HWND, kind: Kind, fonts: &[HFONT; 4]) {
+    let font = fonts[match kind {
+        Kind::Column => 1,
+        Kind::Heading => 2,
+        Kind::Button | Kind::Current | Kind::Value => 3,
+        _ => 0,
+    }];
+    let font = if font.is_null() {
+        unsafe { GetStockObject(DEFAULT_GUI_FONT) }
+    } else {
+        font
+    };
+    send(hwnd, WM_SETFONT, font as WPARAM, 1);
+}
+
+fn fill(dc: HDC, rect: &RECT, color: u32) {
+    unsafe {
+        SetDCBrushColor(dc, color);
+        FillRect(dc, rect, GetStockObject(DC_BRUSH));
+    }
+}
+
+fn round(dc: HDC, rect: &RECT, radius: i32, border: u32, background: Option<u32>) {
+    let diameter = radius * 2;
+    unsafe {
+        let pen = SelectObject(dc, GetStockObject(DC_PEN));
+        let brush = SelectObject(
+            dc,
+            GetStockObject(if background.is_some() {
+                DC_BRUSH
+            } else {
+                NULL_BRUSH
+            }),
+        );
+        SetDCPenColor(dc, border);
+        if let Some(color) = background {
+            SetDCBrushColor(dc, color);
+        }
+        RoundRect(
+            dc,
+            rect.left,
+            rect.top,
+            rect.right,
+            rect.bottom,
+            diameter,
+            diameter,
+        );
+        SelectObject(dc, brush);
+        SelectObject(dc, pen);
+    }
+}
+
+fn outline(dc: HDC, rect: &RECT, radius: i32, color: u32) {
+    round(dc, rect, radius, color, None);
+}
+
+fn stroke(dc: HDC, points: &[[i32; 2]], color: u32) {
+    let native: Vec<_> = points.iter().map(|&[x, y]| POINT { x, y }).collect();
+    unsafe {
+        let pen = SelectObject(dc, GetStockObject(DC_PEN));
+        SetDCPenColor(dc, color);
+        Polyline(dc, native.as_ptr(), native.len() as i32);
+        SelectObject(dc, pen);
+    }
+}
+
+fn draw_text(hwnd: HWND, dc: HDC, mut rect: RECT, value: &str, color: u32, format: u32) {
+    let value = wide(value);
+    let font = send(hwnd, WM_GETFONT, 0, 0) as HFONT;
+    unsafe {
+        let previous = if font.is_null() {
+            ptr::null_mut()
+        } else {
+            SelectObject(dc, font)
+        };
+        SetBkMode(dc, TRANSPARENT as i32);
+        SetTextColor(dc, color);
+        DrawTextW(
+            dc,
+            value.as_ptr(),
+            (value.len() - 1) as i32,
+            &mut rect,
+            format | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS,
+        );
+        if !previous.is_null() {
+            SelectObject(dc, previous);
+        }
+    }
+}
+
+fn cursor_over(hwnd: HWND) -> bool {
+    let mut cursor = POINT::default();
+    unsafe { GetCursorPos(&mut cursor) != 0 && WindowFromPoint(cursor) == hwnd }
+}
+
+pub(crate) fn paint_embedded_backdrop(hwnd: HWND, dc: HDC) {
+    let parent = unsafe { GetAncestor(hwnd, GA_ROOT) };
+    let mut client = RECT::default();
+    let mut child = RECT::default();
+    let mut origin = POINT::default();
+    unsafe {
+        GetClientRect(hwnd, &mut child);
+        GetClientRect(parent, &mut client);
+        ClientToScreen(hwnd, &mut origin);
+        ScreenToClient(parent, &mut origin);
+    }
+    let pad = if unsafe { IsZoomed(parent) } != 0 {
+        0
+    } else {
+        EDGE_PAD
+    };
+    // Match the parent's light direction across every child HWND.
+    let saved = unsafe { SaveDC(dc) };
+    unsafe { IntersectClipRect(dc, child.left, child.top, child.right, child.bottom) };
+    paint_glass(
+        dc,
+        RECT {
+            left: pad - origin.x,
+            top: pad - origin.y,
+            right: client.right - pad - origin.x,
+            bottom: client.bottom - pad - origin.y,
+        },
+    );
+    unsafe { RestoreDC(dc, saved) };
+}
+
+fn paint_item(parent: HWND, item: &DRAWITEMSTRUCT) {
+    let dc = item.hDC;
+    let hwnd = item.hwndItem;
+    let rect = item.rcItem;
+    if item.CtlType == ODT_STATIC {
+        let kind = (unsafe { GetPropW(hwnd, CONTROL_KIND) } as usize).saturating_sub(1);
+        paint_embedded_backdrop(hwnd, dc);
+        paint_label(hwnd, dc, rect, kind);
+        return;
+    }
+    if item.CtlType == ODT_COMBOBOX {
+        if item.itemState & ODS_COMBOBOXEDIT == 0 {
+            let selected = item.itemState & ODS_SELECTED != 0;
+            fill(
+                dc,
+                &rect,
+                if selected {
+                    rgb(37, 78, 118)
+                } else {
+                    CONTROL_BG
+                },
+            );
+            let mut label = rect;
+            label.left += 9;
+            label.right -= 7;
+            draw_text(
+                hwnd,
+                dc,
+                label,
+                &combo_text(hwnd, item.itemID as usize),
+                PRIMARY,
+                DT_LEFT,
+            );
+        }
+        return;
+    }
+    if item.CtlType != ODT_BUTTON {
+        return;
+    }
+    paint_embedded_backdrop(hwnd, dc);
+    let pressed = item.itemState & ODS_SELECTED != 0;
+    let disabled = item.itemState & ODS_DISABLED != 0;
+    let focused = item.itemState & ODS_FOCUS != 0;
+    let hovering = !disabled && cursor_over(hwnd);
+    let id = item.CtlID as u16;
+    let chrome = [Field::Minimize, Field::Maximize, Field::TitleClose]
+        .into_iter()
+        .find(|&field| field as u16 == id);
+    if let Some(chrome) = chrome {
+        if hovering || pressed {
+            let color = if chrome == Field::TitleClose {
+                rgb(219, 58, 53)
+            } else {
+                rgb(69, 71, 77)
+            };
+            round(dc, &rect, 10, color, Some(color));
+        } else if focused {
+            outline(dc, &rect, 10, HOVER_ACCENT);
+        }
+        paint_chrome(parent, dc, rect, chrome);
+        return;
+    }
+    let is_tab = (Field::TabLocal as u16..=Field::TabRolling as u16).contains(&id);
+    let active_tab =
+        is_tab && unsafe { GetPropW(parent, SELECTED_TAB) } as usize == usize::from(id);
+    let foreground = if disabled || (is_tab && !active_tab && !hovering) {
+        MUTED
+    } else if active_tab {
+        rgb(220, 238, 255)
+    } else {
+        PRIMARY
+    };
+    if active_tab {
+        let border = if focused || hovering {
+            HOVER_ACCENT
+        } else {
+            rgb(68, 103, 151)
+        };
+        round(dc, &rect, 10, border, Some(rgb(43, 69, 101)));
+    } else if !is_tab || hovering || focused {
+        let border = if focused {
+            HOVER_ACCENT
+        } else if hovering {
+            rgb(91, 91, 95)
+        } else {
+            CONTROL_BORDER
+        };
+        let fill = if pressed || disabled {
+            rgb(45, 45, 48)
+        } else if hovering {
+            rgb(62, 62, 66)
+        } else {
+            rgb(55, 55, 59)
+        };
+        round(dc, &rect, 10, border, Some(fill));
+    }
+    draw_text(hwnd, dc, rect, &text(hwnd), foreground, DT_CENTER);
+}
+
+fn paint_label(hwnd: HWND, dc: HDC, mut rect: RECT, kind: usize) {
+    if kind == Kind::Value as usize {
+        round(dc, &rect, 8, rgb(36, 67, 96), Some(rgb(36, 67, 96)));
+        draw_text(hwnd, dc, rect, &text(hwnd), rgb(185, 220, 255), DT_CENTER);
+    } else if kind == Kind::DisabledField as usize {
+        round(dc, &rect, 9, rgb(57, 57, 61), Some(rgb(46, 46, 48)));
+        rect.left += 10;
+        draw_text(hwnd, dc, rect, &text(hwnd), MUTED, DT_LEFT);
+    } else {
+        let color = if kind == Kind::Muted as usize {
+            MUTED
+        } else if kind == Kind::Current as usize {
+            ACCENT
+        } else {
+            PRIMARY
+        };
+        draw_text(hwnd, dc, rect, &text(hwnd), color, DT_LEFT);
+        if kind == Kind::Column as usize {
+            let mut origin = POINT::default();
+            unsafe {
+                ClientToScreen(hwnd, &mut origin);
+                ScreenToClient(GetParent(hwnd), &mut origin);
+            }
+            if origin.y >= 170 {
+                stroke(
+                    dc,
+                    &[[0, rect.bottom - 1], [rect.right, rect.bottom - 1]],
+                    rgb(57, 83, 111),
+                );
+            }
+        }
+    }
+}
+
+fn paint_chrome(parent: HWND, dc: HDC, rect: RECT, button: Field) {
+    let x = (rect.left + rect.right) / 2;
+    let y = (rect.top + rect.bottom) / 2;
+    match button {
+        Field::Minimize => stroke(dc, &[[x - 4, y + 4], [x + 5, y + 4]], PRIMARY),
+        Field::Maximize => {
+            let offset = unsafe { IsZoomed(parent) };
+            if offset != 0 {
+                stroke(
+                    dc,
+                    &[[x - 1, y - 5], [x + 5, y - 5], [x + 5, y + 1]],
+                    PRIMARY,
+                );
+            }
+            outline(
+                dc,
+                &RECT {
+                    left: x - 4,
+                    right: x + 5 - offset,
+                    top: y - 4 + offset,
+                    bottom: y + 5,
+                },
+                0,
+                PRIMARY,
+            );
+        }
+        Field::TitleClose => {
+            stroke(dc, &[[x - 4, y - 4], [x + 5, y + 5]], PRIMARY);
+            stroke(dc, &[[x + 4, y - 4], [x - 5, y + 5]], PRIMARY);
+        }
+        _ => {}
+    }
+}
+
+fn combo_text(hwnd: HWND, index: usize) -> String {
+    let len = send(hwnd, CB_GETLBTEXTLEN, index, 0);
+    if len < 0 {
+        return String::new();
+    }
+    let mut units = vec![0; len as usize + 1];
+    let written = send(hwnd, CB_GETLBTEXT, index, units.as_mut_ptr() as LPARAM);
+    String::from_utf16_lossy(&units[..written.max(0) as usize])
+}
+
+unsafe extern "system" fn style_control(
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    _id: usize,
+    kind: usize,
+) -> LRESULT {
+    let combo = kind == Kind::Combo as usize;
+    let slider = kind == Kind::Slider as usize;
+    let check = kind == Kind::Check as usize;
+    let edit = [Kind::Edit, Kind::Password, Kind::Number]
+        .into_iter()
+        .any(|control| kind == control as usize);
+    match message {
+        WM_MOUSEMOVE => {
+            let mut tracking = TRACKMOUSEEVENT {
+                cbSize: size_of::<TRACKMOUSEEVENT>() as u32,
+                dwFlags: TME_LEAVE,
+                hwndTrack: hwnd,
+                dwHoverTime: 0,
+            };
+            unsafe {
+                TrackMouseEvent(&mut tracking);
+                InvalidateRect(hwnd, ptr::null(), 0);
+            }
+        }
+        WM_MOUSEWHEEL if slider || (combo && send(hwnd, CB_GETDROPPEDSTATE, 0, 0) == 0) => {
+            return 0;
+        }
+        WM_PAINT | WM_PRINTCLIENT if slider || combo || check => {
+            let mut paint = PAINTSTRUCT::default();
+            let painting = message == WM_PAINT;
+            let dc = if painting {
+                unsafe { BeginPaint(hwnd, &mut paint) }
+            } else {
+                wparam as HDC
+            };
+            let mut rect = RECT::default();
+            unsafe { GetClientRect(hwnd, &mut rect) };
+            paint_embedded_backdrop(hwnd, dc);
+            if combo {
+                paint_combo(hwnd, dc, rect);
+            } else if check {
+                paint_check(hwnd, dc, rect);
+            } else {
+                paint_slider(hwnd, dc, rect);
+            }
+            if painting {
+                unsafe { EndPaint(hwnd, &paint) };
+            }
+            return 0;
+        }
+        _ => {}
+    }
+    let result = unsafe { DefSubclassProc(hwnd, message, wparam, lparam) };
+    if message == WM_PAINT && edit {
+        let dc = unsafe { GetDC(hwnd) };
+        let mut rect = RECT::default();
+        unsafe { GetClientRect(hwnd, &mut rect) };
+        let border = if unsafe { GetFocus() } == hwnd {
+            HOVER_ACCENT
+        } else if cursor_over(hwnd) {
+            rgb(89, 89, 93)
+        } else {
+            CONTROL_BORDER
+        };
+        outline(dc, &rect, 9, border);
+        unsafe { ReleaseDC(hwnd, dc) };
+    }
+    if matches!(
+        message,
+        WM_SETFOCUS
+            | WM_KILLFOCUS
+            | WM_ENABLE
+            | WM_LBUTTONDOWN
+            | WM_LBUTTONUP
+            | BM_SETCHECK
+            | WM_MOUSELEAVE
+            | WM_SETTEXT
+    ) {
+        unsafe { InvalidateRect(hwnd, ptr::null(), 1) };
+    }
+    result
+}
+
+fn paint_combo(hwnd: HWND, dc: HDC, rect: RECT) {
+    let focused = unsafe { GetFocus() } == hwnd;
+    let expanded = send(hwnd, CB_GETDROPPEDSTATE, 0, 0) != 0;
+    let border = if focused || expanded {
+        HOVER_ACCENT
+    } else if cursor_over(hwnd) {
+        rgb(89, 89, 93)
+    } else {
+        CONTROL_BORDER
+    };
+    round(dc, &rect, 9, border, Some(CONTROL_BG));
+    if let Some(index) = choice(hwnd) {
+        let mut label = rect;
+        label.left += 10;
+        label.right -= 28;
+        draw_text(hwnd, dc, label, &combo_text(hwnd, index), PRIMARY, DT_LEFT);
+    }
+    let x = rect.right - 15;
+    let y = (rect.top + rect.bottom) / 2;
+    stroke(dc, &[[x - 4, y - 2], [x, y + 2], [x + 5, y - 3]], MUTED);
+}
+
+fn paint_check(hwnd: HWND, dc: HDC, rect: RECT) {
+    let selected = checked(hwnd);
+    let disabled = unsafe { IsWindowEnabled(hwnd) } == 0;
+    let focus = !disabled && unsafe { GetFocus() } == hwnd;
+    let top = (rect.bottom - 14) / 2;
+    let check = RECT {
+        left: 2,
+        top,
+        right: 16,
+        bottom: top + 14,
+    };
+    let color = if selected && !disabled {
+        if cursor_over(hwnd) {
+            HOVER_ACCENT
+        } else {
+            ACCENT
+        }
+    } else {
+        CONTROL_BG
+    };
+    round(
+        dc,
+        &check,
+        4,
+        if selected && !disabled {
+            color
+        } else {
+            CONTROL_BORDER
+        },
+        Some(color),
+    );
+    if selected {
+        let color = if disabled { MUTED } else { PRIMARY };
+        stroke(dc, &[[5, top + 7], [8, top + 10], [13, top + 4]], color);
+        stroke(dc, &[[5, top + 8], [8, top + 11], [13, top + 5]], color);
+    }
+    if focus {
+        outline(
+            dc,
+            &RECT {
+                left: 1,
+                top: top - 1,
+                right: 17,
+                bottom: top + 15,
+            },
+            5,
+            HOVER_ACCENT,
+        );
+    }
+    let mut label = rect;
+    label.left += 24;
+    draw_text(
+        hwnd,
+        dc,
+        label,
+        &text(hwnd),
+        if disabled { MUTED } else { PRIMARY },
+        DT_LEFT,
+    );
+}
+
+fn paint_slider(hwnd: HWND, dc: HDC, rect: RECT) {
+    let mut channel = RECT::default();
+    let mut thumb = RECT::default();
+    send(
+        hwnd,
+        TBM_GETCHANNELRECT,
+        0,
+        ptr::from_mut(&mut channel) as LPARAM,
+    );
+    send(
+        hwnd,
+        TBM_GETTHUMBRECT,
+        0,
+        ptr::from_mut(&mut thumb) as LPARAM,
+    );
+    let y = (rect.top + rect.bottom) / 2;
+    let x = (thumb.left + thumb.right) / 2;
+    let track = RECT {
+        left: channel.left,
+        top: y - 3,
+        right: channel.right,
+        bottom: y + 3,
+    };
+    let progress = RECT {
+        right: x.max(channel.left + 1),
+        ..track
+    };
+    round(dc, &track, 3, CONTROL_BORDER, Some(CONTROL_BORDER));
+    round(dc, &progress, 3, ACCENT, Some(ACCENT));
+    let thumb = RECT {
+        left: x - 8,
+        top: y - 8,
+        right: x + 8,
+        bottom: y + 8,
+    };
+    round(
+        dc,
+        &thumb,
+        8,
+        if unsafe { GetFocus() } == hwnd {
+            HOVER_ACCENT
+        } else {
+            rgb(194, 211, 229)
+        },
+        Some(PRIMARY),
+    );
 }
 
 fn wide(value: &str) -> Vec<u16> {
@@ -1106,5 +2326,15 @@ mod tests {
         assert_eq!(slider_position(2.0, 0.5), 30);
         assert_eq!(slider_position(1.0, 0.30), 14);
         assert_eq!(slider_value(2, 0.30), 0.4);
+    }
+
+    #[test]
+    fn glass_shell_keeps_eight_way_resize_and_title_drag() {
+        assert_eq!(shell_hit(12, 12, 1120, 820, false), HTTOPLEFT as LRESULT);
+        assert_eq!(shell_hit(1110, 420, 1120, 820, false), HTRIGHT as LRESULT);
+        assert_eq!(shell_hit(600, 810, 1120, 820, false), HTBOTTOM as LRESULT);
+        assert_eq!(shell_hit(600, 35, 1120, 820, false), HTCAPTION as LRESULT);
+        assert_eq!(shell_hit(600, 160, 1120, 820, false), HTCLIENT as LRESULT);
+        assert_eq!(shell_hit(0, 200, 1120, 820, true), HTCLIENT as LRESULT);
     }
 }

@@ -284,13 +284,31 @@ impl Template {
     }
 
     pub fn with_size(title: &str, width: u16, height: u16) -> Self {
+        Self::with_style(
+            title,
+            width,
+            height,
+            WS_CAPTION | WS_SYSMENU | DS_MODALFRAME as u32 | DS_SETFONT as u32 | DS_CENTER as u32,
+            0,
+        )
+    }
+
+    pub fn embedded(width: u16, height: u16) -> Self {
+        Self::with_style(
+            "",
+            width,
+            height,
+            WS_CHILD | WS_CLIPCHILDREN | DS_CONTROL as u32 | DS_SETFONT as u32,
+            WS_EX_CONTROLPARENT,
+        )
+    }
+
+    fn with_style(title: &str, width: u16, height: u16, style: u32, ex_style: u32) -> Self {
         let mut template = Self {
             words: Vec::with_capacity(128),
         };
-        template.dword(
-            WS_CAPTION | WS_SYSMENU | DS_MODALFRAME as u32 | DS_SETFONT as u32 | DS_CENTER as u32,
-        );
-        template.dword(0);
+        template.dword(style);
+        template.dword(ex_style);
         template.words.extend([0, 0, 0, width, height, 0, 0]);
         template.words.extend(wide(title));
         template.words.push(9);
@@ -354,7 +372,8 @@ impl Panel {
         }
     }
     pub fn accepts(&self, message: &MSG) -> bool {
-        unsafe { IsDialogMessageW(self.0, message) != 0 }
+        // The wheel page can remain alive while a different settings tab is visible.
+        unsafe { IsWindowVisible(self.0) != 0 && IsDialogMessageW(self.0, message) != 0 }
     }
 }
 

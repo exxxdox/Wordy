@@ -2,6 +2,8 @@
 
 Rust 版使用 Win32 消息循环和 WASAPI。设置、轮盘和录制截取共用配置存储，运行轮盘和两处选槽界面共用 Direct2D 绘制。主播放固定走 VB-CABLE，返听和 F10 本地试听使用独立输出。原有 TOML、Windows 凭据目标名称及 `.wordybackup` 加密格式可直接读取。
 
+设置窗口以原版的无边框玻璃和双栏留白为基准，聊天轮盘直接在设置页操作。悬浮输入框保留原生文本编辑器用于输入法与键盘操作，玻璃、图标和投影由 Rust 绘制。设置临时反馈在页脚上方堆叠，悬停时停留，移开后继续淡出。设置轮盘、热键轮盘和截取目标盘共用同一绘制逻辑。
+
 ## Windows 本地构建
 
 需要 Rust MSVC 工具链、Visual Studio C++ Build Tools 和 Windows SDK。运行 `cargo build --locked` 生成开发版。压缩音频及非 PCM16 WAV 依赖同目录的 `ffmpeg.exe`。解码器进程接受本地文件，运行时从应用目录取可执行文件。
