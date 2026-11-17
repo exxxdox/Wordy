@@ -69,6 +69,7 @@ const EDITOR_CARD: u32 = 0x3e3b3b;
 const SEPARATOR: u32 = 0x3a3838;
 const PRIMARY: u32 = 0xf7f5f5;
 const MUTED: u32 = 0x9d9898;
+const CAPTION: u32 = 0xc9c6c6;
 const ACCENT: u32 = 0xff840a;
 const ERROR: u32 = 0x3a45ff;
 
@@ -367,7 +368,33 @@ unsafe extern "system" fn no_erase_proc(
     if message == WM_ERASEBKGND {
         return 1;
     }
+    if message == WM_MOUSEMOVE {
+        // Ownerdraw buttons have no hover state of their own; repaint on entry
+        // and exit so the hover fill shows.
+        let mut track = TRACKMOUSEEVENT {
+            cbSize: mem::size_of::<TRACKMOUSEEVENT>() as u32,
+            dwFlags: TME_LEAVE,
+            hwndTrack: hwnd,
+            dwHoverTime: 0,
+        };
+        unsafe {
+            TrackMouseEvent(&mut track);
+            InvalidateRect(hwnd, ptr::null(), 0);
+        }
+    } else if message == WM_MOUSELEAVE {
+        unsafe { InvalidateRect(hwnd, ptr::null(), 0) };
+    }
     unsafe { DefSubclassProc(hwnd, message, wparam, lparam) }
+}
+
+fn hovering(hwnd: HWND) -> bool {
+    let mut rect = RECT::default();
+    let mut cursor = POINT::default();
+    unsafe {
+        GetWindowRect(hwnd, &mut rect);
+        GetCursorPos(&mut cursor);
+    }
+    (rect.left..rect.right).contains(&cursor.x) && (rect.top..rect.bottom).contains(&cursor.y)
 }
 
 unsafe extern "system" fn chrome_proc(
@@ -409,7 +436,10 @@ unsafe extern "system" fn chrome_proc(
                     || matches!(control, WHEEL | STYLE);
                 let card =
                     !state.trim && matches!(control, INFO | GAIN_SLIDER | GAIN_VALUE | 302..=305);
-                SetTextColor(dc, PRIMARY);
+                // Values read bright; captions stay muted. Captions sit straight
+                // on the glass, so they must not erase a solid surface rectangle.
+                let value = matches!(control, INFO | GAIN_VALUE | RANGE_SUMMARY);
+                SetTextColor(dc, if value { PRIMARY } else { CAPTION });
                 SetBkMode(dc, if field { OPAQUE } else { TRANSPARENT } as i32);
                 SetBkColor(
                     dc,
@@ -426,7 +456,7 @@ unsafe extern "system" fn chrome_proc(
                 } else if card {
                     state.card as LRESULT
                 } else {
-                    state.surface as LRESULT
+                    GetStockObject(NULL_BRUSH) as LRESULT
                 }
             }
             WM_DRAWITEM if lp != 0 => {
@@ -501,14 +531,24 @@ fn draw_button(item: &DRAWITEMSTRUCT, state: &ChromeState) {
     let disabled = item.itemState & ODS_DISABLED != 0;
     let pressing = item.itemState & ODS_SELECTED != 0;
     let focus = item.itemState & ODS_FOCUS != 0;
+    let hovering = !disabled && hovering(item.hwndItem);
+    let danger = matches!(id, REMOVE | CLEAR);
     let (background, border) = if selected || state.trim && id == SAVE {
-        (0x673c1c, ACCENT)
+        (
+            if hovering { 0x7b4a26 } else { 0x673c1c },
+            if focus { PRIMARY } else { ACCENT },
+        )
     } else if pressing {
-        (0x494646, SEPARATOR)
+        (0x242426, SEPARATOR)
     } else if id == PRECISE {
         (PANEL_SURFACE, PANEL_SURFACE)
+    } else if hovering {
+        (
+            if danger { 0x32262a } else { 0x3a3a3e },
+            if focus { ACCENT } else { 0x4a4a4e },
+        )
     } else {
-        (ELEVATED, SEPARATOR)
+        (ELEVATED, if focus { ACCENT } else { SEPARATOR })
     };
     fill(
         item.hDC,
@@ -524,13 +564,7 @@ fn draw_button(item: &DRAWITEMSTRUCT, state: &ChromeState) {
             PANEL_SURFACE
         },
     );
-    rounded(
-        item.hDC,
-        item.rcItem,
-        12,
-        Some(background),
-        if focus { ACCENT } else { border },
-    );
+    rounded(item.hDC, item.rcItem, 10, Some(background), border);
     let text = wide(&window_text(item.hwndItem));
     let mut area = item.rcItem;
     unsafe {
@@ -1068,12 +1102,12 @@ fn layout_editor(hwnd: HWND, state: &ChromeState) {
     let field = card.right - left - px(18);
     for (id, x, y, w, h) in [
         (300, 0, 7, 34, 20),
-        (WHEEL, 35, 0, 220, 200),
-        (301, 263, 7, 47, 20),
-        (HOTKEY, 310, 0, 160, 32),
-        (ADD, 478, 0, 52, 32),
-        (REMOVE, 538, 0, 52, 32),
-        (RENAME, 598, 0, 58, 32),
+        (WHEEL, 42, 0, 208, 200),
+        (301, 258, 7, 47, 20),
+        (HOTKEY, 313, 0, 150, 32),
+        (ADD, 471, 0, 52, 32),
+        (REMOVE, 531, 0, 52, 32),
+        (RENAME, 591, 0, 58, 32),
         (PICK, 0, 44, 400, 400),
     ] {
         at(i32::from(id), px(x), y, px(w), h);
