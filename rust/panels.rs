@@ -546,7 +546,7 @@ fn render_preview(child: HWND, state: &mut PreviewState) {
     let scale = (f64::from(width) / CANVAS_WIDTH).min(f64::from(height) / CANVAS_HEIGHT);
     if let Ok(bitmap) = state.renderer.render(frame, scale) {
         state.bitmap = Some(bitmap);
-        unsafe { InvalidateRect(child, ptr::null(), 1) };
+        unsafe { InvalidateRect(child, ptr::null(), 0) };
     }
 }
 
@@ -568,6 +568,7 @@ unsafe extern "system" fn preview_proc(
         let state = &mut *(data as *mut PreviewState);
         let (width, height) = dimensions(hwnd);
         match msg {
+            WM_ERASEBKGND => 1,
             WM_PAINT => {
                 let mut paint = PAINTSTRUCT::default();
                 let dc = BeginPaint(hwnd, &mut paint);

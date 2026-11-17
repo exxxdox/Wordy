@@ -951,20 +951,20 @@ impl SettingsWindow {
                 "点击录制后按下新的快捷键组合",
                 [48, 234, 440, 24],
             ),
-            (Rolling, None, Label, "保留时长", [48, 261, 60, 34]),
+            (Rolling, None, Label, "保留时长", [48, 261, 84, 34]),
             (
                 Rolling,
                 Some(RollingSeconds),
                 Number,
                 "",
-                [108, 261, 140, 34],
+                [132, 261, 116, 34],
             ),
             (Rolling, None, Muted, "秒", [252, 261, 35, 34]),
         ] {
             self.add(field, Some(page), kind, caption, bounds)?;
         }
         for (field, kind, caption, bounds) in [
-            (None, Muted, "设置自动保存", [48, -66, 105, 40]),
+            (None, Muted, "设置自动保存", [48, -56, 105, 32]),
             (Some(OpenLogs), Button, "查看日志", [157, -56, 92, 32]),
             (Some(Export), Button, "导出备份", [812, -56, 78, 32]),
             (Some(Import), Button, "导入备份", [898, -56, 78, 32]),
@@ -1121,6 +1121,8 @@ impl SettingsWindow {
                 )
             };
         }
+        // Repaint the glass under controls that were hidden by the page switch.
+        unsafe { InvalidateRect(self.hwnd, ptr::null(), 0) };
         if !self.wheel_panel.is_null() {
             unsafe {
                 if self.page == Page::Wheels {
@@ -1245,7 +1247,7 @@ impl SettingsWindow {
                     "Windows 侦听：未开启".to_string()
                 };
                 if let Some(output) = output {
-                    text.push_str(&format!(" · 输出目标：{output}"));
+                    text.push_str(&format!(" · 输出目标：{}", short(output, 28)));
                 } else if *has_target {
                     text.push_str(" · 输出目标：设备不可用");
                 } else if *enabled {
@@ -1748,6 +1750,16 @@ unsafe extern "system" fn add_font(
         }
     }
     1
+}
+
+fn short(text: &str, limit: usize) -> String {
+    if text.chars().count() <= limit {
+        return text.to_owned();
+    }
+    text.chars()
+        .take(limit.saturating_sub(1))
+        .chain(['…'])
+        .collect()
 }
 
 fn usable_font<'a>(families: &[String], configured: &'a str) -> &'a str {

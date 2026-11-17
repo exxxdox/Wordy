@@ -3,10 +3,10 @@ use std::{io, mem, ptr};
 use windows_sys::Win32::{
     Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
     Graphics::Gdi::{
-        CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, CreateFontW, CreateSolidBrush, DEFAULT_CHARSET,
-        DEFAULT_PITCH, DeleteObject, FW_NORMAL, GetMonitorInfoW, HBRUSH, HFONT, HGDIOBJ,
-        MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint, OUT_DEFAULT_PRECIS, SetBkColor,
-        SetTextColor,
+        BLACK_BRUSH, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, CreateFontW, CreateSolidBrush,
+        DEFAULT_CHARSET, DEFAULT_PITCH, DeleteObject, FW_NORMAL, GetMonitorInfoW, GetStockObject,
+        HBRUSH, HFONT, HGDIOBJ, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint,
+        OUT_DEFAULT_PRECIS, SetBkColor, SetTextColor, UpdateWindow,
     },
     System::LibraryLoader::GetModuleHandleW,
     UI::{
@@ -47,6 +47,8 @@ impl LogWindow {
             lpfnWndProc: Some(window_proc),
             hInstance: instance,
             lpszClassName: CLASS,
+            // Painted before the list exists, so the window never flashes white.
+            hbrBackground: unsafe { GetStockObject(BLACK_BRUSH) as HBRUSH },
             ..Default::default()
         };
         // The class lives for the process, so a duplicate registration is harmless.
@@ -124,7 +126,10 @@ impl LogWindow {
         };
         unsafe {
             SendMessageW(state.edit, WM_SETFONT, state.font as usize, 1);
+            // EM_SETBKGNDCOLOR prevents the default white edit background on first paint.
+            SendMessageW(state.edit, 0x0433, 0, BACKGROUND as isize);
             ShowWindow(hwnd, SW_SHOWNORMAL);
+            UpdateWindow(hwnd);
             SetForegroundWindow(hwnd);
         }
         Ok(Self { hwnd })

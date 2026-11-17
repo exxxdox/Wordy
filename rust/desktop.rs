@@ -284,6 +284,15 @@ impl Tray {
             AppendMenuW(menu, MF_OWNERDRAW, TRAY_LOGS, w!("打开日志窗口"));
             AppendMenuW(menu, MF_OWNERDRAW | MF_DISABLED, 0, ptr::null());
             AppendMenuW(menu, MF_OWNERDRAW, TRAY_EXIT, w!("退出"));
+            // Fill the native menu frame with the same dark tone as the items.
+            let background = CreateSolidBrush(MENU_BG);
+            let info = MENUINFO {
+                cbSize: mem::size_of::<MENUINFO>() as u32,
+                fMask: MIM_BACKGROUND,
+                hbrBack: background,
+                ..Default::default()
+            };
+            SetMenuInfo(menu, &info);
             let mut position = POINT::default();
             GetCursorPos(&mut position);
             SetForegroundWindow(self.host);
@@ -298,6 +307,7 @@ impl Tray {
             );
             PostMessageW(self.host, WM_NULL, 0, 0);
             DestroyMenu(menu);
+            DeleteObject(background);
             action as usize
         }
     }
