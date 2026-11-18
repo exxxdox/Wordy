@@ -36,14 +36,14 @@ use crate::{
     slider::{self, TBM_GETPOS},
 };
 
-mod controls;
 mod actions;
 mod build;
+mod controls;
 mod refresh;
 mod shell;
 
-use shell::*;
 use controls::{paint_item, style_control};
+use shell::*;
 
 pub const SETTINGS_ACTION_MESSAGE: u32 = WM_APP + 10;
 const CLASS: PCWSTR = w!("Wordy.Rust.Settings");
@@ -456,8 +456,6 @@ impl SettingsWindow {
     pub fn handle_message(&self, message: &MSG) -> bool {
         unsafe { IsWindowVisible(self.hwnd) != 0 && IsDialogMessageW(self.hwnd, message) != 0 }
     }
-
-
 }
 impl Drop for SettingsWindow {
     fn drop(&mut self) {

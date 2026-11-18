@@ -130,7 +130,14 @@ pub(super) unsafe extern "system" fn window_proc(
     unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
 }
 
-pub(super) fn shell_hit(x: i32, y: i32, width: i32, height: i32, maximized: bool, scale: i32) -> LRESULT {
+pub(super) fn shell_hit(
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    maximized: bool,
+    scale: i32,
+) -> LRESULT {
     let pad = if maximized {
         0
     } else {
@@ -369,7 +376,11 @@ pub(super) fn choice(hwnd: HWND) -> Option<usize> {
     usize::try_from(send(hwnd, CB_GETCURSEL, 0, 0)).ok()
 }
 
-pub(super) fn fill_choices(hwnd: HWND, choices: impl IntoIterator<Item = impl AsRef<str>>, selected: usize) {
+pub(super) fn fill_choices(
+    hwnd: HWND,
+    choices: impl IntoIterator<Item = impl AsRef<str>>,
+    selected: usize,
+) {
     send(hwnd, CB_RESETCONTENT, 0, 0);
     for label in choices {
         let label = wide(label.as_ref());
@@ -413,4 +424,3 @@ pub(super) fn voice_labels(voices: &[Voice]) -> Vec<String> {
         .chain(labels)
         .collect()
 }
-

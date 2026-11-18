@@ -129,7 +129,6 @@ fn combo(template: &mut Template, id: u16, bounds: [u16; 4]) {
     );
 }
 
-
 const EMOJI_FONT: &str = "Segoe UI Emoji";
 static EMOJI_SUPPORT: OnceLock<Mutex<HashMap<(String, String), bool>>> = OnceLock::new();
 

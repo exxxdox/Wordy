@@ -227,5 +227,4 @@ impl App {
         }
         self.refresh_editor()
     }
-
 }

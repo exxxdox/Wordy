@@ -491,8 +491,8 @@ fn overlay_font(height: i32, weight: i32, name: &[u16]) -> HFONT {
 
 #[cfg(test)]
 mod overlay_visual_tests {
-    use super::paint::*;
     use super::super::host_window;
+    use super::paint::*;
     use super::*;
 
     #[test]

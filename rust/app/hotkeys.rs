@@ -22,7 +22,11 @@ pub(super) struct Hotkeys {
 }
 
 impl Hotkeys {
-    pub(super) fn register_new(&mut self, binding: Binding, action: Action) -> io::Result<Registered> {
+    pub(super) fn register_new(
+        &mut self,
+        binding: Binding,
+        action: Action,
+    ) -> io::Result<Registered> {
         // Register replacements before dropping old bindings so failed switches preserve working keys.
         self.next_id = self.next_id % 0xbfff + 1;
         while self.current.values().any(|entry| entry.id == self.next_id) {
@@ -117,4 +121,3 @@ pub(super) fn checked_keys(settings: &Settings) -> io::Result<HashMap<Binding, A
     }
     Ok(keys)
 }
-

@@ -97,7 +97,10 @@ impl Drawing<'_> {
         }
     }
 
-    pub(super) fn path(&self, record: impl FnOnce(&ID2D1GeometrySink)) -> Result<ID2D1PathGeometry> {
+    pub(super) fn path(
+        &self,
+        record: impl FnOnce(&ID2D1GeometrySink),
+    ) -> Result<ID2D1PathGeometry> {
         let geometry = unsafe { self.renderer.factory.CreatePathGeometry()? };
         let sink = unsafe { geometry.Open()? };
         record(&sink);
@@ -172,7 +175,11 @@ impl Drawing<'_> {
         }
     }
 
-    pub(super) fn layout(&self, text: &str, format: &IDWriteTextFormat) -> Result<IDWriteTextLayout> {
+    pub(super) fn layout(
+        &self,
+        text: &str,
+        format: &IDWriteTextFormat,
+    ) -> Result<IDWriteTextLayout> {
         let utf16: Vec<_> = text.encode_utf16().collect();
         unsafe {
             self.renderer
@@ -188,7 +195,12 @@ impl Drawing<'_> {
         Ok(metrics.widthIncludingTrailingWhitespace)
     }
 
-    pub(super) fn split_at_width(&self, text: &str, width: f32, format: &IDWriteTextFormat) -> Result<usize> {
+    pub(super) fn split_at_width(
+        &self,
+        text: &str,
+        width: f32,
+        format: &IDWriteTextFormat,
+    ) -> Result<usize> {
         for (end, ch) in text.char_indices() {
             if self.text_width(&text[..end + ch.len_utf8()], format)? > width {
                 return Ok(end);
@@ -279,7 +291,12 @@ impl Drawing<'_> {
         Ok(())
     }
 
-    pub(super) fn title(&self, frame: WheelFrame<'_>, font: &IDWriteTextFormat, classic: bool) -> Result<()> {
+    pub(super) fn title(
+        &self,
+        frame: WheelFrame<'_>,
+        font: &IDWriteTextFormat,
+        classic: bool,
+    ) -> Result<()> {
         let title = frame.title();
         let width = if classic { 112.0 } else { 116.0 };
         let color = if classic { ACCENT } else { PRIMARY };
@@ -316,7 +333,13 @@ impl Drawing<'_> {
         self.draw_text(hint, point(CENTER.X, 297.5), &hint_format, MUTED, false)
     }
 
-    pub(super) fn wedge(&self, outer: f32, inner: f32, start: f32, span: f32) -> Result<ID2D1PathGeometry> {
+    pub(super) fn wedge(
+        &self,
+        outer: f32,
+        inner: f32,
+        start: f32,
+        span: f32,
+    ) -> Result<ID2D1PathGeometry> {
         self.path(|sink| unsafe {
             sink.BeginFigure(polar(outer, start), D2D1_FIGURE_BEGIN_FILLED);
             add_arc(sink, CENTER, outer, start, -span);
@@ -365,6 +388,4 @@ impl Drawing<'_> {
             sink.EndFigure(D2D1_FIGURE_END_CLOSED);
         })
     }
-
-
 }

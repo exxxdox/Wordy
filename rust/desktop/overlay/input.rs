@@ -1,7 +1,12 @@
-use super::*;
 use super::paint::*;
+use super::*;
 
-pub(super) unsafe extern "system" fn overlay_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+pub(super) unsafe extern "system" fn overlay_proc(
+    hwnd: HWND,
+    msg: u32,
+    wp: WPARAM,
+    lp: LPARAM,
+) -> LRESULT {
     // Never borrow app state inside a window procedure. Turn actions into queued messages.
     unsafe {
         let action = match msg {
@@ -344,13 +349,11 @@ unsafe fn sync_overlay_glass(hwnd: HWND) {
     }
 }
 
-
 unsafe fn overlay_key_brush(hwnd: HWND) -> HBRUSH {
     unsafe {
         let cached = GetPropW(hwnd, w!("WordyKeyBrush"));
         if !cached.is_null() {
             return cached;
-
         }
         let brush = CreateSolidBrush(OVERLAY_KEY);
         if !brush.is_null() && SetPropW(hwnd, w!("WordyKeyBrush"), brush) != 0 {
@@ -377,4 +380,3 @@ pub(super) unsafe fn enable_read(hwnd: HWND, enabled: bool) {
         )
     };
 }
-

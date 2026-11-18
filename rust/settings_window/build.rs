@@ -465,5 +465,4 @@ impl SettingsWindow {
             RedrawWindow(self.hwnd, ptr::null(), ptr::null_mut(), RDW_INVALIDATE);
         }
     }
-
 }

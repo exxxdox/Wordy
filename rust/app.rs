@@ -35,11 +35,11 @@ use crate::wheel::WheelStyle;
 use crate::wheel_window::WheelWindow;
 use crate::{backup, dialog};
 
-mod recording;
 mod actions;
 mod editor_actions;
 mod hotkeys;
 mod logging;
+mod recording;
 mod settings_actions;
 
 use hotkeys::*;
@@ -475,8 +475,6 @@ impl App {
         }
         Ok(())
     }
-
-
 }
 fn gain(value: &str) -> io::Result<f64> {
     value

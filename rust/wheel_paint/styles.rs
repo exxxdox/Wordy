@@ -1,6 +1,6 @@
 use super::draw::Drawing;
-use std::sync::LazyLock;
 use super::*;
+use std::sync::LazyLock;
 
 impl Drawing<'_> {
     pub(super) fn modern(&self, frame: WheelFrame<'_>, petals: bool) -> Result<()> {

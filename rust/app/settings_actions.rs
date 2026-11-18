@@ -448,7 +448,6 @@ impl App {
             Ok(())
         }
     }
-
 }
 
 fn set_volc_voice(voices: &mut Vec<Voice>, voice: Voice) {
@@ -457,4 +456,3 @@ fn set_volc_voice(voices: &mut Vec<Voice>, voice: Voice) {
         voices.insert(0, voice);
     }
 }
-
