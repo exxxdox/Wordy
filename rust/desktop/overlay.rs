@@ -344,11 +344,7 @@ impl Overlay {
 
     fn set_visual_settings(&mut self, settings: &Settings, dpi: u32) -> io::Result<()> {
         let pixel = |value| (value * dpi as i32 + 48) / 96;
-        let font_name = wide(if settings.ui_font.is_empty() {
-            "Segoe UI Variable"
-        } else {
-            &settings.ui_font
-        });
+        let font_name = wide(crate::config::ui_font_family(&settings.ui_font));
         let placeholder = wide(&settings.overlay_placeholder);
         unsafe {
             if SetPropW(

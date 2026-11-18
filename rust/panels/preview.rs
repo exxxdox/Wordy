@@ -50,6 +50,7 @@ struct PreviewState {
     hover: Option<usize>,
     labels: [String; 8],
     style: WheelStyle,
+    font: String,
     renderer: WheelRenderer,
     embedded: bool,
 }
@@ -63,6 +64,7 @@ impl Preview {
             hover: None,
             labels: std::array::from_fn(|_| String::new()),
             style: WheelStyle::Classic,
+            font: crate::config::DEFAULT_UI_FONT.into(),
             renderer,
             embedded,
         });
@@ -89,9 +91,11 @@ impl Preview {
         labels: &[String; 8],
         style: WheelStyle,
         slot: usize,
+        font: &str,
     ) -> io::Result<()> {
         self.state.labels = labels.clone();
         self.state.style = style;
+        self.state.font = crate::config::ui_font_family(font).to_owned();
         self.state.selected = Some(slot);
         render_preview(self.child, &mut self.state);
         Ok(())
@@ -101,6 +105,7 @@ impl Preview {
 fn render_preview(child: HWND, state: &mut PreviewState) {
     let labels = state.labels.clone();
     let mut frame = WheelFrame::new(&labels, state.style);
+    frame.font = &state.font;
     frame.editing = true;
     frame.selected = state.selected;
     let mut highlights = [0.0; 8];

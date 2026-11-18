@@ -179,9 +179,14 @@ impl App {
                 session.window.refresh(self.config.settings())?;
             }
             ADD if notification == 0 => {
-                let Some(value) =
-                    dialog::prompt(hwnd, "新增轮盘", "快捷键（例如 f9）", "f9", false)
-                else {
+                let Some(value) = dialog::prompt(
+                    hwnd,
+                    "新增轮盘",
+                    "快捷键（例如 f9）",
+                    "f9",
+                    false,
+                    &self.config.settings().ui_font,
+                ) else {
                     return Ok(());
                 };
                 let hotkey = value.trim().to_owned();

@@ -251,6 +251,7 @@ impl Trim {
     }
 
     pub fn refresh(&mut self, settings: &Settings) -> io::Result<()> {
+        self.chrome.set_ui_font(&settings.ui_font);
         if let Some(preview) = &mut self.preview {
             let wheel = settings.wheel(self.wheel).expect("wheel index in range");
             choices(&self.panel, WHEEL, wheel_names(settings), self.wheel);
@@ -275,6 +276,7 @@ impl Trim {
                 &wheel_labels(&wheel),
                 WheelStyle::from_config(&settings.chat_wheel_style),
                 self.slot,
+                &settings.ui_font,
             )?;
         }
         Ok(())

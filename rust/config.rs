@@ -19,6 +19,15 @@ pub const WHEEL_NAME_MAX_LENGTH: usize = 20;
 pub const SAVE_DEBOUNCE: Duration = Duration::from_millis(150);
 pub const CHAT_WHEEL_STYLES: [&str; 4] = ["classic", "glass", "petals", "game"];
 pub const LOG_LEVELS: [&str; 5] = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"];
+pub const DEFAULT_UI_FONT: &str = "Segoe UI Variable";
+
+pub fn ui_font_family(configured: &str) -> &str {
+    if configured.is_empty() {
+        DEFAULT_UI_FONT
+    } else {
+        configured
+    }
+}
 pub const CARTESIA_BYTES: &str = "Cartesia Bytes";
 pub const CARTESIA_REALTIME: &str = "Cartesia Realtime";
 pub const VOLCENGINE_STREAMING: &str = "Volcengine Streaming";
@@ -916,6 +925,12 @@ mod tests {
         assert_eq!(wheel.slots[7], "x.wav");
         assert_eq!(wheel.labels[7], "名称");
         assert_eq!(wheel.volumes[7], 2.5);
+    }
+
+    #[test]
+    fn empty_ui_font_uses_the_built_in_family() {
+        assert_eq!(ui_font_family(""), DEFAULT_UI_FONT);
+        assert_eq!(ui_font_family("Consolas"), "Consolas");
     }
 
     #[test]

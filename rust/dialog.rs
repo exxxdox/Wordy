@@ -3,8 +3,12 @@ use std::os::windows::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
 use std::ptr;
 use windows_sys::Win32::Foundation::{HWND, LPARAM, WPARAM};
-use windows_sys::Win32::Graphics::Gdi::{COLOR_WINDOW, GetSysColor};
+use windows_sys::Win32::Graphics::Gdi::{
+    CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, COLOR_WINDOW, CreateFontW, DEFAULT_CHARSET,
+    DEFAULT_PITCH, DeleteObject, FW_NORMAL, GetSysColor, HFONT, OUT_DEFAULT_PRECIS,
+};
 use windows_sys::Win32::UI::Controls::Dialogs::*;
+use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 use crate::desktop::{wide, window_text};
@@ -12,6 +16,41 @@ use crate::hotkey::{is_modifier, key_name, windows::is_down};
 
 // Win32 defines DWLP_USER as two pointer-sized dialog slots after DWLP_MSGRESULT.
 const DWLP_USER: i32 = (2 * mem::size_of::<usize>()) as i32;
+
+fn dialog_font(hwnd: HWND, font_family: &str) -> HFONT {
+    let dpi = unsafe { GetDpiForWindow(hwnd) }.max(96) as i32;
+    let family = wide(crate::config::ui_font_family(font_family));
+    unsafe {
+        CreateFontW(
+            -((9 * dpi) / 72),
+            0,
+            0,
+            0,
+            FW_NORMAL as i32,
+            0,
+            0,
+            0,
+            DEFAULT_CHARSET as u32,
+            OUT_DEFAULT_PRECIS as u32,
+            CLIP_DEFAULT_PRECIS as u32,
+            CLEARTYPE_QUALITY as u32,
+            DEFAULT_PITCH as u32,
+            family.as_ptr(),
+        )
+    }
+}
+
+fn apply_dialog_font(hwnd: HWND, font: HFONT, ids: &[i32]) {
+    if font.is_null() {
+        return;
+    }
+    for &id in ids {
+        let child = unsafe { GetDlgItem(hwnd, id) };
+        if !child.is_null() {
+            unsafe { SendMessageW(child, WM_SETFONT, font as usize, 1) };
+        }
+    }
+}
 
 pub fn file(
     owner: HWND,
@@ -72,7 +111,7 @@ pub fn confirm(owner: HWND, title: &str, message: &str) -> bool {
     }
 }
 
-pub fn record_key(owner: HWND, single: bool) -> Option<String> {
+pub fn record_key(owner: HWND, single: bool, font_family: &str) -> Option<String> {
     let mut template = Template::with_size("录制快捷键", 244, 68);
     template.control(
         0x82,
@@ -97,6 +136,8 @@ pub fn record_key(owner: HWND, single: bool) -> Option<String> {
         result: None,
         pressed: None,
         single,
+        font_family: font_family.into(),
+        font: ptr::null_mut(),
     };
     // The dialog procedure accesses this state only during the modal call.
     unsafe {
@@ -108,6 +149,9 @@ pub fn record_key(owner: HWND, single: bool) -> Option<String> {
             ptr::from_mut(&mut capture) as isize,
         )
     };
+    if !capture.font.is_null() {
+        unsafe { DeleteObject(capture.font) };
+    }
     capture.result
 }
 
@@ -116,6 +160,8 @@ struct Capture {
     result: Option<String>,
     pressed: Option<(u16, String)>,
     single: bool,
+    font_family: String,
+    font: HFONT,
 }
 
 unsafe extern "system" fn capture_proc(hwnd: HWND, message: u32, wp: WPARAM, lp: LPARAM) -> isize {
@@ -124,6 +170,8 @@ unsafe extern "system" fn capture_proc(hwnd: HWND, message: u32, wp: WPARAM, lp:
             WM_INITDIALOG => {
                 SetWindowLongPtrW(hwnd, DWLP_USER, lp);
                 let data = &mut *(lp as *mut Capture);
+                data.font = dialog_font(hwnd, &data.font_family);
+                apply_dialog_font(hwnd, data.font, &[100, IDCANCEL]);
                 data.previous = std::array::from_fn(|key| is_down(key as u16));
                 SetTimer(hwnd, 1, 12, None);
                 1
@@ -196,10 +244,13 @@ pub fn prompt(
     label: &str,
     value: &str,
     password: bool,
+    font_family: &str,
 ) -> Option<String> {
     let mut data = Prompt {
         value: Some(value.to_owned()),
         accepted: false,
+        font_family: font_family.into(),
+        font: ptr::null_mut(),
     };
     let mut template = Template::new(title);
     template.control(0x0082, 100, label, WS_VISIBLE | WS_CHILD, [9, 9, 214, 16]);
@@ -239,20 +290,27 @@ pub fn prompt(
             ptr::from_mut(&mut data) as LPARAM,
         )
     };
+    if !data.font.is_null() {
+        unsafe { DeleteObject(data.font) };
+    }
     if data.accepted { data.value } else { None }
 }
 
 struct Prompt {
     value: Option<String>,
     accepted: bool,
+    font_family: String,
+    font: HFONT,
 }
 
 unsafe extern "system" fn prompt_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> isize {
     unsafe {
         match msg {
             WM_INITDIALOG => {
-                let data = &*(lp as *const Prompt);
+                let data = &mut *(lp as *mut Prompt);
                 SetWindowLongPtrW(hwnd, DWLP_USER, lp);
+                data.font = dialog_font(hwnd, &data.font_family);
+                apply_dialog_font(hwnd, data.font, &[100, 101, IDOK, IDCANCEL]);
                 let value = wide(data.value.as_deref().unwrap_or_default());
                 SetDlgItemTextW(hwnd, 101, value.as_ptr());
                 // Native single-line edits draw at the top; centre the text in
@@ -316,7 +374,7 @@ impl Template {
         template.words.extend([0, 0, 0, width, height, 0, 0]);
         template.words.extend(wide(title));
         template.words.push(9);
-        template.words.extend(wide("Microsoft YaHei UI"));
+        template.words.extend(wide(crate::config::DEFAULT_UI_FONT));
         template
     }
 

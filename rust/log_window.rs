@@ -11,7 +11,7 @@ use windows_sys::Win32::{
     System::LibraryLoader::GetModuleHandleW,
     UI::{
         Controls::{EM_LINEINDEX, EM_REPLACESEL, EM_SCROLLCARET, EM_SETSEL},
-        HiDpi::GetDpiForSystem,
+        HiDpi::{GetDpiForSystem, GetDpiForWindow},
         WindowsAndMessaging::{
             CREATESTRUCTW, CreateWindowExW, DefWindowProcW, DestroyIcon, DestroyWindow,
             ES_AUTOVSCROLL, ES_MULTILINE, ES_READONLY, GWLP_USERDATA, GetClientRect, GetCursorPos,
@@ -42,7 +42,7 @@ pub struct LogWindow {
 }
 
 impl LogWindow {
-    pub fn open(owner: HWND) -> io::Result<Self> {
+    pub fn open(owner: HWND, font_family: &str) -> io::Result<Self> {
         let instance = unsafe { GetModuleHandleW(ptr::null()) };
         let class = WNDCLASSW {
             lpfnWndProc: Some(window_proc),
@@ -85,25 +85,7 @@ impl LogWindow {
             return Err(io::Error::last_os_error());
         }
         let state = unsafe { &mut *(GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut State) };
-        let family = w!("Consolas");
-        state.font = unsafe {
-            CreateFontW(
-                -px(14),
-                0,
-                0,
-                0,
-                FW_NORMAL as i32,
-                0,
-                0,
-                0,
-                DEFAULT_CHARSET as u32,
-                OUT_DEFAULT_PRECIS as u32,
-                CLIP_DEFAULT_PRECIS as u32,
-                CLEARTYPE_QUALITY as u32,
-                DEFAULT_PITCH as u32,
-                family,
-            )
-        };
+        state.font = log_font(font_family, -px(14));
         state.brush = unsafe { CreateSolidBrush(BACKGROUND) };
         state.edit = unsafe {
             CreateWindowExW(
@@ -140,6 +122,27 @@ impl LogWindow {
             SetForegroundWindow(hwnd);
         }
         Ok(Self { hwnd })
+    }
+
+    pub fn set_font(&self, font_family: &str) {
+        let dpi = unsafe { GetDpiForWindow(self.hwnd) }.max(96) as i32;
+        let height = -((14 * dpi + 48) / 96);
+        let font = log_font(font_family, height);
+        if font.is_null() {
+            return;
+        }
+        let state = unsafe { &mut *(GetWindowLongPtrW(self.hwnd, GWLP_USERDATA) as *mut State) };
+        if state.edit.is_null() {
+            unsafe { DeleteObject(font as HGDIOBJ) };
+            return;
+        }
+        unsafe {
+            SendMessageW(state.edit, WM_SETFONT, font as usize, 1);
+            let old = std::mem::replace(&mut state.font, font);
+            if !old.is_null() {
+                DeleteObject(old as HGDIOBJ);
+            }
+        }
     }
 
     pub fn set_lines(&self, lines: &[String]) {
@@ -192,6 +195,32 @@ impl LogWindow {
 impl Drop for LogWindow {
     fn drop(&mut self) {
         unsafe { DestroyWindow(self.hwnd) };
+    }
+}
+
+fn log_font(font_family: &str, height: i32) -> HFONT {
+    let family = crate::desktop::wide(if font_family.is_empty() {
+        "Consolas"
+    } else {
+        font_family
+    });
+    unsafe {
+        CreateFontW(
+            height,
+            0,
+            0,
+            0,
+            FW_NORMAL as i32,
+            0,
+            0,
+            0,
+            DEFAULT_CHARSET as u32,
+            OUT_DEFAULT_PRECIS as u32,
+            CLIP_DEFAULT_PRECIS as u32,
+            CLEARTYPE_QUALITY as u32,
+            DEFAULT_PITCH as u32,
+            family.as_ptr(),
+        )
     }
 }
 
@@ -275,8 +304,21 @@ mod tests {
     use windows_sys::Win32::UI::Controls::EM_GETLINECOUNT;
 
     #[test]
+    fn changing_the_log_font_replaces_the_handle() {
+        let window = LogWindow::open(ptr::null_mut(), "").unwrap();
+        let before =
+            unsafe { (*(GetWindowLongPtrW(window.hwnd, GWLP_USERDATA) as *const State)).font };
+        window.set_font("Consolas");
+        let after =
+            unsafe { (*(GetWindowLongPtrW(window.hwnd, GWLP_USERDATA) as *const State)).font };
+        assert!(!before.is_null());
+        assert!(!after.is_null());
+        assert_ne!(before, after);
+    }
+
+    #[test]
     fn trimming_removes_only_the_oldest_line() {
-        let window = LogWindow::open(ptr::null_mut()).unwrap();
+        let window = LogWindow::open(ptr::null_mut(), "").unwrap();
         window.set_lines(&["one".into(), "two".into(), "three".into()]);
         let state = unsafe { &*(GetWindowLongPtrW(window.hwnd, GWLP_USERDATA) as *const State) };
         assert_eq!(

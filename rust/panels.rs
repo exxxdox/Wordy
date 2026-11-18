@@ -1,4 +1,7 @@
-use std::{cell::Cell, io, mem, ptr};
+use std::{
+    cell::{Cell, RefCell},
+    io, mem, ptr,
+};
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Dwm::{
     DWMWA_CAPTION_COLOR, DWMWA_USE_IMMERSIVE_DARK_MODE, DWMWA_WINDOW_CORNER_PREFERENCE,
@@ -128,9 +131,14 @@ struct ChromeState {
     precise: Cell<bool>,
     previewing: Cell<bool>,
     text_mode: Cell<bool>,
+    ui_font: RefCell<String>,
 }
 
 impl Chrome {
+    pub(super) fn set_ui_font(&self, font: &str) {
+        self.state.ui_font.replace(font.to_owned());
+    }
+
     fn attach(panel: &Panel, trim: bool, rolling: bool) -> io::Result<Self> {
         let mut state = Box::new(ChromeState {
             surface: unsafe { CreateSolidBrush(PANEL_SURFACE) },
@@ -141,6 +149,7 @@ impl Chrome {
             precise: Cell::new(false),
             previewing: Cell::new(false),
             text_mode: Cell::new(false),
+            ui_font: RefCell::new(String::new()),
         });
         if !trim || rolling {
             // Keep the numeric field as the existing app-message contract and display a slider instead.
@@ -530,8 +539,9 @@ unsafe extern "system" fn chrome_proc(
             }
             WM_COMMAND if !state.trim && wp as u16 == RENAME => {
                 let current = window_text(GetDlgItem(hwnd, i32::from(NAME)));
+                let ui_font = state.ui_font.borrow().clone();
                 if let Some(name) =
-                    crate::dialog::prompt(hwnd, "重命名轮盘", "轮盘名称", &current, false)
+                    crate::dialog::prompt(hwnd, "重命名轮盘", "轮盘名称", &current, false, &ui_font)
                 {
                     let name = name.trim().to_owned();
                     if name != current {

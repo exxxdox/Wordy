@@ -1614,7 +1614,7 @@ fn scale_at_cursor() -> i32 {
     }
 }
 
-const DEFAULT_FAMILY: &str = "Segoe UI Variable";
+const DEFAULT_FAMILY: &str = crate::config::DEFAULT_UI_FONT;
 
 fn installed_fonts() -> Vec<String> {
     let mut family_names: Vec<String> = Vec::new();
@@ -1683,7 +1683,7 @@ fn usable_font<'a>(families: &[String], configured: &'a str) -> &'a str {
 
 fn create_fonts(family: &str, scale: i32) -> [HFONT; 4] {
     let family = wide(if family.is_empty() {
-        "Segoe UI Variable"
+        DEFAULT_FAMILY
     } else {
         family
     });

@@ -132,7 +132,12 @@ impl Toasts {
         self.clock.elapsed().as_millis() as u64
     }
 
-    pub(crate) fn tick(&mut self, owner: HWND, anchor: Option<RECT>) -> io::Result<()> {
+    pub(crate) fn tick(
+        &mut self,
+        owner: HWND,
+        anchor: Option<RECT>,
+        font_family: &str,
+    ) -> io::Result<()> {
         if self.queue.cards.is_empty() {
             return Ok(());
         }
@@ -169,16 +174,22 @@ impl Toasts {
             let index = match self.popups.iter().position(|popup| popup.id == card.id) {
                 Some(index) => index,
                 None => {
-                    self.popups.push(Popup::new(owner, card, max_text, dpi)?);
+                    self.popups
+                        .push(Popup::new(owner, card, max_text, dpi, font_family)?);
                     self.popups.len() - 1
                 }
             };
             let popup = &mut self.popups[index];
-            if popup.tone != card.tone || popup.dpi != dpi || popup.max_text != max_text {
-                popup.surface = Surface::new(&card.text, card.tone, max_text, dpi)?;
+            if popup.tone != card.tone
+                || popup.dpi != dpi
+                || popup.max_text != max_text
+                || popup.font_family != font_family
+            {
+                popup.surface = Surface::new(&card.text, card.tone, max_text, dpi, font_family)?;
                 popup.tone = card.tone;
                 popup.dpi = dpi;
                 popup.max_text = max_text;
+                popup.font_family = font_family.into();
                 popup.presented = None;
             }
             let (width, height) = (popup.surface.size.cx, popup.surface.size.cy);
@@ -201,6 +212,7 @@ struct Popup {
     tone: Tone,
     dpi: u32,
     max_text: i32,
+    font_family: String,
     surface: Surface,
     bounds: RECT,
     presented: Option<(i32, i32, u8)>,
@@ -210,8 +222,14 @@ struct Popup {
 }
 
 impl Popup {
-    fn new(owner: HWND, card: &Card, max_text: i32, dpi: u32) -> io::Result<Self> {
-        let surface = Surface::new(&card.text, card.tone, max_text, dpi)?;
+    fn new(
+        owner: HWND,
+        card: &Card,
+        max_text: i32,
+        dpi: u32,
+        font_family: &str,
+    ) -> io::Result<Self> {
+        let surface = Surface::new(&card.text, card.tone, max_text, dpi, font_family)?;
         // An owned popup stays above its settings window without taking keyboard focus.
         let hwnd = unsafe {
             CreateWindowExW(
@@ -238,6 +256,7 @@ impl Popup {
             tone: card.tone,
             dpi,
             max_text,
+            font_family: font_family.into(),
             surface,
             bounds: RECT::default(),
             presented: None,
@@ -320,8 +339,15 @@ struct Surface {
 }
 
 impl Surface {
-    fn new(message: &str, tone: Tone, max_text: i32, dpi: u32) -> io::Result<Self> {
+    fn new(
+        message: &str,
+        tone: Tone,
+        max_text: i32,
+        dpi: u32,
+        font_family: &str,
+    ) -> io::Result<Self> {
         let px = |value| scale(value, dpi);
+        let family = wide(crate::config::ui_font_family(font_family));
         let mut text = wide(message);
         // Draw into private top-down pixels, then pass the surface to UpdateLayeredWindow.
         unsafe {
@@ -343,7 +369,7 @@ impl Surface {
                 0,
                 ANTIALIASED_QUALITY as u32,
                 0,
-                w!("Microsoft YaHei UI"),
+                family.as_ptr(),
             );
             let previous_font = if font.is_null() {
                 ptr::null_mut()
@@ -559,12 +585,13 @@ mod tests {
         assert_eq!(pixel(23, 27), [58, 69, 255, 255]);
         assert!(pixel(80, 54)[3] > 0 && pixel(80, 54)[3] < 128);
         assert_ne!(pixel(70, 22), pixel(70, 38));
-        let short = Surface::new("已保存", Tone::Success, 300, 96).unwrap();
+        let short = Surface::new("已保存", Tone::Success, 300, 96, "").unwrap();
         let long = Surface::new(
             &"设置已保存，请重试操作。".repeat(20),
             Tone::Success,
             300,
             96,
+            "",
         )
         .unwrap();
         assert!(long.size.cx > short.size.cx && long.size.cy > short.size.cy);

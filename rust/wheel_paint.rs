@@ -54,6 +54,7 @@ pub struct WheelFrame<'a> {
     pub editing: bool,
     pub opacity: f64,
     pub anchor: Option<Point>,
+    pub font: &'a str,
 }
 
 impl<'a> WheelFrame<'a> {
@@ -66,6 +67,7 @@ impl<'a> WheelFrame<'a> {
             editing: false,
             opacity: 1.0,
             anchor: None,
+            font: crate::config::DEFAULT_UI_FONT,
         }
     }
 
@@ -358,13 +360,14 @@ impl Drawing<'_> {
 
     fn text_format(
         &self,
-        family: PCWSTR,
+        family: &str,
         size: f32,
         weight: DWRITE_FONT_WEIGHT,
     ) -> Result<IDWriteTextFormat> {
+        let family: Vec<u16> = family.encode_utf16().chain([0]).collect();
         unsafe {
             let format = self.renderer.text.CreateTextFormat(
-                family,
+                PCWSTR(family.as_ptr()),
                 None,
                 weight,
                 DWRITE_FONT_STYLE_NORMAL,
@@ -512,11 +515,7 @@ impl Drawing<'_> {
         } else {
             13.0
         };
-        let hint_format = self.text_format(
-            w!("Microsoft YaHei UI"),
-            hint_size,
-            DWRITE_FONT_WEIGHT_NORMAL,
-        )?;
+        let hint_format = self.text_format(frame.font, hint_size, DWRITE_FONT_WEIGHT_NORMAL)?;
         let hint = if frame.editing {
             "选择槽位"
         } else if title.is_empty() {
@@ -596,12 +595,12 @@ impl Drawing<'_> {
             }
         }
         let numbers = self.text_format(
-            w!("Segoe UI"),
+            frame.font,
             if frame.editing { 17.0 } else { 13.0 },
             DWRITE_FONT_WEIGHT_NORMAL,
         )?;
         let font = self.text_format(
-            w!("Microsoft YaHei UI"),
+            frame.font,
             if frame.editing { 25.0 } else { 19.0 },
             DWRITE_FONT_WEIGHT_DEMI_BOLD,
         )?;
@@ -740,12 +739,12 @@ impl Drawing<'_> {
             ],
         )?;
         let numbers = self.text_format(
-            w!("Segoe UI"),
+            frame.font,
             pt(if frame.editing { 13.0 } else { 9.0 }),
             DWRITE_FONT_WEIGHT_NORMAL,
         )?;
         let font = self.text_format(
-            w!("Microsoft YaHei UI"),
+            frame.font,
             pt(if frame.editing { 14.0 } else { 10.0 }),
             DWRITE_FONT_WEIGHT_DEMI_BOLD,
         )?;
@@ -926,7 +925,7 @@ impl Drawing<'_> {
         let mut knob = CENTER;
         for (index, (label, &strength)) in frame.labels.iter().zip(&strengths).enumerate() {
             let font = self.text_format(
-                w!("Microsoft YaHei UI"),
+                frame.font,
                 (22.0 + 4.0 * strength).round_ties_even(),
                 DWRITE_FONT_WEIGHT_NORMAL,
             )?;

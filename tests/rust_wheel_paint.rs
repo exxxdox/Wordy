@@ -78,6 +78,20 @@ fn game_picker_knob_stays_with_selected_slot_while_hovering_elsewhere() {
 }
 
 #[test]
+fn configured_font_changes_the_rendered_labels() {
+    let renderer = WheelRenderer::new().unwrap();
+    let labels = std::array::from_fn(|_| String::from("MMMM"));
+    let mut first = WheelFrame::new(&labels, WheelStyle::Classic);
+    first.font = "Segoe UI Variable";
+    let mut second = first;
+    second.font = "Consolas";
+    assert_ne!(
+        renderer.render(first, 1.0).unwrap().pixels,
+        renderer.render(second, 1.0).unwrap().pixels
+    );
+}
+
+#[test]
 fn classic_shadow_fades_outside_the_disc() {
     let renderer = WheelRenderer::new().unwrap();
     let labels = std::array::from_fn(|_| String::new());

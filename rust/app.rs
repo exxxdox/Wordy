@@ -399,6 +399,7 @@ impl App {
         if let Err(error) = self.toasts.tick(
             self.settings_window.hwnd(),
             self.settings_window.toast_anchor(),
+            &self.config.settings().ui_font,
         ) {
             self.toasts.clear();
             self.log_at("WARNING", format!("设置反馈显示失败：{error}"));
@@ -507,6 +508,7 @@ impl App {
                             &labels,
                             WheelStyle::from_config(&self.config.settings().chat_wheel_style),
                             key,
+                            &self.config.settings().ui_font,
                         )
                         .map_err(io::Error::other)?
                     {
@@ -601,7 +603,7 @@ impl App {
         match &self.log_window {
             Some(window) => window.show_existing(),
             None => {
-                let window = LogWindow::open(self.host)?;
+                let window = LogWindow::open(self.host, &self.config.settings().ui_font)?;
                 let lines = self.logs.iter().cloned().collect::<Vec<_>>();
                 window.set_lines(&lines);
                 self.log_window = Some(window);
@@ -657,7 +659,18 @@ impl App {
             }
             SetUiFont(value) => {
                 self.edit(|s| s.ui_font = value)?;
+                self.settings_window.apply_panel_font(self.editor.panel.0);
+                if let Some(trim) = &self.trim {
+                    self.settings_window.apply_panel_font(trim.window.panel.0);
+                }
+                self.refresh_editor()?;
+                if let Some(trim) = &mut self.trim {
+                    trim.window.refresh(self.config.settings())?;
+                }
                 self.overlay.apply_visual_settings(self.config.settings())?;
+                if let Some(window) = &self.log_window {
+                    window.set_font(&self.config.settings().ui_font);
+                }
             }
             SetFixedCenter(fixed) => self.edit(|s| s.fixed_center = fixed)?,
             SetLogLevel(level) => self.edit(|s| s.log_level = level)?,
@@ -667,6 +680,7 @@ impl App {
                     &mut self.hotkeys,
                     self.settings_window.hwnd(),
                     matches!(action, RecordHoldKey),
+                    &self.config.settings().ui_font,
                 )?
                 else {
                     return Ok(());
@@ -933,14 +947,28 @@ impl App {
         {
             return Ok(());
         }
-        let Some(password) = dialog::prompt(owner, title, "备份密码", "", true) else {
+        let Some(password) = dialog::prompt(
+            owner,
+            title,
+            "备份密码",
+            "",
+            true,
+            &self.config.settings().ui_font,
+        ) else {
             return Ok(());
         };
         if password.is_empty() {
             return Err(io::Error::other("备份密码不能为空"));
         }
         if export {
-            let Some(check) = dialog::prompt(owner, title, "确认备份密码", "", true) else {
+            let Some(check) = dialog::prompt(
+                owner,
+                title,
+                "确认备份密码",
+                "",
+                true,
+                &self.config.settings().ui_font,
+            ) else {
                 return Ok(());
             };
             if check != password {
@@ -1028,9 +1056,14 @@ impl App {
                 self.config.update(|s| s.chat_wheel_style = style.into())?;
             }
             ADD if notification == 0 => {
-                let Some(value) =
-                    dialog::prompt(hwnd, "新增轮盘", "快捷键（例如 f9）", "f9", false)
-                else {
+                let Some(value) = dialog::prompt(
+                    hwnd,
+                    "新增轮盘",
+                    "快捷键（例如 f9）",
+                    "f9",
+                    false,
+                    &self.config.settings().ui_font,
+                ) else {
                     return Ok(());
                 };
                 let hotkey = value.trim().to_owned();
@@ -1060,7 +1093,13 @@ impl App {
                 }
             }
             HOTKEY if notification == 0 => {
-                let Some(hotkey) = capture_binding(&mut self.hotkeys, hwnd, false)? else {
+                let Some(hotkey) = capture_binding(
+                    &mut self.hotkeys,
+                    hwnd,
+                    false,
+                    &self.config.settings().ui_font,
+                )?
+                else {
                     return Ok(());
                 };
                 let mut next = self.config.settings().clone();
@@ -1364,14 +1403,19 @@ fn gain(value: &str) -> io::Result<f64> {
         .ok_or_else(|| io::Error::other("请输入有效音量"))
 }
 
-fn capture_binding(hotkeys: &mut Hotkeys, owner: HWND, single: bool) -> io::Result<Option<String>> {
+fn capture_binding(
+    hotkeys: &mut Hotkeys,
+    owner: HWND,
+    single: bool,
+    font_family: &str,
+) -> io::Result<Option<String>> {
     // Clear global registrations while capturing so the old shortcut cannot open a second surface.
     let previous: Vec<_> = hotkeys
         .current
         .drain()
         .map(|(binding, registered)| (binding, registered.action))
         .collect();
-    let binding = dialog::record_key(owner, single);
+    let binding = dialog::record_key(owner, single, font_family);
     let mut failures = Vec::new();
     for (key, action) in previous {
         match hotkeys.register_new(key, action) {

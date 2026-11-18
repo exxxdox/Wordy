@@ -87,6 +87,7 @@ impl Editor {
     }
 
     pub fn refresh(&mut self, settings: &Settings) -> io::Result<()> {
+        self.chrome.set_ui_font(&settings.ui_font);
         self.wheel = self.wheel.min(settings.wheel_count() - 1);
         let wheel = settings.wheel(self.wheel).expect("wheel index in range");
         choices(&self.panel, WHEEL, wheel_names(settings), self.wheel);
@@ -164,6 +165,7 @@ impl Editor {
             &wheel_labels(&wheel),
             WheelStyle::from_config(&settings.chat_wheel_style),
             self.slot,
+            &settings.ui_font,
         )
     }
 

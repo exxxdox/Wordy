@@ -47,6 +47,7 @@ pub struct WheelWindow {
     clock: Instant,
     monitor_origin: Point,
     scale: f64,
+    font: String,
 }
 
 impl WheelWindow {
@@ -96,6 +97,7 @@ impl WheelWindow {
             clock: Instant::now(),
             monitor_origin: Point::default(),
             scale: 1.0,
+            font: crate::config::DEFAULT_UI_FONT.into(),
         })
     }
 
@@ -107,10 +109,17 @@ impl WheelWindow {
         self.visible
     }
 
-    pub fn open(&mut self, labels: &[String], style: WheelStyle, key: u16) -> Result<bool> {
+    pub fn open(
+        &mut self,
+        labels: &[String],
+        style: WheelStyle,
+        key: u16,
+        font: &str,
+    ) -> Result<bool> {
         if self.state.is_active() {
             return Ok(false);
         }
+        self.font = crate::config::ui_font_family(font).to_owned();
         let cursor = cursor_position()?;
         let monitor = unsafe { MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST) };
         let mut info = MONITORINFO {
@@ -210,6 +219,7 @@ impl WheelWindow {
             }
         }
         let mut frame = WheelFrame::new(self.state.labels(), self.state.style());
+        frame.font = &self.font;
         frame.opacity = visuals.opacity;
         frame.selected = visuals.selected;
         frame.highlights = Some(visuals.highlights);
