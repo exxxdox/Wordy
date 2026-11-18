@@ -13,13 +13,13 @@ use windows_sys::Win32::{
         Controls::{EM_REPLACESEL, EM_SCROLLCARET, EM_SETSEL},
         HiDpi::GetDpiForSystem,
         WindowsAndMessaging::{
-            CREATESTRUCTW, CreateWindowExW, DefWindowProcW, DestroyWindow, ES_AUTOVSCROLL,
-            ES_MULTILINE, ES_READONLY, GWLP_USERDATA, GetClientRect, GetCursorPos,
-            GetWindowLongPtrW, MoveWindow, RegisterClassW, SW_HIDE, SW_SHOW, SW_SHOWNORMAL,
-            SendMessageW, SetForegroundWindow, SetWindowLongPtrW, ShowWindow, WM_CLOSE,
-            WM_CTLCOLOREDIT, WM_CTLCOLORSTATIC, WM_ERASEBKGND, WM_NCCREATE, WM_NCDESTROY,
-            WM_SETFONT, WM_SIZE, WNDCLASSW, WS_CHILD, WS_CLIPCHILDREN, WS_OVERLAPPEDWINDOW,
-            WS_VISIBLE, WS_VSCROLL,
+            CREATESTRUCTW, CreateWindowExW, DefWindowProcW, DestroyIcon, DestroyWindow,
+            ES_AUTOVSCROLL, ES_MULTILINE, ES_READONLY, GWLP_USERDATA, GetClientRect, GetCursorPos,
+            GetWindowLongPtrW, HICON, ICON_BIG, ICON_SMALL, MoveWindow, RegisterClassW, SW_HIDE,
+            SW_SHOW, SW_SHOWNORMAL, SendMessageW, SetForegroundWindow, SetWindowLongPtrW,
+            ShowWindow, WM_CLOSE, WM_CTLCOLOREDIT, WM_CTLCOLORSTATIC, WM_ERASEBKGND, WM_NCCREATE,
+            WM_NCDESTROY, WM_SETFONT, WM_SETICON, WM_SIZE, WNDCLASSW, WS_CHILD, WS_CLIPCHILDREN,
+            WS_OVERLAPPEDWINDOW, WS_VISIBLE, WS_VSCROLL,
         },
     },
 };
@@ -34,6 +34,7 @@ struct State {
     edit: HWND,
     font: HFONT,
     brush: HBRUSH,
+    icon: HICON,
 }
 
 pub struct LogWindow {
@@ -62,6 +63,7 @@ impl LogWindow {
             edit: ptr::null_mut(),
             font: ptr::null_mut(),
             brush: ptr::null_mut(),
+            icon: ptr::null_mut(),
         });
         let hwnd = unsafe {
             CreateWindowExW(
@@ -128,6 +130,11 @@ impl LogWindow {
             SendMessageW(state.edit, WM_SETFONT, state.font as usize, 1);
             // EM_SETBKGNDCOLOR prevents the default white edit background on first paint.
             SendMessageW(state.edit, 0x0433, 0, BACKGROUND as isize);
+            if let Ok(icon) = crate::desktop::wordy_icon() {
+                state.icon = icon;
+                SendMessageW(hwnd, WM_SETICON, ICON_BIG as usize, icon as isize);
+                SendMessageW(hwnd, WM_SETICON, ICON_SMALL as usize, icon as isize);
+            }
             ShowWindow(hwnd, SW_SHOWNORMAL);
             UpdateWindow(hwnd);
             SetForegroundWindow(hwnd);
@@ -232,6 +239,9 @@ unsafe extern "system" fn window_proc(
                 }
                 if !state.brush.is_null() {
                     DeleteObject(state.brush as HGDIOBJ);
+                }
+                if !state.icon.is_null() {
+                    DestroyIcon(state.icon);
                 }
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
                 DefWindowProcW(hwnd, message, wparam, lparam)

@@ -454,7 +454,7 @@ fn recording_icon(icon: HICON) -> HICON {
     }
 }
 
-fn wordy_icon() -> io::Result<HICON> {
+pub(crate) fn wordy_icon() -> io::Result<HICON> {
     let bytes = include_bytes!("assets/wordy.ico");
     let count = u16::from_le_bytes([bytes[4], bytes[5]]) as usize;
     let icon = bytes[6..6 + count * 16]

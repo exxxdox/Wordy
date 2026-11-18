@@ -3,6 +3,7 @@ use std::os::windows::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
 use std::ptr;
 use windows_sys::Win32::Foundation::{HWND, LPARAM, WPARAM};
+use windows_sys::Win32::Graphics::Gdi::{COLOR_WINDOW, GetSysColor};
 use windows_sys::Win32::UI::Controls::Dialogs::*;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
@@ -254,6 +255,9 @@ unsafe extern "system" fn prompt_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                 SetWindowLongPtrW(hwnd, DWLP_USER, lp);
                 let value = wide(data.value.as_deref().unwrap_or_default());
                 SetDlgItemTextW(hwnd, 101, value.as_ptr());
+                // Native single-line edits draw at the top; centre the text in
+                // the prompt field the same way the settings editors do.
+                crate::desktop::center_edit_text(GetDlgItem(hwnd, 101), GetSysColor(COLOR_WINDOW));
                 1
             }
             WM_COMMAND if matches!(wp as u16 as i32, IDOK | IDCANCEL) => {

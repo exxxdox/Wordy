@@ -952,7 +952,7 @@ impl SettingsWindow {
                 Some(SaveVoice),
                 Button,
                 "添加 / 保存音色",
-                [955, 545, 117, 32],
+                [892, 545, 180, 32],
             ),
             (
                 Page::Wheels,
