@@ -7,8 +7,10 @@ use windows_sys::Win32::Graphics::Gdi::{
     CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, COLOR_WINDOW, CreateFontW, DEFAULT_CHARSET,
     DEFAULT_PITCH, DeleteObject, FW_NORMAL, GetSysColor, HFONT, OUT_DEFAULT_PRECIS,
 };
+use windows_sys::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
 use windows_sys::Win32::UI::Controls::Dialogs::*;
 use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 use crate::desktop::{wide, window_text};
@@ -37,6 +39,33 @@ fn dialog_font(hwnd: HWND, font_family: &str) -> HFONT {
             DEFAULT_PITCH as u32,
             family.as_ptr(),
         )
+    }
+}
+
+/// Posted after WM_INITDIALOG, when the dialog is visible and can be activated.
+const FORCE_FOREGROUND: u32 = WM_APP + 17;
+
+/// Modal dialogs are owned by the settings window, which the app may have
+/// opened while another process still holds the foreground. Windows then
+/// refuses to activate the dialog, keystrokes keep going to the other app, and
+/// the hotkey recorder hears nothing. Attach to the foreground thread once to
+/// hand the dialog the foreground explicitly.
+fn force_foreground(hwnd: HWND) {
+    unsafe {
+        let foreground = GetForegroundWindow();
+        let foreground_thread = if foreground.is_null() {
+            0
+        } else {
+            GetWindowThreadProcessId(foreground, ptr::null_mut())
+        };
+        let current = GetCurrentThreadId();
+        let attached = foreground_thread != 0
+            && foreground_thread != current
+            && AttachThreadInput(current, foreground_thread, 1) != 0;
+        SetForegroundWindow(hwnd);
+        if attached {
+            AttachThreadInput(current, foreground_thread, 0);
+        }
     }
 }
 
@@ -172,8 +201,15 @@ unsafe extern "system" fn capture_proc(hwnd: HWND, message: u32, wp: WPARAM, lp:
                 let data = &mut *(lp as *mut Capture);
                 data.font = dialog_font(hwnd, &data.font_family);
                 apply_dialog_font(hwnd, data.font, &[100, IDCANCEL]);
+                // The dialog is still hidden here; activate it once shown.
+                PostMessageW(hwnd, FORCE_FOREGROUND, 0, 0);
                 data.previous = std::array::from_fn(|key| is_down(key as u16));
                 SetTimer(hwnd, 1, 12, None);
+                1
+            }
+            FORCE_FOREGROUND => {
+                force_foreground(hwnd);
+                SetFocus(hwnd);
                 1
             }
             WM_TIMER if GetForegroundWindow() == hwnd => {
@@ -311,11 +347,17 @@ unsafe extern "system" fn prompt_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                 SetWindowLongPtrW(hwnd, DWLP_USER, lp);
                 data.font = dialog_font(hwnd, &data.font_family);
                 apply_dialog_font(hwnd, data.font, &[100, 101, IDOK, IDCANCEL]);
+                PostMessageW(hwnd, FORCE_FOREGROUND, 0, 0);
                 let value = wide(data.value.as_deref().unwrap_or_default());
                 SetDlgItemTextW(hwnd, 101, value.as_ptr());
                 // Native single-line edits draw at the top; centre the text in
                 // the prompt field the same way the settings editors do.
                 crate::desktop::center_edit_text(GetDlgItem(hwnd, 101), GetSysColor(COLOR_WINDOW));
+                1
+            }
+            FORCE_FOREGROUND => {
+                force_foreground(hwnd);
+                SetFocus(GetDlgItem(hwnd, 101));
                 1
             }
             WM_COMMAND if matches!(wp as u16 as i32, IDOK | IDCANCEL) => {
@@ -472,5 +514,45 @@ unsafe extern "system" fn panel_proc(hwnd: HWND, message: u32, wp: WPARAM, lp: L
             PostMessageW(host, event as u32, message_id, hwnd as isize);
         }
         1
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::desktop::host_window;
+    use std::time::Duration;
+    use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+
+    #[test]
+    fn hotkey_recorder_takes_the_foreground_and_returns_on_cancel() {
+        let instance = unsafe { GetModuleHandleW(ptr::null()) };
+        let owner = host_window(instance).unwrap();
+        let title = wide("录制快捷键");
+        // The probe runs while record_key owns the modal loop on the test thread.
+        let took_foreground = std::thread::spawn(move || {
+            // The dialog exists a moment before the posted activation runs.
+            let deadline = std::time::Instant::now() + Duration::from_secs(2);
+            let mut dialog: HWND = ptr::null_mut();
+            while std::time::Instant::now() < deadline {
+                if dialog.is_null() {
+                    dialog = unsafe { FindWindowW(ptr::null(), title.as_ptr()) };
+                }
+                if !dialog.is_null() && unsafe { GetForegroundWindow() == dialog } {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            let foreground = !dialog.is_null() && unsafe { GetForegroundWindow() == dialog };
+            if !dialog.is_null() {
+                unsafe { PostMessageW(dialog, WM_COMMAND, IDCANCEL as usize, 0) };
+            }
+            foreground
+        });
+        let binding = record_key(owner, false, crate::config::DEFAULT_UI_FONT);
+        let took_foreground = took_foreground.join().unwrap();
+        unsafe { DestroyWindow(owner) };
+        assert!(binding.is_none(), "cancel must not record a binding");
+        assert!(took_foreground, "the recorder must own the keyboard");
     }
 }
