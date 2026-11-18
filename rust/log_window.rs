@@ -57,8 +57,7 @@ impl LogWindow {
 
         let scale = unsafe { GetDpiForSystem() }.max(96) as i32;
         let px = |units: i32| (units * scale + 48) / 96;
-        let (width, height) = (px(800), px(500));
-        let origin = centered_origin(width, height);
+        let (origin, width, height) = centered_frame(px(1080), px(720));
         let state = Box::new(State {
             edit: ptr::null_mut(),
             font: ptr::null_mut(),
@@ -234,7 +233,9 @@ fn log_font(font_family: &str, height: i32) -> HFONT {
     }
 }
 
-fn centered_origin(width: i32, height: i32) -> POINT {
+/// Centres the window on the cursor monitor and never lets it exceed the work
+/// area, so the larger default still fits small laptop screens.
+fn centered_frame(width: i32, height: i32) -> (POINT, i32, i32) {
     let mut cursor = POINT::default();
     unsafe { GetCursorPos(&mut cursor) };
     let monitor = unsafe { MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST) };
@@ -242,15 +243,20 @@ fn centered_origin(width: i32, height: i32) -> POINT {
         cbSize: mem::size_of::<MONITORINFO>() as u32,
         ..Default::default()
     };
-    if unsafe { GetMonitorInfoW(monitor, &mut info) } != 0 {
-        let work = info.rcWork;
+    if unsafe { GetMonitorInfoW(monitor, &mut info) } == 0 {
+        return (POINT::default(), width, height);
+    }
+    let work = info.rcWork;
+    let width = width.min(work.right - work.left);
+    let height = height.min(work.bottom - work.top);
+    (
         POINT {
             x: work.left + ((work.right - work.left - width) / 2).max(0),
             y: work.top + ((work.bottom - work.top - height) / 2).max(0),
-        }
-    } else {
-        POINT::default()
-    }
+        },
+        width,
+        height,
+    )
 }
 
 unsafe extern "system" fn window_proc(
