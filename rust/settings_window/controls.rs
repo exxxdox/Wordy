@@ -22,6 +22,7 @@ use super::{
 };
 use crate::{
     desktop::paint_buffered,
+    selector::paint_field,
     settings_backdrop::{fill, outline, paint_embedded_backdrop, rgb, round, stroke},
     slider,
 };
@@ -91,6 +92,11 @@ pub(super) fn paint_item(parent: HWND, item: &DRAWITEMSTRUCT) {
                 PRIMARY,
                 DT_LEFT,
             );
+        } else {
+            // The combo delegates its closed face to the parent. Drawing it here
+            // covers selection changes and page switches, which otherwise leave
+            // the field blank until a hover repaint.
+            paint_field(hwnd, dc, rect, true);
         }
         return;
     }

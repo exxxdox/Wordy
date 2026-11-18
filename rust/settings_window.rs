@@ -527,6 +527,57 @@ mod tests {
     }
 
     #[test]
+    fn combo_face_draw_request_paints_the_selection() {
+        use windows_sys::Win32::UI::Controls::{ODS_COMBOBOXEDIT, ODT_COMBOBOX};
+        let window = SettingsWindow::new(ptr::null_mut(), &Settings::default()).unwrap();
+        let combo = window.control(Field::LogLevel);
+        let mut rect = RECT::default();
+        unsafe { GetClientRect(combo, &mut rect) };
+        let screen = unsafe { GetDC(ptr::null_mut()) };
+        let dc = unsafe { CreateCompatibleDC(screen) };
+        let bitmap =
+            unsafe { CreateCompatibleBitmap(screen, rect.right.max(1), rect.bottom.max(1)) };
+        let previous = unsafe { SelectObject(dc, bitmap) };
+        let sentinel = rgb(255, 0, 255);
+        let area = RECT {
+            left: 0,
+            top: 0,
+            right: rect.right,
+            bottom: rect.bottom,
+        };
+        crate::settings_backdrop::fill(dc, &area, sentinel);
+        // Owner-draw combos ask the parent to paint their closed field instead of
+        // painting it themselves; ignoring the request left it blank until hover.
+        let mut item = DRAWITEMSTRUCT {
+            CtlType: ODT_COMBOBOX,
+            CtlID: Field::LogLevel as u32,
+            itemID: 0,
+            itemAction: 0,
+            itemState: ODS_COMBOBOXEDIT,
+            hwndItem: combo,
+            hDC: dc,
+            rcItem: area,
+            itemData: 0,
+        };
+        unsafe {
+            SendMessageW(
+                window.hwnd(),
+                WM_DRAWITEM,
+                0,
+                ptr::from_mut(&mut item) as LPARAM,
+            );
+        }
+        let painted = unsafe { GetPixel(dc, rect.right / 2, rect.bottom / 2) };
+        unsafe {
+            SelectObject(dc, previous);
+            DeleteObject(bitmap);
+            DeleteDC(dc);
+            ReleaseDC(ptr::null_mut(), screen);
+        }
+        assert_ne!(painted, sentinel, "the combo face was not repainted");
+    }
+
+    #[test]
     fn dragging_a_settings_slider_leaves_unrelated_controls_untouched() {
         let mut committed = Settings::default();
         let mut window = SettingsWindow::new(ptr::null_mut(), &committed).unwrap();

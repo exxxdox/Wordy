@@ -98,6 +98,18 @@ unsafe fn paint(hwnd: HWND, glass: bool) -> LRESULT {
         let dc = BeginPaint(hwnd, &mut paint);
         let mut client = RECT::default();
         GetClientRect(hwnd, &mut client);
+        paint_field(hwnd, dc, client, glass);
+        EndPaint(hwnd, &paint);
+        0
+    }
+}
+
+/// Draws the closed field into `dc`. Shared with the parent's WM_DRAWITEM
+/// handler: owner-draw combos delegate their face to the parent whenever the
+/// selection changes, and skipping that leaves the field erased until the next
+/// hover repaint.
+pub(crate) fn paint_field(hwnd: HWND, dc: HDC, client: RECT, glass: bool) {
+    unsafe {
         if glass {
             paint_embedded_backdrop(hwnd, dc);
         } else {
@@ -147,8 +159,6 @@ unsafe fn paint(hwnd: HWND, glass: bool) -> LRESULT {
         if !previous.is_null() {
             SelectObject(dc, previous);
         }
-        EndPaint(hwnd, &paint);
-        0
     }
 }
 

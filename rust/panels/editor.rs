@@ -391,6 +391,67 @@ mod tests {
     }
 
     #[test]
+    fn combo_face_draw_request_paints_the_closed_field() {
+        use windows_sys::Win32::{
+            Graphics::Gdi::{
+                CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GdiFlush,
+                GetDC, GetPixel, ReleaseDC, SelectObject,
+            },
+            UI::Controls::{DRAWITEMSTRUCT, ODS_COMBOBOXEDIT, ODT_COMBOBOX},
+        };
+        let settings = Settings::default();
+        let window =
+            crate::settings_window::SettingsWindow::new(ptr::null_mut(), &settings).unwrap();
+        let editor = Editor::new_embedded(ptr::null_mut(), window.hwnd(), &settings).unwrap();
+        let combo = editor.panel.child(STYLE);
+        let mut rect = RECT::default();
+        unsafe { GetClientRect(combo, &mut rect) };
+        let screen = unsafe { GetDC(ptr::null_mut()) };
+        let dc = unsafe { CreateCompatibleDC(screen) };
+        let bitmap =
+            unsafe { CreateCompatibleBitmap(screen, rect.right.max(1), rect.bottom.max(1)) };
+        let previous = unsafe { SelectObject(dc, bitmap) };
+        let sentinel = crate::settings_backdrop::rgb(255, 0, 255);
+        let area = RECT {
+            left: 0,
+            top: 0,
+            right: rect.right,
+            bottom: rect.bottom,
+        };
+        crate::settings_backdrop::fill(dc, &area, sentinel);
+        // The editor's combos also hand their closed face to the parent; the
+        // panel must draw it instead of leaving the field erased.
+        let mut item = DRAWITEMSTRUCT {
+            CtlType: ODT_COMBOBOX,
+            CtlID: u32::from(STYLE),
+            itemID: 0,
+            itemAction: 0,
+            itemState: ODS_COMBOBOXEDIT,
+            hwndItem: combo,
+            hDC: dc,
+            rcItem: area,
+            itemData: 0,
+        };
+        unsafe {
+            SendMessageW(
+                editor.panel.0,
+                WM_DRAWITEM,
+                0,
+                ptr::from_mut(&mut item) as LPARAM,
+            );
+            GdiFlush();
+        }
+        let painted = unsafe { GetPixel(dc, rect.right / 2, rect.bottom / 2) };
+        unsafe {
+            SelectObject(dc, previous);
+            DeleteObject(bitmap);
+            DeleteDC(dc);
+            ReleaseDC(ptr::null_mut(), screen);
+        }
+        assert_ne!(painted, sentinel, "the combo face was not repainted");
+    }
+
+    #[test]
     fn editor_gain_readout_is_written_only_when_its_value_changes() {
         unsafe extern "system" fn count_writes(
             hwnd: HWND,
