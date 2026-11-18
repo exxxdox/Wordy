@@ -9,7 +9,7 @@ use windows::Win32::Graphics::DirectWrite::{
     DWRITE_FONT_WEIGHT_NORMAL, DWriteCreateFactory, IDWriteFactory, IDWriteFontCollection,
 };
 use windows::core::{BOOL, PCWSTR};
-use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM};
 use windows_sys::Win32::Graphics::Dwm::{
     DWMWA_CAPTION_COLOR, DWMWA_USE_IMMERSIVE_DARK_MODE, DWMWA_WINDOW_CORNER_PREFERENCE,
     DWMWCP_ROUND, DwmSetWindowAttribute,
@@ -817,7 +817,7 @@ fn draw_slot_glyph(
     let family = wide(family);
     let font = unsafe {
         CreateFontW(
-            -((17 * dpi) / 96),
+            -((18 * dpi) / 96),
             0,
             0,
             0,
@@ -838,17 +838,27 @@ fn draw_slot_glyph(
     }
     let previous = unsafe { SelectObject(dc, font) };
     let mut text = wide(glyph);
-    let mut area = rect;
+    let units = text.len().saturating_sub(1) as i32;
+    let mut extent = SIZE::default();
     unsafe {
         SetBkMode(dc, TRANSPARENT as i32);
         SetTextColor(dc, color);
-        DrawTextW(
-            dc,
-            text.as_mut_ptr(),
-            -1,
-            &mut area,
-            DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
-        );
+        // TextOut's metrics center the glyph cell more reliably than DrawText's
+        // baseline placement for color emoji and Nerd Font private-use icons.
+        if GetTextExtentPoint32W(dc, text.as_ptr(), units, &mut extent) != 0 {
+            let x = rect.left + (rect.right - rect.left - extent.cx) / 2;
+            let y = rect.top + (rect.bottom - rect.top - extent.cy) / 2;
+            TextOutW(dc, x, y, text.as_ptr(), units);
+        } else {
+            let mut area = rect;
+            DrawTextW(
+                dc,
+                text.as_mut_ptr(),
+                -1,
+                &mut area,
+                DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
+            );
+        }
         if !previous.is_null() {
             SelectObject(dc, previous);
         }

@@ -39,8 +39,8 @@ impl Editor {
         combo(&mut template, WHEEL, [31, 7, 108, 100]);
         label(&mut template, 301, "快捷键", [144, 11, 28, 14]);
         button(&mut template, HOTKEY, "录制快捷键", [172, 7, 80, 18]);
-        button(&mut template, ADD, "新增", [256, 7, 34, 18]);
-        button(&mut template, REMOVE, "删除", [294, 7, 34, 18]);
+        button(&mut template, ADD, "新增", [256, 7, 32, 32]);
+        button(&mut template, REMOVE, "删除", [294, 7, 32, 32]);
         button(&mut template, RENAME, "重命名", [0, 0, 1, 1]);
         label(&mut template, 307, "样式", [407, 11, 28, 14]);
         combo(&mut template, STYLE, [435, 7, 63, 100]);
@@ -48,8 +48,8 @@ impl Editor {
         edit(&mut template, NAME, [0, 0, 1, 1]);
         label(&mut template, INFO, "", [217, 42, 252, 16]);
         label(&mut template, 302, "内容", [217, 64, 26, 15]);
-        button(&mut template, AUDIO_MODE, "音频", [245, 60, 52, 18]);
-        button(&mut template, TEXT_MODE, "文字", [303, 60, 52, 18]);
+        button(&mut template, AUDIO_MODE, "音频", [245, 60, 32, 32]);
+        button(&mut template, TEXT_MODE, "文字", [283, 60, 32, 32]);
         label(&mut template, 304, "音量", [217, 88, 26, 15]);
         edit(&mut template, GAIN, [245, 83, 112, 18]);
         label(&mut template, GAIN_VALUE, "100%", [362, 87, 41, 15]);
@@ -57,10 +57,10 @@ impl Editor {
         edit(&mut template, LABEL, [217, 125, 272, 18]);
         label(&mut template, 303, "朗读文字", [217, 150, 60, 15]);
         edit(&mut template, TEXT, [217, 167, 272, 18]);
-        button(&mut template, IMPORT, "导入", [217, 152, 52, 18]);
-        button(&mut template, PLAY, "试听", [275, 152, 52, 18]);
-        button(&mut template, CROP, "截取", [333, 152, 52, 18]);
-        button(&mut template, CLEAR, "清空", [391, 152, 52, 18]);
+        button(&mut template, IMPORT, "导入", [217, 152, 32, 32]);
+        button(&mut template, PLAY, "试听", [255, 152, 32, 32]);
+        button(&mut template, CROP, "截取", [293, 152, 32, 32]);
+        button(&mut template, CLEAR, "清空", [331, 152, 32, 32]);
         let panel = Panel::new(parent, &template, host, EDITOR_MESSAGE)?;
         let chrome = Chrome::attach(&panel, false, false)?;
         layout_editor(panel.0, &chrome.state);
@@ -226,8 +226,8 @@ pub(super) fn layout_editor(hwnd: HWND, state: &ChromeState) {
         (WHEEL, 46, 0, 204, 200),
         (301, 256, 7, 56, 20),
         (HOTKEY, 318, 0, 145, 32),
-        (ADD, 471, 0, 52, 32),
-        (REMOVE, 531, 0, 52, 32),
+        (ADD, 471, 0, 32, 32),
+        (REMOVE, 511, 0, 32, 32),
         (RENAME, 591, 0, 58, 32),
         (PICK, 0, 44, 400, 400),
     ] {
@@ -249,8 +249,8 @@ pub(super) fn layout_editor(hwnd: HWND, state: &ChromeState) {
     for (id, x, y, w, h) in [
         (INFO, 0, 60, 180, 23),
         (302, 0, 92, 44, 20),
-        (AUDIO_MODE, 43, 86, 52, 32),
-        (TEXT_MODE, 101, 86, 52, 32),
+        (AUDIO_MODE, 43, 86, 32, 32),
+        (TEXT_MODE, 81, 86, 32, 32),
         (304, 0, 126, 44, 20),
         (GAIN_VALUE, 268, 126, 50, 20),
         (
@@ -295,10 +295,10 @@ pub(super) fn layout_editor(hwnd: HWND, state: &ChromeState) {
     let action_y = if mode { 244 } else { 222 };
     let (mut x, gap) = (0, 6);
     for (id, control_width, visible) in [
-        (IMPORT, 52, !mode),
-        (PLAY, 52, true),
-        (CROP, 52, !mode),
-        (CLEAR, 52, true),
+        (IMPORT, 32, !mode),
+        (PLAY, 32, true),
+        (CROP, 32, !mode),
+        (CLEAR, 32, true),
     ] {
         if visible {
             at_card(i32::from(id), x, action_y, control_width, 32);
@@ -333,19 +333,20 @@ mod tests {
     }
 
     #[test]
-    fn editor_icon_buttons_share_the_same_width() {
+    fn editor_icon_buttons_are_equal_squares() {
         let settings = Settings::default();
         let window =
             crate::settings_window::SettingsWindow::new(ptr::null_mut(), &settings).unwrap();
         let editor = Editor::new_embedded(ptr::null_mut(), window.hwnd(), &settings).unwrap();
-        let width = |id| {
+        let size = |id| {
             let mut rect = RECT::default();
             unsafe { GetWindowRect(editor.panel.child(id), &mut rect) };
-            rect.right - rect.left
+            (rect.right - rect.left, rect.bottom - rect.top)
         };
-        let expected = width(ADD);
+        let expected = size(ADD);
+        assert_eq!(expected.0, expected.1, "add button is not square");
         for id in [IMPORT, PLAY, CROP, CLEAR, AUDIO_MODE, TEXT_MODE, REMOVE] {
-            assert_eq!(width(id), expected, "icon button {id} width differs");
+            assert_eq!(size(id), expected, "icon button {id} differs");
         }
     }
 
