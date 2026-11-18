@@ -420,7 +420,8 @@ mod tests {
         };
         crate::settings_backdrop::fill(dc, &area, sentinel);
         // The editor's combos also hand their closed face to the parent; the
-        // panel must draw it instead of leaving the field erased.
+        // panel must draw it instead of leaving the field erased. rcItem
+        // excludes the arrow button, so the full field must still be painted.
         let mut item = DRAWITEMSTRUCT {
             CtlType: ODT_COMBOBOX,
             CtlID: u32::from(STYLE),
@@ -429,7 +430,10 @@ mod tests {
             itemState: ODS_COMBOBOXEDIT,
             hwndItem: combo,
             hDC: dc,
-            rcItem: area,
+            rcItem: RECT {
+                right: rect.right - 30,
+                ..area
+            },
             itemData: 0,
         };
         unsafe {
@@ -441,7 +445,7 @@ mod tests {
             );
             GdiFlush();
         }
-        let painted = unsafe { GetPixel(dc, rect.right / 2, rect.bottom / 2) };
+        let painted = unsafe { GetPixel(dc, rect.right - 15, rect.bottom / 2) };
         unsafe {
             SelectObject(dc, previous);
             DeleteObject(bitmap);

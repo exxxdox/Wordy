@@ -548,6 +548,8 @@ mod tests {
         crate::settings_backdrop::fill(dc, &area, sentinel);
         // Owner-draw combos ask the parent to paint their closed field instead of
         // painting it themselves; ignoring the request left it blank until hover.
+        // rcItem excludes the native arrow button, so the full field must still
+        // reach the chevron zone at the right edge.
         let mut item = DRAWITEMSTRUCT {
             CtlType: ODT_COMBOBOX,
             CtlID: Field::LogLevel as u32,
@@ -556,7 +558,10 @@ mod tests {
             itemState: ODS_COMBOBOXEDIT,
             hwndItem: combo,
             hDC: dc,
-            rcItem: area,
+            rcItem: RECT {
+                right: rect.right - 30,
+                ..area
+            },
             itemData: 0,
         };
         unsafe {
@@ -567,7 +572,7 @@ mod tests {
                 ptr::from_mut(&mut item) as LPARAM,
             );
         }
-        let painted = unsafe { GetPixel(dc, rect.right / 2, rect.bottom / 2) };
+        let painted = unsafe { GetPixel(dc, rect.right - 15, rect.bottom / 2) };
         unsafe {
             SelectObject(dc, previous);
             DeleteObject(bitmap);

@@ -95,8 +95,12 @@ pub(super) fn paint_item(parent: HWND, item: &DRAWITEMSTRUCT) {
         } else {
             // The combo delegates its closed face to the parent. Drawing it here
             // covers selection changes and page switches, which otherwise leave
-            // the field blank until a hover repaint.
-            paint_field(hwnd, dc, rect, true);
+            // the field blank until a hover repaint. rcItem excludes the native
+            // arrow button, so paint the whole client like the WM_PAINT path;
+            // using rcItem shifts the field and leaves a second border/chevron.
+            let mut client = RECT::default();
+            unsafe { GetClientRect(hwnd, &mut client) };
+            paint_field(hwnd, dc, client, true);
         }
         return;
     }

@@ -388,13 +388,14 @@ unsafe extern "system" fn chrome_proc(
                     ODT_STATIC => draw_label(item.hwndItem, item.hDC, item.rcItem, state.trim),
                     ODT_COMBOBOX if item.itemState & ODS_COMBOBOXEDIT == 0 => draw_combo_item(item),
                     // The combo delegates its closed face to the parent; without
-                    // this the field stays blank until a hover repaint.
-                    ODT_COMBOBOX => crate::selector::paint_field(
-                        item.hwndItem,
-                        item.hDC,
-                        item.rcItem,
-                        !state.trim,
-                    ),
+                    // this the field stays blank until a hover repaint. rcItem
+                    // excludes the native arrow button, so draw the full client
+                    // to avoid a second shifted border and chevron.
+                    ODT_COMBOBOX => {
+                        let mut client = RECT::default();
+                        GetClientRect(item.hwndItem, &mut client);
+                        crate::selector::paint_field(item.hwndItem, item.hDC, client, !state.trim)
+                    }
                     _ => return DefSubclassProc(hwnd, msg, wp, lp),
                 }
                 1
