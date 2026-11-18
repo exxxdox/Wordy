@@ -93,11 +93,10 @@ pub(super) fn paint_item(parent: HWND, item: &DRAWITEMSTRUCT) {
                 DT_LEFT,
             );
         } else {
-            // The combo asks the parent to paint its closed face, but that DC
-            // is clipped inside the field, so drawing here left only corner
-            // fragments of the border. Repaint through the combo's own WM_PAINT
-            // instead, which draws the frame in one pass.
-            unsafe { InvalidateRect(hwnd, ptr::null(), 0) };
+            // The request's DC is clipped inside the field; paint the face now
+            // through the combo's own client DC so the field never shows an
+            // empty frame while a repaint is pending.
+            crate::selector::paint_face(hwnd, true);
         }
         return;
     }

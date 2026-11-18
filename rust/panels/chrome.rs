@@ -387,12 +387,10 @@ unsafe extern "system" fn chrome_proc(
                     }
                     ODT_STATIC => draw_label(item.hwndItem, item.hDC, item.rcItem, state.trim),
                     ODT_COMBOBOX if item.itemState & ODS_COMBOBOXEDIT == 0 => draw_combo_item(item),
-                    // The combo asks the parent to paint its closed face, but that
-                    // DC is clipped inside the field and would leave corner
-                    // fragments of the border. Repaint via the combo's WM_PAINT.
-                    ODT_COMBOBOX => {
-                        InvalidateRect(item.hwndItem, ptr::null(), 0);
-                    }
+                    // The request's DC is clipped inside the field; paint the
+                    // face now through the combo's own client DC so a pending
+                    // repaint never leaves the field empty.
+                    ODT_COMBOBOX => crate::selector::paint_face(item.hwndItem, !state.trim),
                     _ => return DefSubclassProc(hwnd, msg, wp, lp),
                 }
                 1

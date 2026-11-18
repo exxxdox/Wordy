@@ -529,12 +529,10 @@ mod tests {
     }
 
     #[test]
-    fn combo_face_draw_request_schedules_a_repaint() {
+    fn combo_face_draw_request_paints_immediately() {
         let window = SettingsWindow::new(ptr::null_mut(), &Settings::default()).unwrap();
         let combo = window.control(Field::LogLevel);
-        // Owner-draw combos ask the parent to paint their closed face. That DC
-        // is clipped inside the field, so the parent must repaint the combo
-        // through its own WM_PAINT instead of drawing into the clipped DC.
+        // The combo is still hidden, so its surface has never been painted.
         let mut item = DRAWITEMSTRUCT {
             CtlType: ODT_COMBOBOX,
             CtlID: 0,
@@ -547,8 +545,6 @@ mod tests {
             itemData: 0,
         };
         unsafe {
-            ShowWindow(window.hwnd(), SW_SHOW);
-            ValidateRect(combo, ptr::null());
             SendMessageW(
                 window.hwnd(),
                 WM_DRAWITEM,
@@ -556,13 +552,23 @@ mod tests {
                 ptr::from_mut(&mut item) as LPARAM,
             );
         }
-        let mut pending = RECT::default();
-        let dirty = unsafe { GetUpdateRect(combo, &mut pending, 0) };
-        unsafe { ShowWindow(window.hwnd(), SW_HIDE) };
-        assert_ne!(
-            dirty, 0,
-            "the combo face request did not schedule a repaint"
-        );
+        let mut rect = RECT::default();
+        unsafe { GetClientRect(combo, &mut rect) };
+        let dc = unsafe { GetDC(combo) };
+        let mut bright = 0;
+        for y in 0..rect.bottom {
+            for x in 0..rect.right {
+                let pixel = unsafe { GetPixel(dc, x, y) } & 0x00ff_ffff;
+                if pixel & 0xff > 0x80 && (pixel >> 8) & 0xff > 0x80 && (pixel >> 16) & 0xff > 0x80
+                {
+                    bright += 1;
+                }
+            }
+        }
+        unsafe { ReleaseDC(combo, dc) };
+        // The face request must paint there and then: leaving it to a deferred
+        // WM_PAINT showed an empty field until the message loop caught up.
+        assert!(bright > 0, "the combo face was not painted immediately");
     }
 
     #[test]

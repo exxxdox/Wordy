@@ -312,7 +312,7 @@ mod tests {
     use std::cell::Cell;
     use windows_sys::Win32::{
         Foundation::{LPARAM, LRESULT, WPARAM},
-        Graphics::Gdi::{GetUpdateRect, MapWindowPoints, ValidateRect},
+        Graphics::Gdi::MapWindowPoints,
         UI::{
             Controls::TB_ENDTRACK,
             Shell::{DefSubclassProc, SetWindowSubclass},
@@ -391,16 +391,17 @@ mod tests {
     }
 
     #[test]
-    fn combo_face_draw_request_schedules_a_repaint() {
-        use windows_sys::Win32::UI::Controls::{DRAWITEMSTRUCT, ODS_COMBOBOXEDIT, ODT_COMBOBOX};
+    fn combo_face_draw_request_paints_immediately() {
+        use windows_sys::Win32::{
+            Graphics::Gdi::{GetDC, GetPixel, ReleaseDC},
+            UI::Controls::{DRAWITEMSTRUCT, ODS_COMBOBOXEDIT, ODT_COMBOBOX},
+        };
         let settings = Settings::default();
         let window =
             crate::settings_window::SettingsWindow::new(ptr::null_mut(), &settings).unwrap();
         let editor = Editor::new_embedded(ptr::null_mut(), window.hwnd(), &settings).unwrap();
         let combo = editor.panel.child(STYLE);
-        // The editor's combos also hand their closed face to the parent, but that
-        // DC is clipped inside the field; the panel must ask the combo to
-        // repaint itself so the frame is drawn in one complete pass.
+        // The panel is hidden, so the combo's surface has never been painted.
         let mut item = DRAWITEMSTRUCT {
             CtlType: ODT_COMBOBOX,
             CtlID: u32::from(STYLE),
@@ -413,9 +414,6 @@ mod tests {
             itemData: 0,
         };
         unsafe {
-            ShowWindow(window.hwnd(), SW_SHOW);
-            ShowWindow(editor.panel.0, SW_SHOW);
-            ValidateRect(combo, ptr::null());
             SendMessageW(
                 editor.panel.0,
                 WM_DRAWITEM,
@@ -423,16 +421,21 @@ mod tests {
                 ptr::from_mut(&mut item) as LPARAM,
             );
         }
-        let mut pending = RECT::default();
-        let dirty = unsafe { GetUpdateRect(combo, &mut pending, 0) };
-        unsafe {
-            ShowWindow(editor.panel.0, SW_HIDE);
-            ShowWindow(window.hwnd(), SW_HIDE);
+        let mut rect = RECT::default();
+        unsafe { GetClientRect(combo, &mut rect) };
+        let dc = unsafe { GetDC(combo) };
+        let mut bright = 0;
+        for y in 0..rect.bottom {
+            for x in 0..rect.right {
+                let pixel = unsafe { GetPixel(dc, x, y) } & 0x00ff_ffff;
+                if pixel & 0xff > 0x80 && (pixel >> 8) & 0xff > 0x80 && (pixel >> 16) & 0xff > 0x80
+                {
+                    bright += 1;
+                }
+            }
         }
-        assert_ne!(
-            dirty, 0,
-            "the combo face request did not schedule a repaint"
-        );
+        unsafe { ReleaseDC(combo, dc) };
+        assert!(bright > 0, "the combo face was not painted immediately");
     }
 
     #[test]

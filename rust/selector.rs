@@ -195,6 +195,23 @@ fn paint_field(hwnd: HWND, dc: HDC, client: RECT, glass: bool) {
     }
 }
 
+/// Paints the closed field right away when the combo asks the parent for its
+/// face (WM_DRAWITEM/ODS_COMBOBOXEDIT). That request carries a DC clipped inside
+/// the field, so the combo's own client DC is used instead: the frame and text
+/// land immediately and no deferred paint leaves a blank field behind.
+pub(crate) fn paint_face(hwnd: HWND, glass: bool) {
+    unsafe {
+        let dc = GetDC(hwnd);
+        if dc.is_null() {
+            return;
+        }
+        let mut client = RECT::default();
+        GetClientRect(hwnd, &mut client);
+        paint_field(hwnd, dc, client, glass);
+        ReleaseDC(hwnd, dc);
+    }
+}
+
 fn rounded(dc: HDC, rect: RECT, radius: i32, background: Option<u32>, border: u32) {
     unsafe {
         let brush = background.map_or_else(
