@@ -115,7 +115,7 @@ unsafe extern "system" fn selector_proc(
     }
 }
 
-unsafe fn paint(hwnd: HWND, glass: bool) -> LRESULT {
+fn paint(hwnd: HWND, glass: bool) -> LRESULT {
     unsafe {
         let mut paint = PAINTSTRUCT::default();
         let dc = BeginPaint(hwnd, &mut paint);
@@ -127,24 +127,23 @@ unsafe fn paint(hwnd: HWND, glass: bool) -> LRESULT {
     }
 }
 
-/// Draws the closed field into `dc`. Shared with the parent's WM_DRAWITEM
-/// handler: owner-draw combos delegate their face to the parent whenever the
-/// selection changes, and skipping that leaves the field erased until the next
-/// hover repaint.
-pub(crate) fn paint_field(hwnd: HWND, dc: HDC, client: RECT, glass: bool) {
+/// The accent marks the open dropdown; at rest the border stays neutral so no
+/// focus ring outlives a selection.
+fn border(dropped: bool) -> u32 {
+    if dropped { ACCENT } else { BORDER }
+}
+
+fn paint_field(hwnd: HWND, dc: HDC, client: RECT, glass: bool) {
     unsafe {
         if glass {
             paint_embedded_backdrop(hwnd, dc);
         } else {
             fill(dc, client, PANEL);
         }
-        // The accent marks the open dropdown; at rest the border stays neutral
-        // so no focus ring outlives a selection.
-        let border = if SendMessageW(hwnd, CB_GETDROPPEDSTATE, 0, 0) != 0 {
-            ACCENT
-        } else {
-            BORDER
-        };
+        // Only the combo's own WM_PAINT draws the field. The WM_DRAWITEM face
+        // request arrives with a clip region inset from the field, which left
+        // corner fragments of the border instead of one complete frame.
+        let border = border(SendMessageW(hwnd, CB_GETDROPPEDSTATE, 0, 0) != 0);
         rounded(dc, client, scaled(hwnd, 10), Some(SURFACE), border);
         let font = SendMessageW(hwnd, WM_GETFONT, 0, 0) as HFONT;
         let previous = if font.is_null() {
@@ -223,5 +222,16 @@ fn fill(dc: HDC, rect: RECT, color: u32) {
         let brush = CreateSolidBrush(color);
         FillRect(dc, &rect, brush);
         DeleteObject(brush);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ACCENT, BORDER, border};
+
+    #[test]
+    fn accent_is_reserved_for_the_open_dropdown() {
+        assert_eq!(border(true), ACCENT);
+        assert_eq!(border(false), BORDER);
     }
 }

@@ -22,7 +22,6 @@ use super::{
 };
 use crate::{
     desktop::paint_buffered,
-    selector::paint_field,
     settings_backdrop::{fill, outline, paint_embedded_backdrop, rgb, round, stroke},
     slider,
 };
@@ -95,14 +94,11 @@ pub(super) fn paint_item(parent: HWND, item: &DRAWITEMSTRUCT) {
                 DT_LEFT,
             );
         } else {
-            // The combo delegates its closed face to the parent. Drawing it here
-            // covers selection changes and page switches, which otherwise leave
-            // the field blank until a hover repaint. rcItem excludes the native
-            // arrow button, so paint the whole client like the WM_PAINT path;
-            // using rcItem shifts the field and leaves a second border/chevron.
-            let mut client = RECT::default();
-            unsafe { GetClientRect(hwnd, &mut client) };
-            paint_field(hwnd, dc, client, true);
+            // The combo asks the parent to paint its closed face, but that DC
+            // is clipped inside the field, so drawing here left only corner
+            // fragments of the border. Repaint through the combo's own WM_PAINT
+            // instead, which draws the frame in one pass.
+            unsafe { InvalidateRect(hwnd, ptr::null(), 0) };
         }
         return;
     }

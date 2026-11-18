@@ -312,7 +312,7 @@ mod tests {
     use std::cell::Cell;
     use windows_sys::Win32::{
         Foundation::{LPARAM, LRESULT, WPARAM},
-        Graphics::Gdi::MapWindowPoints,
+        Graphics::Gdi::{GetUpdateRect, MapWindowPoints, ValidateRect},
         UI::{
             Controls::TB_ENDTRACK,
             Shell::{DefSubclassProc, SetWindowSubclass},
@@ -391,37 +391,16 @@ mod tests {
     }
 
     #[test]
-    fn combo_face_draw_request_paints_the_closed_field() {
-        use windows_sys::Win32::{
-            Graphics::Gdi::{
-                CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GdiFlush,
-                GetDC, GetPixel, ReleaseDC, SelectObject,
-            },
-            UI::Controls::{DRAWITEMSTRUCT, ODS_COMBOBOXEDIT, ODT_COMBOBOX},
-        };
+    fn combo_face_draw_request_schedules_a_repaint() {
+        use windows_sys::Win32::UI::Controls::{DRAWITEMSTRUCT, ODS_COMBOBOXEDIT, ODT_COMBOBOX};
         let settings = Settings::default();
         let window =
             crate::settings_window::SettingsWindow::new(ptr::null_mut(), &settings).unwrap();
         let editor = Editor::new_embedded(ptr::null_mut(), window.hwnd(), &settings).unwrap();
         let combo = editor.panel.child(STYLE);
-        let mut rect = RECT::default();
-        unsafe { GetClientRect(combo, &mut rect) };
-        let screen = unsafe { GetDC(ptr::null_mut()) };
-        let dc = unsafe { CreateCompatibleDC(screen) };
-        let bitmap =
-            unsafe { CreateCompatibleBitmap(screen, rect.right.max(1), rect.bottom.max(1)) };
-        let previous = unsafe { SelectObject(dc, bitmap) };
-        let sentinel = crate::settings_backdrop::rgb(255, 0, 255);
-        let area = RECT {
-            left: 0,
-            top: 0,
-            right: rect.right,
-            bottom: rect.bottom,
-        };
-        crate::settings_backdrop::fill(dc, &area, sentinel);
-        // The editor's combos also hand their closed face to the parent; the
-        // panel must draw it instead of leaving the field erased. rcItem
-        // excludes the arrow button, so the full field must still be painted.
+        // The editor's combos also hand their closed face to the parent, but that
+        // DC is clipped inside the field; the panel must ask the combo to
+        // repaint itself so the frame is drawn in one complete pass.
         let mut item = DRAWITEMSTRUCT {
             CtlType: ODT_COMBOBOX,
             CtlID: u32::from(STYLE),
@@ -429,30 +408,31 @@ mod tests {
             itemAction: 0,
             itemState: ODS_COMBOBOXEDIT,
             hwndItem: combo,
-            hDC: dc,
-            rcItem: RECT {
-                right: rect.right - 30,
-                ..area
-            },
+            hDC: ptr::null_mut(),
+            rcItem: RECT::default(),
             itemData: 0,
         };
         unsafe {
+            ShowWindow(window.hwnd(), SW_SHOW);
+            ShowWindow(editor.panel.0, SW_SHOW);
+            ValidateRect(combo, ptr::null());
             SendMessageW(
                 editor.panel.0,
                 WM_DRAWITEM,
                 0,
                 ptr::from_mut(&mut item) as LPARAM,
             );
-            GdiFlush();
         }
-        let painted = unsafe { GetPixel(dc, rect.right - 15, rect.bottom / 2) };
+        let mut pending = RECT::default();
+        let dirty = unsafe { GetUpdateRect(combo, &mut pending, 0) };
         unsafe {
-            SelectObject(dc, previous);
-            DeleteObject(bitmap);
-            DeleteDC(dc);
-            ReleaseDC(ptr::null_mut(), screen);
+            ShowWindow(editor.panel.0, SW_HIDE);
+            ShowWindow(window.hwnd(), SW_HIDE);
         }
-        assert_ne!(painted, sentinel, "the combo face was not repainted");
+        assert_ne!(
+            dirty, 0,
+            "the combo face request did not schedule a repaint"
+        );
     }
 
     #[test]
