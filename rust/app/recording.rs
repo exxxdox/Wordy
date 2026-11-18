@@ -10,11 +10,10 @@ use windows_sys::Win32::Foundation::HWND;
 use windows_sys::Win32::UI::WindowsAndMessaging::{CBN_SELCHANGE, EN_KILLFOCUS, IDCANCEL};
 
 use crate::audio::{self, Recording};
-use crate::dialog;
 use crate::hotkey::parse_hotkey;
 use crate::panels::{self, Trim};
 
-use super::{App, Background, gain, local_time};
+use super::{App, Background, capture_binding, gain, local_time};
 
 // Handle clip saves alongside recording because both can update or close the trim session.
 pub(super) enum RecordingResult {
@@ -190,14 +189,14 @@ impl App {
                 session.window.refresh(self.config.settings())?;
             }
             ADD if notification == 0 => {
-                let Some(value) = dialog::prompt(
+                // Same recorder as the wheel editor and the settings hotkeys.
+                let Some(value) = capture_binding(
+                    &mut self.hotkeys,
                     hwnd,
-                    "新增轮盘",
-                    "快捷键（例如 f9）",
-                    "f9",
                     false,
                     &self.config.settings().ui_font,
-                ) else {
+                )?
+                else {
                     return Ok(());
                 };
                 let hotkey = value.trim().to_owned();

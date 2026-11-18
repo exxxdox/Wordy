@@ -57,14 +57,15 @@ impl App {
                 self.config.update(|s| s.chat_wheel_style = style.into())?;
             }
             ADD if notification == 0 => {
-                let Some(value) = dialog::prompt(
-                    hwnd,
-                    "新增轮盘",
-                    "快捷键（例如 f9）",
-                    "f9",
+                // Record the wheel's shortcut like every other hotkey field;
+                // typing it into a text box left function keys unrecorded.
+                let Some(value) = capture_binding(
+                    &mut self.hotkeys,
+                    self.settings_window.hwnd(),
                     false,
                     &self.config.settings().ui_font,
-                ) else {
+                )?
+                else {
                     return Ok(());
                 };
                 let hotkey = value.trim().to_owned();
