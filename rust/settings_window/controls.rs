@@ -269,7 +269,10 @@ pub(super) unsafe extern "system" fn style_control(
         // arrive with the erase flag set by the control itself. Edits keep the
         // default erase: their brush is already the dark WM_CTLCOLOREDIT one.
         WM_ERASEBKGND if !edit => return 1,
-        WM_MOUSEMOVE => {
+        // The selector's combo face does not change on hover, so repainting on
+        // every mouse move only flickers; buttons, edits, checks and sliders do
+        // show hover feedback and keep the invalidation.
+        WM_MOUSEMOVE if !combo => {
             let mut tracking = TRACKMOUSEEVENT {
                 cbSize: size_of::<TRACKMOUSEEVENT>() as u32,
                 dwFlags: TME_LEAVE,

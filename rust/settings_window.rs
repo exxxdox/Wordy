@@ -573,6 +573,9 @@ mod tests {
             );
         }
         let painted = unsafe { GetPixel(dc, rect.right - 15, rect.bottom / 2) };
+        // A focused field keeps the neutral border; a focus ring outlived the
+        // selection and read as a leftover highlight.
+        let border = unsafe { GetPixel(dc, 0, rect.bottom / 2) };
         unsafe {
             SelectObject(dc, previous);
             DeleteObject(bitmap);
@@ -580,6 +583,24 @@ mod tests {
             ReleaseDC(ptr::null_mut(), screen);
         }
         assert_ne!(painted, sentinel, "the combo face was not repainted");
+        assert_eq!(
+            border & 0x00ff_ffff,
+            0x003a_3838,
+            "combo border is not neutral"
+        );
+    }
+
+    #[test]
+    fn hovering_a_combo_does_not_schedule_a_repaint() {
+        let window = SettingsWindow::new(ptr::null_mut(), &Settings::default()).unwrap();
+        let combo = window.control(Field::LogLevel);
+        unsafe {
+            ValidateRect(combo, ptr::null());
+            SendMessageW(combo, WM_MOUSEMOVE, 0, 5 | (5 << 16));
+        }
+        let mut pending = RECT::default();
+        let dirty = unsafe { GetUpdateRect(combo, &mut pending, 0) };
+        assert_eq!(dirty, 0, "a mouse move repainted the combo face");
     }
 
     #[test]

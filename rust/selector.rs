@@ -5,7 +5,6 @@ use windows_sys::Win32::{
     Graphics::Gdi::*,
     UI::{
         HiDpi::GetDpiForWindow,
-        Input::KeyboardAndMouse::GetFocus,
         Shell::{DefSubclassProc, SetWindowSubclass},
         WindowsAndMessaging::*,
     },
@@ -20,7 +19,6 @@ const PANEL: u32 = 0x001e1c1c;
 const BORDER: u32 = 0x003a3838;
 const TEXT: u32 = 0x00f7f5f5;
 const MUTED: u32 = 0x009d9898;
-const ACCENT: u32 = 0x00ff840a;
 
 /// Paints a closed dropdown as the app's rounded dark field. The native paint
 /// (and its blue focus selection) is replaced; the popup list still belongs to
@@ -82,11 +80,6 @@ unsafe extern "system" fn selector_proc(
                 0
             }
             WM_PAINT => paint(hwnd, glass != 0),
-            WM_SETFOCUS | WM_KILLFOCUS => {
-                let result = DefSubclassProc(hwnd, message, wparam, lparam);
-                InvalidateRect(hwnd, ptr::null(), 0);
-                result
-            }
             _ => DefSubclassProc(hwnd, message, wparam, lparam),
         }
     }
@@ -115,7 +108,9 @@ pub(crate) fn paint_field(hwnd: HWND, dc: HDC, client: RECT, glass: bool) {
         } else {
             fill(dc, client, PANEL);
         }
-        let border = if GetFocus() == hwnd { ACCENT } else { BORDER };
+        // The border stays neutral in every state: a focus ring would outlive
+        // the selection and read as a leftover highlight.
+        let border = BORDER;
         rounded(dc, client, scaled(hwnd, 10), Some(SURFACE), border);
         let font = SendMessageW(hwnd, WM_GETFONT, 0, 0) as HFONT;
         let previous = if font.is_null() {
