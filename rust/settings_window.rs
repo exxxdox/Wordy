@@ -590,6 +590,44 @@ mod tests {
     }
 
     #[test]
+    fn refilling_an_unchanged_combo_does_not_reset_it() {
+        use std::cell::Cell;
+        use windows_sys::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
+        unsafe extern "system" fn count(
+            hwnd: HWND,
+            msg: u32,
+            wp: WPARAM,
+            lp: LPARAM,
+            _: usize,
+            data: usize,
+        ) -> LRESULT {
+            unsafe {
+                if msg == CB_RESETCONTENT {
+                    let resets = &*(data as *const Cell<usize>);
+                    resets.set(resets.get() + 1);
+                }
+                DefSubclassProc(hwnd, msg, wp, lp)
+            }
+        }
+        let window = SettingsWindow::new(ptr::null_mut(), &Settings::default()).unwrap();
+        let combo = window.control(Field::LogLevel);
+        fill_choices(combo, ["a", "b"], 1);
+        let resets = Cell::new(0usize);
+        unsafe {
+            SetWindowSubclass(combo, Some(count), 77, ptr::from_ref(&resets) as usize);
+        }
+        // A refresh rebuilds every combo; resetting an unchanged list empties
+        // the field for a frame and flashes the dropdown.
+        fill_choices(combo, ["a", "b"], 1);
+        assert_eq!(resets.get(), 0, "identical list was rebuilt");
+        fill_choices(combo, ["a", "b"], 0);
+        assert_eq!(resets.get(), 0, "selection-only change rebuilt the list");
+        assert_eq!(choice(combo), Some(0));
+        fill_choices(combo, ["a", "c"], 1);
+        assert_eq!(resets.get(), 1, "a changed list must be rebuilt");
+    }
+
+    #[test]
     fn moving_the_pointer_inside_an_edit_repaints_once() {
         let window = SettingsWindow::new(ptr::null_mut(), &Settings::default()).unwrap();
         let edit = window.control(Field::Placeholder);

@@ -387,9 +387,25 @@ pub(super) fn fill_choices(
     choices: impl IntoIterator<Item = impl AsRef<str>>,
     selected: usize,
 ) {
+    let labels: Vec<String> = choices
+        .into_iter()
+        .map(|label| label.as_ref().to_owned())
+        .collect();
+    // Refreshes run on every settings action and rebuild every combo. Resetting
+    // an unchanged list empties the field and repaints it, which flashes the
+    // combos the user is not touching.
+    let count = send(hwnd, CB_GETCOUNT, 0, 0);
+    let same_labels = count == labels.len() as LRESULT
+        && (0..labels.len()).all(|index| super::controls::combo_text(hwnd, index) == labels[index]);
+    if same_labels {
+        if send(hwnd, CB_GETCURSEL, 0, 0) != selected as LRESULT {
+            send(hwnd, CB_SETCURSEL, selected, 0);
+        }
+        return;
+    }
     send(hwnd, CB_RESETCONTENT, 0, 0);
-    for label in choices {
-        let label = wide(label.as_ref());
+    for label in labels {
+        let label = wide(&label);
         send(hwnd, CB_ADDSTRING, 0, label.as_ptr() as LPARAM);
     }
     send(hwnd, CB_SETCURSEL, selected, 0);
