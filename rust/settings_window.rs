@@ -454,7 +454,22 @@ impl SettingsWindow {
     }
 
     pub fn handle_message(&self, message: &MSG) -> bool {
-        unsafe { IsWindowVisible(self.hwnd) != 0 && IsDialogMessageW(self.hwnd, message) != 0 }
+        unsafe {
+            if IsWindowVisible(self.hwnd) == 0 {
+                return false;
+            }
+            // Keys go to the focused child, so the window proc only sees Escape
+            // when the shell itself holds focus. Close here, before
+            // IsDialogMessage consumes the key for dialog navigation.
+            if message.message == WM_KEYDOWN
+                && message.wParam as u16 == VK_ESCAPE
+                && (message.hwnd == self.hwnd || IsChild(self.hwnd, message.hwnd) != 0)
+            {
+                close_window(self.hwnd);
+                return true;
+            }
+            IsDialogMessageW(self.hwnd, message) != 0
+        }
     }
 }
 impl Drop for SettingsWindow {
@@ -493,6 +508,43 @@ mod tests {
         assert_eq!(slider_position(2.0, 0.5), 30);
         assert_eq!(slider_position(1.0, 0.30), 14);
         assert_eq!(slider_value(2, 0.30), 0.4);
+    }
+
+    #[test]
+    fn escape_closes_the_settings_window_from_a_focused_child() {
+        unsafe {
+            let instance = GetModuleHandleW(ptr::null());
+            let host = crate::desktop::host_window(instance).unwrap();
+            let window = SettingsWindow::new(host, &Settings::default()).unwrap();
+            window.show();
+            let edit = window.control(Field::Placeholder);
+            windows_sys::Win32::UI::Input::KeyboardAndMouse::SetFocus(edit);
+            let message = MSG {
+                hwnd: edit,
+                message: WM_KEYDOWN,
+                wParam: VK_ESCAPE as usize,
+                ..Default::default()
+            };
+            // The message loop asks IsDialogMessage first; Escape sent to a child
+            // must still close the window instead of being swallowed.
+            assert!(window.handle_message(&message));
+            assert_eq!(IsWindowVisible(window.hwnd()), 0);
+            // Earlier messages (the resize from showing the shell) may queue first.
+            let mut posted = MSG::default();
+            let mut closed = false;
+            while PeekMessageW(
+                &mut posted,
+                host,
+                SETTINGS_ACTION_MESSAGE,
+                SETTINGS_ACTION_MESSAGE,
+                PM_REMOVE,
+            ) != 0
+            {
+                closed |= posted.wParam == Field::Close as usize;
+            }
+            assert!(closed, "Escape did not post the settings Close action");
+            DestroyWindow(host);
+        }
     }
 
     #[test]

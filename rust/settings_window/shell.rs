@@ -44,13 +44,11 @@ pub(super) unsafe extern "system" fn window_proc(
             return 0;
         }
         WM_KEYDOWN if wparam as u16 == VK_ESCAPE => {
-            unsafe { ShowWindow(hwnd, SW_HIDE) };
-            post(Field::Close as u16);
+            close_window(hwnd);
             return 0;
         }
         WM_CLOSE => {
-            unsafe { ShowWindow(hwnd, SW_HIDE) };
-            post(Field::Close as u16);
+            close_window(hwnd);
             return 0;
         }
         WM_SIZE => post(Field::Resize as u16),
@@ -134,6 +132,16 @@ pub(super) unsafe extern "system" fn window_proc(
         _ => {}
     }
     unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+}
+
+pub(super) fn close_window(hwnd: HWND) {
+    // Hide before posting: the host tears down the embedded editor from the
+    // queued Close action, and the key press must not leave a stale frame.
+    unsafe { ShowWindow(hwnd, SW_HIDE) };
+    let host = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as HWND;
+    if !host.is_null() {
+        unsafe { PostMessageW(host, SETTINGS_ACTION_MESSAGE, Field::Close as WPARAM, 0) };
+    }
 }
 
 pub(super) fn shell_hit(
