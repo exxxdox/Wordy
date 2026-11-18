@@ -59,6 +59,8 @@ pub struct Overlay {
     entry: HWND,
     font: HFONT,
     prompt_font: HFONT,
+    // Family and DPI the two fonts were created for; reopening reuses them.
+    font_key: Option<(String, u32)>,
     placeholder: Vec<u16>,
     previous_foreground: HWND,
 }
@@ -98,6 +100,7 @@ impl Overlay {
                 entry: ptr::null_mut(),
                 font: ptr::null_mut(),
                 prompt_font: ptr::null_mut(),
+                font_key: None,
                 placeholder: vec![0],
                 previous_foreground: ptr::null_mut(),
             };
@@ -350,7 +353,9 @@ impl Overlay {
 
     fn set_visual_settings(&mut self, settings: &Settings, dpi: u32) -> io::Result<()> {
         let pixel = |value| (value * dpi as i32 + 48) / 96;
-        let font_name = wide(crate::config::ui_font_family(&settings.ui_font));
+        let family = crate::config::ui_font_family(&settings.ui_font);
+        let key = (family.to_owned(), dpi);
+        let font_name = wide(family);
         let placeholder = wide(&settings.overlay_placeholder);
         unsafe {
             if SetPropW(
@@ -362,23 +367,26 @@ impl Overlay {
                 return Err(io::Error::last_os_error());
             }
             self.placeholder = placeholder;
-            for (child, size, weight, slot) in [
-                (self.entry, 24, FW_NORMAL, &mut self.font),
-                (
-                    GetDlgItem(self.hwnd, PROMPT),
-                    20,
-                    FW_MEDIUM,
-                    &mut self.prompt_font,
-                ),
-            ] {
-                let font = overlay_font(-pixel(size), weight as i32, &font_name);
-                if !font.is_null() {
-                    SendMessageW(child, WM_SETFONT, font as usize, 0);
-                    let old = mem::replace(slot, font);
-                    if !old.is_null() {
-                        DeleteObject(old);
+            if self.font_key.as_ref() != Some(&key) {
+                for (child, size, weight, slot) in [
+                    (self.entry, 24, FW_NORMAL, &mut self.font),
+                    (
+                        GetDlgItem(self.hwnd, PROMPT),
+                        20,
+                        FW_MEDIUM,
+                        &mut self.prompt_font,
+                    ),
+                ] {
+                    let font = overlay_font(-pixel(size), weight as i32, &font_name);
+                    if !font.is_null() {
+                        SendMessageW(child, WM_SETFONT, font as usize, 0);
+                        let old = mem::replace(slot, font);
+                        if !old.is_null() {
+                            DeleteObject(old);
+                        }
                     }
                 }
+                self.font_key = Some(key);
             }
             RedrawWindow(
                 self.hwnd,
@@ -500,6 +508,22 @@ mod overlay_visual_tests {
     use super::super::host_window;
     use super::paint::*;
     use super::*;
+
+    #[test]
+    fn focus_glow_tints_the_cached_backdrop_without_touching_alpha() {
+        let center = (WIDTH as usize * (HEIGHT as usize / 2) + WIDTH as usize / 2) * 4;
+        let rest = overlay_bitmap(WIDTH as u32, HEIGHT as u32, 0.7, 0.0);
+        // A different opacity rebuilds the cached layers; the glow tint must
+        // still land on the right frame.
+        let other = overlay_bitmap(WIDTH as u32, HEIGHT as u32, 0.9, 0.0);
+        assert_ne!(rest.pixels[center + 3], other.pixels[center + 3]);
+        let focused = overlay_bitmap(WIDTH as u32, HEIGHT as u32, 0.7, 1.0);
+        assert_eq!(rest.pixels[center + 3], focused.pixels[center + 3]);
+        assert!(
+            focused.pixels[center] > rest.pixels[center],
+            "the focus glow must add blue to the premultiplied frame"
+        );
+    }
 
     #[test]
     fn glass_panel_is_brighter_at_the_top_and_gets_focus_glow_at_the_bottom() {
