@@ -529,6 +529,135 @@ mod tests {
     }
 
     #[test]
+    fn dropdowns_and_edits_have_no_black_corners() {
+        use windows_sys::Win32::Graphics::Gdi::{
+            BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, SRCCOPY,
+        };
+        unsafe fn pump() {
+            unsafe {
+                let mut message = MSG::default();
+                while PeekMessageW(&mut message, ptr::null_mut(), 0, 0, PM_REMOVE) != 0 {
+                    TranslateMessage(&message);
+                    DispatchMessageW(&message);
+                }
+            }
+        }
+        /// Rounded fields leave the corners outside the border to the backdrop.
+        /// A missed backdrop call leaves them black, which is the artifact this
+        /// test guards against.
+        unsafe fn assert_clean(label: &str, hwnd: HWND) {
+            unsafe {
+                let dc = GetWindowDC(hwnd);
+                let mut window = RECT::default();
+                GetWindowRect(hwnd, &mut window);
+                let (width, height) = (window.right - window.left, window.bottom - window.top);
+                let memory = CreateCompatibleDC(dc);
+                let bitmap = CreateCompatibleBitmap(dc, width.max(1), height.max(1));
+                let previous = SelectObject(memory, bitmap);
+                BitBlt(memory, 0, 0, width, height, dc, 0, 0, SRCCOPY);
+                let mut black = Vec::new();
+                for y in 0..height {
+                    for x in 0..width {
+                        let pixel = GetPixel(memory, x, y) & 0x00ff_ffff;
+                        let (red, green, blue) =
+                            (pixel & 0xff, (pixel >> 8) & 0xff, (pixel >> 16) & 0xff);
+                        if red < 0x12 && green < 0x12 && blue < 0x12 && black.len() < 4 {
+                            black.push(format!("{x},{y}"));
+                        }
+                    }
+                }
+                SelectObject(memory, previous);
+                DeleteObject(bitmap);
+                DeleteDC(memory);
+                ReleaseDC(hwnd, dc);
+                assert!(black.is_empty(), "{label} shows black pixels at {black:?}");
+            }
+        }
+        let mut window = SettingsWindow::new(ptr::null_mut(), &Settings::default()).unwrap();
+        unsafe { ShowWindow(window.hwnd(), SW_SHOW) };
+        for page in [Page::Local, Page::Audio, Page::Tts] {
+            window.page = page;
+            window.show_page();
+            unsafe { pump() };
+            for widget in &window.widgets {
+                if !widget.page.is_none_or(|page| page == window.page) {
+                    continue;
+                }
+                let kind = match widget.kind {
+                    Kind::Combo => "combo",
+                    Kind::Edit => "edit",
+                    Kind::Password => "password",
+                    Kind::Number => "number",
+                    _ => continue,
+                };
+                if unsafe { IsWindowVisible(widget.hwnd) } == 0 {
+                    continue;
+                }
+                unsafe {
+                    assert_clean(
+                        &format!("settings {kind} {}", widget.field.map_or(0, |f| f as u16)),
+                        widget.hwnd,
+                    )
+                };
+            }
+        }
+        let settings = Settings::default();
+        let editor =
+            crate::panels::Editor::new_embedded(ptr::null_mut(), window.hwnd(), &settings).unwrap();
+        window.set_wheel_panel(editor.panel.0);
+        window.page = Page::Wheels;
+        window.show_page();
+        unsafe {
+            ShowWindow(editor.panel.0, SW_SHOW);
+            pump();
+            for id in [crate::panels::WHEEL, crate::panels::STYLE] {
+                assert_clean(&format!("editor combo {id}"), editor.panel.child(id));
+            }
+            for id in [
+                crate::panels::LABEL,
+                crate::panels::TEXT,
+                crate::panels::GAIN,
+            ] {
+                if IsWindowVisible(editor.panel.child(id)) != 0 {
+                    assert_clean(&format!("editor edit {id}"), editor.panel.child(id));
+                }
+            }
+        }
+        // The popup list is its own window; it must not show black corners either.
+        unsafe {
+            use windows_sys::Win32::UI::Controls::{COMBOBOXINFO, GetComboBoxInfo};
+            let combo = window.control(Field::LogLevel);
+            let mut rect = RECT::default();
+            GetClientRect(combo, &mut rect);
+            let point = ((rect.right - 8) | ((rect.bottom / 2) << 16)) as isize;
+            SendMessageW(combo, WM_LBUTTONDOWN, 1, point);
+            SendMessageW(combo, WM_LBUTTONUP, 0, point);
+            pump();
+            let mut info = COMBOBOXINFO {
+                cbSize: size_of::<COMBOBOXINFO>() as u32,
+                ..Default::default()
+            };
+            GetComboBoxInfo(combo, &mut info);
+            if !info.hwndList.is_null() && IsWindowVisible(info.hwndList) != 0 {
+                assert_clean("combo popup", info.hwndList);
+            }
+            SendMessageW(combo, WM_KEYDOWN, 0x1B, 0);
+            pump();
+            if let Ok(trim) =
+                crate::panels::Trim::new(ptr::null_mut(), window.hwnd(), &settings, None, 0.0, 1.0)
+            {
+                ShowWindow(trim.panel.0, SW_SHOW);
+                pump();
+                assert_clean("trim combo", trim.panel.child(crate::panels::WHEEL));
+                assert_clean("trim edit", trim.panel.child(crate::panels::LABEL));
+                ShowWindow(trim.panel.0, SW_HIDE);
+            }
+            ShowWindow(editor.panel.0, SW_HIDE);
+            ShowWindow(window.hwnd(), SW_HIDE);
+        }
+    }
+
+    #[test]
     fn combo_face_draw_request_paints_immediately() {
         let window = SettingsWindow::new(ptr::null_mut(), &Settings::default()).unwrap();
         let combo = window.control(Field::LogLevel);
