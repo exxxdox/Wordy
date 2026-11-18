@@ -8,8 +8,8 @@ use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::System::SystemServices::SS_OWNERDRAW;
 use windows_sys::Win32::UI::Controls::{
     DRAWITEMSTRUCT, EM_SETLIMITTEXT, EM_SETMARGINS, ODS_COMBOBOXEDIT, ODS_DISABLED, ODS_FOCUS,
-    ODS_SELECTED, ODT_BUTTON, ODT_COMBOBOX, ODT_STATIC, TB_ENDTRACK, TBM_SETPAGESIZE, TBM_SETPOS,
-    TBM_SETRANGE, TBS_NOTICKS, TRACKBAR_CLASSW, WM_MOUSELEAVE,
+    ODS_SELECTED, ODT_BUTTON, ODT_COMBOBOX, ODT_STATIC, TB_ENDTRACK, TBM_SETPAGESIZE, TBM_SETRANGE,
+    TBS_NOTICKS, TRACKBAR_CLASSW, WM_MOUSELEAVE,
 };
 use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
@@ -21,7 +21,7 @@ use windows_sys::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWi
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 use crate::config::{Settings, Wheel};
-use crate::desktop::{frame_edit_text, wide, window_text};
+use crate::desktop::{frame_edit_text, paint_buffered, wide, window_text};
 use crate::dialog::{Panel, Template};
 use crate::selector::style_selector;
 use crate::settings_window::paint_embedded_backdrop;
@@ -249,10 +249,10 @@ impl Chrome {
     }
 
     fn gain(&self, gain: f64) {
-        let percent = (gain * 100.0).round() as usize;
+        let percent = (gain * 100.0).round() as i32;
         set_control_text(self.hwnd, GAIN, &percent.to_string());
         set_control_text(self.hwnd, GAIN_VALUE, &format!("{percent}%"));
-        unsafe { SendMessageW(self.state.gain, TBM_SETPOS, 1, percent as isize) };
+        slider::set_position(self.state.gain, percent);
     }
 }
 
@@ -346,12 +346,12 @@ unsafe extern "system" fn slider_proc(
         match message {
             WM_ERASEBKGND => 1,
             WM_PAINT => {
-                paint_panel_frame(hwnd, |dc, rect| {
+                paint_buffered(hwnd, |dc, rect| {
                     paint_gain(hwnd, dc, rect, background as u32)
                 });
                 0
             }
-            WM_SETFOCUS | WM_KILLFOCUS | WM_KEYDOWN => {
+            WM_SETFOCUS | WM_KILLFOCUS | WM_KEYDOWN | WM_MOUSEWHEEL => {
                 let result = DefSubclassProc(hwnd, message, wparam, lparam);
                 InvalidateRect(hwnd, ptr::null(), 0);
                 result
@@ -829,7 +829,7 @@ unsafe extern "system" fn preview_proc(
         match msg {
             WM_ERASEBKGND => 1,
             WM_PAINT => {
-                paint_panel_frame(hwnd, |dc, rect| {
+                paint_buffered(hwnd, |dc, rect| {
                     fill(dc, rect, PANEL_SURFACE);
                     if state.embedded {
                         paint_embedded_backdrop(hwnd, dc);
@@ -1667,7 +1667,7 @@ unsafe extern "system" fn wave_proc(
             }
             WM_ERASEBKGND => 1,
             WM_PAINT => {
-                paint_panel_frame(hwnd, |dc, rect| {
+                paint_buffered(hwnd, |dc, rect| {
                     paint_wave(dc, state, plot, rect, GetFocus() == hwnd);
                 });
                 0
@@ -1731,38 +1731,6 @@ fn change_range(hwnd: HWND, state: &mut WaveState, drag: Drag, at: f64) {
             InvalidateRect(hwnd, ptr::null(), 0);
             PostMessageW(GetParent(hwnd), WM_COMMAND, usize::from(WAVE), 0);
         }
-    }
-}
-
-fn paint_panel_frame(hwnd: HWND, draw: impl FnOnce(HDC, RECT)) {
-    unsafe {
-        let mut paint = PAINTSTRUCT::default();
-        let target = BeginPaint(hwnd, &mut paint);
-        let mut rect = RECT::default();
-        GetClientRect(hwnd, &mut rect);
-        if !target.is_null() && rect.right > 0 && rect.bottom > 0 {
-            let buffer = CreateCompatibleDC(target);
-            let bitmap = CreateCompatibleBitmap(target, rect.right, rect.bottom);
-            let mut original = ptr::null_mut();
-            if !buffer.is_null() && !bitmap.is_null() {
-                original = SelectObject(buffer, bitmap);
-            }
-            if original.is_null() {
-                draw(target, rect);
-            } else {
-                // Only publish the composed frame, clipped by BeginPaint to the update region.
-                draw(buffer, rect);
-                BitBlt(target, 0, 0, rect.right, rect.bottom, buffer, 0, 0, SRCCOPY);
-                SelectObject(buffer, original);
-            }
-            if !bitmap.is_null() {
-                DeleteObject(bitmap);
-            }
-            if !buffer.is_null() {
-                DeleteDC(buffer);
-            }
-        }
-        EndPaint(hwnd, &paint);
     }
 }
 
@@ -1948,6 +1916,45 @@ fn paint_wave(dc: HDC, state: &WaveState, plot: Plot, rect: RECT, focused: bool)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn moving_gain_repaints_the_old_thumb_and_progress_track() {
+        let trim = Trim::new(
+            ptr::null_mut(),
+            ptr::null_mut(),
+            &Settings::default(),
+            None,
+            3.0,
+            1.0,
+        )
+        .unwrap();
+        let gain = trim.chrome.state.gain;
+        let (width, height) = dimensions(gain);
+        let pointer = |x: i32| (x as u16 as isize) | ((height as isize / 2) << 16);
+        unsafe {
+            SetWindowPos(
+                trim.panel.0,
+                ptr::null_mut(),
+                -32000,
+                -32000,
+                0,
+                0,
+                SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOZORDER | SWP_SHOWWINDOW,
+            );
+            SendMessageW(gain, WM_LBUTTONDOWN, 1, pointer(width - 2));
+            ValidateRect(gain, ptr::null());
+            SendMessageW(gain, WM_MOUSEMOVE, 1, pointer(2));
+        }
+        let mut dirty = RECT::default();
+        unsafe {
+            GetUpdateRect(gain, &mut dirty, 0);
+            SendMessageW(gain, WM_LBUTTONUP, 0, pointer(2));
+        }
+        assert_eq!(
+            (dirty.left, dirty.top, dirty.right, dirty.bottom),
+            (0, 0, width, height)
+        );
+    }
 
     #[test]
     fn trim_gain_click_and_drag_follow_the_visible_track() {

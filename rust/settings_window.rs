@@ -14,8 +14,8 @@ use windows_sys::{
             Controls::{
                 DRAWITEMSTRUCT, EM_SETLIMITTEXT, EM_SETMARGINS, ICC_BAR_CLASSES,
                 INITCOMMONCONTROLSEX, InitCommonControlsEx, ODS_COMBOBOXEDIT, ODS_DISABLED,
-                ODS_FOCUS, ODS_SELECTED, ODT_BUTTON, ODT_COMBOBOX, ODT_STATIC, TBM_SETPOS,
-                TBM_SETRANGEMAX, TRACKBAR_CLASSW, WM_MOUSELEAVE,
+                ODS_FOCUS, ODS_SELECTED, ODT_BUTTON, ODT_COMBOBOX, ODT_STATIC, TBM_SETRANGEMAX,
+                TRACKBAR_CLASSW, WM_MOUSELEAVE,
             },
             HiDpi::{GetDpiForMonitor, GetDpiForWindow, MDT_EFFECTIVE_DPI},
             Input::KeyboardAndMouse::{
@@ -35,7 +35,7 @@ use crate::{
         VOLCENGINE_STREAMING, Voice,
     },
     credentials::{Provider, normalize_api_key_input},
-    desktop::set_dwm,
+    desktop::{paint_buffered, set_dwm},
     slider::{self, TBM_GETPOS},
 };
 
@@ -509,11 +509,11 @@ impl SettingsWindow {
         self.check(Field::FixedCenter, settings.fixed_center);
         self.check(Field::MainPlayback, settings.main_playback_enabled);
         self.check(Field::Sidetone, settings.sidetone_enabled);
-        set_slider(
+        slider::set_position(
             self.control(Field::Volume),
             slider_position(settings.volume, 0.5),
         );
-        set_slider(
+        slider::set_position(
             self.control(Field::Opacity),
             slider_position(settings.overlay_opacity, 0.30),
         );
@@ -2326,6 +2326,15 @@ unsafe extern "system" fn style_control(
         WM_MOUSEWHEEL if slider || (combo && send(hwnd, CB_GETDROPPEDSTATE, 0, 0) == 0) => {
             return 0;
         }
+        WM_KEYDOWN if slider => unsafe {
+            let result = DefSubclassProc(hwnd, message, wparam, lparam);
+            InvalidateRect(hwnd, ptr::null(), 0);
+            return result;
+        },
+        WM_PAINT if slider => {
+            paint_buffered(hwnd, |dc, rect| paint_slider(hwnd, dc, rect));
+            return 0;
+        }
         WM_PAINT | WM_PRINTCLIENT if slider || combo || check => {
             let mut paint = PAINTSTRUCT::default();
             let painting = message == WM_PAINT;
@@ -2336,7 +2345,9 @@ unsafe extern "system" fn style_control(
             };
             let mut rect = RECT::default();
             unsafe { GetClientRect(hwnd, &mut rect) };
-            paint_embedded_backdrop(hwnd, dc);
+            if !slider {
+                paint_embedded_backdrop(hwnd, dc);
+            }
             if combo {
                 paint_combo(hwnd, dc, rect);
             } else if check {
@@ -2475,6 +2486,7 @@ fn paint_check(hwnd: HWND, dc: HDC, rect: RECT) {
 }
 
 fn paint_slider(hwnd: HWND, dc: HDC, rect: RECT) {
+    paint_embedded_backdrop(hwnd, dc);
     let (channel, x) = slider::thumb_geometry(hwnd);
     let y = (rect.top + rect.bottom) / 2;
     let track = RECT {
@@ -2530,10 +2542,6 @@ fn send(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
 
 fn checked(hwnd: HWND) -> bool {
     send(hwnd, BM_GETCHECK, 0, 0) != 0
-}
-
-fn set_slider(hwnd: HWND, position: i32) {
-    send(hwnd, TBM_SETPOS, 1, position as LPARAM);
 }
 
 fn slider_position(value: f64, min: f64) -> i32 {
@@ -2624,16 +2632,20 @@ mod tests {
 
     #[test]
     fn clicking_the_settings_sliders_jumps_to_the_clicked_value() {
-        let settings = SettingsWindow::new(ptr::null_mut(), &Settings::default()).unwrap();
+        let mut settings = SettingsWindow::new(ptr::null_mut(), &Settings::default()).unwrap();
         for (field, position) in [(Field::Volume, 15), (Field::Opacity, 7)] {
             let slider = settings.control(field);
             let mut rect = RECT::default();
             unsafe { GetClientRect(slider, &mut rect) };
             let point = (rect.right as isize / 2) | ((rect.bottom as isize / 2) << 16);
-            set_slider(slider, 0);
+            slider::set_position(slider, 0);
             send(slider, WM_LBUTTONDOWN, 1, point);
             send(slider, WM_LBUTTONUP, 0, point);
             assert_eq!(send(slider, TBM_GETPOS, 0, 0), position);
+        }
+        match settings.action(Field::Opacity as u16) {
+            Some(SettingsAction::SetOpacity(value)) => assert_eq!(value, 0.65),
+            _ => panic!("the opacity slider should emit its new value"),
         }
     }
 

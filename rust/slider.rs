@@ -1,5 +1,6 @@
 use windows_sys::Win32::{
     Foundation::{HWND, LPARAM, LRESULT, RECT},
+    Graphics::Gdi::InvalidateRect,
     UI::{
         Controls::{
             TB_ENDTRACK, TB_THUMBTRACK, TBM_GETCHANNELRECT, TBM_GETRANGEMAX, TBM_GETRANGEMIN,
@@ -55,6 +56,17 @@ pub(crate) fn thumb_geometry(hwnd: HWND) -> (RECT, i32) {
     (track.channel, center)
 }
 
+pub(crate) fn set_position(hwnd: HWND, value: i32) {
+    if hwnd.is_null() {
+        return;
+    }
+    unsafe {
+        SendMessageW(hwnd, TBM_SETPOS, 0, value as LPARAM);
+        // The native redraw misses the previous custom thumb and progress fill.
+        InvalidateRect(hwnd, std::ptr::null(), 0);
+    }
+}
+
 pub(crate) fn handle_pointer(hwnd: HWND, message: u32, point: LPARAM) -> Option<LRESULT> {
     unsafe {
         match message {
@@ -84,7 +96,7 @@ pub(crate) fn handle_pointer(hwnd: HWND, message: u32, point: LPARAM) -> Option<
         let ratio = f64::from(offset) / f64::from(track.span());
         let value = track.min + (ratio * f64::from(track.max - track.min)).round() as i32;
         if SendMessageW(hwnd, TBM_GETPOS, 0, 0) != value as isize {
-            SendMessageW(hwnd, TBM_SETPOS, 1, value as LPARAM);
+            set_position(hwnd, value);
             let scroll = TB_THUMBTRACK as usize | ((value as u16 as usize) << 16);
             SendMessageW(GetParent(hwnd), WM_HSCROLL, scroll, hwnd as LPARAM);
         }

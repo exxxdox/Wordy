@@ -69,6 +69,38 @@ pub(crate) fn set_dwm(hwnd: HWND, attribute: i32, value: i32) {
     };
 }
 
+pub(crate) fn paint_buffered(hwnd: HWND, draw: impl FnOnce(HDC, RECT)) {
+    unsafe {
+        let mut paint = PAINTSTRUCT::default();
+        let target = BeginPaint(hwnd, &mut paint);
+        let mut rect = RECT::default();
+        GetClientRect(hwnd, &mut rect);
+        if !target.is_null() && rect.right > 0 && rect.bottom > 0 {
+            let buffer = CreateCompatibleDC(target);
+            let bitmap = CreateCompatibleBitmap(target, rect.right, rect.bottom);
+            let mut original = ptr::null_mut();
+            if !buffer.is_null() && !bitmap.is_null() {
+                original = SelectObject(buffer, bitmap);
+            }
+            if original.is_null() {
+                draw(target, rect);
+            } else {
+                // Only publish the composed frame, clipped by BeginPaint to the update region.
+                draw(buffer, rect);
+                BitBlt(target, 0, 0, rect.right, rect.bottom, buffer, 0, 0, SRCCOPY);
+                SelectObject(buffer, original);
+            }
+            if !bitmap.is_null() {
+                DeleteObject(bitmap);
+            }
+            if !buffer.is_null() {
+                DeleteDC(buffer);
+            }
+        }
+        EndPaint(hwnd, &paint);
+    }
+}
+
 pub(crate) fn host_window(instance: HINSTANCE) -> io::Result<HWND> {
     let class = WNDCLASSW {
         lpfnWndProc: Some(host_proc),
@@ -1701,6 +1733,15 @@ mod overlay_visual_tests {
         let focused = capsule_color(200.0, 55.5, 1.0);
         assert!(top[0] > bottom[0]);
         assert!(focused[2] > bottom[2]);
+    }
+
+    #[test]
+    fn overlay_opacity_sets_the_backdrop_alpha() {
+        let center = (WIDTH as usize * (HEIGHT as usize / 2) + WIDTH as usize / 2) * 4;
+        for (opacity, alpha) in [(0.30, 77), (0.65, 166), (1.0, 255)] {
+            let backdrop = overlay_bitmap(WIDTH as u32, HEIGHT as u32, opacity, 0.0);
+            assert_eq!(backdrop.pixels[center + 3], alpha);
+        }
     }
 
     #[test]
