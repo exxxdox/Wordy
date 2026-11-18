@@ -181,6 +181,9 @@ impl Chrome {
         }
         if trim {
             unsafe {
+                // A dialog redraw must leave the wave and other child surfaces intact.
+                let style = GetWindowLongPtrW(panel.0, GWL_STYLE);
+                SetWindowLongPtrW(panel.0, GWL_STYLE, style | WS_CLIPCHILDREN as isize);
                 // Match the dark client while retaining the system frame and shadow.
                 for (attribute, value) in [
                     (DWMWA_USE_IMMERSIVE_DARK_MODE, 1),
@@ -361,12 +364,9 @@ unsafe extern "system" fn slider_proc(
         match message {
             WM_ERASEBKGND => 1,
             WM_PAINT => {
-                let mut paint = PAINTSTRUCT::default();
-                let dc = BeginPaint(hwnd, &mut paint);
-                let mut rect = RECT::default();
-                GetClientRect(hwnd, &mut rect);
-                paint_gain(hwnd, dc, rect, background as u32);
-                EndPaint(hwnd, &paint);
+                paint_panel_frame(hwnd, |dc, rect| {
+                    paint_gain(hwnd, dc, rect, background as u32)
+                });
                 0
             }
             WM_SETFOCUS | WM_KILLFOCUS | WM_LBUTTONDOWN | WM_LBUTTONUP | WM_MOUSEMOVE
@@ -851,26 +851,15 @@ unsafe extern "system" fn preview_proc(
         match msg {
             WM_ERASEBKGND => 1,
             WM_PAINT => {
-                let mut paint = PAINTSTRUCT::default();
-                let dc = BeginPaint(hwnd, &mut paint);
-                if state.embedded {
-                    paint_embedded_backdrop(hwnd, dc);
-                } else {
-                    fill(
-                        dc,
-                        RECT {
-                            left: 0,
-                            top: 0,
-                            right: width,
-                            bottom: height,
-                        },
-                        PANEL_SURFACE,
-                    );
-                }
-                if let Some(bitmap) = &state.bitmap {
-                    blend_preview(dc, bitmap, width, height);
-                }
-                EndPaint(hwnd, &paint);
+                paint_panel_frame(hwnd, |dc, rect| {
+                    fill(dc, rect, PANEL_SURFACE);
+                    if state.embedded {
+                        paint_embedded_backdrop(hwnd, dc);
+                    }
+                    if let Some(bitmap) = &state.bitmap {
+                        blend_preview(dc, bitmap, width, height);
+                    }
+                });
                 0
             }
             WM_MOUSEMOVE => {
@@ -1600,10 +1589,27 @@ impl Trim {
     }
     pub fn progress(&mut self, seconds: Option<f64>) {
         self.set_previewing(seconds.is_some());
-        self.wave.playhead = seconds.filter(|value| value.is_finite()).map(|value| {
+        let next = seconds.filter(|value| value.is_finite()).map(|value| {
             (self.wave.range.start + value).clamp(self.wave.range.start, self.wave.range.end)
         });
-        self.invalidate();
+        let previous = mem::replace(&mut self.wave.playhead, next);
+        let wave = self.panel.child(WAVE);
+        let (width, height) = dimensions(wave);
+        let plot = Plot::new(width, height);
+        let column = |time: f64| plot.x_at(time, self.wave.range.duration);
+        let (before, after) = (previous.map(column), next.map(column));
+        if before != after {
+            // Repaint the old and new cursor strips, leaving the rest of the plot untouched.
+            for x in [before, after].into_iter().flatten() {
+                let dirty = RECT {
+                    left: x - 1,
+                    right: x + 2,
+                    bottom: plot.bounds.bottom + 1,
+                    ..plot.bounds
+                };
+                unsafe { InvalidateRect(wave, &dirty, 0) };
+            }
+        }
     }
 
     pub fn set_previewing(&mut self, active: bool) {
@@ -1618,10 +1624,6 @@ impl Trim {
                     "试听片段"
                 },
             );
-        }
-        if !active {
-            self.wave.playhead = None;
-            self.invalidate();
         }
     }
     fn invalidate(&self) {
@@ -1720,10 +1722,9 @@ unsafe extern "system" fn wave_proc(
             }
             WM_ERASEBKGND => 1,
             WM_PAINT => {
-                let mut paint = PAINTSTRUCT::default();
-                let dc = BeginPaint(hwnd, &mut paint);
-                paint_wave(dc, state, plot, width, height, GetFocus() == hwnd);
-                EndPaint(hwnd, &paint);
+                paint_panel_frame(hwnd, |dc, rect| {
+                    paint_wave(dc, state, plot, rect, GetFocus() == hwnd);
+                });
                 0
             }
             _ => DefSubclassProc(hwnd, msg, wp, lp),
@@ -1788,6 +1789,38 @@ fn change_range(hwnd: HWND, state: &mut WaveState, drag: Drag, at: f64) {
     }
 }
 
+fn paint_panel_frame(hwnd: HWND, draw: impl FnOnce(HDC, RECT)) {
+    unsafe {
+        let mut paint = PAINTSTRUCT::default();
+        let target = BeginPaint(hwnd, &mut paint);
+        let mut rect = RECT::default();
+        GetClientRect(hwnd, &mut rect);
+        if !target.is_null() && rect.right > 0 && rect.bottom > 0 {
+            let buffer = CreateCompatibleDC(target);
+            let bitmap = CreateCompatibleBitmap(target, rect.right, rect.bottom);
+            let mut original = ptr::null_mut();
+            if !buffer.is_null() && !bitmap.is_null() {
+                original = SelectObject(buffer, bitmap);
+            }
+            if original.is_null() {
+                draw(target, rect);
+            } else {
+                // Only publish the composed frame, clipped by BeginPaint to the update region.
+                draw(buffer, rect);
+                BitBlt(target, 0, 0, rect.right, rect.bottom, buffer, 0, 0, SRCCOPY);
+                SelectObject(buffer, original);
+            }
+            if !bitmap.is_null() {
+                DeleteObject(bitmap);
+            }
+            if !buffer.is_null() {
+                DeleteDC(buffer);
+            }
+        }
+        EndPaint(hwnd, &paint);
+    }
+}
+
 fn fill(dc: HDC, rect: RECT, color: u32) {
     unsafe {
         let brush = CreateSolidBrush(color);
@@ -1838,22 +1871,13 @@ fn line(dc: HDC, x: i32, y: i32, x2: i32, y2: i32) {
     }
 }
 
-fn paint_wave(dc: HDC, state: &WaveState, plot: Plot, width: i32, height: i32, focused: bool) {
+fn paint_wave(dc: HDC, state: &WaveState, plot: Plot, rect: RECT, focused: bool) {
     let bounds = plot.bounds;
     let middle = (bounds.top + bounds.bottom) / 2;
     let duration = state.range.duration;
     let left = plot.x_at(state.range.start, duration);
     let right = plot.x_at(state.range.end, duration);
-    fill(
-        dc,
-        RECT {
-            left: 0,
-            top: 0,
-            right: width,
-            bottom: height,
-        },
-        PANEL_SURFACE,
-    );
+    fill(dc, rect, PANEL_SURFACE);
     rounded(dc, bounds, 16, Some(ELEVATED), SEPARATOR);
     let saved_dc = unsafe { SaveDC(dc) };
     let clip = unsafe {
@@ -1867,7 +1891,7 @@ fn paint_wave(dc: HDC, state: &WaveState, plot: Plot, width: i32, height: i32, f
         )
     };
     unsafe {
-        SelectClipRgn(dc, clip);
+        ExtSelectClipRgn(dc, clip, RGN_AND);
         DeleteObject(clip);
     }
     fill(
@@ -1921,7 +1945,7 @@ fn paint_wave(dc: HDC, state: &WaveState, plot: Plot, width: i32, height: i32, f
     }
     for tick in 0..=5 {
         let time = duration * f64::from(tick) / 5.0;
-        let at = (plot.x_at(time, duration) - 35).clamp(0, (width - 70).max(0));
+        let at = (plot.x_at(time, duration) - 35).clamp(0, (rect.right - 70).max(0));
         let mut label = RECT {
             left: at,
             top: bounds.bottom + 7,
@@ -1979,6 +2003,53 @@ fn paint_wave(dc: HDC, state: &WaveState, plot: Plot, width: i32, height: i32, f
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preview_progress_invalidates_only_the_changed_playhead_pixels() {
+        let mut trim = Trim::new(
+            ptr::null_mut(),
+            ptr::null_mut(),
+            &Settings::default(),
+            None,
+            10.0,
+            1.0,
+        )
+        .unwrap();
+        let wave = trim.panel.child(WAVE);
+        let (width, height) = dimensions(wave);
+        let plot = Plot::new(width, height);
+        let x = plot.x_at(1.0, 10.0);
+        let mut dirty = RECT::default();
+        unsafe {
+            SetWindowPos(
+                trim.panel.0,
+                ptr::null_mut(),
+                -32000,
+                -32000,
+                0,
+                0,
+                SWP_NOACTIVATE | SWP_NOSIZE | SWP_NOZORDER | SWP_SHOWWINDOW,
+            );
+            ValidateRect(wave, ptr::null());
+        }
+
+        trim.progress(Some(1.0));
+        assert_ne!(unsafe { GetUpdateRect(wave, &mut dirty, 0) }, 0);
+        assert!(dirty.left <= x - 1 && dirty.right > x);
+        assert!(
+            dirty.right - dirty.left <= 3,
+            "only the playhead should be dirty"
+        );
+        unsafe { ValidateRect(wave, ptr::null()) };
+
+        trim.progress(Some(1.0 + f64::EPSILON));
+        assert_eq!(unsafe { GetUpdateRect(wave, &mut dirty, 0) }, 0);
+
+        trim.progress(None);
+        assert_ne!(unsafe { GetUpdateRect(wave, &mut dirty, 0) }, 0);
+        assert!(dirty.left <= x - 1 && dirty.right > x);
+        assert!(dirty.right - dirty.left <= 3);
+    }
 
     #[test]
     fn rolling_trim_shows_a_large_wheel_beside_its_save_fields() {
