@@ -84,6 +84,14 @@ impl Queue {
         }
     }
 
+    fn request_speech(&mut self, job: Speech) -> Option<Speech> {
+        // A new submission must stop the current speech, not wait behind it.
+        if let Some(cancel) = &self.speech {
+            cancel.store(true, Ordering::Release);
+        }
+        self.speak(job)
+    }
+
     fn stop_speech(&mut self) -> Option<u64> {
         if let Some(cancel) = &self.speech {
             cancel.store(true, Ordering::Release);
@@ -131,9 +139,7 @@ impl Playback {
     }
 
     pub fn speak(&self, id: u64, text: String, engine: Arc<EngineSettings>, settings: &Settings) {
-        if text.trim().is_empty()
-            || !(settings.main_playback_enabled || settings.sidetone_enabled)
-            || settings.active_voice_id().is_none()
+        if text.trim().is_empty() || !(settings.main_playback_enabled || settings.sidetone_enabled)
         {
             finished(&self.sender, id, Ok(()));
             return;
@@ -147,7 +153,7 @@ impl Playback {
         };
         let mut queue = self.shared.0.lock().unwrap();
         queue.stop_clip(false);
-        let replaced = queue.speak(job);
+        let replaced = queue.request_speech(job);
         self.shared.1.notify_one();
         drop(queue);
         if let Some(replaced) = replaced {
@@ -332,7 +338,8 @@ fn select_route<'a>(
     let preferred = settings
         .audio_output_device
         .as_ref()
-        .map(|id| id.name.as_str());
+        .map(|id| id.name.as_str())
+        .or(settings.audio_output_device_name.as_deref());
     audio::route(
         settings.main_playback_enabled,
         settings.sidetone_enabled,
@@ -479,6 +486,46 @@ mod tests {
         assert_eq!(latest.id, 3);
         assert!(queue.stop_speech().is_none());
         assert!(latest.cancel.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn a_new_speech_cancels_the_current_one_and_keeps_the_latest_pending() {
+        let mut queue = Queue::default();
+        assert!(queue.request_speech(job(1)).is_none());
+        let Some(Work::Speech(first)) = queue.jobs.pop_front() else {
+            panic!("missing first job")
+        };
+        assert!(!first.cancel.load(Ordering::Acquire));
+
+        assert!(queue.request_speech(job(2)).is_none());
+        assert!(first.cancel.load(Ordering::Acquire));
+        assert_eq!(queue.pending_speech.as_ref().unwrap().id, 2);
+    }
+
+    #[test]
+    fn legacy_output_name_drives_the_local_route_without_an_identity() {
+        let settings = Settings {
+            audio_output_device_name: Some("Speakers".into()),
+            sidetone_enabled: true,
+            ..Settings::default()
+        };
+        let outputs = vec![
+            audio::Endpoint {
+                id: "system".into(),
+                name: "System".into(),
+                is_default: true,
+            },
+            audio::Endpoint {
+                id: "speakers".into(),
+                name: "Speakers".into(),
+                is_default: false,
+            },
+        ];
+        let route = select_route(&settings, false, &outputs);
+        assert_eq!(
+            route.local.map(|endpoint| endpoint.name.as_str()),
+            Some("Speakers")
+        );
     }
 
     #[test]

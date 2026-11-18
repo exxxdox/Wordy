@@ -86,10 +86,6 @@ impl TtsEngine {
         }
     }
 
-    pub fn backend(&self) -> Backend {
-        self.backend
-    }
-
     pub fn set_voice(&mut self, voice_id: Option<String>) {
         self.voice_id = voice_id;
     }
@@ -357,11 +353,11 @@ impl TtsEngine {
         let client = Client::builder()
             .connect_timeout(Duration::from_secs(10))
             // Python's requests timeout is per socket operation, not a whole-request
-            // deadline. reqwest's blocking builder has no read_timeout (only the
-            // async builder does), so bound the connect phase and rely on per-read
-            // socket behavior for the body.
+            // deadline. reqwest's blocking builder defaults to a 30 second total
+            // deadline, so disable it; long TTS streams must not be cut off.
             // Match requests: follow redirects; reqwest strips Authorization on a
             // cross-origin hop, as requests does.
+            .timeout(None::<Duration>)
             .redirect(Policy::limited(10))
             .build()
             .map_err(|error| transport_error("无法初始化 TTS HTTP 客户端", error))?;
