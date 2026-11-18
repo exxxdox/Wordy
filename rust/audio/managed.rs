@@ -55,7 +55,7 @@ pub fn stage_clip(source: &Path, config: &Path, cancel: &AtomicBool) -> io::Resu
     })();
     drop(output);
     result?;
-    super::decode_clip(clip.path(), cancel)?;
+    super::validate_clip(clip.path(), cancel)?;
     Ok(clip)
 }
 

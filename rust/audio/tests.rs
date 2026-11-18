@@ -1,4 +1,5 @@
 use super::*;
+use crate::config::AudioIdentity;
 
 fn endpoint(id: &str, name: &str, is_default: bool) -> Endpoint {
     Endpoint {
@@ -35,6 +36,56 @@ fn preview_bypasses_switches_and_never_uses_cable() {
     assert_eq!(
         route(false, false, true, Some("Unplugged"), &endpoints, None).local,
         None
+    );
+}
+
+#[test]
+fn endpoint_matching_is_exact_then_unique_fragment() {
+    let endpoints = [
+        endpoint("a", "Speakers", false),
+        endpoint("b", "Headset", true),
+    ];
+    assert_eq!(
+        find_endpoint(&endpoints, " speakers ").map(|e| e.id.as_str()),
+        Some("a")
+    );
+    assert_eq!(
+        find_endpoint(&endpoints, "speak").map(|e| e.id.as_str()),
+        Some("a")
+    );
+    assert_eq!(find_endpoint(&endpoints, "missing"), None);
+    let ambiguous = [endpoint("a", "Mic A", false), endpoint("b", "Mic B", false)];
+    assert_eq!(find_endpoint(&ambiguous, "mic"), None);
+}
+
+#[test]
+fn saved_endpoint_id_wins_over_a_renamed_device() {
+    let endpoints = [endpoint("new-id", "Renamed", false)];
+    let current = AudioIdentity {
+        name: "Old".into(),
+        host_api_name: None,
+        id: Some("new-id".into()),
+    };
+    assert_eq!(
+        resolve_output(&endpoints, Some(&current), None).map(|e| e.name.as_str()),
+        Some("Renamed")
+    );
+    let stale = AudioIdentity {
+        name: "Old".into(),
+        host_api_name: None,
+        id: Some("gone".into()),
+    };
+    assert_eq!(resolve_output(&endpoints, Some(&stale), None), None);
+}
+
+#[test]
+fn renamed_virtual_cable_is_still_the_main_route() {
+    let endpoints = [endpoint("cable", "VB-Audio Virtual Cable", true)];
+    let selected = route(true, false, false, None, &endpoints, None);
+    assert_eq!(selected.main.map(|e| e.id.as_str()), Some("cable"));
+    assert_eq!(
+        cable_endpoint_for(&endpoints, None).map(|e| e.id.as_str()),
+        Some("cable")
     );
 }
 

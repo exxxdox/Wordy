@@ -30,6 +30,19 @@ fn waveform_uses_cross_channel_peak_without_overflow() {
 }
 
 #[test]
+fn validating_a_pcm16_clip_does_not_need_a_decoder() {
+    let source = write_wave(&Pcm {
+        sample_rate: 48_000,
+        channels: 2,
+        samples: vec![1, 2],
+    })
+    .unwrap();
+    let cancel = AtomicBool::new(false);
+    validate_clip(source.path(), &cancel).unwrap();
+    assert!(validate_clip(&source.path().with_extension("missing.wav"), &cancel).is_err());
+}
+
+#[test]
 fn truncated_wave_cannot_be_saved_as_a_partial_clip() {
     let pcm = Pcm {
         sample_rate: 4,

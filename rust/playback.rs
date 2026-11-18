@@ -335,16 +335,25 @@ fn select_route<'a>(
     preview: bool,
     endpoints: &'a [audio::Endpoint],
 ) -> PlaybackRoute<'a> {
-    let preferred = settings
-        .audio_output_device
-        .as_ref()
-        .map(|id| id.name.as_str())
-        .or(settings.audio_output_device_name.as_deref());
+    let saved = settings.audio_output_device.as_ref();
+    let resolved = audio::resolve_output(
+        endpoints,
+        saved,
+        settings.audio_output_device_name.as_deref(),
+    );
+    // A stale saved selection must stay stale (route then plays nowhere local),
+    // not turn into "no selection" and silently use the default device.
+    let selected_name = match resolved {
+        Some(endpoint) => Some(endpoint.name.as_str()),
+        None => saved
+            .map(|identity| identity.name.as_str())
+            .or(settings.audio_output_device_name.as_deref()),
+    };
     audio::route(
         settings.main_playback_enabled,
         settings.sidetone_enabled,
         preview,
-        preferred,
+        selected_name,
         endpoints,
         settings.virtual_output_device.as_deref(),
     )

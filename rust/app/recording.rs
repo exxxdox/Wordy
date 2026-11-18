@@ -73,6 +73,11 @@ impl TrimSession {
 
 impl App {
     pub(super) fn toggle_recording(&mut self) -> io::Result<()> {
+        // Stopping an active recording is always allowed; only starting one and
+        // writing its result would touch config during a backup.
+        if self.backup_running && self.recording.is_none() {
+            return Err(io::Error::other("正在处理备份，请稍候"));
+        }
         if let Some(recording) = self.recording.take() {
             self.tray.set_recording(false);
             let events = self.jobs.clone();
@@ -92,6 +97,8 @@ impl App {
             self.notify(format!(
                 "后台录制已开始（保留最近 {seconds:.0} 秒；再按一次结束并截取）"
             ));
+        } else {
+            return Err(io::Error::other("请先结束当前保存或音频截取"));
         }
         Ok(())
     }
@@ -167,6 +174,10 @@ impl App {
             return Ok(());
         }
         let (action, notification) = (command as u16, (command >> 16) as u32);
+        // SAVE/ADD write config and audio; playback and closing stay available.
+        if self.backup_running && matches!(action, SAVE | ADD) {
+            return Ok(());
+        }
         match action {
             PICK => {
                 if let Some(slot) = session.window.take_slot() {
@@ -247,15 +258,15 @@ impl App {
                 let rolling = session.window.rolling;
                 let config = self.config.path().to_path_buf();
                 let events = self.jobs.clone();
+                let cancel = self.background_cancel.clone();
                 std::thread::Builder::new()
                     .name("WordyTrimSave".into())
                     .spawn(move || {
                         let clip = audio::trim_recording(source.path(), range.start, range.end);
                         let (result, source) = match clip {
-                            Ok(clip) => (
-                                audio::stage_clip(clip.path(), &config, &AtomicBool::new(false)),
-                                Some(clip),
-                            ),
+                            Ok(clip) => {
+                                (audio::stage_clip(clip.path(), &config, &cancel), Some(clip))
+                            }
                             Err(error) => (Err(error), None),
                         };
                         let _ = events.send(Background::Recording(RecordingResult::SlotClip {
@@ -304,10 +315,11 @@ impl App {
             .into_owned();
         let config = self.config.path().to_path_buf();
         let events = self.jobs.clone();
+        let cancel = self.background_cancel.clone();
         std::thread::Builder::new()
             .name("WordyClipImport".into())
             .spawn(move || {
-                let result = audio::stage_clip(&path, &config, &AtomicBool::new(false));
+                let result = audio::stage_clip(&path, &config, &cancel);
                 let _ = events.send(Background::Recording(RecordingResult::SlotClip {
                     wheel,
                     slot,
@@ -330,12 +342,13 @@ impl App {
         path: PathBuf,
     ) -> io::Result<()> {
         let events = self.jobs.clone();
+        let cancel = self.background_cancel.clone();
         self.playback.stop_clip();
         std::thread::Builder::new()
             .name("WordyDecodeTrim".into())
             .spawn(move || {
                 let result = (|| {
-                    let decoded = audio::decode_clip(&path, &AtomicBool::new(false))?;
+                    let decoded = audio::decode_clip(&path, &cancel)?;
                     let mut source = std::fs::File::open(decoded.as_ref())?;
                     let mut copy = tempfile::Builder::new().suffix(".wav").tempfile()?;
                     io::copy(&mut source, copy.as_file_mut())?;

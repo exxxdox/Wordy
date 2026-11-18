@@ -1,5 +1,7 @@
 use std::sync::Mutex;
-use std::{io, iter, ptr};
+use std::{io, ptr};
+
+use crate::desktop::wide;
 use windows_sys::Win32::Foundation::{CloseHandle, ERROR_ALREADY_EXISTS, GetLastError, HANDLE};
 use windows_sys::Win32::System::Threading::CreateMutexW;
 use windows_sys::Win32::UI::WindowsAndMessaging::{MB_OK, MB_SETFOREGROUND, MessageBoxW};
@@ -38,10 +40,6 @@ pub fn show_native_message(text: &str) {
             MB_OK | MB_SETFOREGROUND,
         )
     };
-}
-
-fn wide(text: &str) -> Vec<u16> {
-    text.encode_utf16().chain(iter::once(0)).collect()
 }
 
 struct InstanceHandle(HANDLE);

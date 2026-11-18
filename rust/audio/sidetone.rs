@@ -150,7 +150,13 @@ impl StreamSidetone {
             self.cancel.store(true, Ordering::Release);
         }
         self.queue = None;
-        let _ = self.result.recv_timeout(Duration::from_millis(100));
+        // The worker drains its queue and may wait for the device buffer (up to
+        // its own 2s finish timeout) while holding the lease. Wait for it so the
+        // next clip can start its monitor; a 100ms wait silently dropped it.
+        if self.result.recv_timeout(Duration::from_secs(2)).is_err() {
+            self.cancel.store(true, Ordering::Release);
+            let _ = self.result.recv_timeout(Duration::from_millis(250));
+        }
     }
 }
 

@@ -17,6 +17,7 @@ use crate::{
 pub const SLOT_COUNT: usize = 8;
 pub const WHEEL_NAME_MAX_LENGTH: usize = 20;
 pub const SAVE_DEBOUNCE: Duration = Duration::from_millis(150);
+const SAVE_RETRY: Duration = Duration::from_secs(1);
 pub const CHAT_WHEEL_STYLES: [&str; 4] = ["classic", "glass", "petals", "game"];
 pub const LOG_LEVELS: [&str; 5] = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"];
 pub const DEFAULT_UI_FONT: &str = "Segoe UI Variable";
@@ -36,6 +37,9 @@ pub const VOLCENGINE_STREAMING: &str = "Volcengine Streaming";
 pub struct AudioIdentity {
     pub name: String,
     pub host_api_name: Option<String>,
+    // Windows endpoint id keeps two identically named devices apart.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -118,15 +122,28 @@ impl Wheel {
     }
 
     fn from_table(table: &Table) -> Option<Self> {
-        let hotkey = valid_hotkey(table, "hotkey")?;
-        Some(Self {
+        // An unparseable hotkey must not delete the wheel and its slots. Keep it
+        // unbound, keep its data, and let the startup warning ask for a new key.
+        let raw_hotkey = text(table, "hotkey").map(str::trim).unwrap_or_default();
+        let hotkey = if parse_hotkey(raw_hotkey).is_ok() {
+            raw_hotkey.to_owned()
+        } else {
+            String::new()
+        };
+        let wheel = Self {
             name: text(table, "name").map(wheel_name).unwrap_or_default(),
             hotkey,
             slots: read_slot_texts(table, "slots", true),
             labels: read_slot_texts(table, "labels", false),
             texts: read_slot_texts(table, "texts", false),
             volumes: read_slot_volumes(table, "volumes"),
-        })
+        };
+        let has_data = !wheel.name.is_empty()
+            || !wheel.hotkey.is_empty()
+            || wheel.slots.iter().any(|slot| !slot.is_empty())
+            || wheel.labels.iter().any(|label| !label.is_empty())
+            || wheel.texts.iter().any(|text| !text.is_empty());
+        has_data.then_some(wheel)
     }
 
     fn normalize(&mut self) {
@@ -597,10 +614,18 @@ impl ConfigStore {
     }
 
     pub fn flush(&mut self) -> io::Result<()> {
-        // A timer failure leaves the current settings available for an explicit
-        // flush at dialog close or app shutdown.
-        self.save_deadline = None;
-        write_atomic(&self.path, &self.settings)
+        match write_atomic(&self.path, &self.settings) {
+            Ok(()) => {
+                self.save_deadline = None;
+                Ok(())
+            }
+            Err(error) => {
+                // Keep retrying while the app runs; a transient disk error must
+                // not leave the newest settings unsaved until the next edit.
+                self.save_deadline = Some(Instant::now() + SAVE_RETRY);
+                Err(error)
+            }
+        }
     }
 
     pub fn update_wheel(&mut self, index: usize, edit: impl FnOnce(&mut Wheel)) -> io::Result<()> {
@@ -609,7 +634,10 @@ impl ConfigStore {
             .wheel(index)
             .ok_or_else(|| invalid("轮盘不存在"))?;
         edit(&mut wheel);
-        parse_hotkey(&wheel.hotkey).map_err(|_| invalid("轮盘快捷键无效"))?;
+        // Empty means unbound after a bad legacy hotkey; only check real values.
+        if !wheel.hotkey.trim().is_empty() {
+            parse_hotkey(&wheel.hotkey).map_err(|_| invalid("轮盘快捷键无效"))?;
+        }
         self.update(|settings| settings.assign_wheel(index, wheel))
     }
 }
@@ -736,16 +764,26 @@ fn read_position(table: &Table) -> Option<WindowPosition> {
 
 fn read_identity(table: &Table) -> Option<AudioIdentity> {
     let name = nonempty_text(table, "name")?.into();
-    let host_api_name = match table.get("host_api_name") {
-        Some(Value::String(host)) => Some(host.trim())
-            .filter(|host| !host.is_empty())
+    let optional = |key: &str| match table.get(key) {
+        Some(Value::String(value)) => Some(value.trim())
+            .filter(|value| !value.is_empty())
             .map(str::to_owned),
-        Some(_) => return None,
+        Some(_) => None,
         None => None,
     };
+    if table
+        .get("host_api_name")
+        .is_some_and(|value| !matches!(value, Value::String(_)))
+        || table
+            .get("id")
+            .is_some_and(|value| !matches!(value, Value::String(_)))
+    {
+        return None;
+    }
     Some(AudioIdentity {
         name,
-        host_api_name,
+        host_api_name: optional("host_api_name"),
+        id: optional("id"),
     })
 }
 
@@ -951,5 +989,58 @@ mod tests {
         assert!(config.save_if_due(deadline).unwrap());
         assert!(!config.save_if_due(deadline).unwrap());
         assert_eq!(ConfigStore::load(&path).unwrap().settings().volume, 1.8);
+    }
+
+    #[test]
+    fn bad_wheel_hotkey_keeps_the_wheel_and_allows_edits() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        fs::write(
+            &path,
+            r#"
+            additional_chat_wheels = [{ hotkey = "media play", slots = ["a.wav"], labels = ["lbl"], texts = [""], volumes = [1.0] }]
+            "#,
+        )
+        .unwrap();
+        let mut config = ConfigStore::load(&path).unwrap();
+        let wheel = config.settings().wheel(1).unwrap();
+        assert!(wheel.hotkey.is_empty());
+        assert_eq!(wheel.slots[0], "a.wav");
+        assert_eq!(wheel.labels[0], "lbl");
+        config
+            .update_wheel(1, |wheel| wheel.labels[0] = "new".into())
+            .unwrap();
+        let loaded = ConfigStore::load(&path).unwrap();
+        let wheel = loaded.settings().wheel(1).unwrap();
+        assert_eq!(wheel.slots[0], "a.wav");
+        assert_eq!(wheel.labels[0], "new");
+    }
+
+    #[test]
+    fn failed_flush_keeps_a_retry_deadline() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let mut config = ConfigStore::load(&path).unwrap();
+        config.update_debounced(|s| s.volume = 1.5).unwrap();
+        fs::create_dir(&path).unwrap();
+        assert!(config.flush().is_err());
+        assert!(config.save_deadline().is_some());
+    }
+
+    #[test]
+    fn endpoint_id_survives_a_config_round_trip() {
+        let settings = Settings::from_toml(
+            "[audio_output_device]\nname = 'Speakers'\nhost_api_name = 'WASAPI'\nid = 'endpoint-id'\n",
+        )
+        .unwrap();
+        assert_eq!(
+            settings.audio_output_device.as_ref().unwrap().id.as_deref(),
+            Some("endpoint-id")
+        );
+        let loaded = Settings::from_toml(&settings.to_toml().unwrap()).unwrap();
+        assert_eq!(
+            loaded.audio_output_device.as_ref().unwrap().id.as_deref(),
+            Some("endpoint-id")
+        );
     }
 }

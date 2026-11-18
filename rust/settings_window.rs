@@ -25,12 +25,13 @@ use windows_sys::{
 };
 
 use crate::{
+    audio::endpoint_index,
     config::{
         AudioIdentity, CARTESIA_BYTES, CARTESIA_REALTIME, LOG_LEVELS, Settings,
         VOLCENGINE_STREAMING, Voice,
     },
     credentials::{Provider, normalize_api_key_input},
-    desktop::set_dwm,
+    desktop::{set_dwm, wide},
     settings_backdrop::{COLOR_KEY, EDGE_PAD, FOOTER_HEIGHT, paint_shell, rgb, scaled},
     slider::{self, TBM_GETPOS},
 };
@@ -1229,12 +1230,27 @@ impl SettingsWindow {
     fn refresh_audio_choices(&self) {
         let chosen = self.settings.audio_output_device.as_ref();
         let legacy = self.settings.audio_output_device_name.as_deref();
-        let selected = self.outputs.iter().position(|output| {
-            chosen.map_or_else(
-                || legacy == Some(output.name.as_str()),
-                |chosen| chosen == output,
-            )
-        });
+        // Match the playback rule: stable endpoint id, then exact name, then a
+        // unique name fragment. The old code only accepted identical identities.
+        let selected = chosen
+            .and_then(|chosen| self.outputs.iter().position(|output| output == chosen))
+            .or_else(|| {
+                chosen
+                    .and_then(|chosen| chosen.id.as_deref())
+                    .and_then(|id| {
+                        self.outputs
+                            .iter()
+                            .position(|output| output.id.as_deref() == Some(id))
+                    })
+            })
+            .or_else(|| {
+                chosen
+                    .map(|chosen| chosen.name.as_str())
+                    .or(legacy)
+                    .and_then(|name| {
+                        endpoint_index(self.outputs.iter().map(|output| output.name.as_str()), name)
+                    })
+            });
         let outputs =
             std::iter::once("默认（跟随系统）".into()).chain(self.outputs.iter().map(|output| {
                 output.host_api_name.as_ref().map_or_else(
@@ -1247,14 +1263,21 @@ impl SettingsWindow {
             outputs,
             selected.map_or(0, |index| index + 1),
         );
-        set_text(
-            self.control(Field::OutputStatus),
-            &format!("已找到 {} 个输出设备。", self.outputs.len()),
-        );
+        let missing = selected.is_none() && (chosen.is_some() || legacy.is_some());
+        let status = if missing {
+            format!(
+                "已找到 {} 个输出设备；已保存的返听设备不可用。",
+                self.outputs.len()
+            )
+        } else {
+            format!("已找到 {} 个输出设备。", self.outputs.len())
+        };
+        set_text(self.control(Field::OutputStatus), &status);
         let selected = self
-            .microphones
-            .iter()
-            .position(|mic| Some(mic) == self.settings.mic_input_device.as_ref());
+            .settings
+            .mic_input_device
+            .as_deref()
+            .and_then(|name| endpoint_index(self.microphones.iter().map(String::as_str), name));
         let microphones = std::iter::once("无（不侦听麦克风）")
             .chain(self.microphones.iter().map(String::as_str));
         fill_choices(
@@ -1287,7 +1310,14 @@ impl SettingsWindow {
             .map_or(self.settings.audio_routing_enabled, |state| state.0);
         self.check(Field::Listen, listen);
         unsafe { EnableWindow(self.control(Field::Listen), i32::from(self.cable_available)) };
-        let status = match &self.listen_state {
+        let mic_missing = self
+            .settings
+            .mic_input_device
+            .as_deref()
+            .is_some_and(|name| {
+                endpoint_index(self.microphones.iter().map(String::as_str), name).is_none()
+            });
+        let mut status = match &self.listen_state {
             Some((enabled, output, has_target)) => {
                 let mut text = if *enabled {
                     "Windows 侦听：已开启".to_string()
@@ -1308,6 +1338,9 @@ impl SettingsWindow {
             }
             None => "选择麦克风后自动配置".into(),
         };
+        if mic_missing {
+            status.push_str(" · 已保存的麦克风不可用");
+        }
         set_text(self.control(Field::MicStatus), &status);
     }
 
@@ -1728,10 +1761,6 @@ fn apply_font(hwnd: HWND, kind: Kind, fonts: &[HFONT; 4]) {
         font
     };
     send(hwnd, WM_SETFONT, font as WPARAM, 1);
-}
-
-fn wide(value: &str) -> Vec<u16> {
-    value.encode_utf16().chain([0]).collect()
 }
 
 fn text(hwnd: HWND) -> String {

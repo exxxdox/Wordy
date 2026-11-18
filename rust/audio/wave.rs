@@ -369,7 +369,14 @@ pub(super) fn clip_format(path: &Path) -> Option<&'static str> {
 }
 
 pub fn decode_clip<'a>(path: &'a Path, cancel: &AtomicBool) -> io::Result<DecodedClip<'a>> {
-    decode_clip_with(path, cancel, crate::ffmpeg::find)
+    decode_with(path, cancel, crate::ffmpeg::find, None)
+}
+
+/// Import validation only needs a short prefix. Decoding the whole file wrote a
+/// full PCM temporary copy (about 1.3 GB for a one-hour MP3) before the slot
+/// could be used.
+pub(crate) fn validate_clip(path: &Path, cancel: &AtomicBool) -> io::Result<()> {
+    decode_with(path, cancel, crate::ffmpeg::find, Some(5)).map(drop)
 }
 
 #[derive(Debug)]
@@ -383,10 +390,20 @@ impl fmt::Display for MissingFfmpeg {
 
 impl std::error::Error for MissingFfmpeg {}
 
+#[cfg(test)]
 fn decode_clip_with<'a>(
     path: &'a Path,
     cancel: &AtomicBool,
     resolve_decoder: impl FnOnce() -> Option<PathBuf>,
+) -> io::Result<DecodedClip<'a>> {
+    decode_with(path, cancel, resolve_decoder, None)
+}
+
+fn decode_with<'a>(
+    path: &'a Path,
+    cancel: &AtomicBool,
+    resolve_decoder: impl FnOnce() -> Option<PathBuf>,
+    limit_seconds: Option<u64>,
 ) -> io::Result<DecodedClip<'a>> {
     check_cancelled(cancel)?;
     if !path.is_file() {
@@ -438,7 +455,11 @@ fn decode_clip_with<'a>(
             "pcm_s16le",
             "-f",
             "wav",
-        ])
+        ]);
+    if let Some(seconds) = limit_seconds {
+        command.args(["-t", &seconds.to_string()]);
+    }
+    command
         .arg(output.path())
         .stdin(Stdio::null())
         .stdout(Stdio::null())

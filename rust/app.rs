@@ -2,8 +2,12 @@ use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::path::PathBuf;
 use std::ptr;
-use std::sync::{Arc, mpsc};
-use std::time::Instant;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+    mpsc,
+};
+use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Foundation::{HINSTANCE, HWND};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -14,7 +18,7 @@ use windows_sys::Win32::UI::Shell::ShellExecuteW;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 use windows_sys::core::w;
 
-use crate::audio::{self, Endpoint, Recording};
+use crate::audio::{self, Recording};
 use crate::config::{AudioIdentity, ConfigStore, Settings, Voice};
 use crate::credentials::{CredentialStore, Provider, WindowsCredentials, normalize_api_key_input};
 use crate::desktop::*;
@@ -145,6 +149,11 @@ impl Hotkeys {
                 failures.push(format!("快捷键 {value} 未启用：{error}"));
             }
         }
+        for (index, wheel) in settings.additional_chat_wheels.iter().enumerate() {
+            if wheel.hotkey.trim().is_empty() {
+                failures.push(format!("轮盘 {} 未设置快捷键，已跳过", index + 2));
+            }
+        }
         failures
     }
 
@@ -184,6 +193,8 @@ fn configured_keys(settings: &Settings) -> impl Iterator<Item = (Action, &str)> 
             .enumerate()
             .map(|(index, wheel)| (Action::Wheel(index + 1), wheel.hotkey.as_str())),
     )
+    // A wheel kept from a bad legacy hotkey has no binding until the user sets one.
+    .filter(|(_, value)| !value.trim().is_empty())
 }
 
 fn checked_keys(settings: &Settings) -> io::Result<HashMap<Binding, Action>> {
@@ -218,6 +229,9 @@ struct App {
     jobs: mpsc::Sender<Background>,
     results: mpsc::Receiver<Background>,
     pending_saves: usize,
+    background_cancel: Arc<AtomicBool>,
+    backup_running: bool,
+    skip_config_flush: bool,
     voices_request: Option<u64>,
     ffmpeg_installing: bool,
     next_job: u64,
@@ -230,14 +244,26 @@ enum Background {
     Recording(RecordingResult),
     NotificationFailed(String),
     FfmpegInstalled(io::Result<()>),
+    Backup {
+        import: bool,
+        result: io::Result<()>,
+    },
 }
 
 impl App {
     fn new(instance: HINSTANCE, host: HWND, config: ConfigStore) -> io::Result<Self> {
         let vault = WindowsCredentials;
+        let mut credential_warning = None;
+        // A locked or damaged vault must not stop unrelated features from running.
+        let api_key = vault
+            .load(config.settings().active_tts_provider)
+            .unwrap_or_else(|error| {
+                credential_warning = Some(format!("无法读取已保存的 API Key：{error}"));
+                None
+            });
         let engine = Arc::new(EngineSettings {
             settings: config.settings().clone(),
-            api_key: vault.load(config.settings().active_tts_provider)?,
+            api_key,
         });
         let playback = Playback::start()?;
         let mut hotkeys = Hotkeys::default();
@@ -270,6 +296,9 @@ impl App {
             jobs,
             results,
             pending_saves: 0,
+            background_cancel: Arc::default(),
+            backup_running: false,
+            skip_config_flush: false,
             voices_request: None,
             ffmpeg_installing: false,
             next_job: 0,
@@ -284,6 +313,9 @@ impl App {
             }
         }
         if let Some(warning) = app.config.take_load_warning() {
+            app.notify(warning);
+        }
+        if let Some(warning) = credential_warning {
             app.notify(warning);
         }
         for failure in failures {
@@ -336,6 +368,10 @@ impl App {
                     TRAY_OVERLAY => self.toggle_overlay(),
                     TRAY_SETTINGS => self.show_settings(),
                     TRAY_LOGS => self.show_logs(),
+                    TRAY_EXIT if self.backup_running => {
+                        self.failure("备份处理中，完成后再退出".into());
+                        Ok(())
+                    }
                     TRAY_EXIT => break,
                     _ => Ok(()),
                 },
@@ -385,14 +421,49 @@ impl App {
                 self.log(format!("停止后台录制失败：{error}"));
             }
         }
-        // A submitted save owns the only temporary recording. Finish it before dropping results.
+        // A submitted save owns the only temporary recording. Finish it before
+        // dropping results, but do not hang forever on a stuck decoder.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut cancel_deadline = None;
         while self.pending_saves > 0 {
-            let result = self.results.recv().map_err(io::Error::other)?;
-            if let Err(error) = self.complete_background(result, true) {
-                self.log(format!("保存失败：{error}"));
+            let now = Instant::now();
+            let wait = match cancel_deadline {
+                None if now >= deadline => Duration::ZERO,
+                None => deadline.saturating_duration_since(now),
+                Some(limit) if now >= limit => {
+                    self.log("仍有后台音频任务未结束，已放弃等待".into());
+                    break;
+                }
+                Some(limit) => limit.saturating_duration_since(now),
+            };
+            if wait.is_zero() && cancel_deadline.is_none() {
+                self.background_cancel.store(true, Ordering::Release);
+                cancel_deadline = Some(now + Duration::from_secs(3));
+            }
+            match self.results.recv_timeout(wait) {
+                Ok(result) => {
+                    if let Err(error) = self.complete_background(result, true) {
+                        self.log(format!("保存失败：{error}"));
+                    }
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    if cancel_deadline.is_none() {
+                        self.background_cancel.store(true, Ordering::Release);
+                        cancel_deadline = Some(Instant::now() + Duration::from_secs(3));
+                    }
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
             }
         }
-        self.config.flush()
+        if self.skip_config_flush {
+            Ok(())
+        } else if let Err(error) = self.config.flush() {
+            // A save failure during quit is not a startup failure.
+            self.failure(format!("保存设置失败：{error}"));
+            Ok(())
+        } else {
+            Ok(())
+        }
     }
 
     fn tick(&mut self) -> io::Result<()> {
@@ -412,7 +483,10 @@ impl App {
             self.play_slot(wheel, slot)?;
         }
         self.wheel.present().map_err(io::Error::other)?;
-        self.config.save_if_due(Instant::now())?;
+        // The backup worker owns the file; do not flush a debounce over it.
+        if !self.backup_running {
+            self.config.save_if_due(Instant::now())?;
+        }
         while let Ok(event) = self.playback.events.try_recv() {
             match event {
                 Event::Finished { id, result } => {
@@ -468,7 +542,7 @@ impl App {
         match result {
             Background::NotificationFailed(message) => {
                 // Fall back to the tray when the notification-center sender is unavailable.
-                self.tray.notify_balloon(&message);
+                self.tray.notify(&message);
                 self.log_at("WARNING", "Windows 通知发送失败，已改用托盘提示".into());
             }
             Background::FfmpegInstalled(result) => {
@@ -485,6 +559,27 @@ impl App {
                         }
                         Err(error) => self.failure(format!("安装 FFmpeg 失败：{error}")),
                     }
+                }
+            }
+            Background::Backup { import, result } => {
+                self.backup_running = false;
+                match result {
+                    Ok(()) if import => {
+                        // The worker wrote the imported config. Reload it so the
+                        // shutdown path cannot overwrite it with stale settings.
+                        let path = self.config.path().to_path_buf();
+                        match ConfigStore::load(&path) {
+                            Ok(config) => self.config = config,
+                            Err(error) => {
+                                self.failure(format!("备份已导入，但重新读取配置失败：{error}"));
+                            }
+                        }
+                        self.skip_config_flush = true;
+                        self.status("备份已导入，请重新启动 Wordy".into());
+                        unsafe { PostQuitMessage(0) };
+                    }
+                    Ok(()) => self.status("备份已导出".into()),
+                    Err(error) => self.failure(format!("备份失败：{error}")),
                 }
             }
             Background::Recording(result) => self.complete_recording(result, exiting)?,
@@ -560,6 +655,10 @@ impl App {
     }
 
     fn overlay_action(&mut self, action: usize) -> io::Result<()> {
+        // Only the saved position writes config; the rest stays usable.
+        if self.backup_running && action == OVERLAY_POSITION {
+            return Ok(());
+        }
         match action {
             OVERLAY_SUBMIT | OVERLAY_READ => {
                 let text = self.overlay.text();
@@ -627,6 +726,11 @@ impl App {
 
     fn settings_action(&mut self, action: SettingsAction) -> io::Result<()> {
         use SettingsAction::*;
+        // A background backup owns config.toml and the credential store. Closed
+        // only clears transient UI state, so it must still reach close_editor.
+        if self.backup_running && !matches!(action, SettingsAction::Closed) {
+            return Ok(());
+        }
         match action {
             SetProvider(provider) => {
                 let previous = self.config.settings().clone();
@@ -811,6 +915,7 @@ impl App {
                 .map(|e| AudioIdentity {
                     name: e.name,
                     host_api_name: Some("WASAPI".into()),
+                    id: Some(e.id),
                 })
                 .collect(),
         );
@@ -819,7 +924,7 @@ impl App {
             .settings()
             .mic_input_device
             .as_deref()
-            .and_then(|name| find(&inputs, name))
+            .and_then(|name| audio::find_endpoint(&inputs, name))
             .and_then(|input| audio::read_listen(input).ok());
         self.settings_window
             .set_input_devices(inputs.into_iter().map(|e| e.name).collect());
@@ -838,7 +943,8 @@ impl App {
             .mic_input_device
             .as_deref()
             .unwrap_or_default();
-        let input = find(&inputs, name).ok_or_else(|| io::Error::other("请先选择麦克风"))?;
+        let input = audio::find_endpoint(&inputs, name)
+            .ok_or_else(|| io::Error::other("请先选择麦克风"))?;
         let before = audio::read_listen(input)?;
         let legacy_main = self.config.settings().virtual_output_device.clone();
         let target = if enabled {
@@ -872,15 +978,25 @@ impl App {
             .settings()
             .mic_input_device
             .as_deref()
-            .and_then(|name| find(&inputs, name));
-        let new = name.as_deref().and_then(|name| find(&inputs, name));
+            .and_then(|name| audio::find_endpoint(&inputs, name));
+        let new = name
+            .as_deref()
+            .and_then(|name| audio::find_endpoint(&inputs, name));
         if old == new {
             return Ok(());
         }
-        let old_state = old.map(audio::read_listen).transpose()?;
-        let new_state = new.map(audio::read_listen).transpose()?;
         // Follow Wordy's routing switch, not a possibly manual Windows listen state.
         let enabled = self.config.settings().audio_routing_enabled;
+        // Read Windows state only when routing is on. Some devices do not expose
+        // the listen properties, and that must not block a plain mic switch.
+        let (old_state, new_state) = if enabled {
+            (
+                old.map(audio::read_listen).transpose()?,
+                new.map(audio::read_listen).transpose()?,
+            )
+        } else {
+            (None, None)
+        };
         let outputs = audio::list_outputs().unwrap_or_default();
         let legacy_main = self.config.settings().virtual_output_device.clone();
         let cable = audio::cable_endpoint_for(&outputs, legacy_main.as_deref());
@@ -902,11 +1018,13 @@ impl App {
             self.edit(|s| s.mic_input_device = name)
         })();
         if let Err(error) = result {
-            if enabled && let Some((input, state)) = new.zip(new_state.as_ref()) {
-                audio::restore_listen(input, state)?;
-            }
-            if let Some((input, state)) = old.zip(old_state.as_ref()) {
-                audio::restore_listen(input, state)?;
+            if enabled {
+                if let Some((input, state)) = new.zip(new_state.as_ref()) {
+                    audio::restore_listen(input, state)?;
+                }
+                if let Some((input, state)) = old.zip(old_state.as_ref()) {
+                    audio::restore_listen(input, state)?;
+                }
             }
             return Err(error);
         }
@@ -914,6 +1032,9 @@ impl App {
     }
 
     fn backup(&mut self, export: bool) -> io::Result<()> {
+        if self.backup_running {
+            return Err(io::Error::other("正在处理备份，请稍候"));
+        }
         let owner = self.settings_window.hwnd();
         if !export && (self.recording.is_some() || self.pending_saves > 0 || self.trim.is_some()) {
             return Err(io::Error::other("请先结束录制或音频导入，再导入备份"));
@@ -974,12 +1095,47 @@ impl App {
             if check != password {
                 return Err(io::Error::other("两次输入的密码不一致"));
             }
-            backup::export_backup(&mut self.config, &self.vault, &path, &password)?;
-            self.status("备份已导出".into());
+            self.config.flush()?;
+            let settings = self.config.settings().clone();
+            let config_path = self.config.path().to_path_buf();
+            let events = self.jobs.clone();
+            std::thread::Builder::new()
+                .name("WordyBackupExport".into())
+                .spawn(move || {
+                    let result = backup::export_backup(
+                        &config_path,
+                        &settings,
+                        &WindowsCredentials,
+                        &path,
+                        &password,
+                    );
+                    let _ = events.send(Background::Backup {
+                        import: false,
+                        result,
+                    });
+                })?;
+            self.backup_running = true;
+            self.status("正在导出备份…".into());
         } else {
-            backup::import_backup(&mut self.config, &self.vault, &path, &password)?;
-            self.status("备份已导入，请重新启动 Wordy".into());
-            unsafe { PostQuitMessage(0) };
+            self.config.flush()?;
+            let config_path = self.config.path().to_path_buf();
+            let events = self.jobs.clone();
+            std::thread::Builder::new()
+                .name("WordyBackupImport".into())
+                .spawn(move || {
+                    // A fresh store writes the imported file; the UI store stays
+                    // untouched until the completion event reloads it.
+                    let result = (|| {
+                        let mut config = ConfigStore::load(&config_path)?;
+                        backup::import_backup(&mut config, &WindowsCredentials, &path, &password)
+                    })();
+                    let _ = events.send(Background::Backup {
+                        import: true,
+                        result,
+                    });
+                })?;
+            self.backup_running = true;
+            self.status("正在导入备份…".into());
         }
         Ok(())
     }
@@ -1022,6 +1178,9 @@ impl App {
     fn editor_action(&mut self, command: usize, hwnd: HWND) -> io::Result<()> {
         use panels::*;
         const CANCEL: u16 = IDCANCEL as u16;
+        if self.backup_running {
+            return Ok(());
+        }
         let editor = &mut self.editor;
         if editor.panel.0 != hwnd {
             return Ok(());
@@ -1075,6 +1234,7 @@ impl App {
                 next.chat_wheel_last_index = next.wheel_count() - 1;
                 self.hotkeys.update(&mut self.config, next)?;
                 editor.wheel = self.config.settings().chat_wheel_last_index;
+                editor.slot = 0;
             }
             REMOVE if notification == 0 => {
                 let mut next = self.config.settings().clone();
@@ -1366,26 +1526,6 @@ impl App {
     }
 }
 
-fn find<'a>(endpoints: &'a [Endpoint], name: &str) -> Option<&'a Endpoint> {
-    let target = name.trim().to_lowercase();
-    if target.is_empty() {
-        return None;
-    }
-    let normalized = |endpoint: &Endpoint| endpoint.name.trim().to_lowercase();
-    if let Some(exact) = endpoints
-        .iter()
-        .find(|endpoint| normalized(endpoint) == target)
-    {
-        return Some(exact);
-    }
-    // A renamed device keeps working when the saved name is still a unique fragment.
-    let mut partial = endpoints
-        .iter()
-        .filter(|endpoint| normalized(endpoint).contains(&target));
-    let found = partial.next()?;
-    partial.next().is_none().then_some(found)
-}
-
 fn set_volc_voice(voices: &mut Vec<Voice>, voice: Voice) {
     if !voice.id.trim().is_empty() {
         voices.retain(|item| item.id != voice.id);
@@ -1456,6 +1596,9 @@ mod tests {
         assert!(checked_keys(&settings).is_err());
         settings.additional_chat_wheels[0].hotkey = "f9".into();
         assert_eq!(checked_keys(&settings).unwrap().len(), 4);
+        // A wheel kept from a bad legacy hotkey contributes no binding.
+        settings.additional_chat_wheels[0].hotkey.clear();
+        assert_eq!(checked_keys(&settings).unwrap().len(), 3);
     }
 
     #[test]

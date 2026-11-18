@@ -3,10 +3,14 @@
 use std::cell::{Cell, RefCell};
 use std::fs;
 use std::io;
+use std::io::Write;
 use std::path::Path;
 use wordy::backup::{export_backup, import_backup};
-use wordy::config::ConfigStore;
+use wordy::backup_crypto::EncryptedWriter;
+use wordy::config::{ConfigStore, Settings, Wheel};
 use wordy::credentials::{CredentialStore, Provider};
+use zip::write::SimpleFileOptions;
+use zip::{CompressionMethod, ZipWriter};
 
 #[derive(Default)]
 struct Vault {
@@ -61,7 +65,7 @@ fn create_backup(folder: &Path, path: &Path) {
     let vault = Vault::default();
     vault.save(Provider::Cartesia, "fixture-one").unwrap();
     vault.save(Provider::Volcengine, "fixture-two").unwrap();
-    export_backup(&mut config, &vault, path, " 测试 ").unwrap();
+    export_backup(config.path(), config.settings(), &vault, path, " 测试 ").unwrap();
 }
 
 #[test]
@@ -121,4 +125,80 @@ fn rolls_back_both_credentials_and_new_audio_when_a_vault_write_partly_fails() {
     );
     assert_eq!(vault.load(Provider::Volcengine).unwrap(), None);
     assert_eq!(fs::read_dir(new.join("audio_clips")).unwrap().count(), 0);
+}
+
+const MANIFEST: &[u8] = br#"{"format":"wordy-backup","version":1}"#;
+const SECRETS: &[u8] = br#"{"cartesia_api_key":null,"volcengine_access_key":null}"#;
+
+fn encrypted_zip(path: &Path, files: &[(&str, &[u8])]) {
+    let writer = EncryptedWriter::new(fs::File::create(path).unwrap(), "pw").unwrap();
+    let mut archive = ZipWriter::new_stream(writer);
+    let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+    for (name, data) in files {
+        archive.start_file(*name, options).unwrap();
+        archive.write_all(data).unwrap();
+    }
+    archive.finish().unwrap().into_inner().finish().unwrap();
+}
+
+fn import_entries(entries: &[(&str, &[u8])]) -> io::Result<()> {
+    let workspace = tempfile::tempdir().unwrap();
+    let backup = workspace.path().join("fixture.wordybackup");
+    encrypted_zip(&backup, entries);
+    let mut config = ConfigStore::load(workspace.path().join("config.toml")).unwrap();
+    import_backup(&mut config, &Vault::default(), &backup, "pw")
+}
+
+#[test]
+fn rejects_audio_paths_outside_the_managed_folder() {
+    let config = Settings::default().to_toml().unwrap();
+    let result = import_entries(&[
+        ("manifest.json", MANIFEST),
+        ("config.toml", config.as_bytes()),
+        ("secrets.json", SECRETS),
+        ("audio_clips/../escape.wav", b"x"),
+    ]);
+    assert!(result.is_err());
+}
+
+#[test]
+fn accepts_a_wheel_kept_without_a_hotkey() {
+    let mut settings = Settings::default();
+    let mut wheel = Wheel::new("");
+    wheel.labels[0] = "kept".into();
+    settings.additional_chat_wheels.push(wheel);
+    let config = settings.to_toml().unwrap();
+    let result = import_entries(&[
+        ("manifest.json", MANIFEST),
+        ("config.toml", config.as_bytes()),
+        ("secrets.json", SECRETS),
+    ]);
+    assert!(result.is_ok());
+}
+
+#[test]
+fn rejects_duplicate_audio_names_and_unknown_config_fields() {
+    let config = Settings::default().to_toml().unwrap();
+    let duplicate = import_entries(&[
+        ("manifest.json", MANIFEST),
+        ("config.toml", config.as_bytes()),
+        ("secrets.json", SECRETS),
+        ("audio_clips/A.wav", b"a"),
+        ("audio_clips/a.wav", b"b"),
+    ]);
+    assert!(duplicate.is_err());
+    let unknown = format!("bogus = 1\n{config}");
+    let rejected = import_entries(&[
+        ("manifest.json", MANIFEST),
+        ("config.toml", unknown.as_bytes()),
+        ("secrets.json", SECRETS),
+    ]);
+    assert!(rejected.is_err());
+    let outside = import_entries(&[
+        ("manifest.json", MANIFEST),
+        ("config.toml", config.as_bytes()),
+        ("secrets.json", SECRETS),
+        ("other.txt", b"x"),
+    ]);
+    assert!(outside.is_err());
 }

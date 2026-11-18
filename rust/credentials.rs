@@ -128,6 +128,7 @@ mod win32 {
     };
 
     use super::*;
+    use crate::desktop::wide;
 
     struct WinVault;
     static VAULT_LOCK: Mutex<()> = Mutex::new(());
@@ -138,10 +139,6 @@ mod win32 {
             .lock()
             .map_err(|_| io::Error::other("无法访问 Windows 凭据管理器"))?;
         operation(&mut WinVault)
-    }
-
-    fn wide(value: &str) -> Vec<u16> {
-        value.encode_utf16().chain([0]).collect()
     }
 
     fn not_found(error: &io::Error) -> bool {

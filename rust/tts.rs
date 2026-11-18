@@ -202,6 +202,8 @@ impl TtsEngine {
             .header("Cartesia-Version", CARTESIA_HTTP_VERSION)
             .bearer_auth(key)
             .json(&payload)
+            // A whole-utterance cap; the blocking body read has no other deadline.
+            .timeout(Duration::from_secs(120))
             .send()
             .map_err(|error| transport_error("Cartesia bytes TTS 失败", error))?;
         let wav = check_status(response, "Cartesia bytes TTS 失败", key)?
@@ -237,6 +239,9 @@ impl TtsEngine {
             .header("X-Api-Resource-Id", VOLCENGINE_RESOURCE_ID)
             .header("Accept", "text/event-stream")
             .json(&payload)
+            // Blocking reqwest applies this per socket read, so long streams
+            // still work while a stalled socket can no longer block cancel.
+            .timeout(Duration::from_secs(30))
             .send()
             .map_err(|error| transport_error("火山引擎流式 TTS 失败", error))?;
         let response = check_status(response, "火山引擎流式 TTS 失败", key)?;
@@ -352,11 +357,10 @@ impl TtsEngine {
         }
         let client = Client::builder()
             .connect_timeout(Duration::from_secs(10))
-            // Python's requests timeout is per socket operation, not a whole-request
-            // deadline. reqwest's blocking builder defaults to a 30 second total
-            // deadline, so disable it; long TTS streams must not be cut off.
-            // Match requests: follow redirects; reqwest strips Authorization on a
-            // cross-origin hop, as requests does.
+            // The blocking timeout is applied per request/socket operation, not
+            // as one total deadline for a streamed body. Keep the client default
+            // off and set a limit on each request instead: streaming gets a read
+            // timeout, bytes gets a whole-utterance cap.
             .timeout(None::<Duration>)
             .redirect(Policy::limited(10))
             .build()

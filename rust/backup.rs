@@ -45,7 +45,8 @@ impl Secrets {
 }
 
 pub fn export_backup(
-    config: &mut ConfigStore,
+    config_path: &Path,
+    settings: &Settings,
     credentials: &dyn CredentialStore,
     destination: &Path,
     password: &str,
@@ -53,15 +54,14 @@ pub fn export_backup(
     validate_password(password)?;
     let folder = parent(destination);
     let target = resolve_path(destination)?;
-    let config_file = resolve_path(config.path())?;
-    let audio_dir = resolve_path(&audio::clips_directory(config.path())?)?;
+    let config_file = resolve_path(config_path)?;
+    let audio_dir = resolve_path(&audio::clips_directory(config_path)?)?;
     if same_path(&target, &config_file) || target.ancestors().any(|p| same_path(p, &audio_dir)) {
         return Err(invalid("备份不能覆盖配置文件或保存到音频托管目录"));
     }
-    config.flush()?;
     let secrets = serde_json::to_vec(&Secrets::read(credentials)?).map_err(io::Error::other)?;
-    let config_text = config.settings().to_toml().map_err(io::Error::other)?;
-    let names: BTreeSet<_> = config.settings().referenced_audio().collect();
+    let config_text = settings.to_toml().map_err(io::Error::other)?;
+    let names: BTreeSet<_> = settings.referenced_audio().collect();
     let mut seen = HashSet::new();
     if names.len() + REQUIRED.len() > MAX_ENTRIES
         || names
@@ -350,7 +350,7 @@ fn validate_settings(table: &Table) -> io::Result<Settings> {
     );
     default_fields.insert(
         "audio_output_device".into(),
-        "name=''\nhost_api_name=''"
+        "name=''\nhost_api_name=''\nid=''"
             .parse::<Value>()
             .map_err(io::Error::other)?,
     );
@@ -385,6 +385,10 @@ fn validate_settings(table: &Table) -> io::Result<Settings> {
             .iter()
             .map(|wheel| &wheel.hotkey),
     ) {
+        // A wheel kept from a bad legacy hotkey is unbound, not invalid.
+        if binding.trim().is_empty() {
+            continue;
+        }
         let binding = parse_hotkey(binding).map_err(io::Error::other)?;
         if !bindings.insert(binding) {
             return Err(invalid("备份中的快捷键互相冲突"));

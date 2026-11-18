@@ -2,6 +2,8 @@ use std::collections::VecDeque;
 use std::io;
 use std::path::Path;
 
+use crate::config::AudioIdentity;
+
 #[path = "audio/managed.rs"]
 mod managed;
 
@@ -26,6 +28,7 @@ mod wave;
 
 #[cfg(windows)]
 pub(crate) use wave::MissingFfmpeg;
+pub(crate) use wave::validate_clip;
 pub use wave::{
     DecodedClip, decode_clip, read_tts_wave, read_wave, recording_duration, trim_recording,
     waveform_peaks, write_wave,
@@ -78,19 +81,17 @@ pub fn is_cable_device(name: &str) -> bool {
     .any(|part| name.contains(part))
 }
 
-pub fn cable_endpoint(outputs: &[Endpoint]) -> Option<&Endpoint> {
-    cable_endpoint_for(outputs, None)
-}
-
 /// Legacy builds stored a custom VB-CABLE friendly name; keep it working when
 /// the endpoint no longer contains the default "CABLE Input" marker.
 pub fn cable_endpoint_for<'a>(
     outputs: &'a [Endpoint],
     preferred: Option<&str>,
 ) -> Option<&'a Endpoint> {
+    // One rule for every VB-CABLE check, so a renamed cable endpoint is still
+    // recognized by the main route and hidden from the local device list.
     outputs
         .iter()
-        .find(|endpoint| endpoint.name.to_lowercase().contains("cable input"))
+        .find(|endpoint| is_cable_device(&endpoint.name))
         .or_else(|| {
             let preferred = preferred?.trim().to_lowercase();
             if preferred.is_empty() {
@@ -101,6 +102,59 @@ pub fn cable_endpoint_for<'a>(
                     .find(|endpoint| endpoint.name.to_lowercase().contains(&preferred))
             }
         })
+}
+
+/// Exact name match first, then a unique case-insensitive substring. A renamed
+/// device keeps working while an ambiguous fragment is rejected.
+pub(crate) fn endpoint_index<'a>(
+    names: impl IntoIterator<Item = &'a str>,
+    name: &str,
+) -> Option<usize> {
+    let target = name.trim().to_lowercase();
+    if target.is_empty() {
+        return None;
+    }
+    let names: Vec<String> = names
+        .into_iter()
+        .map(|name| name.trim().to_lowercase())
+        .collect();
+    if let Some(index) = names.iter().position(|name| *name == target) {
+        return Some(index);
+    }
+    let mut matches = names
+        .iter()
+        .enumerate()
+        .filter(|(_, name)| name.contains(&target));
+    let (index, _) = matches.next()?;
+    matches.next().is_none().then_some(index)
+}
+
+pub fn find_endpoint<'a>(endpoints: &'a [Endpoint], name: &str) -> Option<&'a Endpoint> {
+    endpoint_index(
+        endpoints.iter().map(|endpoint| endpoint.name.as_str()),
+        name,
+    )
+    .map(|index| &endpoints[index])
+}
+
+/// Resolve a saved output selection to a current endpoint. The stable endpoint
+/// id wins; the saved name is a fallback for older configs and renamed devices.
+pub fn resolve_output<'a>(
+    outputs: &'a [Endpoint],
+    identity: Option<&AudioIdentity>,
+    legacy_name: Option<&str>,
+) -> Option<&'a Endpoint> {
+    if let Some(id) = identity
+        .and_then(|identity| identity.id.as_deref())
+        .filter(|id| !id.is_empty())
+        && let Some(endpoint) = outputs.iter().find(|endpoint| endpoint.id == id)
+    {
+        return Some(endpoint);
+    }
+    let name = identity
+        .map(|identity| identity.name.as_str())
+        .or(legacy_name)?;
+    find_endpoint(outputs, name)
 }
 
 pub fn route<'a>(

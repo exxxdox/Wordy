@@ -204,10 +204,6 @@ impl Tray {
         unsafe { Shell_NotifyIconW(NIM_MODIFY, &data) };
     }
 
-    pub fn notify_balloon(&self, message: &str) {
-        self.notify(message);
-    }
-
     pub fn open_menu(&self) -> io::Result<()> {
         // Native popup: `enable_dark_mode` already opted the process into the
         // Windows 11 dark menu theme, so no custom drawing is needed. Tray
