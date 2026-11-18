@@ -6,10 +6,7 @@ use windows_sys::{
             ERROR_CLASS_ALREADY_EXISTS, GetLastError, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
         },
         Graphics::{
-            Dwm::{
-                DWMWA_CLOAK, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND,
-                DwmSetWindowAttribute,
-            },
+            Dwm::{DWMWA_CLOAK, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND},
             Gdi::*,
         },
         System::{LibraryLoader::GetModuleHandleW, SystemServices::SS_OWNERDRAW},
@@ -38,6 +35,7 @@ use crate::{
         VOLCENGINE_STREAMING, Voice,
     },
     credentials::{Provider, normalize_api_key_input},
+    desktop::set_dwm,
 };
 
 pub const SETTINGS_ACTION_MESSAGE: u32 = WM_APP + 10;
@@ -1601,17 +1599,6 @@ fn scale_at_cursor() -> i32 {
 
 fn scaled(units: i32, dpi: i32) -> i32 {
     (units * dpi.max(96) + 48) / 96
-}
-
-unsafe fn set_dwm(hwnd: HWND, attribute: i32, value: i32) {
-    unsafe {
-        DwmSetWindowAttribute(
-            hwnd,
-            attribute as u32,
-            ptr::from_ref(&value).cast(),
-            size_of::<i32>() as u32,
-        )
-    };
 }
 
 const fn rgb(red: u8, green: u8, blue: u8) -> u32 {

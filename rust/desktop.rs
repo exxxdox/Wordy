@@ -1,5 +1,6 @@
 use std::{io, iter, mem, ptr};
 use windows_sys::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows_sys::Win32::Graphics::Dwm::{DWMWA_CLOAK, DwmSetWindowAttribute};
 use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::System::Registry::{
     HKEY_CURRENT_USER, KEY_WRITE, REG_OPTION_NON_VOLATILE, REG_SZ, RegCloseKey, RegCreateKeyExW,
@@ -54,6 +55,17 @@ const GLOW_STEPS: usize = 10;
 // Matches the capsule mid-tone, so antialiased glyph edges blend into the backdrop.
 const OVERLAY_KEY: u32 = 0x002a_3038;
 const OVERLAY_OPACITY: windows_sys::core::PCWSTR = w!("WordyOpacity");
+
+pub(crate) fn set_dwm(hwnd: HWND, attribute: i32, value: i32) {
+    unsafe {
+        DwmSetWindowAttribute(
+            hwnd,
+            attribute as u32,
+            ptr::from_ref(&value).cast(),
+            mem::size_of_val(&value) as u32,
+        )
+    };
+}
 
 pub(crate) fn host_window(instance: HINSTANCE) -> io::Result<HWND> {
     let class = WNDCLASSW {
@@ -512,7 +524,7 @@ impl Overlay {
                 WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW,
                 class.lpszClassName,
                 w!("Wordy 朗读"),
-                WS_POPUP,
+                WS_POPUP | WS_CLIPCHILDREN,
                 0,
                 0,
                 WIDTH,
@@ -534,6 +546,10 @@ impl Overlay {
                 placeholder: vec![0],
                 previous_foreground: ptr::null_mut(),
             };
+            // Configure transparency before any child paints and keep it stable across reopens.
+            if SetLayeredWindowAttributes(hwnd, OVERLAY_KEY, 255, LWA_COLORKEY) == 0 {
+                return Err(io::Error::last_os_error());
+            }
             // The noninteractive shadow has its own alpha so the standard EDIT can keep IME and caret support.
             overlay.backdrop = CreateWindowExW(
                 WS_EX_LAYERED
@@ -699,7 +715,7 @@ impl Overlay {
                 (SETTINGS, 496, 19, 36, 36),
             ] {
                 let child = GetDlgItem(self.hwnd, id);
-                MoveWindow(child, px(x), px(y), px(w), px(h), 1);
+                MoveWindow(child, px(x), px(y), px(w), px(h), 0);
             }
             self.set_visual_settings(settings, dpi)?;
             SetWindowTextW(self.entry, w!(""));
@@ -713,7 +729,17 @@ impl Overlay {
                     ptr::without_provenance_mut(1)
                 },
             );
-            SetWindowPos(self.hwnd, HWND_TOPMOST, x, y, width, height, SWP_SHOWWINDOW);
+            // The parent and native child surfaces must finish their first paint before DWM shows them.
+            set_dwm(self.hwnd, DWMWA_CLOAK, 1);
+            SetWindowPos(
+                self.hwnd,
+                HWND_TOPMOST,
+                x,
+                y,
+                width,
+                height,
+                SWP_SHOWWINDOW | SWP_NOACTIVATE,
+            );
             // The capsule now lives on the backdrop window; keep it directly under the text layer.
             SetWindowPos(
                 self.backdrop,
@@ -724,6 +750,13 @@ impl Overlay {
                 0,
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
             );
+            RedrawWindow(
+                self.hwnd,
+                ptr::null(),
+                ptr::null_mut(),
+                RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_UPDATENOW,
+            );
+            set_dwm(self.hwnd, DWMWA_CLOAK, 0);
             SetForegroundWindow(self.hwnd);
             SetFocus(self.entry);
             SetTimer(self.hwnd, 1, 30, None);
@@ -768,14 +801,11 @@ impl Overlay {
                 OVERLAY_OPACITY,
                 ptr::without_provenance_mut(alpha),
             );
-            // The capsule background is a separate layered window, so text and
-            // icons keep full opacity while only the background dims.
-            if SetLayeredWindowAttributes(self.hwnd, OVERLAY_KEY, 255, LWA_COLORKEY) == 0
-                || SetPropW(
-                    self.entry,
-                    w!("WordyPlaceholder"),
-                    placeholder.as_ptr().cast_mut().cast(),
-                ) == 0
+            if SetPropW(
+                self.entry,
+                w!("WordyPlaceholder"),
+                placeholder.as_ptr().cast_mut().cast(),
+            ) == 0
             {
                 return Err(io::Error::last_os_error());
             }
@@ -944,9 +974,7 @@ unsafe extern "system" fn overlay_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPA
                 let dc = BeginPaint(hwnd, &mut paint);
                 let mut bounds = RECT::default();
                 GetClientRect(hwnd, &mut bounds);
-                let brush = CreateSolidBrush(OVERLAY_KEY);
-                FillRect(dc, &bounds, brush);
-                DeleteObject(brush);
+                FillRect(dc, &bounds, overlay_key_brush(hwnd));
                 EndPaint(hwnd, &paint);
                 return 0;
             }
@@ -971,7 +999,7 @@ unsafe extern "system" fn overlay_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPA
                 );
                 return 1;
             }
-            WM_CTLCOLOREDIT | WM_CTLCOLORSTATIC => {
+            WM_CTLCOLOREDIT | WM_CTLCOLORSTATIC | WM_CTLCOLORBTN => {
                 let dc = wp as HDC;
                 let text = if lp as HWND == GetDlgItem(hwnd, PROMPT) {
                     [152, 152, 157]
@@ -980,10 +1008,7 @@ unsafe extern "system" fn overlay_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPA
                 };
                 SetTextColor(dc, colorref(text));
                 SetBkMode(dc, TRANSPARENT as i32);
-                if msg == WM_CTLCOLORSTATIC {
-                    // Let the key-colored parent surface show through the prompt.
-                    return GetStockObject(NULL_BRUSH) as isize;
-                }
+                // Child HWNDs must use the same key instead of a system-colored background.
                 SetBkColor(dc, OVERLAY_KEY);
                 return overlay_key_brush(hwnd) as isize;
             }
@@ -1105,6 +1130,8 @@ unsafe extern "system" fn overlay_button_proc(
             OVERLAY_READ
         };
         match msg {
+            // Owner-draw replaces the entire button surface in one blit.
+            WM_ERASEBKGND => return 1,
             WM_NCDESTROY => {
                 RemoveWindowSubclass(hwnd, Some(overlay_button_proc), id);
             }
@@ -1687,6 +1714,30 @@ mod overlay_visual_tests {
         assert_eq!(capsule_icon_color(false, false, true), [152, 152, 157]);
         assert_eq!(capsule_icon_color(false, true, true), [64, 156, 255]);
         assert_eq!(capsule_icon_color(true, true, false), [64, 156, 255]);
+    }
+
+    #[test]
+    fn native_overlay_buttons_use_the_color_key_for_background_requests() {
+        unsafe {
+            let instance = windows_sys::Win32::System::LibraryLoader::GetModuleHandleW(ptr::null());
+            let overlay = Overlay::new(instance, ptr::null_mut()).unwrap();
+            let dc = CreateCompatibleDC(ptr::null_mut());
+            for id in [READ, SETTINGS] {
+                let button = GetDlgItem(overlay.hwnd, id);
+                let brush =
+                    SendMessageW(overlay.hwnd, WM_CTLCOLORBTN, dc as usize, button as isize);
+                let mut info = LOGBRUSH::default();
+                let bytes = GetObjectW(
+                    brush as HGDIOBJ,
+                    mem::size_of_val(&info) as i32,
+                    ptr::from_mut(&mut info).cast(),
+                );
+                assert_eq!(bytes as usize, mem::size_of_val(&info));
+                assert_eq!(info.lbColor, OVERLAY_KEY);
+                assert_eq!(GetBkColor(dc), OVERLAY_KEY);
+            }
+            DeleteDC(dc);
+        }
     }
 
     #[test]
