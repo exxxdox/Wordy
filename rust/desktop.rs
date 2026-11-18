@@ -1,5 +1,7 @@
 use std::{io, iter, mem, ptr};
-use windows_sys::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows_sys::Win32::Foundation::{
+    ERROR_CLASS_ALREADY_EXISTS, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM,
+};
 use windows_sys::Win32::Graphics::Dwm::{DWMWA_CLOAK, DwmSetWindowAttribute};
 use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::System::Registry::{
@@ -113,14 +115,14 @@ unsafe extern "system" fn host_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
 }
 
 unsafe fn lookup_class(class: &WNDCLASSW) -> io::Result<()> {
-    let mut registered = WNDCLASSW::default();
-    if unsafe { GetClassInfoW(class.hInstance, class.lpszClassName, &mut registered) } != 0
-        || unsafe { RegisterClassW(class) } != 0
-    {
-        Ok(())
-    } else {
-        Err(io::Error::last_os_error())
+    if unsafe { RegisterClassW(class) } == 0 {
+        let error = io::Error::last_os_error();
+        // Another GUI thread may have registered the same process-wide class.
+        if error.raw_os_error() != Some(ERROR_CLASS_ALREADY_EXISTS as i32) {
+            return Err(error);
+        }
     }
+    Ok(())
 }
 
 pub struct Tray {
