@@ -792,6 +792,46 @@ fn editor_glyphs(id: u16, label: &str) -> Option<(&'static str, &'static str)> {
     }
 }
 
+fn private_use_character(glyph: &str) -> Option<char> {
+    let mut characters = glyph.chars();
+    let character = characters.next()?;
+    if characters.next().is_some() {
+        return None;
+    }
+    matches!(
+        character as u32,
+        0xe000..=0xf8ff | 0xf0000..=0xffffd | 0x100000..=0x10fffd
+    )
+    .then_some(character)
+}
+
+fn glyph_ink(dc: HDC, character: char) -> Option<(i32, i32, i32, i32)> {
+    let identity = MAT2 {
+        eM11: FIXED { fract: 0, value: 1 },
+        eM12: FIXED { fract: 0, value: 0 },
+        eM21: FIXED { fract: 0, value: 0 },
+        eM22: FIXED { fract: 0, value: 1 },
+    };
+    let mut metrics = GLYPHMETRICS::default();
+    let result = unsafe {
+        GetGlyphOutlineW(
+            dc,
+            character as u32,
+            GGO_METRICS,
+            &mut metrics,
+            0,
+            ptr::null_mut(),
+            &identity,
+        )
+    };
+    (result != u32::MAX).then_some((
+        metrics.gmptGlyphOrigin.x,
+        metrics.gmBlackBoxX as i32,
+        metrics.gmptGlyphOrigin.y,
+        metrics.gmBlackBoxY as i32,
+    ))
+}
+
 fn draw_slot_glyph(
     hwnd: HWND,
     dc: HDC,
@@ -843,13 +883,7 @@ fn draw_slot_glyph(
     unsafe {
         SetBkMode(dc, TRANSPARENT as i32);
         SetTextColor(dc, color);
-        // TextOut's metrics center the glyph cell more reliably than DrawText's
-        // baseline placement for color emoji and Nerd Font private-use icons.
-        if GetTextExtentPoint32W(dc, text.as_ptr(), units, &mut extent) != 0 {
-            let x = rect.left + (rect.right - rect.left - extent.cx) / 2;
-            let y = rect.top + (rect.bottom - rect.top - extent.cy) / 2;
-            TextOutW(dc, x, y, text.as_ptr(), units);
-        } else {
+        if GetTextExtentPoint32W(dc, text.as_ptr(), units, &mut extent) == 0 {
             let mut area = rect;
             DrawTextW(
                 dc,
@@ -858,6 +892,32 @@ fn draw_slot_glyph(
                 &mut area,
                 DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
             );
+        } else if let Some((origin_x, box_x, origin_y, box_y)) =
+            private_use_character(glyph).and_then(|character| glyph_ink(dc, character))
+        {
+            // Nerd Font private-use glyphs often overhang their advance width,
+            // so center the measured ink box rather than the text cell.
+            let mut metrics = TEXTMETRICW::default();
+            let ascent = if GetTextMetricsW(dc, &mut metrics) != 0 {
+                metrics.tmAscent
+            } else {
+                extent.cy
+            };
+            let center_x = (rect.left + rect.right) / 2;
+            let center_y = (rect.top + rect.bottom) / 2;
+            TextOutW(
+                dc,
+                center_x - origin_x - box_x / 2,
+                center_y - ascent + origin_y - box_y / 2,
+                text.as_ptr(),
+                units,
+            );
+        } else {
+            // Color emoji sit slightly below their reported cell; nudge the cell
+            // up so the visible glyph shares the button center.
+            let x = rect.left + (rect.right - rect.left - extent.cx) / 2;
+            let y = rect.top + (rect.bottom - rect.top - extent.cy) / 2 - (extent.cy / 12).max(1);
+            TextOutW(dc, x, y, text.as_ptr(), units);
         }
         if !previous.is_null() {
             SelectObject(dc, previous);
