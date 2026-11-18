@@ -17,8 +17,7 @@ use windows_sys::Win32::{
 };
 
 use super::{
-    CONTROL_BG, CONTROL_KIND, Field, Kind, MUTED, PRIMARY, SELECTED_TAB, checked, choice, send,
-    text, wide,
+    CONTROL_BG, CONTROL_KIND, Field, Kind, MUTED, PRIMARY, SELECTED_TAB, checked, send, text, wide,
 };
 use crate::{
     desktop::paint_buffered,
@@ -251,7 +250,6 @@ pub(super) unsafe extern "system" fn style_control(
     _id: usize,
     kind: usize,
 ) -> LRESULT {
-    let combo = kind == Kind::Combo as usize;
     let slider = kind == Kind::Slider as usize;
     if slider && let Some(result) = slider::handle_pointer(hwnd, message, lparam) {
         return result;
@@ -267,11 +265,11 @@ pub(super) unsafe extern "system" fn style_control(
         // arrive with the erase flag set by the control itself. Edits keep the
         // default erase: their brush is already the dark WM_CTLCOLOREDIT one.
         WM_ERASEBKGND if !edit => return 1,
-        // Combo faces never change on hover, and slider faces only on drag, so
-        // those never repaint from a mouse move. Edits, checks and buttons do
-        // show a hover state, but repainting on every move flickers; paint once
-        // when the pointer enters and once when it leaves.
-        WM_MOUSEMOVE if !combo && !slider => {
+        // Slider faces change only on drag, so they never repaint from a mouse
+        // move. Edits, checks and buttons do show a hover state, but repainting
+        // on every move flickers; paint once when the pointer enters and once
+        // when it leaves.
+        WM_MOUSEMOVE if !slider => {
             let mut tracking = TRACKMOUSEEVENT {
                 cbSize: size_of::<TRACKMOUSEEVENT>() as u32,
                 dwFlags: TME_LEAVE,
@@ -286,9 +284,7 @@ pub(super) unsafe extern "system" fn style_control(
                 }
             }
         }
-        WM_MOUSEWHEEL if slider || (combo && send(hwnd, CB_GETDROPPEDSTATE, 0, 0) == 0) => {
-            return 0;
-        }
+        WM_MOUSEWHEEL if slider => return 0,
         WM_KEYDOWN if slider => unsafe {
             let result = DefSubclassProc(hwnd, message, wparam, lparam);
             InvalidateRect(hwnd, ptr::null(), 0);
@@ -298,7 +294,7 @@ pub(super) unsafe extern "system" fn style_control(
             paint_buffered(hwnd, |dc, rect| paint_slider(hwnd, dc, rect));
             return 0;
         }
-        WM_PAINT | WM_PRINTCLIENT if slider || combo || check => {
+        WM_PAINT | WM_PRINTCLIENT if slider || check => {
             let mut paint = PAINTSTRUCT::default();
             let painting = message == WM_PAINT;
             let dc = if painting {
@@ -311,9 +307,7 @@ pub(super) unsafe extern "system" fn style_control(
             if !slider {
                 paint_embedded_backdrop(hwnd, dc);
             }
-            if combo {
-                paint_combo(hwnd, dc, rect);
-            } else if check {
+            if check {
                 paint_check(hwnd, dc, rect);
             } else {
                 paint_slider(hwnd, dc, rect);
@@ -367,28 +361,6 @@ pub(super) unsafe extern "system" fn style_control(
         unsafe { InvalidateRect(hwnd, ptr::null(), 0) };
     }
     result
-}
-
-fn paint_combo(hwnd: HWND, dc: HDC, rect: RECT) {
-    let focused = unsafe { GetFocus() } == hwnd;
-    let expanded = send(hwnd, CB_GETDROPPEDSTATE, 0, 0) != 0;
-    let border = if focused || expanded {
-        HOVER_ACCENT
-    } else if cursor_over(hwnd) {
-        rgb(89, 89, 93)
-    } else {
-        CONTROL_BORDER
-    };
-    round(dc, &rect, 9, border, Some(CONTROL_BG));
-    if let Some(index) = choice(hwnd) {
-        let mut label = rect;
-        label.left += 10;
-        label.right -= 28;
-        draw_text(hwnd, dc, label, &combo_text(hwnd, index), PRIMARY, DT_LEFT);
-    }
-    let x = rect.right - 15;
-    let y = (rect.top + rect.bottom) / 2;
-    stroke(dc, &[[x - 4, y - 2], [x, y + 2], [x + 5, y - 3]], MUTED);
 }
 
 fn paint_check(hwnd: HWND, dc: HDC, rect: RECT) {

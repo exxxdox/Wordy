@@ -101,8 +101,14 @@ pub(super) unsafe extern "system" fn window_proc(
             return 1;
         }
         WM_COMMAND if lparam != 0 => {
+            use windows_sys::Win32::UI::WindowsAndMessaging::{CBN_CLOSEUP, CBN_DROPDOWN};
             let id = wparam as u16;
             let notification = ((wparam >> 16) & 0xffff) as u32;
+            if matches!(notification, CBN_DROPDOWN | CBN_CLOSEUP) {
+                // The selector's border follows the dropped state, and these are
+                // the only notifications for the open/close transitions.
+                unsafe { InvalidateRect(lparam as HWND, ptr::null(), 0) };
+            }
             if notification == BN_CLICKED
                 && (Field::TabLocal as u16..=Field::TabRolling as u16).contains(&id)
             {

@@ -466,9 +466,7 @@ impl Drop for SettingsWindow {
 
 #[cfg(test)]
 mod tests {
-    use windows_sys::Win32::UI::Controls::{
-        COMBOBOXINFO, GetComboBoxInfo, ODS_COMBOBOXEDIT, ODT_COMBOBOX,
-    };
+    use windows_sys::Win32::UI::Controls::{ODS_COMBOBOXEDIT, ODT_COMBOBOX};
 
     use super::{controls::combo_text, *};
 
@@ -568,32 +566,27 @@ mod tests {
     }
 
     #[test]
-    fn the_dropdown_list_repaints_the_combo_when_it_opens_or_closes() {
+    fn opening_or_closing_the_dropdown_repaints_the_combo() {
         let window = SettingsWindow::new(ptr::null_mut(), &Settings::default()).unwrap();
         let combo = window.control(Field::LogLevel);
-        let mut info = COMBOBOXINFO {
-            cbSize: size_of::<COMBOBOXINFO>() as u32,
-            ..Default::default()
-        };
-        assert_ne!(unsafe { GetComboBoxInfo(combo, &mut info) }, 0);
-        assert!(!info.hwndList.is_null());
-        unsafe {
-            ShowWindow(window.hwnd(), SW_SHOW);
-            ValidateRect(combo, ptr::null());
-            SendMessageW(info.hwndList, WM_SHOWWINDOW, 1, 0);
-        }
+        unsafe { ShowWindow(window.hwnd(), SW_SHOW) };
         let mut pending = RECT::default();
-        let dirty = unsafe { GetUpdateRect(combo, &mut pending, 0) };
-        // The accent border only shows while the list is open; the selector
-        // reads CB_GETDROPPEDSTATE when it repaints.
-        unsafe { SendMessageW(combo, CB_SHOWDROPDOWN, 1, 0) };
-        let dropped = unsafe { SendMessageW(combo, CB_GETDROPPEDSTATE, 0, 0) };
         unsafe {
-            SendMessageW(combo, CB_SHOWDROPDOWN, 0, 0);
-            ShowWindow(window.hwnd(), SW_HIDE);
+            ValidateRect(combo, ptr::null());
+            SendMessageW(combo, CB_SHOWDROPDOWN, 1, 0);
         }
-        assert_ne!(dirty, 0, "list visibility did not repaint the combo");
-        assert_ne!(dropped, 0, "the dropdown did not open");
+        let opened = unsafe { GetUpdateRect(combo, &mut pending, 0) };
+        unsafe {
+            ValidateRect(combo, ptr::null());
+            SendMessageW(combo, CB_SHOWDROPDOWN, 0, 0);
+        }
+        let closed = unsafe { GetUpdateRect(combo, &mut pending, 0) };
+        unsafe { ShowWindow(window.hwnd(), SW_HIDE) };
+        // The border shows the accent only while the list is open, so both
+        // transitions need a repaint; opening sends WM_WINDOWPOSCHANGED to the
+        // list and closing sends WM_SHOWWINDOW.
+        assert_ne!(opened, 0, "opening the dropdown did not repaint the combo");
+        assert_ne!(closed, 0, "closing the dropdown did not repaint the combo");
     }
 
     #[test]

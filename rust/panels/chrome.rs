@@ -410,6 +410,18 @@ unsafe extern "system" fn chrome_proc(
                 }
                 0
             }
+            // The selector's border follows the dropped state; these are the
+            // only notifications for the open and close transitions.
+            WM_COMMAND
+                if matches!(
+                    ((wp >> 16) & 0xffff) as u32,
+                    windows_sys::Win32::UI::WindowsAndMessaging::CBN_DROPDOWN
+                        | windows_sys::Win32::UI::WindowsAndMessaging::CBN_CLOSEUP
+                ) =>
+            {
+                InvalidateRect(lp as HWND, ptr::null(), 0);
+                DefSubclassProc(hwnd, msg, wp, lp)
+            }
             WM_COMMAND if state.trim && wp as u16 == PRECISE => {
                 let precise = !state.precise.get();
                 state.precise.set(precise);

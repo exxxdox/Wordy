@@ -35,9 +35,10 @@ pub fn style_selector(hwnd: HWND, glass: bool) {
             ..Default::default()
         };
         if GetComboBoxInfo(hwnd, &mut info) != 0 && !info.hwndList.is_null() {
-            // Opening or closing the list is the only state the accent border
-            // reflects, and the combo does not repaint its face for it on its
-            // own, so watch the list and invalidate the combo.
+            // The border follows the dropped state, and the combo does not
+            // repaint its face for it on its own. Opening sends the list a
+            // WM_WINDOWPOSCHANGED and closing sends WM_SHOWWINDOW; the parent's
+            // CBN_DROPDOWN/CBN_CLOSEUP notifications cover user-driven opens.
             SetWindowSubclass(info.hwndList, Some(list_proc), LIST_SUBCLASS, hwnd as usize);
         }
         SetWindowPos(
@@ -62,7 +63,7 @@ unsafe extern "system" fn list_proc(
 ) -> LRESULT {
     unsafe {
         let result = DefSubclassProc(hwnd, message, wparam, lparam);
-        if message == WM_SHOWWINDOW {
+        if message == WM_SHOWWINDOW || message == WM_WINDOWPOSCHANGED {
             InvalidateRect(combo as HWND, ptr::null(), 0);
         }
         result
@@ -110,6 +111,17 @@ unsafe extern "system" fn selector_proc(
                 0
             }
             WM_PAINT => paint(hwnd, glass != 0),
+            WM_PRINTCLIENT => {
+                let mut client = RECT::default();
+                GetClientRect(hwnd, &mut client);
+                paint_field(hwnd, wparam as HDC, client, glass != 0);
+                0
+            }
+            // The selector supplies the whole face; the class brush would flash
+            // light underneath it.
+            WM_ERASEBKGND => 1,
+            // A closed combo must not change its selection on a stray wheel.
+            WM_MOUSEWHEEL if SendMessageW(hwnd, CB_GETDROPPEDSTATE, 0, 0) == 0 => 0,
             _ => DefSubclassProc(hwnd, message, wparam, lparam),
         }
     }

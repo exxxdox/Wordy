@@ -330,7 +330,12 @@ impl SettingsWindow {
         apply_font(hwnd, kind, &self.fonts);
         unsafe {
             SetPropW(hwnd, CONTROL_KIND, (kind as usize + 1) as _);
-            SetWindowSubclass(hwnd, Some(style_control), 1, kind as usize);
+            // Combos are painted solely by the shared selector: a second
+            // painter drew a frame with a different radius, which peeked out at
+            // the corners after the selector repainted.
+            if !matches!(kind, Kind::Combo) {
+                SetWindowSubclass(hwnd, Some(style_control), 1, kind as usize);
+            }
         }
         if matches!(kind, Kind::Edit | Kind::Password | Kind::Number) {
             send(
