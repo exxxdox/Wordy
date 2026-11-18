@@ -11,7 +11,8 @@
 
 - Windows 10/11
 - VB-CABLE（可选，[音频侦听](#音频侦听vb-cable) 功能需要）
-- [uv](https://docs.astral.sh/uv/)：运行源码需要
+- FFmpeg（用于 MP3、FLAC 等格式及非 PCM16 WAV。缺少时可在 Wordy 提示中通过 WinGet 安装）
+- Rust stable（MSVC 工具链）：源码开发与打包
 
 ## 功能介绍
 
@@ -59,68 +60,71 @@
 
 打包产物为 `dist/Wordy.exe`，双击运行，不带控制台窗口。同一 Windows 会话只允许运行一个实例。
 
+- PCM16 WAV 和后台录制可直接使用。处理其他支持的音频格式时，Wordy 会查找系统安装的 FFmpeg。
 - 配置与轮盘音频：`$XDG_CONFIG_HOME/wordy`，未设置时为 `%USERPROFILE%\.config\wordy`，内含 `config.toml` 与 `audio_clips/`
 - 日志：`wordy.log` 写在 exe 同目录，单文件上限 5 MiB，含备份最多 5 个文件；源码运行只输出到控制台
 
 ## 开发
 
 ```powershell
-# 同步依赖（含 pytest）
-uv sync
+# 拉取依赖
+cargo fetch
 
 # 运行测试
-uv run python -m pytest tests/ -v
+cargo test
 
-# 类型检查
-uv run python -m pyright src/ tests/
+# 运行应用（保留控制台日志）
+cargo run
 
 # 添加新依赖
-uv add <package>
-uv add --dev <dev-package>
+cargo add <crate>
 ```
 
 ### 快速开始
 
 ```powershell
-# 1. 初始化环境（自动安装 Python 3.12 + 依赖）
+# 1. 初始化环境
 .\wordy.ps1 init
 
 # 2. 运行
 .\wordy.ps1 dev
 ```
 
-首次运行 `wordy.ps1 init` 时，uv 自动下载 Python 3.12、创建 `.venv`、安装全部依赖。再次运行会同步依赖变更。
-
 `wordy.ps1` 不带参数时默认启动应用。保留的 `dev.cmd` 也可双击启动，或转发参数（例如 `dev.cmd build -Clean -NoPause`）。
 
 ```powershell
-# 打包为 dist/Wordy.exe
+# 打包为 dist/Wordy.exe（release + packaged，无控制台窗口）
 .\wordy.ps1 build -Clean -NoPause
 ```
 
-`init` 和 `build` 默认结束后等待回车，自动化执行时加 `-NoPause`；`-Clean` 清理 PyInstaller 缓存。初始化时，仅在 `.python-version` 不存在时使用 `-PythonVersion`（默认 `3.12`）固定版本。
+`init` 和 `build` 默认结束后等待回车，自动化执行时加 `-NoPause`；`-Clean` 执行 `cargo clean`。
 
 ### 项目结构
 
 | 路径 | 说明 |
 |------|------|
-| `src/wordy/main.py` | 应用入口与生命周期管理 |
-| `src/wordy/audio/` | 设备枚举（`capture`）、播放与返听（`player`/`sidetone`）、VB-CABLE 检测（`driver`）、路由引擎（`router`）、Windows 侦听策略（`listen_policy`）、系统声音录制（`recorder`）、裁剪与波形（`trim`/`waveform`）、托管音频导入（`clips`） |
-| `src/wordy/tts/` | 引擎抽象（`engine`）、常量（`constants`）、Cartesia bytes/realtime 后端（`cartesia`）、Volcengine 后端（`volcengine`）、注册表（`registry`）、语音标签（`labels`） |
-| `src/wordy/ui/` | 悬浮输入框（`overlay`/`overlay_widgets`）、设置窗口（`settings` + `settings_state`/`settings_widgets`/`settings_style`）、聊天轮盘（`chat_wheel`/`chat_wheel_settings`/`wheel_paint`）、音频截取（`audio_trim_dialog`/`audio_waveform`）、玻璃材质与主题（`glass`/`theme`）、无边框窗口工具（`window`）、托盘（`tray`）、反馈提示（`status_toast`）、TTS 面板（`tts_panels`） |
-| `src/wordy/hotkey/` | keyboard 风格快捷键解析（`parser`）+ Win32 原生全局热键监听（`native`） |
-| `src/wordy/` 模块级 | 配置（`config`）、全局常量（`constants`）、密钥存储（`secret`）、轮盘控制（`chat_wheel_controller`）、TTS 任务（`tts_manager`）、路由控制（`routing_controller`）、目录解析（`paths`）、日志（`log`）、设备标识（`identity`）、单实例（`single_instance`）、Qt 安全调用（`qt_lifecycle`） |
-| `pyproject.toml` | 项目元数据与依赖声明 |
+| `rust/main.rs` / `rust/app.rs` | 进程入口、单实例、热键分发与窗口消息循环 |
+| `rust/app/recording.rs` | 后台录制、音频截取、试听和保存 |
+| `rust/audio.rs` + `rust/audio/` | WASAPI 设备枚举、播放/返听、VB-CABLE 路由、Windows 侦听策略、回环录制、裁剪与波形、托管音频 |
+| `rust/tts.rs` + `rust/tts/` | TTS 引擎、Cartesia HTTP/WebSocket、Volcengine SSE、音色标签 |
+| `rust/desktop.rs` | 宿主窗口、托盘、Windows 通知 |
+| `rust/desktop/overlay.rs` | 悬浮输入框和绘制 |
+| `rust/settings_window.rs` / `rust/settings_window/controls.rs` | 设置窗口、DPI 布局和控件绘制 |
+| `rust/settings_backdrop.rs` | 设置窗口和嵌入控件共用的玻璃背景 |
+| `rust/panels.rs` / `rust/panels/` | 共用面板控件、轮盘编辑器、截取对话框和轮盘预览 |
+| `rust/wheel*.rs` | 轮盘运行窗口、四种样式绘制、托盘与设置预览 |
+| `rust/config.rs`/`backup*.rs`/`credentials.rs` | 配置持久化、加密备份、凭据库 |
+| `rust/hotkey.rs`/`instance.rs`/`file_log.rs` | 快捷键解析与注册、单实例、日志轮转 |
+| `rust/log_window.rs`/`status_toast.rs`/`dialog.rs` | 日志窗口、反馈提示、原生对话框 |
 
 ### 技术栈
 
-- **Python 3.12**（uv 管理，`.python-version` 锁定）
-- **GUI**: PySide6（自绘玻璃窗口，无原生标题栏）
-- **音频**: sounddevice（设备枚举）+ pyaudio（播放）+ pyaudiowpatch（WASAPI 回环录制）+ numpy（PCM 处理）
-- **路由**: Windows Core Audio 侦听策略（COM/WASAPI，comtypes）+ VB-CABLE
-- **TTS**: Cartesia SDK（`cartesia[websockets]`）、Volcengine HTTP/SSE（requests）
-- **其他**: keyring（密钥存储）、keyboard（快捷键录制）
-- **包管理**: uv
+- **Rust（edition 2024）**，`windows-sys` / `windows` 直接调用 Win32、Direct2D、WASAPI
+- **GUI**: 自绘 Win32 窗口（玻璃外壳、悬浮输入框、轮盘）
+- **音频**: WASAPI（设备、回环录制、Windows 侦听策略）
+- **TTS**: reqwest（Cartesia bytes、Volcengine SSE）、tungstenite（Cartesia realtime）
+- **密钥**: Windows 凭据管理器（Credential Manager）
+- **包管理**: Cargo
 
 ## 许可证
 

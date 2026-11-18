@@ -1,110 +1,91 @@
-# 项目模块约定
+# Wordy 项目说明
+
+## 架构
+
+纯 Rust（edition 2024）Win32 应用，Cargo 管理。入口 `rust/main.rs` → `rust/app.rs:run()`。所有 UI、音频、TTS 均为原生实现，不再依赖 Python/Qt。
+
+| 路径 | 职责 |
+|------|------|
+| `rust/app.rs` | 单实例、热键分发、窗口消息循环、设置动作、日志 |
+| `rust/app/recording.rs` | 后台录制、音频截取与试听、异步导入与保存 |
+| `rust/desktop.rs` | Win32 宿主窗口、托盘、通知和共用控件辅助函数 |
+| `rust/desktop/overlay.rs` | 悬浮输入框、输入事件、背景和按钮绘制 |
+| `rust/settings_window.rs` / `rust/settings_window/controls.rs` | 设置窗口、DPI 布局、设置控件绘制 |
+| `rust/settings_backdrop.rs` | 设置窗口和嵌入控件共用的玻璃背景及绘制缓存 |
+| `rust/panels.rs` / `rust/panels/` | 共用面板控件、轮盘编辑器、截取对话框和轮盘预览 |
+| `rust/wheel.rs` / `wheel_paint.rs` / `wheel_window.rs` | 轮盘状态、四种样式绘制、运行时窗口 |
+| `rust/audio.rs` + `rust/audio/` | WASAPI 设备枚举、播放/返听、VB-CABLE 路由、Windows 侦听、回环录制、裁剪/波形、托管音频 |
+| `rust/tts.rs` + `rust/tts/realtime.rs` | TTS 引擎、Cartesia HTTP/WebSocket、Volcengine SSE、音色标签 |
+| `rust/config.rs` | `Settings` 单一数据源、钳位、原子写入、150ms 防抖写盘 |
+| `rust/backup.rs` / `backup_crypto.rs` / `credentials.rs` | 加密备份、AES-256-GCM/PBKDF2、Windows 凭据管理器 |
+| `rust/hotkey.rs` / `instance.rs` / `file_log.rs` / `log_window.rs` | 快捷键解析与注册、单实例互斥体、日志轮转与日志窗口 |
+
+持久化目录：`config_directory()`（`XDG_CONFIG_HOME/wordy`，未设置时 `%USERPROFILE%\.config\wordy`），含 `config.toml` 与 `audio_clips/`；托管音频从配置文件父目录推导。日志仅 `packaged` 构建在 exe 同目录写 `wordy.log`（5 MiB × 5）。图标资源在 `rust/assets/wordy.ico`，通过 `include_bytes!` 打入。
+
+## 构建与验证
+
+```powershell
+.\wordy.ps1 init                # cargo fetch
+.\wordy.ps1 dev                 # cargo run，保留控制台
+.\wordy.ps1 build -Clean -NoPause # release + packaged → dist/Wordy.exe
+cargo test                       # 全部 Rust 测试
+```
+
+发布工作流 `.github/workflows/release.yml` 使用 Rust stable、`cargo test --locked`，再调用 `wordy.ps1 build`。`dev.cmd` 仍转发 `wordy.ps1` 参数。
 
 ## 配置备份
 
-设置页底部提供 `.wordybackup` 加密备份导入与导出，包含全部持久化设置、所有轮盘引用的音频和两家 TTS 的 API 密钥。默认保存位置为 exe 同目录，源码运行时为项目根目录，可手动选择其他位置。导出必须输入并确认非空密码，导入必须输入同一密码；密码不保存、不去掉首尾空格，忘记后无法恢复。整份 ZIP 内容使用 AES-256-GCM 认证加密，随机盐与 nonce，PBKDF2-SHA256 固定 120 万次派生密钥，版本头纳入认证；导出流式写密文，不生成明文 ZIP 临时备份；旧明文 ZIP 不再导入。导入完成认证后才解析配置或访问凭据库，再校验格式、大小、路径、字段与快捷键冲突，复制为新音频文件并原子提交配置；失败回滚配置、音频和已修改的密钥，回滚失败须如实提示。API 密钥不写入配置 TOML。录制、裁剪、音频导入、后台保存或快捷键录制期间禁止恢复。成功后走原有退出链路，重启生效，避免旧运行状态覆盖导入值；不删除原有音频。
+设置页底部提供 `.wordybackup` 导入/导出：全部设置、轮盘音频、两家 TTS API Key。默认 exe 同目录（源码运行为项目根目录）。导出必须输入并确认非空密码，纯空白同样拒绝；密码不去掉首尾空格、不保存。ZIP 内容 AES-256-GCM 认证加密，随机盐/nonce，PBKDF2-SHA256 120 万次；导出流式写密文；旧明文 ZIP 不导入。认证通过后才解析配置/凭据，校验格式、大小、路径、字段、快捷键冲突，复制音频并原子提交；失败回滚配置、音频与密钥并如实提示。录制、裁剪、导入、后台保存、快捷键录制期间禁止导入。成功后退出重启；不删除原有音频。
 
 ## 播放与返听
 
-「启用主播放输出」由 `main_playback_enabled` 持久化，默认开启。轮盘文字、轮盘文件和输入框朗读的主输出固定为 VB-CABLE 的 WASAPI CABLE Input。主端点缺失或无法打开时不回退到系统默认设备。设置页未检测到端点时提供下载入口，启动时已开启主播放且缺少端点则发托盘通知。返听可独立开启，使用「返听播放设备」选择的本地设备（默认跟随系统）；F10 裁剪试听也用该设备，不受主播放和返听开关影响。本地输出拒绝 VB-CABLE。更改播放设备或播放开关后重建音频流。
+「启用主播放输出」由 `main_playback_enabled` 持久化，默认开启。文字/音频/输入框朗读主输出固定为 WASAPI CABLE Input，不回落系统默认设备；缺失时设置页给下载入口、启动时发通知。旧配置 `virtual_output_device` 作为端点名称回退。返听独立开关，使用「返听播放设备」（默认跟随系统）；F10 裁剪试听走本地设备，拒绝 VB-CABLE。播放设备/开关变化后重建音频流。
 
-「音频侦听」只控制所选麦克风的 Windows 侦听，主动打开时将麦克风送到 CABLE Input，主动关闭时关闭该麦克风的侦听。应用启动沿用 Windows 当前状态，设置页回显实际开关状态和输出目标；未选择麦克风或读回失败时回退到 Wordy 保存的侦听偏好。应用退出时保留 Windows 当前状态。关闭失败时保留原侦听状态和开关以便重试。
+「音频侦听」控制所选麦克风的 Windows 侦听：开启送到 CABLE Input，关闭关闭该麦克风。启动沿用 Windows 状态，设置页回显实际开关与输出目标（含设备不可用）；退出保留 Windows 状态；关闭失败保留原状态供重试。麦克风名称匹配先精确（忽略首尾空格与大小写），再唯一子串匹配。设备枚举失败时设置页显示空列表而不是报错中止。
 
-## 轮盘 UI 一致性
+## 轮盘
 
-设置中的轮盘 UI 与快捷键唤出的轮盘 UI 必须保持一致。调整轮盘布局、材质、槽位编号、名称呈现、空槽或选中状态时，须同步检查并更新两处，避免视觉规则分叉。
+轮盘导入、播放和截取原生以外的音频格式时使用系统安装的 FFmpeg，从系统 `PATH` 和 WinGet 命令目录查找。有效的 PCM16 WAV 直接读取。缺少解码器时提示通过 WinGet 安装，发布产物只包含 `Wordy.exe`。
 
-轮盘动画仅影响显示：唤出120ms淡入、收起90ms淡出、两处高亮共用90ms过渡。松键立即提交播放；淡出时停止接收选择，允许新一轮热键立即重开；控制器停止时直接关闭并终止动画。
+设置中的轮盘 UI 与运行时轮盘必须保持一致。样式由 `chat_wheel_style` 保存：`classic`/`glass`/`petals`/`game`，无效值回退经典；两处共用 `wheel_paint`。画布 634×540（盘体 540×540 居中），名称居中 hover 放大仍完整显示。动画仅影响显示：120ms 淡入、90ms 淡出、90ms 高亮；松键立即提交播放，淡出停止接收选择。
 
-轮盘样式由全局 `chat_wheel_style` 保存：`classic`（经典玻璃，默认保留原样）、`glass`（轻薄玻璃）、`petals`（悬浮花瓣）、`game`（竞技轮盘），所有轮盘共用；无效值回退经典。设置页切换时先原子保存再更新预览，失败恢复选择；运行时每次唤出读取样式快照，下一次唤出跟随新选择。四种样式统一由 `wheel_paint.paint_wheel` 绘制；花瓣缝隙、圆角和竞技圆钮偏移仅影响显示，不改变八向选择、中心取消或松键播放。竞技轮盘使用半透明扇面、外围名称、浅色方向高亮与中心金属圆钮，不显示编号或重复的中心标题；预览与实际轮盘共用文字缩放规则。
+每盘八槽、独立快捷键、任意数量、至少一个。第一盘存 `chat_wheel_name/hotkey/slots/labels/texts`，后续在 `additional_chat_wheels`。快捷键不得与输入框/其他轮盘/后台录制重复。槽内容互斥：有文字则朗读，否则播放音频；切换会清空另一类。音频槽 `volumes` 0–300%，播放时快照传主输出与返听。托管音频在 `audio_clips`，导入时复制为独立文件。清空槽保留音量。删除/清空后仅删除无任何轮盘引用的文件。新增轮盘先弹窗输入快捷键，校验通过再注册。
 
-竞技轮盘中心仅在有效选中时显示一个朝向当前扇区的黑色指向角；未选中、移回中心或选择空槽时隐藏，动画过渡不保留旧方向的角，不绘制常驻方形或菱形底座。
+轮盘音频可从文件导入，或通过后台录制保存到槽位。后台录制（默认 F10）环缓冲保留 `rolling_buffer_seconds`（5–300），停止后打开截取对话框；默认目标 `rolling_buffer_target`，保存成功后写回。名称默认「录音 HHMMSS」。WASAPI 回环先查可读帧再读，停止超时不得关闭仍在 read 的流；取消超时只记警告、不阻断关闭。
 
-竞技轮盘已有内容的名称统一用不透明白字，加薄黑色字缘与下移阴影，保证明暗背景可读；选中通过字号和方向扇面强调，空槽占位符保持较弱呈现。
+## TTS
 
-## 脚本入口
+- Cartesia：bytes（HTTP 整段）与 realtime（WebSocket，PCM16）；realtime 支持后台 keepalive、`ctx.cancel`，base URL 可被 `CARTESIA_BASE_URL` 覆盖；仅正常空闲关闭允许重连，其他关闭按错误处理。
+- Volcengine：SSE 返回 `pcm_s16le`（base64），播放必须按 int16 打开。
+- HTTP 使用 connect timeout，不设整请求总期限；最多跟随 10 次重定向。
+- 音量 0.50–2.00 由 TTS 引擎应用；音频槽增益独立，不叠乘。
+- 「播放时自动按住某键」：正式播放前按下，结束/失败/取消后松开；F10 试用跳过。输入框提交先收起窗口再提交。
+- API Key 存 Windows 凭据管理器，不写入 TOML。
+- 朗读可打断：新提交先停旧朗读/音频；取消只能协作式，禁止跨线程关流。退出时最多等待 worker 30 秒。
 
-`wordy.ps1` 统一提供 `init`（初始化）、`dev`（启动，默认）和 `build`（打包）。`dev.cmd` 保留为参数转发入口；发布工作流使用 `wordy.ps1 build -Clean -NoPause`。
+## 日志与通知
 
-打包时只在 PyInstaller 执行期间将系统目录 `System32` 放到 `PATH` 首位，防止把第三方同名 `icuuc.dll` 收进 EXE，导致 QtCore 启动时找不到所需导出。打包相关改动须实际启动生成的 EXE 验证。
+`log_level` 过滤 INFO/WARNING/ERROR/DEBUG；格式 `YYYY-MM-DD HH:MM:SS [LEVEL] target: message`。内存保留 5000 行，托盘「打开日志窗口」与设置页「查看日志」打开实时窗口。packaged 构建同步写 exe 旁 `wordy.log`，UTF-8、5 MiB 轮转、共 5 个文件。
 
-## 持久化目录
+通知通过 `AppUserModelId = Wordy.Desktop` 注册发送者并调用 Windows 通知中心；发送失败回退托盘气泡。图标写入配置目录 `notification-icon.ico`。
 
-配置和轮盘托管音频集中在 `paths.config_directory()` 返回的同一个目录（目录名固定小写 `wordy`）——配置文件 `config.toml` 与轮盘托管音频 `audio_clips/`（后者从配置文件父目录推导，自动跟随）。`XDG_CONFIG_HOME` 未设置、为空串或给的是相对路径时退回 `~/.config/wordy`（相对路径按 XDG 规范视为无效）。根目录解析刻意放在 `src/wordy/paths.py` 而不是 `config.py`：`config` 有一条契约禁止出现 `os.environ`（防止密钥重新从环境读回来），而路径解析本质上要读环境。录制过程中的临时文件不在这里，走 `%TEMP%`。
+## 测试
 
-## PortAudio 生命周期
+`cargo test`；UI/音频测试使用真实 Win32 句柄在进程内创建，不依赖外部显示器。涉及配置的测试用临时目录，不读真实用户配置。新增/修改行为先补测试。禁止在日志或测试中写入真实 API Key。
 
-`AudioPlayer` 每次播放都新建再终止一个 `PyAudio` 实例，而 PortAudio 的初始化计数是**进程级且非原子**的：两个线程并发跑 `Pa_Initialize`/`Pa_Terminate`，会让一个线程把全局设备表释放掉、另一个线程还在读它。症状是 `Pa_GetDeviceCount` 返回垃圾值（实测是一个被截断的指针，如 `-1294395680`）、日志报「没有默认输出设备」，重则原生访问违例**直接段错误**——没有 Python 堆栈，看起来就是「闪退」。
+## Win32 界面防闪烁
 
-返听（`SidetoneAudioPlayer.play_wav`）主输出在调用线程同步播、返听另起守护线程，两路同时播放，正好制造这个并发。因此 `player.py` 用模块级 `_PORTAUDIO_LIFECYCLE_LOCK` 包住每一次 `_new_pyaudio()` 与 `_terminate_pyaudio_locked()`，**只锁生命周期调用、不锁中间的实际播放**（否则一路播放会把另一路整个堵住）。返听那一路只等固定上限（`_SIDETONE_TAIL_TIMEOUT_SECONDS`）就放手——调用方是串行的 TTS worker，无限等下去会把后续所有朗读一起拖住；上一段返听还没收尾时，本次直接跳过返听而不是排队叠加。回归用例在 `tests/test_audio_player.py::test_portaudio_lifecycle_is_serialized`：真跑真 PortAudio 会让 pytest 进程本身挂掉，所以它用假实例检测重叠。
+- 高频更新的自绘控件先在离屏合成背景和内容，再一次提交到窗口。波形进度只使旧、新游标区域失效，同一像素无需重画。自绘控件完整覆盖失效区域时，抑制默认背景擦除。
+- 自绘滑块改变数值后由应用标记整个控件待重画，覆盖旧滑块和进度填充，避免依赖原生控件局部重画。
+- 滑块连续变化时只同步对应的数值和关联预览。配置防抖写盘时不重建页面、下拉列表或无关控件。
+- 分层窗口在首次显示前设好背景和透明色，首帧及子控件绘制完成后再揭开窗口。原生子控件的背景画刷应匹配应用表面或透明色，父窗口重画时裁剪子控件区域。
+- 修改绘制顺序、控件显隐或高频刷新时，补对应回归测试，并检查首次唤出、反复打开、焦点与悬停切换及试听进度。
 
-`pyaudiowpatch`（录音）是另一份静态链接的 PortAudio，有独立的初始化计数，不共用这把锁；`recorder.py` 用 `_PYAUDIO_LIFECYCLE_LOCK` 串行化它，因为普通录音与后台滚动录制可能并发新建/释放实例。
+## 注意事项
 
-## 音频设备枚举
-
-`audio/capture.py` 只提供 `list_input_devices()`，供设置页面枚举输入设备。麦克风侦听由 Windows 原生策略管理，不维护软件录音流。
-
-## TTS Worker 生命周期
-
-`WordyApp` 在 GUI 线程委托 `TTSManager` 提交操作。任务绑定提交时的引擎；预热和播放共用 worker executor。切换后端/API key 时，janitor 先等待旧任务完成，再关闭旧引擎并释放后继事件。新 worker 可立即接收任务，播放/预热等待旧 worker 清理后才使用共享播放器，避免阻塞 UI 和跨引擎关闭音频流。测试直接访问 `tts_manager`。
-
-## Volcengine 音色列表
-
-**厂商没有可枚举音色的 HTTP 接口**，别去写「拉取音色列表」。`POST /api/v3/tts/get_voice` 是**单查**（入参必填 `speaker_id`），只返回该音色的注册状态与试听音频 `demo_audio`，**没有任何人类可读名称字段**，也没有分页/列表参数；官方「大模型音色列表」文档是静态表格，不是接口。
-
-因此音色列表由用户**手动维护**并持久化在 `AppSettings.volcengine_voice_list`（`[{"id", "name"}]`，读取时由 `_normalize_voice_entries` 清洗：id 必须非空字符串、同 id 留第一条、缺名用 id 兜底——下拉按名称做标签，没名称的条目会被 `build_voice_label_maps` 静默丢掉）。火山音色**不再单独存 id/name**：列表顺序就是选择，首条即当前生效音色；旧配置里的 `voice_id`/`voice_name` 键加载时直接丢弃。`VolcenginePanel` 只做三件事：下拉快速切换（把选中条目移到首位并通知重建引擎）、添加（同 ID 改名而非新增，新条目排首位直接生效）、删除（落到剩下第一条，全删光才回「无」）。`set_voices_loaded` 忽略传入的网络结果，始终按本地列表重填。
-
-## 后台持续录制
-
-`RollingAudioRecorder`（`audio/recorder.py`）按全局快捷键持续采集系统声音，内存环形缓冲只保留最近 `rolling_buffer_seconds` 秒（默认 30，范围 5–300，设置页可改）；录制期间不落盘，第二次按快捷键停止时才把窗口压成 48k 双声道临时 WAV。采集循环与普通录音共用 `_open_loopback_stream`、`_normalize`、`_write_pcm_wav`，必须先查 `get_read_available()`，停止超时不得 close 仍在 read 的流；两种录音器共用 `_PYAUDIO_LIFECYCLE_LOCK`，但 `_ACTIVE` 只约束普通录音。
-
-`RollingBufferController` 运行在 GUI 线程：热键监听器经 `triggered` 排队信号切状态；停止后打开 `AudioTrimDialog`。目标选择复用设置页的轮盘预览：`ui/wheel_picker.py` 提供共享 `WheelPicker`（设置页与目标选择器共用盘体绘制），`TargetSlotPicker` 在弹窗内显示各槽原有名称、空槽/音频/文字状态与选中槽详情，点击扇区选槽、下拉切盘；默认选中 `rolling_buffer_target`（`[轮盘, 槽位]`，越界自动钳位）。保存走 `save_buffer_clip`：导入托管副本 → 完整解码校验 → 一次 `update_wheel` 同时写 `slots` / `labels` / `volumes` / 清空同槽 `texts` → 只有确认成功才删临时文件，失败保留临时文件并回滚托管副本；被替换的旧文件仅在无任何轮盘引用时删除。取消弹窗即丢弃，不自动恢复滚动录制。
-
-F10 截取弹窗可设置片段音量（0%–300%，每次默认 100%）。切换目标保留已调音量，每次试听应用当时的值，确认保存后用当前值更新目标槽，覆盖已有音频时也使用这个值。
-
-后台录制快捷键默认 `f10`，不能与输入框或任一轮盘快捷键重复（启动、改键、轮盘改键三处都校验）。设置页录制新组合期间先停掉监听器，取消或失败要恢复；只有成功时控制器才写入配置。托盘图标在录制中叠加红点，状态变化和结果（开始/结束/保存/失败）经托盘气泡提示。退出时 `cancel_active_rolling_recording()` 与控制器 `stop()` 都要收掉采集流。
-
-Windows 通知通过 `Wordy.Desktop` 发送，左上角图标由该发送者的 `IconUri` 指向配置目录里的持久化 ICO。发送在后台调用 Windows 原生通知，失败时回到 Qt 托盘提示。
-
-## 音频聊天轮盘
-
-WASAPI 回环在系统静音时可能完全不发数据包，采集循环必须先查 `get_read_available()`，仅按已就绪帧数读取；无数据时用停止事件做短等待，不能固定帧数阻塞读取。`stop()` / `cancel()` 等待超时后禁止对仍在 `read()` 的流执行 `close()` / `terminate()`，否则会原生访问违例。超时保留 `_ACTIVE` 和设备所有权、拒绝新录制，读取线程退出后再安全回收。足够时长但没有收到音频时提示未录到系统声音，不把静音当作读取故障。
-
-每个音频槽独立保存 `volumes`（首盘 `chat_wheel_volumes`），默认 1.0，范围 0.0 到 3.0（0% 到 300%）；文字槽仍由 TTS 音量控制。槽位标题同行的音量滑块在拖动结束时保存，切槽/切盘时恢复对应值；改动从下次播放生效。普通试听、裁剪试听和轮盘正式播放均传递该槽位增益。音量随每次播放提交快照传给主输出与返听，二者逐块使用相同 PCM 增益与饱和限幅，不修改源文件，也不叠乘 TTS 音量。
-
-用户可新增任意数量轮盘，每盘固定八槽、绑定独立快捷键；至少保留一个轮盘。第一盘仍由 `chat_wheel_name/hotkey/slots/labels/texts` 保存，后续盘存于 `additional_chat_wheels`（各含 `name`）；通过 `get_wheel`、`update_wheel`、`replace_wheels` 统一访问并原子保存。轮盘名称可选，空名回退显示「轮盘 N」，重命名直接在设置页的轮盘下拉框里编辑（`WHEEL_NAME_MAX_LENGTH` 截断），编辑结束才落盘。快捷键不能与输入框或其他轮盘重复，注册/保存失败保持原配置。运行时共用一个轮盘窗口，已有轮盘显示时忽略其他轮盘热键。设置页通过选择器切盘，录制、导入和文字试听期间锁住切盘；清空槽位或删除轮盘后，仅清理全部轮盘都不再引用的音频。
-
-录音结束直接整段导入槽位（名称「录音 HHMMSS」），不再强制先裁剪；「截取」按钮随时对当前槽位已保存的音频打开「截取录音」对话框，通过波形拖选区间或拖动左右手柄试听并保存片段，精确起止时间收在「精确调整」中，结果替换该槽，取消保持原样。`audio/trim.py` 按 PCM 帧创建独立 WAV，不修改源文件。波形峰值由后台线程分块读取，关闭窗口后取消并忽略迟到结果；试听完成按片段路径匹配回调，旧片段不能复位新试听。试听红色播放线按主输出音频块回调推进，排队时不计时；停止、改选区间或关闭后清除，并按片段路径过滤迟到进度。片段导入和槽位配置都成功后，才删除裁剪临时文件；失败保留副本。片段试听通过 TTS worker 与控制器排队信号完成，不能从播放线程直接更新 Qt 控件。
-
-「播放时自动按住某键」由 `AppSettings.hold_key_enabled` / `hold_key` 持久化：开启后 `TTSManager` 在正式播放前注入按键按下（F10 裁剪试听只走本地返听，跳过语音键并拒绝 VB-CABLE）（`keyboard.press`），播放结束、失败或取消后在 `finally` 里松开（`keyboard.release`），用于游戏要求按住语音键（如 Dota 2 的 G）才收音的场景。用户操作不变——轮盘与输入框仍按原热键使用，不必自己按该键。注入点只在 `_generate_and_play` / `_play_audio_file`，由串行 worker 保证同一时刻只按住一个键、不残留按住状态；按下后等 `HOLD_KEY_SETTLE_SECONDS` 再开播，给游戏打开麦克风留出输入处理时间。输入框回车提交先收起窗口再提交，否则注入的键会被自己的输入框吃掉。设置页在「全局快捷键」区录制单键（`keyboard.read_key`），无法解析的按键回退 `g`。
-
-首个轮盘默认 F8，独立于输入框快捷键；按住唤醒，八向选择，松开播放，中心/Esc/右键取消；唤出与收起均不移动光标，方向以唤出点为锚点，屏幕边缘钳位只影响窗口。窗口不抢焦点。八槽文件名、名称与快捷键由 `AppSettings` 持久化。槽内容是**互斥**的：`chat_wheel_texts` 非空则该槽朗读这段文字（当前 TTS），否则才播放 `chat_wheel_slots` 里的音频；填文字会按「清空」语义删掉该槽音频，导入/录制音频会清掉该槽文字。三个数组（`chat_wheel_slots` / `chat_wheel_labels` / `chat_wheel_texts`）必须在同一次 `update()` 里写、一起回滚，否则落盘失败会留下错位状态。轮盘的「可选中」判据就是标签非空，所以文字槽必须把文字（或名称）当标签传进 `open_wheel`——`ChatWheel` 没有别的传参通道。朗读**无法打断**（三个引擎的 `engine.speak()` 都阻塞到底且没有取消钩子，`close()` 抢同一把锁），因此文字槽试听时按钮如实显示「朗读中…」并对**所有槽**禁用：完成回调 `playback_finished` 不带槽号，允许期间开新试听会让回调误复位。朗读期间也拒绝开始录音（否则录音会把 TTS 录进去）。设置页的八个槽用数字编号（`音频 1`…`音频 8`）标识，不用方向名——方向概念只属于运行时轮盘的八向选择。试听按钮在播放期间变成「停止」，再点即停止试听；`TTSManager` 的取消句柄是**单次播放**的（`stop_audio_file()`），不能用全局的 `_audio_files_stopped`，否则一次停止会连累后续播放；`shutdown()` 因此必须显式调用 `stop_audio_file()`。播放结束（播完/被停止/失败）经 `ChatWheelController.playback_finished` 排队回 GUI 线程复位按钮，否则「停止」会一直挂着；替换或清空槽位、开始录音都会先停掉试听。音频存于配置目录下的 `audio_clips`（`$XDG_CONFIG_HOME/wordy/audio_clips`），Windows 优先硬链接，失败复制；硬链接共享内容。Qt 解码成临时 PCM WAV，经 `TTSManager` 当前 worker 串行播放并等待交接，复用输出路由与返听，不依赖 TTS 密钥或音色。文件替换/清空先保存配置，再删除未引用托管文件。槽位音频也能直接录制系统声音：`audio/recorder.py` 用 PyAudioWPatch 采默认输出端点的 WASAPI loopback（sounddevice 的 PortAudio 不支持 loopback），采集线程不碰任何 Qt 对象，流按端点 mix format 原样打开（采样率和声道数都不能自选，多声道在下游截前两路），产物归一化成 48000 Hz 双声道 PCM 再走同一条托管导入链路——播放回退链在设备拒绝源采样率时只换 `rate` 不重采样数据，44100 的录音会静默变调。录音临时文件只在内容进了托管目录**且**槽位落了盘之后才删：导入失败或槽位保存失败时必须留着，那是这份音频唯一的副本。录制上限 `MAX_RECORD_SECONDS`（60 秒），设置窗口关闭与 `app.quit()`（`main.py:_stop_background_threads`，Qt 退出不派发 Close）都会丢弃未完成的录音。
-
-## 设置窗口玻璃外壳
-
-设置窗口是**无边框自绘玻璃窗口**（`FramelessWindowHint` + `WA_TranslucentBackground` + `_SettingsDialog.paintEvent` 手绘），与悬浮输入框、音频轮盘同材质。原生标题栏、拖动、缩放和三个窗口按钮全部自绘：标题栏是 `settings_widgets._TitleBar`，拖动/缩放交给 Windows 原生的 `startSystemMove()` / `startSystemResize()`，不在 Python 里算鼠标位移。
-
-- **缩放必须先补 `WS_THICKFRAME`（`window.enable_system_resize`）**：`FramelessWindowHint` 让窗口变成 `WS_POPUP`，没有可缩放边框，而 Windows 的缩放循环要求这一位，缺了会**静默忽略** `startSystemResize`——光标会变，但窗口拖不动。补上样式位后 DWM 会顺带加系统圆角，必须同时把 `DWMWA_WINDOW_CORNER_PREFERENCE` 压成 `DONOTROUND`，否则和自绘圆角叠成双层。
-- **窗口四周留 `WINDOW_EDGE_PAD`（12px）透明余量**，一举三得：容投影、当 8 向缩放热区、让子控件不贴边——热区必须落在没有子控件的区域，鼠标按下才会直达窗口自己。`DIALOG_WIDTH/HEIGHT` 已含这圈余量（默认窗口 1120×820，最小宽度960px，设置按任务双栏排列，含透明边缘与标题栏；400px 轮盘及编辑区默认完整显示，无需纵向滚动），且必须写成字面量整数，静态尺寸契约只识别顶层 `ast.Constant`。
-- **`QDialog` 与 `QWidget#settingsFooter` 的 QSS 必须透明**：窗口改成透明合成后，任何不透明底色都会整块盖住玻璃与投影。玻璃底的渐变分层已从 QSS 的 `qlineargradient` 搬到 `paintEvent`（`test_glass_theme_contract` 改为扫手绘源文件里的 `QLinearGradient`）。
-- **首帧用 DWM cloaking（`window.set_window_cloaked`）**：透明窗口从 HWND 创建到首次合成之间必然有一段没有内容的空档，靠"提前多画一帧"堵不住。`show()` 前遮蔽、首帧 `paintEvent` 后解除；`FIRST_FRAME_GUARD_MS` 兜底，防止窗口始终不绘制时被永久藏起来。遮蔽必须在所有窗口标志/属性改完之后设置——`show` 期间若因改标志重建 HWND，遮蔽会连窗口一起丢掉。
-- **缩放光标不继承**：窗口在边缘把光标设成缩放形后，Qt 的 `QWidget::cursor()` 会沿祖先链继承，内容区会跟着变缩放光标。`dialogShell` 与 `_TitleBar` 各显式设回 `ArrowCursor`。
-- 最大化/全屏时余量与圆角都归零：`edge_pad()` / `corner_radius()` 是派生值，绘制、热区、布局三处自动一致。
-- 内容区仍靠留白分组，没有做成卡片：分栏表单通过间距表达层级，避免卡片边框切碎内容（`_create_tab_page` 的注释记录了这一点）。
-
-## 设置页反馈提示
-
-临时反馈（保存结果、录制结果、密钥与音色操作结果等）统一走 `ui/status_toast.py` 的浮动反馈队列：每条自动淡出、悬停保持、移开继续淡出；多条同时出现时上下并列（新的在下、旧的在上），各自计时逐个消失，同时最多 `MAX_VISIBLE` 条。需要长期停留的状态说明（设备数量、密钥状态）仍留在原地标签——浮动卡片锚在页脚上沿、向上生长，正好盖住页脚上方的操作按钮，而且卡片自身没设 `WA_TransparentForMouseEvents`（只有内层卡片/色条/文字设了），命中的是卡片而不是按钮，停在按钮上时按钮**真的点不动**，不只是被遮住。面板被单独实例化时 `show_status_toast()` 返回 False，调用方回退到原地标签（测试里的独立面板走这条路径）。
-
-- **一个控件只能挂一个 `QGraphicsEffect`**：淡出已占用不透明度效果。曾在其内层卡片再加投影效果，结果卡片在可见状态下改变尺寸时，投影缓存的源图失效，Qt 整块不绘制（离屏渲染与平台合成都复现）。浮起观感改由 `paintEvent` 手绘的分层圆角矩形 + 状态色混出的渐变底色和描边实现（`_mix`）；卡片外留出 `SHADOW_PAD` 画投影，比较可见位置用 `card_geometry()`，不要用控件矩形。
-- **不要用 `adjustSize()` 定尺寸**：控件已可见时布局 `sizeHint` 缓存不更新，第二条更长的反馈会沿用上一条的尺寸导致文字被裁。尺寸按字体度量显式算出（见 `StatusToast.fit_width`）。
-- **悬停判定要核对真实光标**：显示新卡片时 Qt 会给同层卡片补发没配对的 Enter/Leave（光标并不在卡片上），照单全收会把停留时间压成悬停时长。`enterEvent` 用 `_cursor_inside()` 校验，`leaveEvent` 只在真的悬停过后才重新计时。
-- 队列挂在设置窗口（`self.window`）而非页签页，否则会被页签透明度动画一起淡化。
-
-## 日志持久化
-
-仅 `sys.frozen` 打包运行时在 `Path(sys.executable)` 同目录同步写入 UTF-8 `wordy.log`；源码运行保留控制台和内存日志，不创建日志文件。每个文件最多 5 MiB，当前文件加 `wordy.log.1` 到 `wordy.log.4` 共五个，超限轮转并删除最旧备份。按实际 UTF-8 字节计量且禁用 Windows 换行扩展，超长单条记录按字符边界跨文件保存；每次写入立即 flush，不使用后台日志队列。目录不可写时在现有日志流报告错误，不擅自改到其他目录。
-
-## 单实例运行
-
-`main()` 在配置、日志处理器和音频设备初始化前获取 Windows 命名互斥体 `Local\Wordy.SingleInstance`；同一 Windows 会话内已有实例时，新进程先用原生提示框显示“Wordy 已在运行，请勿重复启动。”，关闭提示后退出，不初始化第二套 Qt UI、日志或播放链路。互斥体名称不依赖 exe 路径，源码版与不同目录的 exe 共用限制。首实例句柄一直保留到进程终止，由 Windows 自动回收，不能在 `main()` 返回或日志关闭前提前释放。
++ 新项目，不考虑兼容旧 Python 数据格式之外的历史；旧明文 ZIP 不导入。
++ 修改符号时用 rust-analyzer/LSP 查找引用。
++ 所有设置页内容必须持久化；滑块/占位文字使用 150ms 防抖，退出时 flush。
++ 设置窗口按显示器 DPI 缩放（窗口、字体、行高、热区），嵌入编辑器同步；改动布局时保持 1120×820 逻辑坐标。
++ 单实例互斥体 `Local\Wordy.SingleInstance`，重复启动用 TaskDialog 提示。
++ 用户可见文案保持中文；公开 UI 不写内部实现说明。
