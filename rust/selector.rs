@@ -36,9 +36,9 @@ pub fn style_selector(hwnd: HWND, glass: bool) {
         };
         if GetComboBoxInfo(hwnd, &mut info) != 0 && !info.hwndList.is_null() {
             // The border follows the dropped state, and the combo does not
-            // repaint its face for it on its own. Opening sends the list a
-            // WM_WINDOWPOSCHANGED and closing sends WM_SHOWWINDOW; the parent's
-            // CBN_DROPDOWN/CBN_CLOSEUP notifications cover user-driven opens.
+            // repaint its face for it on its own. The parent's CBN_DROPDOWN and
+            // CBN_CLOSEUP notifications cover user-driven transitions; the list
+            // hide also sends WM_SHOWWINDOW, which covers programmatic closes.
             SetWindowSubclass(info.hwndList, Some(list_proc), LIST_SUBCLASS, hwnd as usize);
         }
         SetWindowPos(
@@ -63,7 +63,7 @@ unsafe extern "system" fn list_proc(
 ) -> LRESULT {
     unsafe {
         let result = DefSubclassProc(hwnd, message, wparam, lparam);
-        if message == WM_SHOWWINDOW || message == WM_WINDOWPOSCHANGED {
+        if message == WM_SHOWWINDOW {
             InvalidateRect(combo as HWND, ptr::null(), 0);
         }
         result

@@ -393,7 +393,11 @@ pub(super) fn fill_choices(
         .collect();
     // Refreshes run on every settings action and rebuild every combo. Resetting
     // an unchanged list empties the field and repaints it, which flashes the
-    // combos the user is not touching.
+    // combos the user is not touching. An open dropdown must never be reset at
+    // all: its visible list would collapse and rebuild in place.
+    if send(hwnd, CB_GETDROPPEDSTATE, 0, 0) != 0 {
+        return;
+    }
     let count = send(hwnd, CB_GETCOUNT, 0, 0);
     let same_labels = count == labels.len() as LRESULT
         && (0..labels.len()).all(|index| super::controls::combo_text(hwnd, index) == labels[index]);

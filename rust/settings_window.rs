@@ -567,26 +567,87 @@ mod tests {
 
     #[test]
     fn opening_or_closing_the_dropdown_repaints_the_combo() {
+        use std::cell::Cell;
+        use windows_sys::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
+        unsafe extern "system" fn count(
+            hwnd: HWND,
+            msg: u32,
+            wp: WPARAM,
+            lp: LPARAM,
+            _: usize,
+            data: usize,
+        ) -> LRESULT {
+            unsafe {
+                if msg == WM_PAINT {
+                    let paints = &*(data as *const Cell<usize>);
+                    paints.set(paints.get() + 1);
+                }
+                DefSubclassProc(hwnd, msg, wp, lp)
+            }
+        }
+        unsafe fn pump() {
+            unsafe {
+                let mut message = MSG::default();
+                while PeekMessageW(&mut message, ptr::null_mut(), 0, 0, PM_REMOVE) != 0 {
+                    TranslateMessage(&message);
+                    DispatchMessageW(&message);
+                }
+            }
+        }
         let window = SettingsWindow::new(ptr::null_mut(), &Settings::default()).unwrap();
         let combo = window.control(Field::LogLevel);
-        unsafe { ShowWindow(window.hwnd(), SW_SHOW) };
-        let mut pending = RECT::default();
+        let paints = Cell::new(0usize);
         unsafe {
-            ValidateRect(combo, ptr::null());
-            SendMessageW(combo, CB_SHOWDROPDOWN, 1, 0);
+            SetWindowSubclass(combo, Some(count), 78, ptr::from_ref(&paints) as usize);
+            ShowWindow(window.hwnd(), SW_SHOW);
+            pump();
         }
-        let opened = unsafe { GetUpdateRect(combo, &mut pending, 0) };
+        let base = paints.get();
         unsafe {
-            ValidateRect(combo, ptr::null());
-            SendMessageW(combo, CB_SHOWDROPDOWN, 0, 0);
+            let mut rect = RECT::default();
+            GetClientRect(combo, &mut rect);
+            let point = ((rect.right - 8) | ((rect.bottom / 2) << 16)) as isize;
+            SendMessageW(combo, WM_LBUTTONDOWN, 1, point);
+            SendMessageW(combo, WM_LBUTTONUP, 0, point);
+            pump();
         }
-        let closed = unsafe { GetUpdateRect(combo, &mut pending, 0) };
-        unsafe { ShowWindow(window.hwnd(), SW_HIDE) };
+        let opened = paints.get() - base;
+        let base = paints.get();
+        unsafe {
+            let mut rect = RECT::default();
+            GetClientRect(combo, &mut rect);
+            let point = ((rect.right - 8) | ((rect.bottom / 2) << 16)) as isize;
+            SendMessageW(combo, WM_LBUTTONDOWN, 1, point);
+            SendMessageW(combo, WM_LBUTTONUP, 0, point);
+            pump();
+            ShowWindow(window.hwnd(), SW_HIDE);
+        }
+        let closed = paints.get() - base;
         // The border shows the accent only while the list is open, so both
-        // transitions need a repaint; opening sends WM_WINDOWPOSCHANGED to the
-        // list and closing sends WM_SHOWWINDOW.
-        assert_ne!(opened, 0, "opening the dropdown did not repaint the combo");
-        assert_ne!(closed, 0, "closing the dropdown did not repaint the combo");
+        // transitions need a repaint. User clicks send CBN_DROPDOWN/CBN_CLOSEUP.
+        assert!(opened > 0, "opening the dropdown did not repaint the combo");
+        assert!(closed > 0, "closing the dropdown did not repaint the combo");
+    }
+
+    #[test]
+    fn an_open_dropdown_is_never_rebuilt() {
+        let window = SettingsWindow::new(ptr::null_mut(), &Settings::default()).unwrap();
+        let combo = window.control(Field::LogLevel);
+        fill_choices(combo, ["a", "b"], 0);
+        unsafe {
+            ShowWindow(window.hwnd(), SW_SHOW);
+            let mut rect = RECT::default();
+            GetClientRect(combo, &mut rect);
+            let point = ((rect.right - 8) | ((rect.bottom / 2) << 16)) as isize;
+            SendMessageW(combo, WM_LBUTTONDOWN, 1, point);
+            SendMessageW(combo, WM_LBUTTONUP, 0, point);
+        }
+        // A refresh triggered by the other dropdown must not rewrite the list a
+        // user currently has open.
+        fill_choices(combo, ["x", "y", "z"], 2);
+        let count = unsafe { SendMessageW(combo, CB_GETCOUNT, 0, 0) };
+        assert_eq!(count, 2, "the open dropdown was rebuilt");
+        unsafe { ShowWindow(window.hwnd(), SW_HIDE) };
     }
 
     #[test]
