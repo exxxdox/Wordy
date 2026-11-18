@@ -253,7 +253,7 @@ fn set_gain_readout(hwnd: HWND, value: i32) {
     }
 }
 
-unsafe fn precise_controls(hwnd: HWND, visible: bool) {
+fn precise_controls(hwnd: HWND, visible: bool) {
     for id in [START_LABEL, END_LABEL, START, END] {
         unsafe {
             ShowWindow(
