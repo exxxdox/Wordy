@@ -1647,12 +1647,8 @@ impl App {
     }
 
     fn failure(&mut self, message: String) {
-        // A hidden settings page would swallow the toast; bring it up like Python does.
-        if !self.settings_visible()
-            && let Err(error) = self.show_settings()
-        {
-            self.log_at("WARNING", format!("打开设置失败：{error}"));
-        }
+        // Report through the toast/tray only; forcing the settings window open
+        // on every background error made a plain launch look like a request for it.
         self.toasts.push(&message, Tone::Error);
         self.log_at("ERROR", message);
     }

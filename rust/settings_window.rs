@@ -1126,9 +1126,12 @@ impl SettingsWindow {
 
     fn show_page(&self) {
         let provider = self.settings.active_tts_provider;
-        // Batch the visibility swap: otherwise every ShowWindow exposes a
-        // half-painted page, which reads as a stutter on fast clicks.
-        unsafe { SendMessageW(self.hwnd, WM_SETREDRAW, 0, 0) };
+        // Batch the swap into one frame. WM_SETREDRAW on a hidden window would
+        // reveal it, so only batch while the shell is already on screen.
+        let shown = unsafe { IsWindowVisible(self.hwnd) } != 0;
+        if shown {
+            unsafe { SendMessageW(self.hwnd, WM_SETREDRAW, 0, 0) };
+        }
         for widget in &self.widgets {
             let correct_page = widget.page.is_none_or(|page| page == self.page);
             let visible = match widget.field {
@@ -1184,14 +1187,16 @@ impl SettingsWindow {
                 }
             };
         }
-        unsafe {
-            SendMessageW(self.hwnd, WM_SETREDRAW, 1, 0);
-            RedrawWindow(
-                self.hwnd,
-                ptr::null(),
-                ptr::null_mut(),
-                RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_FRAME | RDW_UPDATENOW,
-            );
+        if shown {
+            unsafe {
+                SendMessageW(self.hwnd, WM_SETREDRAW, 1, 0);
+                RedrawWindow(
+                    self.hwnd,
+                    ptr::null(),
+                    ptr::null_mut(),
+                    RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_FRAME | RDW_UPDATENOW,
+                );
+            }
         }
     }
 
@@ -1683,6 +1688,38 @@ fn paint_shell(hwnd: HWND) {
             },
         ] {
             fill(dc, &margin, COLOR_KEY);
+        }
+        // The glass is clipped to a rounded region, so the four corner squares
+        // inside the body stay untouched unless they are cleared to the key;
+        // otherwise they keep stale/black pixels.
+        let corner = radius.min((body.right - body.left) / 2);
+        for square in [
+            RECT {
+                left: body.left,
+                top: body.top,
+                right: body.left + corner,
+                bottom: body.top + corner,
+            },
+            RECT {
+                left: body.right - corner,
+                top: body.top,
+                right: body.right,
+                bottom: body.top + corner,
+            },
+            RECT {
+                left: body.left,
+                top: body.bottom - corner,
+                right: body.left + corner,
+                bottom: body.bottom,
+            },
+            RECT {
+                left: body.right - corner,
+                top: body.bottom - corner,
+                right: body.right,
+                bottom: body.bottom,
+            },
+        ] {
+            fill(dc, &square, COLOR_KEY);
         }
         let clip = unsafe {
             CreateRoundRectRgn(

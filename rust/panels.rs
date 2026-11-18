@@ -2,10 +2,12 @@ use std::{cell::Cell, io, mem, ptr};
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Dwm::{DWMWA_USE_IMMERSIVE_DARK_MODE, DwmSetWindowAttribute};
 use windows_sys::Win32::Graphics::Gdi::*;
+use windows_sys::Win32::System::SystemServices::SS_OWNERDRAW;
 use windows_sys::Win32::UI::Controls::{
     DRAWITEMSTRUCT, EM_SETLIMITTEXT, EM_SETMARGINS, ODS_COMBOBOXEDIT, ODS_DISABLED, ODS_FOCUS,
-    ODS_SELECTED, ODT_BUTTON, ODT_COMBOBOX, TB_ENDTRACK, TBM_GETCHANNELRECT, TBM_GETTHUMBRECT,
-    TBM_SETPAGESIZE, TBM_SETPOS, TBM_SETRANGE, TBS_NOTICKS, TRACKBAR_CLASSW, WM_MOUSELEAVE,
+    ODS_SELECTED, ODT_BUTTON, ODT_COMBOBOX, ODT_STATIC, TB_ENDTRACK, TBM_GETCHANNELRECT,
+    TBM_GETTHUMBRECT, TBM_SETPAGESIZE, TBM_SETPOS, TBM_SETRANGE, TBS_NOTICKS, TRACKBAR_CLASSW,
+    WM_MOUSELEAVE,
 };
 use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
@@ -80,7 +82,9 @@ fn button(template: &mut Template, id: u16, label: &str, bounds: [u16; 4]) {
 }
 
 fn label(template: &mut Template, id: u16, label: &str, bounds: [u16; 4]) {
-    template.control(0x82, id, label, BASE, bounds);
+    // Ownerdraw so the glass (or card) is repainted under the text every time,
+    // including after the UI font changes.
+    template.control(0x82, id, label, BASE | SS_OWNERDRAW as u32, bounds);
 }
 
 fn edit(template: &mut Template, id: u16, bounds: [u16; 4]) {
@@ -472,6 +476,7 @@ unsafe extern "system" fn chrome_proc(
                 let item = &*(lp as *const DRAWITEMSTRUCT);
                 match item.CtlType {
                     ODT_BUTTON => draw_button(item, state),
+                    ODT_STATIC => draw_label(item, state),
                     ODT_COMBOBOX if item.itemState & ODS_COMBOBOXEDIT == 0 => draw_combo_item(item),
                     _ => return DefSubclassProc(hwnd, msg, wp, lp),
                 }
@@ -560,20 +565,27 @@ fn draw_button(item: &DRAWITEMSTRUCT, state: &ChromeState) {
     } else {
         (ELEVATED, if focus { ACCENT } else { SEPARATOR })
     };
-    fill(
-        item.hDC,
-        item.rcItem,
-        if !state.trim
-            && matches!(
-                id,
-                AUDIO_MODE | TEXT_MODE | IMPORT | RECORD | CANCEL_RECORDING | PLAY | CROP | CLEAR
-            )
-        {
-            EDITOR_CARD
-        } else {
-            PANEL_SURFACE
-        },
-    );
+    let card_button = !state.trim
+        && matches!(
+            id,
+            AUDIO_MODE | TEXT_MODE | IMPORT | RECORD | CANCEL_RECORDING | PLAY | CROP | CLEAR
+        );
+    // Toolbar buttons sit on the glass, so their rounded corners must show the
+    // glass; a solid surface fill would leave dark corner squares.
+    let toolbar = !state.trim && matches!(id, HOTKEY | ADD | REMOVE | RENAME);
+    if toolbar {
+        paint_embedded_backdrop(item.hwndItem, item.hDC);
+    } else {
+        fill(
+            item.hDC,
+            item.rcItem,
+            if card_button {
+                EDITOR_CARD
+            } else {
+                PANEL_SURFACE
+            },
+        );
+    }
     rounded(item.hDC, item.rcItem, 10, Some(background), border);
     let text = wide(&window_text(item.hwndItem));
     let mut area = item.rcItem;
@@ -625,6 +637,40 @@ fn combo_item(combo: HWND, index: u32) -> String {
         )
     };
     String::from_utf16_lossy(&buffer[..written.max(0) as usize])
+}
+
+fn draw_label(item: &DRAWITEMSTRUCT, state: &ChromeState) {
+    let id = item.CtlID as u16;
+    let card = !state.trim && matches!(id, INFO | GAIN_VALUE | 302..=305);
+    if card {
+        fill(item.hDC, item.rcItem, EDITOR_CARD);
+    } else if state.trim {
+        fill(item.hDC, item.rcItem, PANEL_SURFACE);
+    } else {
+        paint_embedded_backdrop(item.hwndItem, item.hDC);
+    }
+    let text = wide(&window_text(item.hwndItem));
+    let mut area = item.rcItem;
+    unsafe {
+        let font = SendMessageW(item.hwndItem, WM_GETFONT, 0, 0) as HFONT;
+        let previous = if font.is_null() {
+            ptr::null_mut()
+        } else {
+            SelectObject(item.hDC, font)
+        };
+        SetBkMode(item.hDC, TRANSPARENT as i32);
+        SetTextColor(item.hDC, if id == LOADING { MUTED } else { PRIMARY });
+        DrawTextW(
+            item.hDC,
+            text.as_ptr(),
+            -1,
+            &mut area,
+            DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS,
+        );
+        if !previous.is_null() {
+            SelectObject(item.hDC, previous);
+        }
+    }
 }
 
 fn draw_combo_item(item: &DRAWITEMSTRUCT) {
@@ -1171,10 +1217,10 @@ fn layout_editor(hwnd: HWND, state: &ChromeState) {
     let left = card.left + px(18);
     let field = card.right - left - px(18);
     for (id, x, y, w, h) in [
-        (300, 0, 7, 34, 20),
-        (WHEEL, 42, 0, 208, 200),
-        (301, 258, 7, 47, 20),
-        (HOTKEY, 313, 0, 150, 32),
+        (300, 0, 7, 40, 20),
+        (WHEEL, 46, 0, 204, 200),
+        (301, 256, 7, 56, 20),
+        (HOTKEY, 318, 0, 145, 32),
         (ADD, 471, 0, 52, 32),
         (REMOVE, 531, 0, 52, 32),
         (RENAME, 591, 0, 58, 32),
@@ -1182,14 +1228,14 @@ fn layout_editor(hwnd: HWND, state: &ChromeState) {
     ] {
         at(i32::from(id), px(x), y, px(w), h);
     }
-    at(307, width - px(172), 7, px(36), 20);
+    at(307, width - px(184), 7, px(40), 20);
     at(i32::from(STYLE), width - px(136), 0, px(136), 200);
     for (id, x, y, w, h) in [
         (INFO, 0, 60, 180, 23),
-        (302, 0, 96, 34, 20),
-        (AUDIO_MODE, 35, 86, 42, 32),
-        (TEXT_MODE, 85, 86, 42, 32),
-        (304, 0, 126, 34, 20),
+        (302, 0, 96, 44, 20),
+        (AUDIO_MODE, 43, 86, 42, 32),
+        (TEXT_MODE, 93, 86, 42, 32),
+        (304, 0, 126, 44, 20),
         (GAIN_VALUE, 268, 126, 50, 20),
         (
             305,
