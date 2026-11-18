@@ -279,3 +279,60 @@ fn status(result: NTSTATUS) -> io::Result<()> {
 fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Read, Write};
+
+    fn payload() -> Vec<u8> {
+        (0..=255).cycle().take(2 * CHUNK_SIZE + 31).collect()
+    }
+
+    fn header() -> [u8; HEADER_SIZE] {
+        let mut header = [0; HEADER_SIZE];
+        header[..MAGIC.len()].copy_from_slice(MAGIC);
+        for (index, byte) in header[MAGIC.len()..].iter_mut().enumerate() {
+            *byte = (index as u8).wrapping_mul(31).wrapping_add(1);
+        }
+        header
+    }
+
+    #[test]
+    fn one_shot_gcm_reads_the_chunked_writer_output() {
+        let expected = payload();
+        let mut writer = EncryptedWriter::new(Vec::new(), "example").unwrap();
+        for chunk in expected.chunks(511) {
+            writer.write_all(chunk).unwrap();
+        }
+        let encrypted = writer.finish().unwrap();
+        let header = encrypted[..HEADER_SIZE].try_into().unwrap();
+        let tag = encrypted[encrypted.len() - TAG_SIZE..].try_into().unwrap();
+        let mut ciphertext = encrypted[HEADER_SIZE..encrypted.len() - TAG_SIZE].to_vec();
+        let mut cipher = Cipher::new(header, "example", Some(tag)).unwrap();
+        cipher.transform(&mut ciphertext, true).unwrap();
+        assert_eq!(ciphertext, expected);
+    }
+
+    #[test]
+    fn chunked_decryptor_reads_a_one_shot_gcm_message() {
+        let expected = payload();
+        let header = header();
+        let mut cipher = Cipher::new(header, "example", None).unwrap();
+        let mut ciphertext = expected.clone();
+        cipher.transform(&mut ciphertext, true).unwrap();
+        let mut encrypted = header.to_vec();
+        encrypted.extend_from_slice(&ciphertext);
+        encrypted.extend_from_slice(&cipher.tag);
+
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("one-shot.wordybackup");
+        std::fs::write(&path, encrypted).unwrap();
+        let mut decoded = Vec::new();
+        decrypt_backup(&path, "example", directory.path())
+            .unwrap()
+            .read_to_end(&mut decoded)
+            .unwrap();
+        assert_eq!(decoded, expected);
+    }
+}
