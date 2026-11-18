@@ -1,9 +1,10 @@
-use std::ptr;
+use std::{mem::size_of, ptr};
 
 use windows_sys::Win32::{
     Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM},
     Graphics::Gdi::*,
     UI::{
+        Controls::{COMBOBOXINFO, GetComboBoxInfo},
         HiDpi::GetDpiForWindow,
         Shell::{DefSubclassProc, SetWindowSubclass},
         WindowsAndMessaging::*,
@@ -14,11 +15,13 @@ use crate::desktop::{wide, window_text};
 use crate::settings_backdrop::paint_embedded_backdrop;
 
 const SUBCLASS: usize = 1;
+const LIST_SUBCLASS: usize = 2;
 const SURFACE: u32 = 0x002e2c2c;
 const PANEL: u32 = 0x001e1c1c;
 const BORDER: u32 = 0x003a3838;
 const TEXT: u32 = 0x00f7f5f5;
 const MUTED: u32 = 0x009d9898;
+const ACCENT: u32 = 0x00ff840a;
 
 /// Paints a closed dropdown as the app's rounded dark field. The native paint
 /// (and its blue focus selection) is replaced; the popup list still belongs to
@@ -27,6 +30,16 @@ const MUTED: u32 = 0x009d9898;
 pub fn style_selector(hwnd: HWND, glass: bool) {
     unsafe {
         SetWindowSubclass(hwnd, Some(selector_proc), SUBCLASS, usize::from(glass));
+        let mut info = COMBOBOXINFO {
+            cbSize: size_of::<COMBOBOXINFO>() as u32,
+            ..Default::default()
+        };
+        if GetComboBoxInfo(hwnd, &mut info) != 0 && !info.hwndList.is_null() {
+            // Opening or closing the list is the only state the accent border
+            // reflects, and the combo does not repaint its face for it on its
+            // own, so watch the list and invalidate the combo.
+            SetWindowSubclass(info.hwndList, Some(list_proc), LIST_SUBCLASS, hwnd as usize);
+        }
         SetWindowPos(
             hwnd,
             ptr::null_mut(),
@@ -36,6 +49,23 @@ pub fn style_selector(hwnd: HWND, glass: bool) {
             0,
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
         );
+    }
+}
+
+unsafe extern "system" fn list_proc(
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    _id: usize,
+    combo: usize,
+) -> LRESULT {
+    unsafe {
+        let result = DefSubclassProc(hwnd, message, wparam, lparam);
+        if message == WM_SHOWWINDOW {
+            InvalidateRect(combo as HWND, ptr::null(), 0);
+        }
+        result
     }
 }
 
@@ -108,9 +138,13 @@ pub(crate) fn paint_field(hwnd: HWND, dc: HDC, client: RECT, glass: bool) {
         } else {
             fill(dc, client, PANEL);
         }
-        // The border stays neutral in every state: a focus ring would outlive
-        // the selection and read as a leftover highlight.
-        let border = BORDER;
+        // The accent marks the open dropdown; at rest the border stays neutral
+        // so no focus ring outlives a selection.
+        let border = if SendMessageW(hwnd, CB_GETDROPPEDSTATE, 0, 0) != 0 {
+            ACCENT
+        } else {
+            BORDER
+        };
         rounded(dc, client, scaled(hwnd, 10), Some(SURFACE), border);
         let font = SendMessageW(hwnd, WM_GETFONT, 0, 0) as HFONT;
         let previous = if font.is_null() {

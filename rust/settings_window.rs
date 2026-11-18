@@ -466,7 +466,56 @@ impl Drop for SettingsWindow {
 
 #[cfg(test)]
 mod tests {
+    use windows_sys::Win32::UI::Controls::{
+        COMBOBOXINFO, GetComboBoxInfo, ODS_COMBOBOXEDIT, ODT_COMBOBOX,
+    };
+
     use super::{controls::combo_text, *};
+
+    /// Paints the closed combo face into a memory DC the way the combo asks the
+    /// parent to, and returns the left border and the right chevron pixels.
+    fn combo_face_colors(owner: HWND, combo: HWND) -> (u32, u32) {
+        let mut rect = RECT::default();
+        unsafe { GetClientRect(combo, &mut rect) };
+        let screen = unsafe { GetDC(ptr::null_mut()) };
+        let dc = unsafe { CreateCompatibleDC(screen) };
+        let bitmap =
+            unsafe { CreateCompatibleBitmap(screen, rect.right.max(1), rect.bottom.max(1)) };
+        let previous = unsafe { SelectObject(dc, bitmap) };
+        let area = RECT {
+            left: 0,
+            top: 0,
+            right: rect.right,
+            bottom: rect.bottom,
+        };
+        crate::settings_backdrop::fill(dc, &area, rgb(255, 0, 255));
+        let mut item = DRAWITEMSTRUCT {
+            CtlType: ODT_COMBOBOX,
+            CtlID: 0,
+            itemID: 0,
+            itemAction: 0,
+            itemState: ODS_COMBOBOXEDIT,
+            hwndItem: combo,
+            hDC: dc,
+            rcItem: RECT {
+                right: rect.right - 30,
+                ..area
+            },
+            itemData: 0,
+        };
+        unsafe {
+            SendMessageW(owner, WM_DRAWITEM, 0, ptr::from_mut(&mut item) as LPARAM);
+        }
+        let chevron = unsafe { GetPixel(dc, rect.right - 15, rect.bottom / 2) };
+        let border = unsafe { GetPixel(dc, 0, rect.bottom / 2) };
+        unsafe {
+            SelectObject(dc, previous);
+            DeleteObject(bitmap);
+            DeleteDC(dc);
+            ReleaseDC(ptr::null_mut(), screen);
+        }
+        (border & 0x00ff_ffff, chevron)
+    }
 
     #[test]
     fn voice_choices_keep_configured_identity_with_duplicate_labels() {
@@ -528,66 +577,65 @@ mod tests {
 
     #[test]
     fn combo_face_draw_request_paints_the_selection() {
-        use windows_sys::Win32::UI::Controls::{ODS_COMBOBOXEDIT, ODT_COMBOBOX};
         let window = SettingsWindow::new(ptr::null_mut(), &Settings::default()).unwrap();
         let combo = window.control(Field::LogLevel);
-        let mut rect = RECT::default();
-        unsafe { GetClientRect(combo, &mut rect) };
-        let screen = unsafe { GetDC(ptr::null_mut()) };
-        let dc = unsafe { CreateCompatibleDC(screen) };
-        let bitmap =
-            unsafe { CreateCompatibleBitmap(screen, rect.right.max(1), rect.bottom.max(1)) };
-        let previous = unsafe { SelectObject(dc, bitmap) };
-        let sentinel = rgb(255, 0, 255);
-        let area = RECT {
-            left: 0,
-            top: 0,
-            right: rect.right,
-            bottom: rect.bottom,
-        };
-        crate::settings_backdrop::fill(dc, &area, sentinel);
         // Owner-draw combos ask the parent to paint their closed field instead of
         // painting it themselves; ignoring the request left it blank until hover.
         // rcItem excludes the native arrow button, so the full field must still
-        // reach the chevron zone at the right edge.
-        let mut item = DRAWITEMSTRUCT {
-            CtlType: ODT_COMBOBOX,
-            CtlID: Field::LogLevel as u32,
-            itemID: 0,
-            itemAction: 0,
-            itemState: ODS_COMBOBOXEDIT,
-            hwndItem: combo,
-            hDC: dc,
-            rcItem: RECT {
-                right: rect.right - 30,
-                ..area
-            },
-            itemData: 0,
-        };
-        unsafe {
-            SendMessageW(
-                window.hwnd(),
-                WM_DRAWITEM,
-                0,
-                ptr::from_mut(&mut item) as LPARAM,
-            );
-        }
-        let painted = unsafe { GetPixel(dc, rect.right - 15, rect.bottom / 2) };
-        // A focused field keeps the neutral border; a focus ring outlived the
-        // selection and read as a leftover highlight.
-        let border = unsafe { GetPixel(dc, 0, rect.bottom / 2) };
-        unsafe {
-            SelectObject(dc, previous);
-            DeleteObject(bitmap);
-            DeleteDC(dc);
-            ReleaseDC(ptr::null_mut(), screen);
-        }
-        assert_ne!(painted, sentinel, "the combo face was not repainted");
-        assert_eq!(
-            border & 0x00ff_ffff,
-            0x003a_3838,
-            "combo border is not neutral"
+        // reach the chevron zone.
+        let (border, chevron) = combo_face_colors(window.hwnd(), combo);
+        assert_ne!(
+            chevron,
+            rgb(255, 0, 255),
+            "the combo face was not repainted"
         );
+        assert_eq!(border, 0x003a_3838, "combo border is not neutral");
+    }
+
+    #[test]
+    fn combo_accent_border_tracks_the_open_dropdown() {
+        let window = SettingsWindow::new(ptr::null_mut(), &Settings::default()).unwrap();
+        let combo = window.control(Field::LogLevel);
+        // The update region only exists while the window is visible.
+        unsafe { ShowWindow(window.hwnd(), SW_SHOW) };
+        let (border, _) = combo_face_colors(window.hwnd(), combo);
+        assert_eq!(
+            border, 0x003a_3838,
+            "a closed combo must keep the neutral border"
+        );
+
+        let mut info = COMBOBOXINFO {
+            cbSize: size_of::<COMBOBOXINFO>() as u32,
+            ..Default::default()
+        };
+        assert_ne!(unsafe { GetComboBoxInfo(combo, &mut info) }, 0);
+        assert!(!info.hwndList.is_null());
+        unsafe {
+            ValidateRect(combo, ptr::null());
+            SendMessageW(info.hwndList, WM_SHOWWINDOW, 1, 0);
+        }
+        let mut pending = RECT::default();
+        assert_ne!(
+            unsafe { GetUpdateRect(combo, &mut pending, 0) },
+            0,
+            "list visibility did not repaint the combo"
+        );
+
+        unsafe { SendMessageW(combo, CB_SHOWDROPDOWN, 1, 0) };
+        assert_ne!(unsafe { SendMessageW(combo, CB_GETDROPPEDSTATE, 0, 0) }, 0);
+        let (border, _) = combo_face_colors(window.hwnd(), combo);
+        assert_eq!(
+            border, 0x00ff_840a,
+            "an open dropdown must show the accent border"
+        );
+
+        unsafe { SendMessageW(combo, CB_SHOWDROPDOWN, 0, 0) };
+        let (border, _) = combo_face_colors(window.hwnd(), combo);
+        assert_eq!(
+            border, 0x003a_3838,
+            "closing the dropdown must restore the border"
+        );
+        unsafe { ShowWindow(window.hwnd(), SW_HIDE) };
     }
 
     #[test]
@@ -595,12 +643,48 @@ mod tests {
         let window = SettingsWindow::new(ptr::null_mut(), &Settings::default()).unwrap();
         let combo = window.control(Field::LogLevel);
         unsafe {
+            // The update region only exists while the window is visible.
+            ShowWindow(window.hwnd(), SW_SHOW);
             ValidateRect(combo, ptr::null());
             SendMessageW(combo, WM_MOUSEMOVE, 0, 5 | (5 << 16));
         }
         let mut pending = RECT::default();
         let dirty = unsafe { GetUpdateRect(combo, &mut pending, 0) };
+        unsafe { ShowWindow(window.hwnd(), SW_HIDE) };
         assert_eq!(dirty, 0, "a mouse move repainted the combo face");
+    }
+
+    #[test]
+    fn moving_the_pointer_inside_an_edit_repaints_once() {
+        let window = SettingsWindow::new(ptr::null_mut(), &Settings::default()).unwrap();
+        let edit = window.control(Field::Placeholder);
+        unsafe {
+            ShowWindow(window.hwnd(), SW_SHOW);
+            ValidateRect(edit, ptr::null());
+            SendMessageW(edit, WM_MOUSEMOVE, 0, 5 | (5 << 16));
+        }
+        let mut pending = RECT::default();
+        assert_ne!(
+            unsafe { GetUpdateRect(edit, &mut pending, 0) },
+            0,
+            "entering the edit did not paint its hover border"
+        );
+        unsafe {
+            ValidateRect(edit, ptr::null());
+            SendMessageW(edit, WM_MOUSEMOVE, 0, 6 | (6 << 16));
+        }
+        assert_eq!(
+            unsafe { GetUpdateRect(edit, &mut pending, 0) },
+            0,
+            "moving inside the edit repainted it again"
+        );
+        unsafe { SendMessageW(edit, windows_sys::Win32::UI::Controls::WM_MOUSELEAVE, 0, 0) };
+        assert_ne!(
+            unsafe { GetUpdateRect(edit, &mut pending, 0) },
+            0,
+            "leaving the edit did not restore its resting border"
+        );
+        unsafe { ShowWindow(window.hwnd(), SW_HIDE) };
     }
 
     #[test]

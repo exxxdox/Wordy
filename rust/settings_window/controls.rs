@@ -30,6 +30,8 @@ use crate::{
 const CONTROL_BORDER: u32 = rgb(72, 72, 74);
 const HOVER_ACCENT: u32 = rgb(64, 156, 255);
 const ACCENT: u32 = rgb(10, 132, 255);
+// Marks a control whose pointer-entered repaint already ran until WM_MOUSELEAVE.
+const HOVER: windows_sys::core::PCWSTR = windows_sys::core::w!("Wordy.Settings.Hover");
 fn draw_text(hwnd: HWND, dc: HDC, mut rect: RECT, value: &str, color: u32, format: u32) {
     let value = wide(value);
     let font = send(hwnd, WM_GETFONT, 0, 0) as HFONT;
@@ -269,10 +271,11 @@ pub(super) unsafe extern "system" fn style_control(
         // arrive with the erase flag set by the control itself. Edits keep the
         // default erase: their brush is already the dark WM_CTLCOLOREDIT one.
         WM_ERASEBKGND if !edit => return 1,
-        // The selector's combo face does not change on hover, so repainting on
-        // every mouse move only flickers; buttons, edits, checks and sliders do
-        // show hover feedback and keep the invalidation.
-        WM_MOUSEMOVE if !combo => {
+        // Combo faces never change on hover, and slider faces only on drag, so
+        // those never repaint from a mouse move. Edits, checks and buttons do
+        // show a hover state, but repainting on every move flickers; paint once
+        // when the pointer enters and once when it leaves.
+        WM_MOUSEMOVE if !combo && !slider => {
             let mut tracking = TRACKMOUSEEVENT {
                 cbSize: size_of::<TRACKMOUSEEVENT>() as u32,
                 dwFlags: TME_LEAVE,
@@ -281,7 +284,10 @@ pub(super) unsafe extern "system" fn style_control(
             };
             unsafe {
                 TrackMouseEvent(&mut tracking);
-                InvalidateRect(hwnd, ptr::null(), 0);
+                if GetPropW(hwnd, HOVER).is_null() {
+                    SetPropW(hwnd, HOVER, 1 as _);
+                    InvalidateRect(hwnd, ptr::null(), 0);
+                }
             }
         }
         WM_MOUSEWHEEL if slider || (combo && send(hwnd, CB_GETDROPPEDSTATE, 0, 0) == 0) => {
@@ -345,6 +351,10 @@ pub(super) unsafe extern "system" fn style_control(
         };
         outline(dc, &rect, 9, border);
         unsafe { ReleaseDC(hwnd, dc) };
+    }
+    if message == WM_MOUSELEAVE {
+        // Hover state ends here; the repaint below restores the resting border.
+        unsafe { RemovePropW(hwnd, HOVER) };
     }
     if matches!(
         message,
