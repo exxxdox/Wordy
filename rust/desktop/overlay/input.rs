@@ -148,7 +148,7 @@ pub(super) unsafe extern "system" fn edit_proc(
     }
 }
 
-unsafe fn paint_overlay_placeholder(hwnd: HWND, print_dc: Option<HDC>) {
+fn paint_overlay_placeholder(hwnd: HWND, print_dc: Option<HDC>) {
     unsafe {
         let placeholder = GetPropW(hwnd, w!("WordyPlaceholder")).cast::<u16>();
         if placeholder.is_null() || *placeholder == 0 || GetWindowTextLengthW(hwnd) != 0 {
@@ -261,7 +261,7 @@ pub(super) unsafe extern "system" fn overlay_button_proc(
     }
 }
 
-unsafe fn move_overlay_shadow(hwnd: HWND) {
+fn move_overlay_shadow(hwnd: HWND) {
     unsafe {
         let shadow = GetPropW(hwnd, w!("WordyShadow"));
         let mut pos = RECT::default();
@@ -279,7 +279,7 @@ unsafe fn move_overlay_shadow(hwnd: HWND) {
     }
 }
 
-unsafe fn sync_overlay_glass(hwnd: HWND) {
+fn sync_overlay_glass(hwnd: HWND) {
     unsafe {
         let previous = GetPropW(hwnd, w!("WordyFocusGlow")) as usize;
         let focused = GetFocus();
@@ -349,7 +349,7 @@ unsafe fn sync_overlay_glass(hwnd: HWND) {
     }
 }
 
-unsafe fn overlay_key_brush(hwnd: HWND) -> HBRUSH {
+fn overlay_key_brush(hwnd: HWND) -> HBRUSH {
     unsafe {
         let cached = GetPropW(hwnd, w!("WordyKeyBrush"));
         if !cached.is_null() {
@@ -363,7 +363,7 @@ unsafe fn overlay_key_brush(hwnd: HWND) -> HBRUSH {
     }
 }
 
-unsafe fn post_overlay(overlay: HWND, action: usize) {
+fn post_overlay(overlay: HWND, action: usize) {
     unsafe {
         let host = GetWindowLongPtrW(overlay, GWLP_USERDATA) as HWND;
         if !host.is_null() {
@@ -372,7 +372,7 @@ unsafe fn post_overlay(overlay: HWND, action: usize) {
     }
 }
 
-pub(super) unsafe fn enable_read(hwnd: HWND, enabled: bool) {
+pub(super) fn enable_read(hwnd: HWND, enabled: bool) {
     unsafe {
         windows_sys::Win32::UI::Input::KeyboardAndMouse::EnableWindow(
             GetDlgItem(hwnd, READ),

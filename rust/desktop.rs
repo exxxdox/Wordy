@@ -126,7 +126,7 @@ unsafe extern "system" fn host_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
     unsafe { DefWindowProcW(hwnd, msg, wp, lp) }
 }
 
-unsafe fn lookup_class(class: &WNDCLASSW) -> io::Result<()> {
+fn lookup_class(class: &WNDCLASSW) -> io::Result<()> {
     if unsafe { RegisterClassW(class) } == 0 {
         let error = io::Error::last_os_error();
         // Another GUI thread may have registered the same process-wide class.
@@ -280,7 +280,14 @@ $toast = [Windows.UI.Notifications.ToastNotification, Windows.UI.Notifications, 
 /// Opt into Windows 11 dark menus; unsupported builds keep the system menu.
 pub fn enable_dark_mode() {
     use windows_sys::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
+    // Ordinal 135 of uxtheme is the undocumented SetPreferredAppMode. Only a
+    // build that ships that export is safe to call; an older uxtheme may map the
+    // ordinal to another function.
+    const DARK_MODE_BUILD: u32 = 17763;
     unsafe {
+        if windows_build() < DARK_MODE_BUILD {
+            return;
+        }
         let module = LoadLibraryW(w!("uxtheme.dll"));
         if module.is_null() {
             return;
@@ -289,6 +296,38 @@ pub fn enable_dark_mode() {
         if let Some(set_mode) = set_mode {
             let set_mode: unsafe extern "system" fn(i32) -> i32 = std::mem::transmute(set_mode);
             set_mode(2);
+        }
+    }
+}
+
+/// Current Windows build from ntdll, which reports the real version even
+/// without a compatibility manifest.
+fn windows_build() -> u32 {
+    use windows_sys::Win32::{
+        Foundation::HMODULE,
+        System::{
+            LibraryLoader::{GetProcAddress, LoadLibraryW},
+            SystemInformation::OSVERSIONINFOW,
+        },
+    };
+    type RtlGetVersion = unsafe extern "system" fn(*mut OSVERSIONINFOW) -> i32;
+    unsafe {
+        let module: HMODULE = LoadLibraryW(w!("ntdll.dll"));
+        if module.is_null() {
+            return 0;
+        }
+        let Some(get_version) = GetProcAddress(module, c"RtlGetVersion".as_ptr().cast()) else {
+            return 0;
+        };
+        let get_version: RtlGetVersion = std::mem::transmute(get_version);
+        let mut info = OSVERSIONINFOW {
+            dwOSVersionInfoSize: std::mem::size_of::<OSVERSIONINFOW>() as u32,
+            ..Default::default()
+        };
+        if get_version(&mut info) == 0 {
+            info.dwBuildNumber
+        } else {
+            0
         }
     }
 }
@@ -652,7 +691,7 @@ unsafe extern "system" fn centered_edit_proc(
     }
 }
 
-unsafe fn edit_line_height(hwnd: HWND) -> i32 {
+fn edit_line_height(hwnd: HWND) -> i32 {
     let mut metrics = TEXTMETRICW::default();
     let dc = unsafe { GetDC(hwnd) };
     if dc.is_null() {

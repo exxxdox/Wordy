@@ -196,7 +196,7 @@ impl Overlay {
         }
     }
 
-    unsafe fn control(
+    fn control(
         &self,
         instance: HINSTANCE,
         class: *const u16,
@@ -398,9 +398,15 @@ impl Overlay {
         height: i32,
         opacity: f64,
     ) -> io::Result<()> {
-        draw_backdrop(self.backdrop, x, y, width, height, opacity, unsafe {
-            capsule_glow(self.hwnd)
-        })?;
+        draw_backdrop(
+            self.backdrop,
+            x,
+            y,
+            width,
+            height,
+            opacity,
+            capsule_glow(self.hwnd),
+        )?;
         let alpha = (opacity.clamp(0.0, 1.0) * 1000.0).round() as usize;
         unsafe {
             SetPropW(

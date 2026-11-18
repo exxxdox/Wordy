@@ -84,10 +84,12 @@ impl LogWindow {
         if hwnd.is_null() {
             return Err(io::Error::last_os_error());
         }
-        let state = unsafe { &mut *(GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut State) };
-        state.font = log_font(font_family, -px(14));
-        state.brush = unsafe { CreateSolidBrush(BACKGROUND) };
-        state.edit = unsafe {
+        // Keep only a raw pointer: the state is owned by the window and the
+        // message handler may re-derive references while these calls run.
+        let state = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *mut State };
+        let font = log_font(font_family, -px(14));
+        let brush = unsafe { CreateSolidBrush(BACKGROUND) };
+        let edit = unsafe {
             CreateWindowExW(
                 0,
                 w!("EDIT"),
@@ -109,11 +111,16 @@ impl LogWindow {
             )
         };
         unsafe {
-            SendMessageW(state.edit, WM_SETFONT, state.font as usize, 1);
+            (*state).font = font;
+            (*state).brush = brush;
+            (*state).edit = edit;
+        }
+        unsafe {
+            SendMessageW(edit, WM_SETFONT, font as usize, 1);
             // EM_SETBKGNDCOLOR prevents the default white edit background on first paint.
-            SendMessageW(state.edit, 0x0433, 0, BACKGROUND as isize);
+            SendMessageW(edit, 0x0433, 0, BACKGROUND as isize);
             if let Ok(icon) = crate::desktop::wordy_icon() {
-                state.icon = icon;
+                (*state).icon = icon;
                 SendMessageW(hwnd, WM_SETICON, ICON_BIG as usize, icon as isize);
                 SendMessageW(hwnd, WM_SETICON, ICON_SMALL as usize, icon as isize);
             }
@@ -131,14 +138,17 @@ impl LogWindow {
         if font.is_null() {
             return;
         }
-        let state = unsafe { &mut *(GetWindowLongPtrW(self.hwnd, GWLP_USERDATA) as *mut State) };
-        if state.edit.is_null() {
+        let state = unsafe { GetWindowLongPtrW(self.hwnd, GWLP_USERDATA) as *mut State };
+        let edit = unsafe { (*state).edit };
+        if edit.is_null() {
             unsafe { DeleteObject(font as HGDIOBJ) };
             return;
         }
         unsafe {
-            SendMessageW(state.edit, WM_SETFONT, font as usize, 1);
-            let old = std::mem::replace(&mut state.font, font);
+            SendMessageW(edit, WM_SETFONT, font as usize, 1);
+            // Re-derive only after the message returns: the handler may have
+            // created another reference to the same state during the call.
+            let old = std::mem::replace(&mut (*state).font, font);
             if !old.is_null() {
                 DeleteObject(old as HGDIOBJ);
             }

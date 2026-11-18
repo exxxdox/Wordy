@@ -1,7 +1,7 @@
 use super::*;
 
 #[allow(clippy::too_many_arguments)]
-pub(super) unsafe fn paint_capsule(
+pub(super) fn paint_capsule(
     hwnd: HWND,
     dc: HDC,
     dest: RECT,
@@ -18,7 +18,7 @@ pub(super) unsafe fn paint_capsule(
     if scale <= 0.0 || width <= 0 || height <= 0 {
         return;
     }
-    let glow = unsafe { capsule_glow(hwnd) };
+    let glow = capsule_glow(hwnd);
     let center = if gear { 514.0 } else { 460.0 };
     let mut pixels = Vec::with_capacity((width * height) as usize);
     for row in 0..height {
@@ -54,10 +54,10 @@ pub(super) unsafe fn paint_capsule(
             pixels.push(dib_rgb(color));
         }
     }
-    unsafe { blit_pixels(dc, dest, &pixels) };
+    blit_pixels(dc, dest, &pixels);
 }
 
-pub(super) unsafe fn blit_pixels(dc: HDC, dest: RECT, pixels: &[u32]) {
+pub(super) fn blit_pixels(dc: HDC, dest: RECT, pixels: &[u32]) {
     let (width, height) = (dest.right - dest.left, dest.bottom - dest.top);
     let info = BITMAPINFO {
         bmiHeader: BITMAPINFOHEADER {
@@ -329,7 +329,7 @@ pub(super) fn polygon_at(points: &[(i16, i16)], x: f32, y: f32) -> bool {
         },
     )
 }
-pub(super) unsafe fn capsule_glow(hwnd: HWND) -> f32 {
+pub(super) fn capsule_glow(hwnd: HWND) -> f32 {
     let step = unsafe { GetPropW(hwnd, w!("WordyFocusGlow")) as usize };
     1.0 - (1.0 - step as f32 / GLOW_STEPS as f32).powi(3)
 }

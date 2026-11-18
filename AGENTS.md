@@ -91,6 +91,8 @@ cargo test                       # 全部 Rust 测试
 + 新项目，不考虑兼容旧 Python 数据格式之外的历史；旧明文 ZIP 不导入。
 + 修改符号时用 rust-analyzer/LSP 查找引用。
 + 所有设置页内容必须持久化；滑块/占位文字使用 150ms 防抖，退出时 flush。
+- 只接受 `HWND`/`HDC` 等不透明句柄的内部辅助函数用普通 `fn`，内部调用 Win32 时再 `unsafe`；只有真正暴露裸指针、调用方必须满足内存约定的函数才标记 `unsafe fn`。窗口回调保持 `unsafe extern "system" fn`。
+- 不要从 `GWLP_USERDATA`/`DWLP_USER` 派生 `&mut` 后跨 `SendMessageW`、`UpdateWindow` 等可能重入窗口过程的调用使用；用裸指针并在每次使用前重新派生，或把借用作用域压到单条语句。
 + 设置窗口按显示器 DPI 缩放（窗口、字体、行高、热区），嵌入编辑器同步；改动布局时保持 1120×820 逻辑坐标。
 + 单实例互斥体 `Local\Wordy.SingleInstance`，重复启动用 TaskDialog 提示。
 + 用户可见文案保持中文；公开 UI 不写内部实现说明。
