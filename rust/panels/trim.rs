@@ -3,6 +3,7 @@ use std::{io, mem, ptr};
 use windows_sys::Win32::{
     Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
     Graphics::Gdi::*,
+    System::SystemServices::SS_NOTIFY,
     UI::{
         Input::KeyboardAndMouse::{
             GetFocus, GetKeyState, ReleaseCapture, SetCapture, SetFocus, VK_LEFT, VK_RIGHT,
@@ -144,7 +145,10 @@ impl Trim {
             "拖动两端手柄调整范围，或在波形上拖选；空格试听 / 停止。",
             [12, 13, 414, 12],
         );
-        template.control(0x82, WAVE, "", BASE | TABS, [6, 28, 428, 90]);
+        // A static control without SS_NOTIFY answers WM_NCHITTEST with
+        // HTTRANSPARENT, so the dialog would swallow every click and the wave
+        // subclass would never receive the drag.
+        template.control(0x82, WAVE, "", BASE | TABS | SS_NOTIFY, [6, 28, 428, 90]);
         label(&mut template, LOADING, "正在加载波形…", [321, 127, 107, 12]);
         label(&mut template, RANGE_SUMMARY, "", [12, 127, 306, 12]);
         // Keep expanded time fields alongside the toggle so collapsing them doesn't leave an empty row.
@@ -843,6 +847,49 @@ mod tests {
         assert!(wheel.right <= name.left && (wheel.top..wheel.bottom).contains(&name.top));
         assert!(wheel.bottom <= info.top && info.bottom < bounds(SAVE).top);
         assert!(wheel.bottom - wheel.top >= logical_px(trim.panel.0, 220));
+    }
+
+    #[test]
+    fn wave_control_is_not_transparent_to_the_mouse() {
+        // The wave is a static control. Without SS_NOTIFY, the static window
+        // answers WM_NCHITTEST with HTTRANSPARENT, so clicks land on the dialog
+        // and the subclass never receives WM_LBUTTONDOWN: dragging does nothing.
+        let trim = Trim::new(
+            ptr::null_mut(),
+            ptr::null_mut(),
+            &Settings::default(),
+            None,
+            3.0,
+            1.0,
+        )
+        .unwrap();
+        let wave = trim.panel.child(WAVE);
+        let hit = unsafe { SendMessageW(wave, WM_NCHITTEST, 0, 0) } as u32;
+        assert_eq!(hit, HTCLIENT);
+    }
+
+    #[test]
+    fn rolling_save_wave_accepts_a_pointer_drag() {
+        let trim = Trim::new(
+            ptr::null_mut(),
+            ptr::null_mut(),
+            &Settings::default(),
+            None,
+            10.0,
+            1.0,
+        )
+        .unwrap();
+        let wave = trim.panel.child(WAVE);
+        let (width, height) = dimensions(wave);
+        let plot = Plot::new(width, height);
+        let y = (plot.bounds.top + plot.bounds.bottom) / 2;
+        let pointer = |time: f64| (plot.x_at(time, 10.0) as isize) | ((y as isize) << 16);
+        unsafe {
+            SendMessageW(wave, WM_LBUTTONDOWN, 1, pointer(3.0));
+            SendMessageW(wave, WM_MOUSEMOVE, 1, pointer(7.0));
+            SendMessageW(wave, WM_LBUTTONUP, 0, pointer(7.0));
+        }
+        assert_eq!((trim.wave.range.start, trim.wave.range.end), (3.0, 7.0));
     }
 
     #[test]
