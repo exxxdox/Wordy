@@ -41,6 +41,8 @@ cargo test                       # 全部 Rust 测试
 
 ## 轮盘
 
+轮盘导入、播放和截取原生以外的音频格式时使用系统安装的 FFmpeg，从系统 `PATH` 和 WinGet 命令目录查找。有效的 PCM16 WAV 直接读取。缺少解码器时提示通过 WinGet 安装，发布产物只包含 `Wordy.exe`。
+
 设置中的轮盘 UI 与运行时轮盘必须保持一致。样式由 `chat_wheel_style` 保存：`classic`/`glass`/`petals`/`game`，无效值回退经典；两处共用 `wheel_paint`。画布 634×540（盘体 540×540 居中），名称居中 hover 放大仍完整显示。动画仅影响显示：120ms 淡入、90ms 淡出、90ms 高亮；松键立即提交播放，淡出停止接收选择。
 
 每盘八槽、独立快捷键、任意数量、至少一个。第一盘存 `chat_wheel_name/hotkey/slots/labels/texts`，后续在 `additional_chat_wheels`。快捷键不得与输入框/其他轮盘/后台录制重复。槽内容互斥：有文字则朗读，否则播放音频；切换会清空另一类。音频槽 `volumes` 0–300%，播放时快照传主输出与返听。托管音频在 `audio_clips`，优先硬链接。清空槽保留音量。删除/清空后仅删除无任何轮盘引用的文件。新增轮盘先弹窗输入快捷键，校验通过再注册。

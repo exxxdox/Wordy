@@ -1,4 +1,5 @@
 use super::*;
+use std::env;
 
 #[test]
 fn trim_creates_new_wave_with_exact_interleaved_selection() {
@@ -65,8 +66,27 @@ fn pcm16_clip_does_not_require_external_decoder() {
     })
     .unwrap();
     let cancel = AtomicBool::new(false);
-    let decoded = decode_clip(source.path(), &cancel).unwrap();
+    let decoded = decode_clip_with(source.path(), &cancel, || {
+        panic!("PCM16 should not look for FFmpeg")
+    })
+    .unwrap();
     assert_eq!(decoded.as_ref(), source.path());
+}
+
+#[test]
+fn a_missing_decoder_is_distinguished_from_a_missing_audio_file() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("clip.mp3");
+    std::fs::write(&source, []).unwrap();
+    let cancel = AtomicBool::new(false);
+    let error = decode_clip_with(&source, &cancel, || None).err().unwrap();
+    assert!(error.get_ref().unwrap().is::<MissingFfmpeg>());
+    let error = decode_clip_with(&directory.path().join("missing.mp3"), &cancel, || {
+        panic!("the source should be checked first")
+    })
+    .err()
+    .unwrap();
+    assert_eq!(error.to_string(), "找不到音频文件");
 }
 
 #[test]
@@ -78,7 +98,7 @@ fn decoder_input_uses_a_fixed_demuxer_for_each_allowed_format() {
 
 #[test]
 #[ignore = "set WORDY_TEST_FFMPEG to an absolute path to run the codec matrix"]
-fn original_clip_formats_decode_with_bundled_ffmpeg_command() {
+fn original_clip_formats_decode_with_system_ffmpeg_command() {
     let ffmpeg = env::var_os("WORDY_TEST_FFMPEG").expect("provide the FFmpeg fixture path");
     let ffmpeg = Path::new(&ffmpeg);
     let directory = tempfile::tempdir().unwrap();
@@ -116,7 +136,7 @@ fn original_clip_formats_decode_with_bundled_ffmpeg_command() {
             "{extension}: {}",
             String::from_utf8_lossy(&result.stderr)
         );
-        let decoded = decode_clip_with(&fixture, &cancel, ffmpeg)
+        let decoded = decode_clip_with(&fixture, &cancel, || Some(ffmpeg.to_owned()))
             .unwrap_or_else(|error| panic!("{extension}: {error}"));
         let pcm = read_wave(decoded.as_ref()).unwrap();
         assert_eq!((pcm.sample_rate, pcm.channels), (48_000, 2), "{extension}");

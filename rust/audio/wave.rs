@@ -1,7 +1,7 @@
-use std::env;
+use std::fmt;
 use std::fs::File;
 use std::io::{self, Cursor, Read, Seek, SeekFrom, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
@@ -369,18 +369,24 @@ pub(super) fn clip_format(path: &Path) -> Option<&'static str> {
 }
 
 pub fn decode_clip<'a>(path: &'a Path, cancel: &AtomicBool) -> io::Result<DecodedClip<'a>> {
-    let executable = env::current_exe()?.with_file_name(if cfg!(windows) {
-        "ffmpeg.exe"
-    } else {
-        "ffmpeg"
-    });
-    decode_clip_with(path, cancel, &executable)
+    decode_clip_with(path, cancel, crate::ffmpeg::find)
 }
+
+#[derive(Debug)]
+pub(crate) struct MissingFfmpeg;
+
+impl fmt::Display for MissingFfmpeg {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("未找到系统 FFmpeg")
+    }
+}
+
+impl std::error::Error for MissingFfmpeg {}
 
 fn decode_clip_with<'a>(
     path: &'a Path,
     cancel: &AtomicBool,
-    executable: &Path,
+    resolve_decoder: impl FnOnce() -> Option<PathBuf>,
 ) -> io::Result<DecodedClip<'a>> {
     check_cancelled(cancel)?;
     if !path.is_file() {
@@ -394,6 +400,8 @@ fn decode_clip_with<'a>(
     {
         return Ok(DecodedClip::Original(path));
     }
+    let executable =
+        resolve_decoder().ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, MissingFfmpeg))?;
     let output = Builder::new()
         .prefix("wordy-clip-")
         .suffix(".wav")
@@ -442,10 +450,11 @@ fn decode_clip_with<'a>(
         command.creation_flags(CREATE_NO_WINDOW);
     }
     let mut child = command.spawn().map_err(|error| {
-        io::Error::new(
-            error.kind(),
-            format!("无法启动随应用分发的音频解码器：{error}"),
-        )
+        if error.kind() == io::ErrorKind::NotFound {
+            io::Error::new(error.kind(), MissingFfmpeg)
+        } else {
+            io::Error::new(error.kind(), format!("无法启动系统 FFmpeg：{error}"))
+        }
     })?;
     let status = wait_for_decoder(&mut child, output.as_file(), cancel);
     if status.is_err() {

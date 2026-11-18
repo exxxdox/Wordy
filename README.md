@@ -11,7 +11,8 @@
 
 - Windows 10/11
 - VB-CABLE（可选，[音频侦听](#音频侦听vb-cable) 功能需要）
-- Rust stable（MSVC 工具链）：运行与打包
+- FFmpeg（用于 MP3、FLAC 等格式及非 PCM16 WAV。缺少时可在 Wordy 提示中通过 WinGet 安装）
+- Rust stable（MSVC 工具链）：源码开发与打包
 
 ## 功能介绍
 
@@ -59,6 +60,7 @@
 
 打包产物为 `dist/Wordy.exe`，双击运行，不带控制台窗口。同一 Windows 会话只允许运行一个实例。
 
+- PCM16 WAV 和后台录制可直接使用。处理其他支持的音频格式时，Wordy 会查找系统安装的 FFmpeg。
 - 配置与轮盘音频：`$XDG_CONFIG_HOME/wordy`，未设置时为 `%USERPROFILE%\.config\wordy`，内含 `config.toml` 与 `audio_clips/`
 - 日志：`wordy.log` 写在 exe 同目录，单文件上限 5 MiB，含备份最多 5 个文件；源码运行只输出到控制台
 

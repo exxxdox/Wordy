@@ -6,7 +6,7 @@ Rust 版使用 Win32 消息循环和 WASAPI。设置、轮盘和录制截取共�
 
 ## Windows 本地构建
 
-需要 Rust MSVC 工具链、Visual Studio C++ Build Tools 和 Windows SDK。运行 `cargo build --locked` 生成开发版。压缩音频及非 PCM16 WAV 依赖同目录的 `ffmpeg.exe`。解码器进程接受本地文件，运行时从应用目录取可执行文件。
+需要 Rust MSVC 工具链、Visual Studio C++ Build Tools 和 Windows SDK。运行 `cargo build --locked` 生成开发版。压缩音频及非 PCM16 WAV 使用系统安装的 FFmpeg。Wordy 从系统 `PATH` 和 WinGet 命令目录查找解码器。遇到缺少解码器的格式时，用户可在提示中通过 WinGet 安装。解码器仅接受本地文件。
 
 `wordy.ps1 build -Clean -NoPause` 使用 `packaged` 特性构建 release，并复制为 `dist\Wordy.exe`；`wordy.ps1 dev` 运行调试版。发布工作流调用同一脚本。Python/Qt 源码与测试已移除，配置、凭据和备份格式保持不变。
 

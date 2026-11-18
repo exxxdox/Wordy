@@ -11,6 +11,7 @@ pub mod credentials;
 pub mod desktop;
 #[cfg(windows)]
 mod dialog;
+mod ffmpeg;
 pub mod file_log;
 pub mod hotkey;
 #[cfg(windows)]

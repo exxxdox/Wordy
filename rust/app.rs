@@ -22,6 +22,7 @@ use crate::audio::{self, Endpoint, Recording};
 use crate::config::{AudioIdentity, ConfigStore, Settings, Voice};
 use crate::credentials::{CredentialStore, Provider, WindowsCredentials, normalize_api_key_input};
 use crate::desktop::*;
+use crate::ffmpeg;
 use crate::file_log::FileLog;
 use crate::hotkey::{display_hotkey, parse_hotkey, windows::Registration};
 use crate::instance::{acquire_single_instance, show_duplicate_instance_message};
@@ -218,6 +219,7 @@ struct App {
     results: mpsc::Receiver<Background>,
     pending_saves: usize,
     voices_request: Option<u64>,
+    ffmpeg_installing: bool,
     next_job: u64,
     logs: VecDeque<String>,
     file_log: Option<FileLog>,
@@ -245,6 +247,7 @@ enum Background {
         result: io::Result<tempfile::NamedTempFile>,
     },
     NotificationFailed(String),
+    FfmpegInstalled(io::Result<()>),
 }
 
 struct TrimSession {
@@ -301,6 +304,7 @@ impl App {
             results,
             pending_saves: 0,
             voices_request: None,
+            ffmpeg_installing: false,
             next_job: 0,
             logs: VecDeque::new(),
             file_log: None,
@@ -397,7 +401,7 @@ impl App {
                 }
             };
             if let Err(error) = result {
-                self.failure(format!("操作失败：{error}"));
+                self.report_error("操作失败", error);
             }
         }
         unsafe { KillTimer(self.host, CONTROLS_TIMER) };
@@ -456,7 +460,7 @@ impl App {
                         self.editor.panel.set_text(panels::PLAY, "试听");
                     }
                     if let Err(error) = result {
-                        self.failure(format!("播放失败：{error}"));
+                        self.report_error("播放失败", error);
                     }
                 }
                 Event::Progress { id, seconds } => {
@@ -500,6 +504,22 @@ impl App {
                 // Fall back to the tray when the notification-center sender is unavailable.
                 self.tray.notify_balloon(&message);
                 self.log_at("WARNING", "Windows 通知发送失败，已改用托盘提示".into());
+            }
+            Background::FfmpegInstalled(result) => {
+                self.ffmpeg_installing = false;
+                if !exiting {
+                    match result {
+                        Ok(()) => {
+                            let message = "FFmpeg 已安装，请重试刚才的音频操作".into();
+                            if self.settings_visible() {
+                                self.status(message);
+                            } else {
+                                self.notify(message);
+                            }
+                        }
+                        Err(error) => self.failure(format!("安装 FFmpeg 失败：{error}")),
+                    }
+                }
             }
             Background::Rolling(result) => {
                 self.pending_saves -= 1;
@@ -1562,6 +1582,64 @@ impl App {
     fn status(&mut self, message: String) {
         self.toasts.push(&message, Tone::Success);
         self.log(message);
+    }
+
+    fn report_error(&mut self, action: &str, error: io::Error) {
+        if error
+            .get_ref()
+            .is_some_and(|cause| cause.is::<audio::MissingFfmpeg>())
+        {
+            self.log_at("WARNING", format!("{action}：{error}"));
+            if let Err(error) = self.offer_ffmpeg_install() {
+                self.failure(format!("无法安装 FFmpeg：{error}"));
+            }
+        } else {
+            self.failure(format!("{action}：{error}"));
+        }
+    }
+
+    fn offer_ffmpeg_install(&mut self) -> io::Result<()> {
+        if self.ffmpeg_installing {
+            return Ok(());
+        }
+        if ffmpeg::find().is_some() {
+            self.status("已检测到 FFmpeg，请重试刚才的音频操作".into());
+            return Ok(());
+        }
+        let owner = if let Some(trim) = &self.trim {
+            trim.window.panel.0
+        } else if self.settings_visible() {
+            self.settings_window.hwnd()
+        } else {
+            ptr::null_mut()
+        };
+        let Some(winget) = ffmpeg::winget() else {
+            if dialog::confirm(
+                owner,
+                "缺少 FFmpeg",
+                "此音频需要 FFmpeg。系统未找到 WinGet，是否打开 FFmpeg 下载页面？安装后请将其目录加入 PATH。",
+            ) {
+                self.open_url("https://ffmpeg.org/download.html")?;
+            }
+            return Ok(());
+        };
+        if dialog::confirm(
+            owner,
+            "缺少 FFmpeg",
+            "此音频需要 FFmpeg。是否通过 Windows 程序包管理器（WinGet）下载并安装？",
+        ) {
+            let events = self.jobs.clone();
+            // Installation can take time. Let the user keep working and report completion on the UI thread.
+            std::thread::Builder::new()
+                .name("WordyInstallFfmpeg".into())
+                .spawn(move || {
+                    let result = ffmpeg::install(&winget);
+                    let _ = events.send(Background::FfmpegInstalled(result));
+                })?;
+            self.ffmpeg_installing = true;
+            self.status("正在下载并安装 FFmpeg…".into());
+        }
+        Ok(())
     }
 
     fn failure(&mut self, message: String) {

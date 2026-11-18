@@ -11,6 +11,8 @@ pub use managed::{
 #[path = "audio/wave.rs"]
 mod wave;
 
+#[cfg(windows)]
+pub(crate) use wave::MissingFfmpeg;
 pub use wave::{
     DecodedClip, decode_clip, read_tts_wave, read_wave, recording_duration, trim_recording,
     waveform_peaks, write_wave,
