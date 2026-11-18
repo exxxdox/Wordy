@@ -8,11 +8,13 @@ use windows_sys::Win32::Graphics::Dwm::{
     DWMWCP_ROUND, DwmSetWindowAttribute,
 };
 use windows_sys::Win32::Graphics::Gdi::*;
+use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::SystemServices::SS_OWNERDRAW;
 use windows_sys::Win32::UI::Controls::{
     DRAWITEMSTRUCT, EM_SETMARGINS, ODS_COMBOBOXEDIT, ODS_DISABLED, ODS_FOCUS, ODS_SELECTED,
     ODT_BUTTON, ODT_COMBOBOX, ODT_STATIC, TB_ENDTRACK, TBM_SETPAGESIZE, TBM_SETRANGE, TBS_NOTICKS,
-    TRACKBAR_CLASSW, WM_MOUSELEAVE,
+    TOOLTIPS_CLASSW, TRACKBAR_CLASSW, TTF_IDISHWND, TTF_SUBCLASS, TTM_ADDTOOLW, TTS_ALWAYSTIP,
+    TTTOOLINFOW, WM_MOUSELEAVE,
 };
 use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
@@ -20,6 +22,7 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows_sys::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
+use windows_sys::core::w;
 
 use crate::config::Settings;
 use crate::desktop::{frame_edit_text, paint_buffered, paint_buffered_rect, wide, window_text};
@@ -151,6 +154,9 @@ impl Chrome {
             text_mode: Cell::new(false),
             ui_font: RefCell::new(String::new()),
         });
+        if !trim {
+            install_editor_tooltips(panel);
+        }
         if !trim || rolling {
             // Keep the numeric field as the existing app-message contract and display a slider instead.
             let edit = panel.child(GAIN);
@@ -611,7 +617,18 @@ fn draw_button(item: &DRAWITEMSTRUCT, state: &ChromeState) {
         );
     }
     rounded(item.hDC, item.rcItem, 10, Some(background), border);
-    let text = wide(&window_text(item.hwndItem));
+    let label = window_text(item.hwndItem);
+    let color = if disabled {
+        MUTED
+    } else if matches!(id, REMOVE | CLEAR) {
+        ERROR
+    } else {
+        PRIMARY
+    };
+    if !state.trim && draw_editor_icon(item.hDC, item.rcItem, id, color, &label) {
+        return;
+    }
+    let text = wide(&label);
     let mut area = item.rcItem;
     unsafe {
         // Ownerdraw DCs do not guarantee the control font; select it so the
@@ -623,16 +640,7 @@ fn draw_button(item: &DRAWITEMSTRUCT, state: &ChromeState) {
             SelectObject(item.hDC, font)
         };
         SetBkMode(item.hDC, TRANSPARENT as i32);
-        SetTextColor(
-            item.hDC,
-            if disabled {
-                MUTED
-            } else if matches!(id, REMOVE | CLEAR) {
-                ERROR
-            } else {
-                PRIMARY
-            },
-        );
+        SetTextColor(item.hDC, color);
         DrawTextW(
             item.hDC,
             text.as_ptr(),
@@ -644,6 +652,196 @@ fn draw_button(item: &DRAWITEMSTRUCT, state: &ChromeState) {
             SelectObject(item.hDC, previous);
         }
     }
+}
+
+fn install_editor_tooltips(panel: &Panel) {
+    let tip = unsafe {
+        CreateWindowExW(
+            WS_EX_TOPMOST,
+            TOOLTIPS_CLASSW,
+            ptr::null(),
+            WS_POPUP | TTS_ALWAYSTIP,
+            0,
+            0,
+            0,
+            0,
+            panel.0,
+            ptr::null_mut(),
+            GetModuleHandleW(ptr::null()),
+            ptr::null(),
+        )
+    };
+    if tip.is_null() {
+        return;
+    }
+    for (id, text) in [
+        (IMPORT, w!("导入音频")),
+        (PLAY, w!("试听 / 停止")),
+        (CROP, w!("截取片段")),
+        (CLEAR, w!("清空当前槽位")),
+        (AUDIO_MODE, w!("音频内容")),
+        (TEXT_MODE, w!("文字内容")),
+        (ADD, w!("新增轮盘")),
+        (REMOVE, w!("删除轮盘")),
+    ] {
+        let child = panel.child(id);
+        let mut tool = TTTOOLINFOW {
+            cbSize: mem::size_of::<TTTOOLINFOW>() as u32,
+            uFlags: TTF_IDISHWND | TTF_SUBCLASS,
+            hwnd: panel.0,
+            uId: child as usize,
+            lpszText: text.cast_mut(),
+            ..Default::default()
+        };
+        unsafe { SendMessageW(tip, TTM_ADDTOOLW, 0, ptr::from_mut(&mut tool) as isize) };
+    }
+}
+
+fn icon_line(dc: HDC, from: POINT, to: POINT) {
+    unsafe {
+        MoveToEx(dc, from.x, from.y, ptr::null_mut());
+        LineTo(dc, to.x, to.y);
+    }
+}
+
+fn icon_polygon(dc: HDC, points: &[POINT], color: u32) {
+    unsafe {
+        let brush = CreateSolidBrush(color);
+        let old_brush = SelectObject(dc, brush);
+        let old_pen = SelectObject(dc, GetStockObject(NULL_PEN));
+        Polygon(dc, points.as_ptr(), points.len() as i32);
+        SelectObject(dc, old_pen);
+        SelectObject(dc, old_brush);
+        DeleteObject(brush);
+    }
+}
+
+fn draw_editor_icon(dc: HDC, rect: RECT, id: u16, color: u32, label: &str) -> bool {
+    if !matches!(
+        id,
+        IMPORT | PLAY | CROP | CLEAR | AUDIO_MODE | TEXT_MODE | ADD | REMOVE
+    ) {
+        return false;
+    }
+    let height = rect.bottom - rect.top;
+    let size = (height * 5 / 11).clamp(10, 22);
+    let half = size / 2;
+    let (cx, cy) = ((rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2);
+    let stroke = (size / 8).max(1);
+    let line = |x1, y1, x2, y2| icon_line(dc, POINT { x: x1, y: y1 }, POINT { x: x2, y: y2 });
+    match id {
+        ADD => with_pen(dc, stroke, color, || {
+            line(cx - half, cy, cx + half, cy);
+            line(cx, cy - half, cx, cy + half);
+        }),
+        REMOVE => with_pen(dc, stroke, color, || {
+            line(cx - half, cy, cx + half, cy);
+        }),
+        IMPORT => with_pen(dc, stroke, color, || {
+            line(cx, cy - half, cx, cy + half / 3);
+            line(cx - half / 3, cy, cx, cy + half / 3);
+            line(cx + half / 3, cy, cx, cy + half / 3);
+            line(cx - half, cy + half, cx + half, cy + half);
+        }),
+        PLAY if label != "停止" => icon_polygon(
+            dc,
+            &[
+                POINT {
+                    x: cx - half + stroke,
+                    y: cy - half,
+                },
+                POINT {
+                    x: cx - half + stroke,
+                    y: cy + half,
+                },
+                POINT {
+                    x: cx + half,
+                    y: cy,
+                },
+            ],
+            color,
+        ),
+        PLAY => fill(
+            dc,
+            RECT {
+                left: cx - half / 2,
+                top: cy - half / 2,
+                right: cx + half / 2,
+                bottom: cy + half / 2,
+            },
+            color,
+        ),
+        CROP => with_pen(dc, stroke, color, || {
+            line(cx - half, cy - half / 2, cx - half / 2, cy - half / 2);
+            line(cx - half / 2, cy - half / 2, cx - half / 2, cy + half);
+            line(cx + half / 2, cy - half, cx + half, cy - half);
+            line(cx + half, cy - half, cx + half, cy + half / 2);
+        }),
+        CLEAR => with_pen(dc, stroke, color, || {
+            line(cx - half, cy - half / 2, cx + half, cy - half / 2);
+            line(cx - half / 3, cy - half, cx + half / 3, cy - half);
+            let body = half - stroke;
+            line(cx - body, cy - half / 3, cx - body, cy + half);
+            line(cx + body, cy - half / 3, cx + body, cy + half);
+            line(cx - body, cy + half, cx + body, cy + half);
+            line(cx, cy, cx, cy + half - stroke);
+        }),
+        AUDIO_MODE => {
+            icon_polygon(
+                dc,
+                &[
+                    POINT {
+                        x: cx - half,
+                        y: cy - half / 3,
+                    },
+                    POINT {
+                        x: cx - half / 3,
+                        y: cy - half / 3,
+                    },
+                    POINT {
+                        x: cx,
+                        y: cy - half,
+                    },
+                    POINT {
+                        x: cx,
+                        y: cy + half,
+                    },
+                    POINT {
+                        x: cx - half / 3,
+                        y: cy + half / 3,
+                    },
+                    POINT {
+                        x: cx - half,
+                        y: cy + half / 3,
+                    },
+                ],
+                color,
+            );
+            with_pen(dc, stroke, color, || {
+                let wave = [
+                    POINT {
+                        x: cx + half / 3,
+                        y: cy - half / 2,
+                    },
+                    POINT {
+                        x: cx + half / 2,
+                        y: cy,
+                    },
+                    POINT {
+                        x: cx + half / 3,
+                        y: cy + half / 2,
+                    },
+                ];
+                unsafe { Polyline(dc, wave.as_ptr(), wave.len() as i32) };
+            });
+        }
+        TEXT_MODE => with_pen(dc, stroke, color, || {
+            line(cx - half / 2, cy - half, cx + half / 2, cy - half);
+            line(cx, cy - half, cx, cy + half);
+        }),
+        _ => return false,
+    }
+    true
 }
 
 fn combo_item(combo: HWND, index: u32) -> String {

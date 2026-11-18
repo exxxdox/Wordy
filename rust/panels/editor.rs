@@ -203,11 +203,14 @@ fn place(control: HWND, x: i32, y: i32, width: i32, height: i32) {
 }
 
 pub(super) fn editor_card(hwnd: HWND, text_mode: bool) -> RECT {
+    let height = if text_mode { 246 } else { 229 };
+    // Center the shorter control card against the 400-unit wheel preview.
+    let top = 44 + (400 - height) / 2;
     RECT {
         left: logical_px(hwnd, 424),
-        top: logical_px(hwnd, 44),
+        top: logical_px(hwnd, top),
         right: dimensions(hwnd).0,
-        bottom: logical_px(hwnd, if text_mode { 290 } else { 273 }),
+        bottom: logical_px(hwnd, top + height),
     }
 }
 
@@ -232,6 +235,17 @@ pub(super) fn layout_editor(hwnd: HWND, state: &ChromeState) {
     }
     at(307, width - px(184), 7, px(40), 20);
     at(i32::from(STYLE), width - px(136), 0, px(136), 200);
+    // The right card is vertically centered on the wheel; its fields keep their
+    // original spacing but move with the card instead of hugging the top edge.
+    let at_card = |id, x, y, w, h| {
+        place(
+            unsafe { GetDlgItem(hwnd, id) },
+            left + px(x),
+            card.top + px(y - 44),
+            px(w),
+            px(h),
+        )
+    };
     for (id, x, y, w, h) in [
         (INFO, 0, 60, 180, 23),
         (302, 0, 92, 44, 20),
@@ -248,25 +262,38 @@ pub(super) fn layout_editor(hwnd: HWND, state: &ChromeState) {
         ),
         (303, 0, 184, 140, 20),
     ] {
-        at(i32::from(id), left + px(x), y, px(w), h);
+        at_card(i32::from(id), x, y, w, h);
     }
     let gain = if state.gain.is_null() {
         unsafe { GetDlgItem(hwnd, i32::from(GAIN)) }
     } else {
         state.gain
     };
-    place(gain, left + px(35), px(118), px(220), px(30));
-    at(
-        i32::from(LABEL),
-        left,
-        if state.text_mode.get() { 145 } else { 174 },
-        field,
-        32,
+    place(
+        gain,
+        left + px(35),
+        card.top + px(118 - 44),
+        px(220),
+        px(30),
     );
-    at(i32::from(TEXT), left, 205, field, 32);
     let mode = state.text_mode.get();
+    let card_y = |y| card.top + px(y - 44);
+    place(
+        unsafe { GetDlgItem(hwnd, i32::from(LABEL)) },
+        left,
+        card_y(if mode { 145 } else { 174 }),
+        field,
+        px(32),
+    );
+    place(
+        unsafe { GetDlgItem(hwnd, i32::from(TEXT)) },
+        left,
+        card_y(205),
+        field,
+        px(32),
+    );
     let action_y = if mode { 244 } else { 222 };
-    let (mut x, gap) = (left, px(6));
+    let (mut x, gap) = (0, 6);
     for (id, control_width, visible) in [
         (IMPORT, 42, !mode),
         (PLAY, 64, true),
@@ -274,8 +301,8 @@ pub(super) fn layout_editor(hwnd: HWND, state: &ChromeState) {
         (CLEAR, 42, true),
     ] {
         if visible {
-            at(i32::from(id), x, action_y, px(control_width), 32);
-            x += px(control_width) + gap;
+            at_card(i32::from(id), x, action_y, control_width, 32);
+            x += control_width + gap;
         }
     }
 }
@@ -285,6 +312,7 @@ mod tests {
     use std::cell::Cell;
     use windows_sys::Win32::{
         Foundation::{LPARAM, LRESULT, WPARAM},
+        Graphics::Gdi::MapWindowPoints,
         UI::{
             Controls::TB_ENDTRACK,
             Shell::{DefSubclassProc, SetWindowSubclass},
@@ -293,6 +321,29 @@ mod tests {
 
     use super::*;
     use crate::slider;
+
+    #[test]
+    fn editor_card_is_vertically_centered_on_the_wheel_preview() {
+        let settings = Settings::default();
+        let window =
+            crate::settings_window::SettingsWindow::new(ptr::null_mut(), &settings).unwrap();
+        let editor = Editor::new_embedded(ptr::null_mut(), window.hwnd(), &settings).unwrap();
+        let mut pick = RECT::default();
+        unsafe {
+            GetWindowRect(editor.panel.child(PICK), &mut pick);
+            MapWindowPoints(
+                ptr::null_mut(),
+                editor.panel.0,
+                ptr::from_mut(&mut pick).cast(),
+                2,
+            );
+        }
+        let card = editor_card(editor.panel.0, false);
+        assert!(
+            (card.top - pick.top - (pick.bottom - card.bottom)).abs() <= 2,
+            "editor card is not centered in the wheel preview"
+        );
+    }
 
     #[test]
     fn editor_gain_readout_is_written_only_when_its_value_changes() {
