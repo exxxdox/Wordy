@@ -355,7 +355,7 @@ impl AsRef<Path> for DecodedClip<'_> {
 }
 
 pub(super) fn clip_format(path: &Path) -> Option<&'static str> {
-    match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
+    match super::audio_extension(path)?.as_str() {
         "wav" => Some("wav"),
         "mp3" => Some("mp3"),
         "ogg" | "opus" => Some("ogg"),

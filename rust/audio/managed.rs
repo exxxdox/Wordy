@@ -28,7 +28,7 @@ impl Drop for StagedClip {
 }
 
 pub fn stage_clip(source: &Path, config: &Path, cancel: &AtomicBool) -> io::Result<StagedClip> {
-    let extension = extension(source).ok_or_else(|| invalid("不支持此音频格式"))?;
+    let extension = super::audio_extension(source).ok_or_else(|| invalid("不支持此音频格式"))?;
     let folder = clips_directory(config)?;
     fs::create_dir_all(&folder)?;
     let path = folder.join(format!("{}.{}", uuid::Uuid::new_v4().simple(), extension));
@@ -105,7 +105,7 @@ pub fn resolve_clip(config: &Path, name: &str) -> io::Result<PathBuf> {
         || name.contains(['/', '\\', ':', '<', '>', '"', '|', '?', '*'])
         || name.chars().any(|c| c < ' ')
         || name.ends_with(['.', ' '])
-        || extension(Path::new(name)).is_none()
+        || super::audio_extension(Path::new(name)).is_none()
     {
         return Err(invalid("无效的音频文件名"));
     }
@@ -153,15 +153,6 @@ fn is_reparse(meta: &fs::Metadata) -> bool {
     }
     #[cfg(not(windows))]
     meta.is_symlink()
-}
-
-fn extension(path: &Path) -> Option<String> {
-    let extension = path.extension()?.to_str()?.to_ascii_lowercase();
-    [
-        "wav", "mp3", "ogg", "flac", "m4a", "aac", "wma", "aiff", "aif", "opus",
-    ]
-    .contains(&extension.as_str())
-    .then_some(extension)
 }
 
 fn invalid(message: &str) -> io::Error {

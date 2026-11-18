@@ -1,7 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fs::{self, File};
 use std::io::{self, Read, Seek, SeekFrom, Write};
-use std::os::windows::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -10,6 +9,7 @@ use toml::{Table, Value};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
+use crate::audio;
 use crate::backup_crypto::{EncryptedWriter, decrypt_backup};
 use crate::config::{ConfigStore, Settings, Wheel};
 use crate::credentials::{CredentialStore, Provider};
@@ -54,7 +54,7 @@ pub fn export_backup(
     let folder = parent(destination);
     let target = resolve_path(destination)?;
     let config_file = resolve_path(config.path())?;
-    let audio_dir = resolve_path(&clips_directory(config.path())?)?;
+    let audio_dir = resolve_path(&audio::clips_directory(config.path())?)?;
     if same_path(&target, &config_file) || target.ancestors().any(|p| same_path(p, &audio_dir)) {
         return Err(invalid("备份不能覆盖配置文件或保存到音频托管目录"));
     }
@@ -159,7 +159,7 @@ pub fn import_backup(
         return Err(invalid("备份音频与配置不匹配"));
     }
 
-    let directory = clips_directory(config.path())?;
+    let directory = audio::clips_directory(config.path())?;
     let previous = Secrets::read(credentials)?;
     let mut changed = Vec::new();
     let mut created = Vec::new();
@@ -435,27 +435,7 @@ fn valid_filename(name: &str) -> bool {
         && !name.contains(['/', '\\', ':', '<', '>', '"', '|', '?', '*'])
         && !name.chars().any(|c| c < ' ')
         && !name.ends_with(['.', ' '])
-        && Path::new(name)
-            .extension()
-            .and_then(|suffix| suffix.to_str())
-            .is_some_and(|suffix| {
-                [
-                    "wav", "mp3", "ogg", "flac", "m4a", "aac", "wma", "aiff", "aif", "opus",
-                ]
-                .contains(&suffix.to_ascii_lowercase().as_str())
-            })
-}
-
-fn clips_directory(config: &Path) -> io::Result<PathBuf> {
-    let directory = parent(config).join("audio_clips");
-    match fs::symlink_metadata(&directory) {
-        Ok(meta) if meta.file_attributes() & 0x400 != 0 => {
-            Err(invalid("音频托管目录不能是符号链接或 junction"))
-        }
-        Ok(_) => Ok(directory),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(directory),
-        Err(error) => Err(error),
-    }
+        && audio::audio_extension(Path::new(name)).is_some()
 }
 
 fn same_path(left: &Path, right: &Path) -> bool {

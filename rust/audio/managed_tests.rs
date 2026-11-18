@@ -62,7 +62,13 @@ fn removing_clip_keeps_other_wheel_references() {
     .unwrap();
     let staged = stage_clip(source.path(), store.path(), &AtomicBool::new(false)).unwrap();
     let name = commit_slot_clip(&mut store, 0, 0, staged, "one", None).unwrap();
-    store.add_wheel("f7").unwrap();
+    store
+        .update(|settings| {
+            settings
+                .additional_chat_wheels
+                .push(crate::config::Wheel::new("f7"));
+        })
+        .unwrap();
     store
         .update_wheel(1, |wheel| wheel.slots[0].clone_from(&name))
         .unwrap();

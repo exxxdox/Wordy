@@ -481,14 +481,38 @@ pub struct ConfigStore {
     path: PathBuf,
     settings: Settings,
     save_deadline: Option<Instant>,
+    load_warning: Option<String>,
 }
 
 impl ConfigStore {
     pub fn load(path: impl Into<PathBuf>) -> io::Result<Self> {
         let path = path.into();
+        let mut load_warning = None;
         let settings = match fs::read_to_string(&path) {
-            Ok(contents) => Settings::from_toml(&contents)
-                .map_err(|error| invalid(format!("无法读取配置文件：{}", error.message())))?,
+            Ok(contents) => match Settings::from_toml(&contents) {
+                Ok(settings) => settings,
+                Err(error) => {
+                    // A syntax error must not make the whole app unusable. Keep the
+                    // original bytes for repair and start from defaults.
+                    let mut broken = path.with_extension("toml.broken");
+                    let mut index = 1;
+                    while broken.exists() {
+                        broken = path.with_extension(format!("toml.broken.{index}"));
+                        index += 1;
+                    }
+                    fs::rename(&path, &broken).map_err(|rename| {
+                        invalid(format!(
+                            "无法读取配置文件：{}；且无法备份损坏文件：{rename}",
+                            error.message()
+                        ))
+                    })?;
+                    load_warning = Some(format!(
+                        "配置文件损坏，已备份到 {}，本次使用默认设置",
+                        broken.display()
+                    ));
+                    Settings::default()
+                }
+            },
             Err(error) if error.kind() == io::ErrorKind::NotFound => Settings::default(),
             Err(error) => return Err(error),
         };
@@ -496,7 +520,12 @@ impl ConfigStore {
             path,
             settings,
             save_deadline: None,
+            load_warning,
         })
+    }
+
+    pub fn take_load_warning(&mut self) -> Option<String> {
+        self.load_warning.take()
     }
 
     pub fn load_default() -> io::Result<Self> {
@@ -573,24 +602,6 @@ impl ConfigStore {
         edit(&mut wheel);
         parse_hotkey(&wheel.hotkey).map_err(|_| invalid("轮盘快捷键无效"))?;
         self.update(|settings| settings.assign_wheel(index, wheel))
-    }
-
-    pub fn add_wheel(&mut self, hotkey: impl Into<String>) -> io::Result<usize> {
-        let hotkey = hotkey.into();
-        parse_hotkey(&hotkey).map_err(|_| invalid("轮盘快捷键无效"))?;
-        let index = self.settings.wheel_count();
-        self.update(|settings| settings.additional_chat_wheels.push(Wheel::new(hotkey)))?;
-        Ok(index)
-    }
-
-    pub fn remove_wheel(&mut self, index: usize) -> io::Result<()> {
-        if index >= self.settings.wheel_count() {
-            return Err(invalid("轮盘不存在"));
-        }
-        if self.settings.additional_chat_wheels.is_empty() {
-            return Err(invalid("至少保留一个轮盘"));
-        }
-        self.update(|settings| settings.discard_wheel(index))
     }
 }
 
@@ -851,12 +862,18 @@ mod tests {
     }
 
     #[test]
-    fn invalid_config_is_reported_without_overwriting_existing_bytes() {
+    fn invalid_config_is_preserved_and_the_app_starts_with_defaults() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("config.toml");
         fs::write(&path, "text = [").unwrap();
-        assert!(ConfigStore::load(&path).is_err());
-        assert_eq!(fs::read_to_string(&path).unwrap(), "text = [");
+        let mut config = ConfigStore::load(&path).unwrap();
+        assert_eq!(config.settings(), &Settings::default());
+        assert!(config.take_load_warning().is_some());
+        assert!(!path.exists());
+        assert_eq!(
+            fs::read_to_string(dir.path().join("config.toml.broken")).unwrap(),
+            "text = ["
+        );
     }
 
     #[test]
@@ -875,7 +892,11 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = dir.path().join("config.toml");
         let mut config = ConfigStore::load(&path).unwrap();
-        assert_eq!(config.add_wheel("ctrl+f9").unwrap(), 1);
+        config
+            .update(|settings| {
+                settings.additional_chat_wheels.push(Wheel::new("ctrl+f9"));
+            })
+            .unwrap();
         config
             .update_wheel(1, |wheel| {
                 wheel.slots[7] = "x.wav".into();
@@ -886,8 +907,7 @@ mod tests {
         config
             .update(|settings| settings.rolling_buffer_target = [1, 7])
             .unwrap();
-        config.remove_wheel(0).unwrap();
-        assert!(config.remove_wheel(0).is_err());
+        config.update(|settings| settings.discard_wheel(0)).unwrap();
         let loaded = ConfigStore::load(&path).unwrap();
         assert_eq!(loaded.settings().rolling_buffer_target, [0, 7]);
         assert_eq!(loaded.settings().wheel_count(), 1);

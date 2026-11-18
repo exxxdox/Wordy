@@ -1,12 +1,25 @@
 use std::collections::VecDeque;
 use std::io;
+use std::path::Path;
 
 #[path = "audio/managed.rs"]
 mod managed;
 
+pub(crate) use managed::clips_directory;
 pub use managed::{
     StagedClip, commit_slot_clip, remove_unreferenced_clip, resolve_clip, stage_clip,
 };
+
+pub(crate) const AUDIO_EXTENSIONS: [&str; 10] = [
+    "wav", "mp3", "ogg", "flac", "m4a", "aac", "wma", "aiff", "aif", "opus",
+];
+
+pub(crate) fn audio_extension(path: &Path) -> Option<String> {
+    let extension = path.extension()?.to_str()?.to_ascii_lowercase();
+    AUDIO_EXTENSIONS
+        .contains(&extension.as_str())
+        .then_some(extension)
+}
 
 #[path = "audio/wave.rs"]
 mod wave;
@@ -31,8 +44,8 @@ pub use sidetone::{RoutedStream, play_routed_pcm, play_routed_wave};
 
 #[cfg(windows)]
 pub use wasapi::{
-    ListenState, PcmStream, Recording, default_rate, list_inputs, list_outputs, play_pcm,
-    play_wave, read_listen, restore_listen, set_listen,
+    ListenState, PcmStream, Recording, default_rate, list_inputs, list_outputs, play_wave,
+    read_listen, restore_listen, set_listen,
 };
 
 #[cfg(test)]
