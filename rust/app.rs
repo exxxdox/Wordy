@@ -1389,6 +1389,8 @@ impl App {
                             self.config
                                 .update_wheel(wheel, |wheel| wheel.volumes[slot] = gain)?;
                         }
+                        // Dragging already updated the controls; saving must not rebuild the editor.
+                        return Ok(());
                     }
                     _ => return Ok(()),
                 }

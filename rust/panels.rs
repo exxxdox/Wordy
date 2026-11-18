@@ -21,7 +21,7 @@ use windows_sys::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWi
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 use crate::config::{Settings, Wheel};
-use crate::desktop::{frame_edit_text, paint_buffered, wide, window_text};
+use crate::desktop::{frame_edit_text, paint_buffered, paint_buffered_rect, wide, window_text};
 use crate::dialog::{Panel, Template};
 use crate::selector::style_selector;
 use crate::settings_window::paint_embedded_backdrop;
@@ -250,8 +250,7 @@ impl Chrome {
 
     fn gain(&self, gain: f64) {
         let percent = (gain * 100.0).round() as i32;
-        set_control_text(self.hwnd, GAIN, &percent.to_string());
-        set_control_text(self.hwnd, GAIN_VALUE, &format!("{percent}%"));
+        set_gain_readout(self.hwnd, percent);
         slider::set_position(self.state.gain, percent);
     }
 }
@@ -275,6 +274,16 @@ impl Drop for ChromeState {
 fn set_control_text(hwnd: HWND, id: u16, value: &str) {
     let text = wide(value);
     unsafe { SetDlgItemTextW(hwnd, i32::from(id), text.as_ptr()) };
+}
+
+fn set_gain_readout(hwnd: HWND, value: i32) {
+    let percent = value.to_string();
+    let edit = unsafe { GetDlgItem(hwnd, i32::from(GAIN)) };
+    // A drag's final notification repeats the last value and needs no visual update.
+    if window_text(edit) != percent {
+        set_control_text(hwnd, GAIN, &percent);
+        set_control_text(hwnd, GAIN_VALUE, &format!("{percent}%"));
+    }
 }
 
 unsafe fn precise_controls(hwnd: HWND, visible: bool) {
@@ -442,8 +451,8 @@ unsafe extern "system" fn chrome_proc(
                 let control = GetDlgCtrlID(lp as HWND) as u16;
                 let field = matches!(msg, WM_CTLCOLOREDIT | WM_CTLCOLORLISTBOX)
                     || matches!(control, WHEEL | STYLE);
-                let card =
-                    !state.trim && matches!(control, INFO | GAIN_SLIDER | GAIN_VALUE | 302..=305);
+                // The gain readout supplies its own buffered background in WM_DRAWITEM.
+                let card = !state.trim && matches!(control, INFO | GAIN_SLIDER | 302..=305);
                 // Values read bright; captions stay muted. Captions sit straight
                 // on the glass, so they must not erase a solid surface rectangle.
                 SetTextColor(dc, PRIMARY);
@@ -470,16 +479,20 @@ unsafe extern "system" fn chrome_proc(
                 let item = &*(lp as *const DRAWITEMSTRUCT);
                 match item.CtlType {
                     ODT_BUTTON => draw_button(item, state),
-                    ODT_STATIC => draw_label(item, state),
+                    ODT_STATIC if item.CtlID == u32::from(GAIN_VALUE) => {
+                        paint_buffered_rect(item.hDC, item.rcItem, |dc, rect| {
+                            draw_label(item.hwndItem, dc, rect, state.trim);
+                        });
+                    }
+                    ODT_STATIC => draw_label(item.hwndItem, item.hDC, item.rcItem, state.trim),
                     ODT_COMBOBOX if item.itemState & ODS_COMBOBOXEDIT == 0 => draw_combo_item(item),
                     _ => return DefSubclassProc(hwnd, msg, wp, lp),
                 }
                 1
             }
             WM_HSCROLL if lp != 0 && lp as HWND == state.gain => {
-                let value = SendMessageW(state.gain, TBM_GETPOS, 0, 0);
-                set_control_text(hwnd, GAIN, &value.to_string());
-                set_control_text(hwnd, GAIN_VALUE, &format!("{value}%"));
+                let value = SendMessageW(state.gain, TBM_GETPOS, 0, 0) as i32;
+                set_gain_readout(hwnd, value);
                 if !state.trim && wp as u16 as u32 == TB_ENDTRACK {
                     PostMessageW(
                         hwnd,
@@ -634,36 +647,35 @@ fn combo_item(combo: HWND, index: u32) -> String {
     String::from_utf16_lossy(&buffer[..written.max(0) as usize])
 }
 
-fn draw_label(item: &DRAWITEMSTRUCT, state: &ChromeState) {
-    let id = item.CtlID as u16;
-    let card = !state.trim && matches!(id, INFO | GAIN_VALUE | 302..=305);
+fn draw_label(hwnd: HWND, dc: HDC, mut area: RECT, trim: bool) {
+    let id = unsafe { GetDlgCtrlID(hwnd) } as u16;
+    let card = !trim && matches!(id, INFO | GAIN_VALUE | 302..=305);
     if card {
-        fill(item.hDC, item.rcItem, EDITOR_CARD);
-    } else if state.trim {
-        fill(item.hDC, item.rcItem, PANEL_SURFACE);
+        fill(dc, area, EDITOR_CARD);
+    } else if trim {
+        fill(dc, area, PANEL_SURFACE);
     } else {
-        paint_embedded_backdrop(item.hwndItem, item.hDC);
+        paint_embedded_backdrop(hwnd, dc);
     }
-    let text = wide(&window_text(item.hwndItem));
-    let mut area = item.rcItem;
+    let text = wide(&window_text(hwnd));
     unsafe {
-        let font = SendMessageW(item.hwndItem, WM_GETFONT, 0, 0) as HFONT;
+        let font = SendMessageW(hwnd, WM_GETFONT, 0, 0) as HFONT;
         let previous = if font.is_null() {
             ptr::null_mut()
         } else {
-            SelectObject(item.hDC, font)
+            SelectObject(dc, font)
         };
-        SetBkMode(item.hDC, TRANSPARENT as i32);
-        SetTextColor(item.hDC, if id == LOADING { MUTED } else { PRIMARY });
+        SetBkMode(dc, TRANSPARENT as i32);
+        SetTextColor(dc, if id == LOADING { MUTED } else { PRIMARY });
         DrawTextW(
-            item.hDC,
+            dc,
             text.as_ptr(),
             -1,
             &mut area,
             DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS,
         );
         if !previous.is_null() {
-            SelectObject(item.hDC, previous);
+            SelectObject(dc, previous);
         }
     }
 }
@@ -1929,6 +1941,57 @@ fn paint_wave(dc: HDC, state: &WaveState, plot: Plot, rect: RECT, focused: bool)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn editor_gain_readout_is_written_only_when_its_value_changes() {
+        unsafe extern "system" fn count_writes(
+            hwnd: HWND,
+            msg: u32,
+            wp: WPARAM,
+            lp: LPARAM,
+            _: usize,
+            data: usize,
+        ) -> LRESULT {
+            unsafe {
+                if msg == WM_SETTEXT {
+                    let writes = &*(data as *const Cell<usize>);
+                    writes.set(writes.get() + 1);
+                }
+                DefSubclassProc(hwnd, msg, wp, lp)
+            }
+        }
+
+        let writes = Cell::new(0usize);
+        let mut settings = Settings::default();
+        settings.chat_wheel_slots[0] = "test.wav".into();
+        let window =
+            crate::settings_window::SettingsWindow::new(ptr::null_mut(), &settings).unwrap();
+        let editor = Editor::new_embedded(ptr::null_mut(), window.hwnd(), &settings).unwrap();
+        let gain = editor.chrome.state.gain;
+        let readout = editor.panel.child(GAIN_VALUE);
+        unsafe {
+            assert_ne!(
+                SetWindowSubclass(
+                    readout,
+                    Some(count_writes),
+                    1,
+                    ptr::from_ref(&writes) as usize
+                ),
+                0
+            );
+            slider::set_position(gain, 145);
+            SendMessageW(editor.panel.0, WM_HSCROLL, 0, gain as LPARAM);
+            SendMessageW(
+                editor.panel.0,
+                WM_HSCROLL,
+                TB_ENDTRACK as usize,
+                gain as LPARAM,
+            );
+        }
+        assert_eq!(editor.panel.text(GAIN_VALUE), "145%");
+        assert_eq!(editor.panel.text(GAIN), "145");
+        assert_eq!(writes.get(), 1);
+    }
 
     #[test]
     fn recording_trim_keeps_precise_time_fields_on_the_toggle_row() {
