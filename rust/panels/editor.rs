@@ -323,6 +323,16 @@ mod tests {
     use crate::slider;
 
     #[test]
+    fn emoji_support_is_checked_per_font() {
+        let settings = Settings::default();
+        let window =
+            crate::settings_window::SettingsWindow::new(ptr::null_mut(), &settings).unwrap();
+        let _editor = Editor::new_embedded(ptr::null_mut(), window.hwnd(), &settings).unwrap();
+        assert!(super::super::font_has_emoji("Segoe UI Emoji", "📥"));
+        assert!(!super::super::font_has_emoji("Consolas", "📥"));
+    }
+
+    #[test]
     fn editor_icon_buttons_share_the_same_width() {
         let settings = Settings::default();
         let window =

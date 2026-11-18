@@ -1,8 +1,14 @@
 use std::{
     cell::{Cell, RefCell},
+    collections::HashMap,
     io, mem, ptr,
-    sync::OnceLock,
+    sync::{Mutex, OnceLock},
 };
+use windows::Win32::Graphics::DirectWrite::{
+    DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
+    DWRITE_FONT_WEIGHT_NORMAL, DWriteCreateFactory, IDWriteFactory, IDWriteFontCollection,
+};
+use windows::core::{BOOL, PCWSTR};
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Dwm::{
     DWMWA_CAPTION_COLOR, DWMWA_USE_IMMERSIVE_DARK_MODE, DWMWA_WINDOW_CORNER_PREFERENCE,
@@ -626,11 +632,13 @@ fn draw_button(item: &DRAWITEMSTRUCT, state: &ChromeState) {
     } else {
         PRIMARY
     };
-    if !state.trim
-        && editor_emoji(id, &label)
-            .is_some_and(|emoji| draw_emoji(item.hwndItem, item.hDC, item.rcItem, emoji, color))
-    {
-        return;
+    if !state.trim {
+        let ui_font = state.ui_font.borrow().clone();
+        if editor_emoji(id, &label).is_some_and(|emoji| {
+            draw_emoji(item.hwndItem, item.hDC, item.rcItem, emoji, color, &ui_font)
+        }) {
+            return;
+        }
     }
     let text = wide(&label);
     let mut area = item.rcItem;
@@ -702,52 +710,64 @@ fn install_editor_tooltips(panel: &Panel) {
 }
 
 const EMOJI_FONT: &str = "Segoe UI Emoji";
+static EMOJI_SUPPORT: OnceLock<Mutex<HashMap<(String, String), bool>>> = OnceLock::new();
 
-fn emoji_supported() -> bool {
-    static SUPPORT: OnceLock<bool> = OnceLock::new();
-    *SUPPORT.get_or_init(|| unsafe {
-        let dc = CreateCompatibleDC(ptr::null_mut());
-        if dc.is_null() {
+fn font_has_emoji(font_family: &str, emoji: &str) -> bool {
+    let family = crate::config::ui_font_family(font_family).to_owned();
+    let key = (family.clone(), emoji.to_owned());
+    let cache = EMOJI_SUPPORT.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Ok(cache) = cache.lock()
+        && let Some(supported) = cache.get(&key)
+    {
+        return *supported;
+    }
+    let supported = unsafe {
+        let factory: IDWriteFactory = match DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED) {
+            Ok(factory) => factory,
+            Err(_) => return false,
+        };
+        let mut collection: Option<IDWriteFontCollection> = None;
+        if factory
+            .GetSystemFontCollection(&mut collection, false)
+            .is_err()
+        {
             return false;
         }
-        let family = wide(EMOJI_FONT);
-        let font = CreateFontW(
-            -16,
-            0,
-            0,
-            0,
-            FW_NORMAL as i32,
-            0,
-            0,
-            0,
-            DEFAULT_CHARSET as u32,
-            0,
-            0,
-            0,
-            0,
-            family.as_ptr(),
-        );
-        if font.is_null() {
-            DeleteDC(dc);
+        let Some(collection) = collection else {
+            return false;
+        };
+        let family = wide(&family);
+        let mut index = 0u32;
+        let mut exists = BOOL(0);
+        if collection
+            .FindFamilyName(PCWSTR(family.as_ptr()), &mut index, &mut exists)
+            .is_err()
+            || !exists.as_bool()
+        {
             return false;
         }
-        let previous = SelectObject(dc, font);
-        let mut name = [0u16; 64];
-        let length = GetTextFaceW(dc, name.len() as i32, name.as_mut_ptr());
-        if !previous.is_null() {
-            SelectObject(dc, previous);
-        }
-        DeleteObject(font);
-        DeleteDC(dc);
-        if length <= 0 {
+        let Ok(font_family) = collection.GetFontFamily(index) else {
             return false;
-        }
-        let end = name[..(length as usize).min(name.len())]
-            .iter()
-            .position(|&unit| unit == 0)
-            .unwrap_or(length as usize);
-        String::from_utf16_lossy(&name[..end]).eq_ignore_ascii_case(EMOJI_FONT)
-    })
+        };
+        let Ok(font) = font_family.GetFirstMatchingFont(
+            DWRITE_FONT_WEIGHT_NORMAL,
+            DWRITE_FONT_STRETCH_NORMAL,
+            DWRITE_FONT_STYLE_NORMAL,
+        ) else {
+            return false;
+        };
+        emoji
+            .chars()
+            .filter(|character| !matches!(*character, '\u{fe0f}' | '\u{200d}'))
+            .all(|character| {
+                font.HasCharacter(character as u32)
+                    .is_ok_and(|value| value.as_bool())
+            })
+    };
+    if let Ok(mut cache) = cache.lock() {
+        cache.insert(key, supported);
+    }
+    supported
 }
 
 fn editor_emoji(id: u16, label: &str) -> Option<&'static str> {
@@ -765,12 +785,16 @@ fn editor_emoji(id: u16, label: &str) -> Option<&'static str> {
     }
 }
 
-fn draw_emoji(hwnd: HWND, dc: HDC, rect: RECT, emoji: &str, color: u32) -> bool {
-    if !emoji_supported() {
+fn draw_emoji(hwnd: HWND, dc: HDC, rect: RECT, emoji: &str, color: u32, font_family: &str) -> bool {
+    let family = if font_has_emoji(font_family, emoji) {
+        crate::config::ui_font_family(font_family)
+    } else if font_has_emoji(EMOJI_FONT, emoji) {
+        EMOJI_FONT
+    } else {
         return false;
-    }
+    };
     let dpi = unsafe { GetDpiForWindow(hwnd) }.max(96) as i32;
-    let family = wide(EMOJI_FONT);
+    let family = wide(family);
     let font = unsafe {
         CreateFontW(
             -((17 * dpi) / 96),
