@@ -634,9 +634,15 @@ fn draw_button(item: &DRAWITEMSTRUCT, state: &ChromeState) {
     };
     if !state.trim {
         let ui_font = state.ui_font.borrow().clone();
-        if editor_emoji(id, &label).is_some_and(|emoji| {
-            draw_emoji(item.hwndItem, item.hDC, item.rcItem, emoji, color, &ui_font)
-        }) {
+        if draw_slot_glyph(
+            item.hwndItem,
+            item.hDC,
+            item.rcItem,
+            id,
+            &label,
+            color,
+            &ui_font,
+        ) {
             return;
         }
     }
@@ -712,9 +718,9 @@ fn install_editor_tooltips(panel: &Panel) {
 const EMOJI_FONT: &str = "Segoe UI Emoji";
 static EMOJI_SUPPORT: OnceLock<Mutex<HashMap<(String, String), bool>>> = OnceLock::new();
 
-fn font_has_emoji(font_family: &str, emoji: &str) -> bool {
+fn font_has_glyph(font_family: &str, text: &str) -> bool {
     let family = crate::config::ui_font_family(font_family).to_owned();
-    let key = (family.clone(), emoji.to_owned());
+    let key = (family.clone(), text.to_owned());
     let cache = EMOJI_SUPPORT.get_or_init(|| Mutex::new(HashMap::new()));
     if let Ok(cache) = cache.lock()
         && let Some(supported) = cache.get(&key)
@@ -756,8 +762,7 @@ fn font_has_emoji(font_family: &str, emoji: &str) -> bool {
         ) else {
             return false;
         };
-        emoji
-            .chars()
+        text.chars()
             .filter(|character| !matches!(*character, '\u{fe0f}' | '\u{200d}'))
             .all(|character| {
                 font.HasCharacter(character as u32)
@@ -770,26 +775,41 @@ fn font_has_emoji(font_family: &str, emoji: &str) -> bool {
     supported
 }
 
-fn editor_emoji(id: u16, label: &str) -> Option<&'static str> {
+fn editor_glyphs(id: u16, label: &str) -> Option<(&'static str, &'static str)> {
     match id {
-        IMPORT => Some("📥"),
-        PLAY if label == "停止" => Some("⏹️"),
-        PLAY => Some("▶️"),
-        CROP => Some("✂️"),
-        CLEAR => Some("🗑️"),
-        AUDIO_MODE => Some("🔊"),
-        TEXT_MODE => Some("📝"),
-        ADD => Some("➕"),
-        REMOVE => Some("➖"),
+        // Nerd Font private-use glyphs let Maple and other Nerd Fonts supply
+        // their own icon shapes; standard emoji remain the cross-font fallback.
+        IMPORT => Some(("\u{f019}", "📥")),
+        PLAY if label == "停止" => Some(("\u{f04d}", "⏹️")),
+        PLAY => Some(("\u{f04b}", "▶️")),
+        CROP => Some(("\u{f125}", "✂️")),
+        CLEAR => Some(("\u{f1f8}", "🗑️")),
+        AUDIO_MODE => Some(("\u{f028}", "🔊")),
+        TEXT_MODE => Some(("\u{f15c}", "📝")),
+        ADD => Some(("\u{f067}", "➕")),
+        REMOVE => Some(("\u{f068}", "➖")),
         _ => None,
     }
 }
 
-fn draw_emoji(hwnd: HWND, dc: HDC, rect: RECT, emoji: &str, color: u32, font_family: &str) -> bool {
-    let family = if font_has_emoji(font_family, emoji) {
-        crate::config::ui_font_family(font_family)
-    } else if font_has_emoji(EMOJI_FONT, emoji) {
-        EMOJI_FONT
+fn draw_slot_glyph(
+    hwnd: HWND,
+    dc: HDC,
+    rect: RECT,
+    id: u16,
+    label: &str,
+    color: u32,
+    font_family: &str,
+) -> bool {
+    let Some((preferred, emoji)) = editor_glyphs(id, label) else {
+        return false;
+    };
+    let (glyph, family) = if font_has_glyph(font_family, preferred) {
+        (preferred, crate::config::ui_font_family(font_family))
+    } else if font_has_glyph(font_family, emoji) {
+        (emoji, crate::config::ui_font_family(font_family))
+    } else if font_has_glyph(EMOJI_FONT, emoji) {
+        (emoji, EMOJI_FONT)
     } else {
         return false;
     };
@@ -817,7 +837,7 @@ fn draw_emoji(hwnd: HWND, dc: HDC, rect: RECT, emoji: &str, color: u32, font_fam
         return false;
     }
     let previous = unsafe { SelectObject(dc, font) };
-    let mut text = wide(emoji);
+    let mut text = wide(glyph);
     let mut area = rect;
     unsafe {
         SetBkMode(dc, TRANSPARENT as i32);
