@@ -25,6 +25,8 @@ pub mod playback;
 #[cfg(windows)]
 mod selector;
 #[cfg(windows)]
+mod settings_backdrop;
+#[cfg(windows)]
 pub mod settings_window;
 #[cfg(windows)]
 mod slider;

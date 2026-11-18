@@ -12,7 +12,7 @@ use windows_sys::Win32::{
 };
 
 use crate::desktop::{wide, window_text};
-use crate::settings_window::paint_embedded_backdrop;
+use crate::settings_backdrop::paint_embedded_backdrop;
 
 const SUBCLASS: usize = 1;
 const SURFACE: u32 = 0x002e_2c2c;

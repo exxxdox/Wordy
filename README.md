@@ -107,7 +107,9 @@ cargo add <crate>
 | `rust/audio.rs` + `rust/audio/` | WASAPI 设备枚举、播放/返听、VB-CABLE 路由、Windows 侦听策略、回环录制、裁剪与波形、托管音频 |
 | `rust/tts.rs` + `rust/tts/` | TTS 引擎、Cartesia HTTP/WebSocket、Volcengine SSE、音色标签 |
 | `rust/desktop.rs` | 悬浮输入框、托盘、Windows 通知 |
-| `rust/settings_window.rs`/`panels.rs` | 设置窗口与轮盘编辑器（DPI 缩放、玻璃外壳） |
+| `rust/settings_window.rs` / `rust/settings_window/controls.rs` | 设置窗口、DPI 布局和控件绘制 |
+| `rust/settings_backdrop.rs` | 设置窗口和嵌入控件共用的玻璃背景 |
+| `rust/panels.rs` | 轮盘编辑器和截取对话框 |
 | `rust/wheel*.rs` | 轮盘运行窗口、四种样式绘制、托盘与设置预览 |
 | `rust/config.rs`/`backup*.rs`/`credentials.rs` | 配置持久化、加密备份、凭据库 |
 | `rust/hotkey.rs`/`instance.rs`/`file_log.rs` | 快捷键解析与注册、单实例、日志轮转 |
