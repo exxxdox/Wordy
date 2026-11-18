@@ -1126,12 +1126,6 @@ impl SettingsWindow {
 
     fn show_page(&self) {
         let provider = self.settings.active_tts_provider;
-        // Batch the swap into one frame. WM_SETREDRAW on a hidden window would
-        // reveal it, so only batch while the shell is already on screen.
-        let shown = unsafe { IsWindowVisible(self.hwnd) } != 0;
-        if shown {
-            unsafe { SendMessageW(self.hwnd, WM_SETREDRAW, 0, 0) };
-        }
         for widget in &self.widgets {
             let correct_page = widget.page.is_none_or(|page| page == self.page);
             let visible = match widget.field {
@@ -1151,16 +1145,10 @@ impl SettingsWindow {
                 }
                 _ => true,
             };
-            unsafe {
-                ShowWindow(
-                    widget.hwnd,
-                    if correct_page && visible {
-                        SW_SHOW
-                    } else {
-                        SW_HIDE
-                    },
-                )
-            };
+            let desired = correct_page && visible;
+            if (unsafe { IsWindowVisible(widget.hwnd) } != 0) != desired {
+                unsafe { ShowWindow(widget.hwnd, if desired { SW_SHOW } else { SW_HIDE }) };
+            }
         }
         // Repaint the glass under controls that were hidden by the page switch.
         unsafe { InvalidateRect(self.hwnd, ptr::null(), 0) };
@@ -1187,16 +1175,9 @@ impl SettingsWindow {
                 }
             };
         }
-        if shown {
-            unsafe {
-                SendMessageW(self.hwnd, WM_SETREDRAW, 1, 0);
-                RedrawWindow(
-                    self.hwnd,
-                    ptr::null(),
-                    ptr::null_mut(),
-                    RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_FRAME | RDW_UPDATENOW,
-                );
-            }
+        unsafe {
+            // Repaint the uncovered shell; shown controls invalidate themselves.
+            RedrawWindow(self.hwnd, ptr::null(), ptr::null_mut(), RDW_INVALIDATE);
         }
     }
 
@@ -1644,6 +1625,91 @@ fn paint_shell(hwnd: HWND) {
     unsafe { GetClientRect(hwnd, &mut window) };
     let maximized = unsafe { IsZoomed(hwnd) != 0 };
     let scale = unsafe { GetDpiForWindow(hwnd) }.max(96) as i32;
+    SHELL_CACHE.with_borrow_mut(|cache| {
+        let stale = cache.as_ref().is_none_or(|shell| {
+            shell.width != window.right
+                || shell.height != window.bottom
+                || shell.scale != scale
+                || shell.maximized != maximized
+        });
+        if stale {
+            *cache = Some(build_shell(window.right, window.bottom, scale, maximized));
+        }
+        if let Some(shell) = cache.as_ref() {
+            // The whole frame is composed once per size; a page switch only blits it.
+            unsafe {
+                BitBlt(
+                    dc,
+                    0,
+                    0,
+                    window.right,
+                    window.bottom,
+                    shell.dc,
+                    0,
+                    0,
+                    SRCCOPY,
+                )
+            };
+        }
+    });
+    unsafe { EndPaint(hwnd, &paint) };
+}
+
+struct ShellCache {
+    width: i32,
+    height: i32,
+    scale: i32,
+    maximized: bool,
+    dc: HDC,
+    bitmap: HBITMAP,
+    previous: HGDIOBJ,
+}
+
+impl Drop for ShellCache {
+    fn drop(&mut self) {
+        unsafe {
+            SelectObject(self.dc, self.previous);
+            DeleteObject(self.bitmap);
+            DeleteDC(self.dc);
+        }
+    }
+}
+
+thread_local! {
+    static SHELL_CACHE: RefCell<Option<ShellCache>> = const { RefCell::new(None) };
+}
+
+fn build_shell(width: i32, height: i32, scale: i32, maximized: bool) -> ShellCache {
+    unsafe {
+        let screen = GetDC(ptr::null_mut());
+        let dc = CreateCompatibleDC(screen);
+        let bitmap = CreateCompatibleBitmap(screen, width.max(1), height.max(1));
+        ReleaseDC(ptr::null_mut(), screen);
+        let previous = SelectObject(dc, bitmap);
+        draw_shell(
+            dc,
+            RECT {
+                left: 0,
+                top: 0,
+                right: width,
+                bottom: height,
+            },
+            maximized,
+            scale,
+        );
+        ShellCache {
+            width,
+            height,
+            scale,
+            maximized,
+            dc,
+            bitmap,
+            previous,
+        }
+    }
+}
+
+fn draw_shell(dc: HDC, window: RECT, maximized: bool, scale: i32) {
     let pad = if maximized {
         0
     } else {
@@ -1768,7 +1834,6 @@ fn paint_shell(hwnd: HWND) {
     } else {
         fill(dc, &window, COLOR_KEY);
     }
-    unsafe { EndPaint(hwnd, &paint) };
 }
 
 fn paint_glass(dc: HDC, body: RECT) {
