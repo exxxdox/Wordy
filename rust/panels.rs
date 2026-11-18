@@ -200,7 +200,7 @@ impl Chrome {
                     SendMessageW(combo, CB_SETITEMHEIGHT, usize::MAX, item_height as isize);
                     SendMessageW(combo, CB_SETITEMHEIGHT, 0, item_height as isize);
                 }
-                style_selector(combo);
+                style_selector(combo, !trim);
             }
         }
         if trim || !state.gain.is_null() {

@@ -1065,7 +1065,7 @@ impl SettingsWindow {
             );
             send(hwnd, CB_SETITEMHEIGHT, 0, scaled(28, self.scale) as isize);
             // Same rounded dark field as the wheel editor's selectors.
-            crate::selector::style_selector(hwnd);
+            crate::selector::style_selector(hwnd, true);
         }
         self.widgets.push(Widget {
             hwnd,

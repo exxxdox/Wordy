@@ -12,9 +12,11 @@ use windows_sys::Win32::{
 };
 
 use crate::desktop::{wide, window_text};
+use crate::settings_window::paint_embedded_backdrop;
 
 const SUBCLASS: usize = 1;
-const BACKGROUND: u32 = 0x002e_2c2c;
+const SURFACE: u32 = 0x002e_2c2c;
+const PANEL: u32 = 0x001e_1c1c;
 const BORDER: u32 = 0x003a_38_38;
 const TEXT: u32 = 0x00f7_f5f5;
 const MUTED: u32 = 0x009d_9898;
@@ -22,10 +24,11 @@ const ACCENT: u32 = 0x00ff_840a;
 
 /// Paints a closed dropdown as the app's rounded dark field. The native paint
 /// (and its blue focus selection) is replaced; the popup list still belongs to
-/// the combo, so keyboard and dropdown behaviour stay native.
-pub fn style_selector(hwnd: HWND) {
+/// the combo, so keyboard and dropdown behaviour stay native. `glass` selects
+/// the backdrop under the rounded corners: the settings glass or a solid panel.
+pub fn style_selector(hwnd: HWND, glass: bool) {
     unsafe {
-        SetWindowSubclass(hwnd, Some(selector_proc), SUBCLASS, 0);
+        SetWindowSubclass(hwnd, Some(selector_proc), SUBCLASS, usize::from(glass));
         SetWindowPos(
             hwnd,
             ptr::null_mut(),
@@ -52,27 +55,14 @@ unsafe extern "system" fn selector_proc(
     wparam: WPARAM,
     lparam: LPARAM,
     _id: usize,
-    _data: usize,
+    glass: usize,
 ) -> LRESULT {
     unsafe {
         match message {
-            WM_SIZE => {
-                let mut size = RECT::default();
-                GetWindowRect(hwnd, &mut size);
-                let radius = scaled(hwnd, 10) * 2;
-                let region = CreateRoundRectRgn(
-                    0,
-                    0,
-                    size.right - size.left + 1,
-                    size.bottom - size.top + 1,
-                    radius,
-                    radius,
-                );
-                SetWindowRgn(hwnd, region, 1);
-                DefSubclassProc(hwnd, message, wparam, lparam)
-            }
+            // The native frame is light; fill it and let the client paint carry
+            // the rounded field. Unlike a window region, this keeps the parent
+            // from leaving stale black pixels in the corners.
             WM_NCPAINT => {
-                // The theme frame is light; fill the frame area and suppress it.
                 let mut size = RECT::default();
                 GetWindowRect(hwnd, &mut size);
                 let dc = GetWindowDC(hwnd);
@@ -85,13 +75,13 @@ unsafe extern "system" fn selector_proc(
                             right: size.right - size.left,
                             bottom: size.bottom - size.top,
                         },
-                        BACKGROUND,
+                        SURFACE,
                     );
                     ReleaseDC(hwnd, dc);
                 }
                 0
             }
-            WM_PAINT => paint(hwnd),
+            WM_PAINT => paint(hwnd, glass != 0),
             WM_SETFOCUS | WM_KILLFOCUS => {
                 let result = DefSubclassProc(hwnd, message, wparam, lparam);
                 InvalidateRect(hwnd, ptr::null(), 0);
@@ -102,13 +92,19 @@ unsafe extern "system" fn selector_proc(
     }
 }
 
-unsafe fn paint(hwnd: HWND) -> LRESULT {
+unsafe fn paint(hwnd: HWND, glass: bool) -> LRESULT {
     unsafe {
         let mut paint = PAINTSTRUCT::default();
         let dc = BeginPaint(hwnd, &mut paint);
         let mut client = RECT::default();
         GetClientRect(hwnd, &mut client);
-        fill(dc, client, BACKGROUND);
+        if glass {
+            paint_embedded_backdrop(hwnd, dc);
+        } else {
+            fill(dc, client, PANEL);
+        }
+        let border = if GetFocus() == hwnd { ACCENT } else { BORDER };
+        rounded(dc, client, scaled(hwnd, 10), Some(SURFACE), border);
         let font = SendMessageW(hwnd, WM_GETFONT, 0, 0) as HFONT;
         let previous = if font.is_null() {
             ptr::null_mut()
@@ -152,30 +148,34 @@ unsafe fn paint(hwnd: HWND) -> LRESULT {
             SelectObject(dc, previous);
         }
         EndPaint(hwnd, &paint);
-        border(hwnd);
         0
     }
 }
 
-unsafe fn border(hwnd: HWND) {
+fn rounded(dc: HDC, rect: RECT, radius: i32, background: Option<u32>, border: u32) {
     unsafe {
-        let mut size = RECT::default();
-        GetWindowRect(hwnd, &mut size);
-        let dc = GetWindowDC(hwnd);
-        if dc.is_null() {
-            return;
-        }
-        let color = if GetFocus() == hwnd { ACCENT } else { BORDER };
-        let (width, height) = (size.right - size.left, size.bottom - size.top);
-        let radius = scaled(hwnd, 10) * 2;
-        let pen = CreatePen(PS_SOLID, scaled(hwnd, 1).max(1), color);
+        let brush = background.map_or_else(
+            || GetStockObject(NULL_BRUSH),
+            |color| CreateSolidBrush(color),
+        );
+        let pen = CreatePen(PS_SOLID, 1, border);
+        let old_brush = SelectObject(dc, brush);
         let old_pen = SelectObject(dc, pen);
-        let old_brush = SelectObject(dc, GetStockObject(NULL_BRUSH));
-        RoundRect(dc, 0, 0, width, height, radius, radius);
-        SelectObject(dc, old_brush);
+        RoundRect(
+            dc,
+            rect.left,
+            rect.top,
+            rect.right,
+            rect.bottom,
+            radius * 2,
+            radius * 2,
+        );
         SelectObject(dc, old_pen);
+        SelectObject(dc, old_brush);
         DeleteObject(pen);
-        ReleaseDC(hwnd, dc);
+        if background.is_some() {
+            DeleteObject(brush);
+        }
     }
 }
 
