@@ -81,6 +81,185 @@ pub(crate) fn paint_buffered_rect(target: HDC, rect: RECT, draw: impl FnOnce(HDC
     }
 }
 
+/// Fraction of the pixel covered by the field (inside the rounded boundary) and
+/// by its one-pixel border, given the signed distance inside the boundary.
+fn corner_coverage(distance: f32) -> (f32, f32) {
+    let inside = (distance + 0.5).clamp(0.0, 1.0);
+    (inside, (1.0 - distance).clamp(0.0, 1.0) * inside)
+}
+
+/// GDI only has aliased rounded rectangles: `RoundRect` and window regions
+/// stair-step on the corner arcs, which reads as pixelation against the glass.
+/// Paint the four radius-sized corner squares with per-pixel coverage instead:
+/// `background` supplies the surface behind the field, the border is blended
+/// just inside the arc, and the control's own fill stays untouched inside.
+pub(crate) fn paint_round_field(
+    dc: HDC,
+    rect: RECT,
+    radius: i32,
+    border: u32,
+    background: impl FnOnce(HDC),
+) {
+    let (width, height) = (rect.right - rect.left, rect.bottom - rect.top);
+    if dc.is_null() || width <= 0 || height <= 0 {
+        return;
+    }
+    let radius = radius.min(width / 2).min(height / 2).max(0);
+    // Straight edges are pixel aligned, so only the arcs need coverage blending.
+    for band in [
+        RECT {
+            left: rect.left + radius,
+            top: rect.top,
+            right: rect.right - radius,
+            bottom: rect.top + 1,
+        },
+        RECT {
+            left: rect.left + radius,
+            top: rect.bottom - 1,
+            right: rect.right - radius,
+            bottom: rect.bottom,
+        },
+        RECT {
+            left: rect.left,
+            top: rect.top + radius,
+            right: rect.left + 1,
+            bottom: rect.bottom - radius,
+        },
+        RECT {
+            left: rect.right - 1,
+            top: rect.top + radius,
+            right: rect.right,
+            bottom: rect.bottom - radius,
+        },
+    ] {
+        unsafe {
+            SetDCBrushColor(dc, border);
+            FillRect(dc, &band, GetStockObject(DC_BRUSH) as HBRUSH);
+        }
+    }
+    if radius == 0 {
+        return;
+    }
+    unsafe {
+        let mut info = BITMAPINFO::default();
+        info.bmiHeader.biSize = mem::size_of::<BITMAPINFOHEADER>() as u32;
+        info.bmiHeader.biWidth = width;
+        info.bmiHeader.biHeight = -height;
+        info.bmiHeader.biPlanes = 1;
+        info.bmiHeader.biBitCount = 32;
+        info.bmiHeader.biCompression = BI_RGB;
+        let mut source_bits = ptr::null_mut();
+        let source_bitmap = CreateDIBSection(
+            dc,
+            &info,
+            DIB_RGB_COLORS,
+            &mut source_bits,
+            ptr::null_mut(),
+            0,
+        );
+        let source = CreateCompatibleDC(dc);
+        if source_bitmap.is_null() || source.is_null() || source_bits.is_null() {
+            if !source_bitmap.is_null() {
+                DeleteObject(source_bitmap);
+            }
+            if !source.is_null() {
+                DeleteDC(source);
+            }
+            return;
+        }
+        let previous_source = SelectObject(source, source_bitmap);
+        background(source);
+        info.bmiHeader.biWidth = radius;
+        info.bmiHeader.biHeight = -radius;
+        let mut tile_bits = ptr::null_mut();
+        let tile_bitmap = CreateDIBSection(
+            dc,
+            &info,
+            DIB_RGB_COLORS,
+            &mut tile_bits,
+            ptr::null_mut(),
+            0,
+        );
+        let tile = CreateCompatibleDC(dc);
+        if !tile_bitmap.is_null() && !tile.is_null() && !tile_bits.is_null() {
+            let previous_tile = SelectObject(tile, tile_bitmap);
+            let source_pixels =
+                std::slice::from_raw_parts(source_bits.cast::<u8>(), (width * height * 4) as usize);
+            let tile_pixels = std::slice::from_raw_parts_mut(
+                tile_bits.cast::<u8>(),
+                (radius * radius * 4) as usize,
+            );
+            // Channel order matches the DIB memory: blue, green, red.
+            let border = [
+                ((border >> 16) & 0xff) as f32,
+                ((border >> 8) & 0xff) as f32,
+                (border & 0xff) as f32,
+            ];
+            let arc = radius as f32;
+            for (left, top, flipped_x, flipped_y) in [
+                (rect.left, rect.top, false, false),
+                (rect.right - radius, rect.top, true, false),
+                (rect.left, rect.bottom - radius, false, true),
+                (rect.right - radius, rect.bottom - radius, true, true),
+            ] {
+                for row in 0..radius {
+                    let ly = if flipped_y { radius - 1 - row } else { row };
+                    for col in 0..radius {
+                        let lx = if flipped_x { radius - 1 - col } else { col };
+                        let (x, y) = (left + col, top + row);
+                        let source_index = ((y - rect.top) * width + (x - rect.left)) as usize * 4;
+                        // Distance from the outer edge keeps the same math for every corner.
+                        let distance = arc - (lx as f32 + 0.5 - arc).hypot(ly as f32 + 0.5 - arc);
+                        let (inside, stroke) = corner_coverage(distance);
+                        let behind = 1.0 - inside;
+                        let alpha = stroke + behind * (1.0 - stroke);
+                        let blend = |channel: usize| {
+                            let under = f32::from(source_pixels[source_index + channel]);
+                            (border[channel] * stroke + under * behind * (1.0 - stroke))
+                                .round()
+                                .clamp(0.0, 255.0) as u8
+                        };
+                        let tile_index = (row * radius + col) as usize * 4;
+                        // The DIB keeps premultiplied BGRA, the layout AlphaBlend expects.
+                        tile_pixels[tile_index] = blend(0);
+                        tile_pixels[tile_index + 1] = blend(1);
+                        tile_pixels[tile_index + 2] = blend(2);
+                        tile_pixels[tile_index + 3] = (alpha * 255.0).round() as u8;
+                    }
+                }
+                AlphaBlend(
+                    dc,
+                    left,
+                    top,
+                    radius,
+                    radius,
+                    tile,
+                    0,
+                    0,
+                    radius,
+                    radius,
+                    BLENDFUNCTION {
+                        BlendOp: AC_SRC_OVER as u8,
+                        BlendFlags: 0,
+                        SourceConstantAlpha: 255,
+                        AlphaFormat: AC_SRC_ALPHA as u8,
+                    },
+                );
+            }
+            SelectObject(tile, previous_tile);
+        }
+        if !tile_bitmap.is_null() {
+            DeleteObject(tile_bitmap);
+        }
+        if !tile.is_null() {
+            DeleteDC(tile);
+        }
+        SelectObject(source, previous_source);
+        DeleteObject(source_bitmap);
+        DeleteDC(source);
+    }
+}
+
 pub(crate) fn host_window(instance: HINSTANCE) -> io::Result<HWND> {
     let class = WNDCLASSW {
         lpfnWndProc: Some(host_proc),
@@ -714,6 +893,66 @@ fn edit_line_height(hwnd: HWND) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn corner_coverage_ramps_the_arc_instead_of_stair_stepping() {
+        assert_eq!(corner_coverage(-2.0), (0.0, 0.0));
+        assert_eq!(corner_coverage(2.0), (1.0, 0.0));
+        let (inside, stroke) = corner_coverage(0.25);
+        assert!(
+            (0.0..1.0).contains(&inside) && (0.0..1.0).contains(&stroke),
+            "pixels on the boundary must be blended, not chosen by a threshold"
+        );
+    }
+
+    #[test]
+    fn round_field_blends_the_corner_arc() {
+        const CARD: u32 = 0x3e3b3b;
+        const FIELD: u32 = 0x2e2c2c;
+        const BORDER: u32 = 0x3a3838;
+        let rgb = |color: u32| [color as u8, (color >> 8) as u8, (color >> 16) as u8];
+        unsafe {
+            let dc = CreateCompatibleDC(ptr::null_mut());
+            let mut info = BITMAPINFO::default();
+            info.bmiHeader.biSize = mem::size_of::<BITMAPINFOHEADER>() as u32;
+            info.bmiHeader.biWidth = 12;
+            info.bmiHeader.biHeight = -12;
+            info.bmiHeader.biPlanes = 1;
+            info.bmiHeader.biBitCount = 32;
+            info.bmiHeader.biCompression = BI_RGB;
+            let mut bits = ptr::null_mut();
+            let bitmap = CreateDIBSection(dc, &info, DIB_RGB_COLORS, &mut bits, ptr::null_mut(), 0);
+            assert!(!dc.is_null() && !bitmap.is_null() && !bits.is_null());
+            let previous = SelectObject(dc, bitmap);
+            let rect = RECT {
+                left: 0,
+                top: 0,
+                right: 12,
+                bottom: 12,
+            };
+            SetDCBrushColor(dc, FIELD);
+            FillRect(dc, &rect, GetStockObject(DC_BRUSH) as HBRUSH);
+            paint_round_field(dc, rect, 6, BORDER, |memory| {
+                SetDCBrushColor(memory, CARD);
+                FillRect(memory, &rect, GetStockObject(DC_BRUSH) as HBRUSH);
+            });
+            let pixels = std::slice::from_raw_parts(bits.cast::<u8>(), 12 * 12 * 4);
+            let read = |x: usize, y: usize| {
+                let index = (y * 12 + x) * 4;
+                [pixels[index + 2], pixels[index + 1], pixels[index]]
+            };
+            assert_eq!(read(0, 0), rgb(CARD), "the corner must show the card");
+            let known = [rgb(CARD), rgb(FIELD), rgb(BORDER)];
+            let blended = (0..6)
+                .flat_map(|y| (0..6).map(move |x| (x, y)))
+                .filter(|&(x, y)| !known.contains(&read(x, y)))
+                .count();
+            SelectObject(dc, previous);
+            DeleteObject(bitmap);
+            DeleteDC(dc);
+            assert!(blended > 0, "the corner arc is still hard edged");
+        }
+    }
 
     #[test]
     fn tray_callbacks_reach_the_event_queue_without_reposting_forever() {

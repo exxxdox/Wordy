@@ -1,4 +1,5 @@
 use super::*;
+use crate::desktop::paint_round_field;
 
 pub(crate) struct Chrome {
     hwnd: HWND,
@@ -217,22 +218,9 @@ unsafe extern "system" fn card_edit_proc(
             right: window.right - window.left,
             bottom: window.bottom - window.top,
         };
-        let full = CreateRectRgn(0, 0, rect.right + 1, rect.bottom + 1);
-        let rounded_region = CreateRoundRectRgn(0, 0, rect.right + 1, rect.bottom + 1, 16, 16);
-        if !full.is_null() && !rounded_region.is_null() {
-            CombineRgn(full, full, rounded_region, RGN_DIFF);
-            let saved = SaveDC(dc);
-            ExtSelectClipRgn(dc, full, RGN_AND);
-            fill(dc, rect, corner);
-            RestoreDC(dc, saved);
-        }
-        if !full.is_null() {
-            DeleteObject(full);
-        }
-        if !rounded_region.is_null() {
-            DeleteObject(rounded_region);
-        }
-        rounded(dc, rect, 16, None, SEPARATOR);
+        // GDI regions and `RoundRect` leave the corner arcs stair-stepped; blend
+        // them against the card instead.
+        paint_round_field(dc, rect, 8, SEPARATOR, |memory| fill(memory, rect, corner));
         ReleaseDC(hwnd, dc);
         result
     }
