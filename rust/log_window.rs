@@ -209,7 +209,9 @@ unsafe extern "system" fn window_proc(
             WM_NCCREATE => {
                 let create = &*(lparam as *const CREATESTRUCTW);
                 SetWindowLongPtrW(hwnd, GWLP_USERDATA, create.lpCreateParams as isize);
-                1
+                // Let DefWindowProc store the creation title; returning 1 here
+                // without it left the title bar empty.
+                DefWindowProcW(hwnd, message, wparam, lparam)
             }
             WM_SIZE => {
                 let mut client = RECT::default();
