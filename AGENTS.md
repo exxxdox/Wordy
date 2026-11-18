@@ -31,6 +31,8 @@
 cargo test                       # 全部 Rust 测试
 ```
 
+`build.rs` 用 `embed-resource` 编译 `wordy.rc`，把 `rust/assets/wordy.ico` 写入 exe 图标资源；缺失时资源管理器只显示默认图标。`tests/rust_icon.rs` 回归检查构建产物的 RT_ICON/RT_GROUP_ICON。
+
 发布工作流 `.github/workflows/release.yml` 使用 Rust stable、`cargo test --locked`，再调用 `wordy.ps1 build`。`dev.cmd` 仍转发 `wordy.ps1` 参数。
 
 ## 配置备份

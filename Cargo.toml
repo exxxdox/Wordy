@@ -14,6 +14,10 @@ path = "rust/main.rs"
 [features]
 packaged = []
 
+[build-dependencies]
+# 只有 build.rs 编译 .rc 才能把图标嵌入 exe 文件资源。
+embed-resource = "3"
+
 [dependencies]
 base64 = "0.22"
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "native-tls"] }
