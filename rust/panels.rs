@@ -90,7 +90,7 @@ fn button(template: &mut Template, id: u16, label: &str, bounds: [u16; 4]) {
 fn label(template: &mut Template, id: u16, label: &str, bounds: [u16; 4]) {
     // Ownerdraw so the glass (or card) is repainted under the text every time,
     // including after the UI font changes.
-    template.control(0x82, id, label, BASE | SS_OWNERDRAW as u32, bounds);
+    template.control(0x82, id, label, BASE | SS_OWNERDRAW, bounds);
 }
 
 fn edit(template: &mut Template, id: u16, bounds: [u16; 4]) {

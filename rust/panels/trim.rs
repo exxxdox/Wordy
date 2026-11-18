@@ -802,7 +802,7 @@ mod tests {
 
         trim.progress(Some(1.0));
         assert_ne!(unsafe { GetUpdateRect(wave, &mut dirty, 0) }, 0);
-        assert!(dirty.left <= x - 1 && dirty.right > x);
+        assert!(dirty.left < x && dirty.right > x);
         assert!(
             dirty.right - dirty.left <= 3,
             "only the playhead should be dirty"
@@ -814,7 +814,7 @@ mod tests {
 
         trim.progress(None);
         assert_ne!(unsafe { GetUpdateRect(wave, &mut dirty, 0) }, 0);
-        assert!(dirty.left <= x - 1 && dirty.right > x);
+        assert!(dirty.left < x && dirty.right > x);
         assert!(dirty.right - dirty.left <= 3);
     }
 

@@ -398,6 +398,7 @@ impl SettingsWindow {
 
     /// Dialog templates carry their own DS_SETFONT, so embedded editors would
     /// otherwise render smaller text than the settings pages around them.
+    #[allow(clippy::not_unsafe_ptr_arg_deref)]
     pub fn apply_panel_font(&self, root: HWND) {
         let body = self.fonts[0];
         if body.is_null() {
@@ -1495,7 +1496,7 @@ unsafe extern "system" fn window_proc(
         WM_COMMAND if lparam != 0 => {
             let id = wparam as u16;
             let notification = ((wparam >> 16) & 0xffff) as u32;
-            if notification == BN_CLICKED as u32
+            if notification == BN_CLICKED
                 && (Field::TabLocal as u16..=Field::TabRolling as u16).contains(&id)
             {
                 // The page swap runs after the posted action; paint the selected

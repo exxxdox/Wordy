@@ -849,6 +849,7 @@ unsafe fn overlay_key_brush(hwnd: HWND) -> HBRUSH {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 unsafe fn paint_capsule(
     hwnd: HWND,
     dc: HDC,

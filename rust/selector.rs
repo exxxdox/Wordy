@@ -15,12 +15,12 @@ use crate::desktop::{wide, window_text};
 use crate::settings_backdrop::paint_embedded_backdrop;
 
 const SUBCLASS: usize = 1;
-const SURFACE: u32 = 0x002e_2c2c;
-const PANEL: u32 = 0x001e_1c1c;
-const BORDER: u32 = 0x003a_38_38;
-const TEXT: u32 = 0x00f7_f5f5;
-const MUTED: u32 = 0x009d_9898;
-const ACCENT: u32 = 0x00ff_840a;
+const SURFACE: u32 = 0x002e2c2c;
+const PANEL: u32 = 0x001e1c1c;
+const BORDER: u32 = 0x003a3838;
+const TEXT: u32 = 0x00f7f5f5;
+const MUTED: u32 = 0x009d9898;
+const ACCENT: u32 = 0x00ff840a;
 
 /// Paints a closed dropdown as the app's rounded dark field. The native paint
 /// (and its blue focus selection) is replaced; the popup list still belongs to

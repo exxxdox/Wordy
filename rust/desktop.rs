@@ -537,42 +537,12 @@ fn copy_wide(target: &mut [u16], text: &str) {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn tray_callbacks_reach_the_event_queue_without_reposting_forever() {
-        unsafe {
-            let instance = windows_sys::Win32::System::LibraryLoader::GetModuleHandleW(ptr::null());
-            let host = host_window(instance).unwrap();
-            for event in [WM_RBUTTONUP, WM_CONTEXTMENU, WM_LBUTTONDBLCLK] {
-                SendMessageW(host, TRAY_MESSAGE, 1, event as isize);
-                let mut message = MSG::default();
-                let received = PeekMessageW(&mut message, host, TRAY_EVENT, TRAY_EVENT, PM_REMOVE);
-                if received == 0 {
-                    DestroyWindow(host);
-                }
-                assert_ne!(received, 0, "tray callback {event:#x} was swallowed");
-                assert_eq!(message.wParam, 1);
-                assert_eq!(message.lParam, event as isize);
-                DispatchMessageW(&message);
-                assert_eq!(
-                    PeekMessageW(&mut message, host, TRAY_EVENT, TRAY_EVENT, PM_REMOVE),
-                    0,
-                    "dispatching the internal event must not enqueue it again"
-                );
-            }
-            DestroyWindow(host);
-        }
-    }
-}
-
 const CENTERED_EDIT: usize = 9;
 const EDIT_BORDER: windows_sys::core::PCWSTR = w!("WordyEditBorder");
 
 /// Same centring as [`center_edit_text`], plus a hairline border painted with
 /// the non-client bands (panels have no custom border renderer of their own).
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub fn frame_edit_text(hwnd: HWND, background: u32, border: u32) {
     unsafe { SetPropW(hwnd, EDIT_BORDER, border as usize as _) };
     center_edit_text(hwnd, background);
@@ -581,6 +551,7 @@ pub fn frame_edit_text(hwnd: HWND, background: u32, border: u32) {
 /// Win32 draws single-line edit text at the top of the client area. Shrink the
 /// client to one text line so the text sits vertically centered, and paint the
 /// rest of the field with `background`; editing behaviour stays single-line.
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub fn center_edit_text(hwnd: HWND, background: u32) {
     unsafe {
         SetWindowSubclass(
@@ -730,4 +701,35 @@ unsafe fn edit_line_height(hwnd: HWND) -> i32 {
     }
     unsafe { ReleaseDC(hwnd, dc) };
     if measured != 0 { metrics.tmHeight } else { 0 }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tray_callbacks_reach_the_event_queue_without_reposting_forever() {
+        unsafe {
+            let instance = windows_sys::Win32::System::LibraryLoader::GetModuleHandleW(ptr::null());
+            let host = host_window(instance).unwrap();
+            for event in [WM_RBUTTONUP, WM_CONTEXTMENU, WM_LBUTTONDBLCLK] {
+                SendMessageW(host, TRAY_MESSAGE, 1, event as isize);
+                let mut message = MSG::default();
+                let received = PeekMessageW(&mut message, host, TRAY_EVENT, TRAY_EVENT, PM_REMOVE);
+                if received == 0 {
+                    DestroyWindow(host);
+                }
+                assert_ne!(received, 0, "tray callback {event:#x} was swallowed");
+                assert_eq!(message.wParam, 1);
+                assert_eq!(message.lParam, event as isize);
+                DispatchMessageW(&message);
+                assert_eq!(
+                    PeekMessageW(&mut message, host, TRAY_EVENT, TRAY_EVENT, PM_REMOVE),
+                    0,
+                    "dispatching the internal event must not enqueue it again"
+                );
+            }
+            DestroyWindow(host);
+        }
+    }
 }
