@@ -43,7 +43,6 @@ pub const TEXT: u16 = 208;
 pub const GAIN: u16 = 209;
 pub const SAVE: u16 = 210;
 pub const IMPORT: u16 = 211;
-pub const RECORD: u16 = 212;
 pub const CROP: u16 = 213;
 pub const PLAY: u16 = 214;
 pub const CLEAR: u16 = 215;
@@ -54,7 +53,6 @@ pub const END: u16 = 219;
 pub const STOP: u16 = 220;
 pub const AUDIO_MODE: u16 = 221;
 pub const TEXT_MODE: u16 = 222;
-pub const CANCEL_RECORDING: u16 = 223;
 const PRECISE: u16 = 224;
 const RANGE_SUMMARY: u16 = 225;
 const LOADING: u16 = 226;
@@ -125,7 +123,6 @@ struct ChromeState {
     precise: Cell<bool>,
     previewing: Cell<bool>,
     text_mode: Cell<bool>,
-    recording: Cell<bool>,
 }
 
 impl Chrome {
@@ -139,7 +136,6 @@ impl Chrome {
             precise: Cell::new(false),
             previewing: Cell::new(false),
             text_mode: Cell::new(false),
-            recording: Cell::new(false),
         });
         if !trim || rolling {
             // Keep the numeric field as the existing app-message contract and display a slider instead.
@@ -574,11 +570,8 @@ fn draw_button(item: &DRAWITEMSTRUCT, state: &ChromeState) {
     } else {
         (ELEVATED, if focus { ACCENT } else { SEPARATOR })
     };
-    let card_button = !state.trim
-        && matches!(
-            id,
-            AUDIO_MODE | TEXT_MODE | IMPORT | RECORD | CANCEL_RECORDING | PLAY | CROP | CLEAR
-        );
+    let card_button =
+        !state.trim && matches!(id, AUDIO_MODE | TEXT_MODE | IMPORT | PLAY | CROP | CLEAR);
     // Toolbar buttons sit on the glass, so their rounded corners must show the
     // glass; a solid surface fill would leave dark corner squares.
     let toolbar = !state.trim && matches!(id, HOTKEY | ADD | REMOVE | RENAME);
@@ -1029,8 +1022,6 @@ impl Editor {
         label(&mut template, 303, "朗读文字", [217, 150, 60, 15]);
         edit(&mut template, TEXT, [217, 167, 272, 18]);
         button(&mut template, IMPORT, "导入", [217, 152, 33, 18]);
-        button(&mut template, RECORD, "录制", [253, 152, 46, 18]);
-        button(&mut template, CANCEL_RECORDING, "取消", [302, 152, 37, 18]);
         button(&mut template, PLAY, "试听", [342, 152, 42, 18]);
         button(&mut template, CROP, "截取", [388, 152, 33, 18]);
         button(&mut template, CLEAR, "清空", [425, 152, 33, 18]);
@@ -1051,7 +1042,6 @@ impl Editor {
             unsafe { SendMessageW(editor.panel.child(id), EM_SETLIMITTEXT, limit, 0) };
         }
         unsafe { ShowWindow(editor.panel.child(NAME), SW_HIDE) };
-        editor.recording(false);
         editor.refresh(settings)?;
         Ok(editor)
     }
@@ -1085,7 +1075,6 @@ impl Editor {
         let text_mode = !wheel.texts[self.slot].is_empty()
             || (wheel.slots[self.slot].is_empty() && self.empty_text_mode);
         self.chrome.state.text_mode.set(text_mode);
-        let recording = self.chrome.state.recording.get();
         unsafe { InvalidateRect(self.panel.0, ptr::null(), 1) };
         for (id, visible) in [
             (TEXT, text_mode),
@@ -1094,7 +1083,6 @@ impl Editor {
             (GAIN_VALUE, !text_mode && !self.chrome.state.gain.is_null()),
             (304, !text_mode),
             (IMPORT, !text_mode),
-            (RECORD, !text_mode),
             (CROP, !text_mode),
         ] {
             unsafe {
@@ -1111,21 +1099,16 @@ impl Editor {
                 self.chrome.state.gain,
                 if text_mode { SW_HIDE } else { SW_SHOW },
             );
-            EnableWindow(self.chrome.state.gain, i32::from(has_audio && !recording));
+            EnableWindow(self.chrome.state.gain, i32::from(has_audio));
             EnableWindow(
                 self.panel.child(REMOVE),
-                i32::from(settings.wheel_count() > 1 && !recording),
+                i32::from(settings.wheel_count() > 1),
             );
-            EnableWindow(
-                self.panel.child(PLAY),
-                i32::from((has_audio || has_text) && !recording),
-            );
-            EnableWindow(self.panel.child(CROP), i32::from(has_audio && !recording));
+            EnableWindow(self.panel.child(PLAY), i32::from(has_audio || has_text));
+            EnableWindow(self.panel.child(CROP), i32::from(has_audio));
             EnableWindow(
                 self.panel.child(CLEAR),
-                i32::from(
-                    (has_audio || has_text || !wheel.labels[self.slot].is_empty()) && !recording,
-                ),
+                i32::from(has_audio || has_text || !wheel.labels[self.slot].is_empty()),
             );
             for id in [AUDIO_MODE, TEXT_MODE] {
                 InvalidateRect(self.panel.child(id), ptr::null(), 0);
@@ -1142,7 +1125,7 @@ impl Editor {
     }
 
     /// Disables editing while a sample is being imported, saved, or previewed,
-    /// leaving the recording and preview buttons available.
+    /// leaving the preview button available to stop playback.
     pub fn busy(&mut self, active: bool) {
         if self.busy == active {
             return;
@@ -1157,26 +1140,6 @@ impl Editor {
             }
             EnableWindow(self.chrome.state.gain, i32::from(!active));
         }
-    }
-
-    pub fn recording(&self, active: bool) {
-        self.chrome.state.recording.set(active);
-        self.panel
-            .set_text(RECORD, if active { "停止" } else { "录制" });
-        unsafe {
-            ShowWindow(
-                self.panel.child(CANCEL_RECORDING),
-                if active { SW_SHOW } else { SW_HIDE },
-            );
-            for id in [
-                WHEEL, PICK, ADD, REMOVE, HOTKEY, STYLE, LABEL, TEXT, AUDIO_MODE, TEXT_MODE,
-                IMPORT, PLAY, CROP, CLEAR,
-            ] {
-                EnableWindow(self.panel.child(id), i32::from(!active));
-            }
-            EnableWindow(self.chrome.state.gain, i32::from(!active));
-        };
-        layout_editor(self.panel.0, &self.chrome.state);
     }
 }
 
@@ -1264,13 +1227,10 @@ fn layout_editor(hwnd: HWND, state: &ChromeState) {
     );
     at(i32::from(TEXT), left, 205, field, 32);
     let mode = state.text_mode.get();
-    let active = state.recording.get();
     let action_y = if mode { 244 } else { 222 };
     let (mut x, gap) = (left, px(6));
     for (id, control_width, visible) in [
         (IMPORT, 42, !mode),
-        (RECORD, 60, !mode),
-        (CANCEL_RECORDING, 48, active && !mode),
         (PLAY, 64, true),
         (CROP, 42, !mode),
         (CLEAR, 42, true),

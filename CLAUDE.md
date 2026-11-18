@@ -45,7 +45,7 @@ cargo test                       # 全部 Rust 测试
 
 每盘八槽、独立快捷键、任意数量、至少一个。第一盘存 `chat_wheel_name/hotkey/slots/labels/texts`，后续在 `additional_chat_wheels`。快捷键不得与输入框/其他轮盘/后台录制重复。槽内容互斥：有文字则朗读，否则播放音频；切换会清空另一类。音频槽 `volumes` 0–300%，播放时快照传主输出与返听。托管音频在 `audio_clips`，优先硬链接。清空槽保留音量。删除/清空后仅删除无任何轮盘引用的文件。新增轮盘先弹窗输入快捷键，校验通过再注册。
 
-后台录制（默认 F10）环缓冲保留 `rolling_buffer_seconds`（5–300），停止后打开截取对话框；默认目标 `rolling_buffer_target`，保存成功后写回。名称默认「录音 HHMMSS」。录制上限 60 秒，按钮显示已录秒数并自动停止。WASAPI 回环先查可读帧再读，停止超时不得关闭仍在 read 的流；取消超时只记警告、不阻断关闭。
+轮盘音频可从文件导入，或通过后台录制保存到槽位。后台录制（默认 F10）环缓冲保留 `rolling_buffer_seconds`（5–300），停止后打开截取对话框；默认目标 `rolling_buffer_target`，保存成功后写回。名称默认「录音 HHMMSS」。WASAPI 回环先查可读帧再读，停止超时不得关闭仍在 read 的流；取消超时只记警告、不阻断关闭。
 
 ## TTS
 

@@ -211,7 +211,6 @@ struct App {
     settings_window: SettingsWindow,
     toasts: Toasts,
     recording: Option<Recording>,
-    slot_recording: Option<(Recording, usize, usize, Instant)>,
     trim: Option<TrimSession>,
     previews: HashMap<u64, tempfile::NamedTempFile>,
     editor_preview: Option<(u64, bool)>,
@@ -295,7 +294,6 @@ impl App {
             settings_window,
             toasts: Toasts::new(),
             recording: None,
-            slot_recording: None,
             trim: None,
             previews: HashMap::new(),
             editor_preview: None,
@@ -413,11 +411,6 @@ impl App {
                 self.log(format!("停止后台录制失败：{error}"));
             }
         }
-        if let Some((recording, ..)) = self.slot_recording.take()
-            && let Err(error) = recording.cancel()
-        {
-            self.log(format!("停止录制失败：{error}"));
-        }
         // A submitted save owns the only temporary recording. Finish it before dropping results.
         while self.pending_saves > 0 {
             let result = self.results.recv().map_err(io::Error::other)?;
@@ -436,20 +429,7 @@ impl App {
             self.toasts.clear();
             self.log_at("WARNING", format!("设置反馈显示失败：{error}"));
         }
-        if let Some((recording, ..)) = &self.slot_recording
-            && !recording.is_running()
-        {
-            self.editor_action(usize::from(panels::RECORD), self.editor.panel.0)?;
-        } else if let Some((_, _, _, started)) = &self.slot_recording {
-            let seconds = started.elapsed().as_secs().min(60);
-            self.editor
-                .panel
-                .set_text(panels::RECORD, &format!("停止 {seconds}s"));
-        }
-        let busy = self.slot_recording.is_some()
-            || self.pending_saves > 0
-            || self.trim.is_some()
-            || self.editor_preview.is_some();
+        let busy = self.pending_saves > 0 || self.trim.is_some() || self.editor_preview.is_some();
         self.editor.busy(busy);
         if let Some(slot) = self.wheel.tick()
             && let Some(wheel) = self.active_wheel.take()
@@ -1006,12 +986,7 @@ impl App {
 
     fn backup(&mut self, export: bool) -> io::Result<()> {
         let owner = self.settings_window.hwnd();
-        if !export
-            && (self.recording.is_some()
-                || self.slot_recording.is_some()
-                || self.pending_saves > 0
-                || self.trim.is_some())
-        {
+        if !export && (self.recording.is_some() || self.pending_saves > 0 || self.trim.is_some()) {
             return Err(io::Error::other("请先结束录制或音频导入，再导入备份"));
         }
         let base = if cfg!(feature = "packaged") {
@@ -1297,12 +1272,6 @@ impl App {
     }
 
     fn close_editor(&mut self) -> io::Result<()> {
-        if let Some((recording, ..)) = self.slot_recording.take()
-            && let Err(error) = recording.cancel()
-        {
-            // A stuck capture keeps device ownership; closing the editor must still finish.
-            self.log_at("WARNING", format!("停止录制失败：{error}"));
-        }
         if let Some((_, text)) = self.editor_preview.take() {
             if text {
                 self.playback.stop_speech();
@@ -1310,7 +1279,6 @@ impl App {
                 self.playback.stop_clip();
             }
         }
-        self.editor.recording(false);
         self.editor.panel.set_text(panels::PLAY, "试听");
         Ok(())
     }
@@ -1330,11 +1298,10 @@ impl App {
         if action == CANCEL && notification == 0 {
             return self.close_editor();
         }
-        let locked = self.slot_recording.is_some()
-            || self.pending_saves > 0
+        let locked = self.pending_saves > 0
             || self.trim.is_some()
             || self.editor_preview.is_some_and(|(_, is_text)| is_text);
-        if locked && ![RECORD, PLAY, CANCEL_RECORDING].contains(&action) {
+        if locked && action != PLAY {
             return Ok(());
         }
         let (wheel, slot) = (editor.wheel, editor.slot);
@@ -1497,61 +1464,6 @@ impl App {
                 self.pending_saves += 1;
                 return Ok(());
             }
-            RECORD if notification == 0 => {
-                if let Some((recording, wheel, slot, _)) = self.slot_recording.take() {
-                    let config = self.config.path().to_path_buf();
-                    let label = recording_label();
-                    let events = self.jobs.clone();
-                    std::thread::Builder::new()
-                        .name("WordySlotCapture".into())
-                        .spawn(move || {
-                            let (result, source) =
-                                match recording.stop().and_then(|pcm| audio::write_wave(&pcm)) {
-                                    Ok(clip) => (
-                                        audio::stage_clip(
-                                            clip.path(),
-                                            &config,
-                                            &AtomicBool::new(false),
-                                        ),
-                                        Some(clip),
-                                    ),
-                                    Err(error) => (Err(error), None),
-                                };
-                            let _ = events.send(Background::SlotClip {
-                                wheel,
-                                slot,
-                                label,
-                                gain: None,
-                                result,
-                                source,
-                                trim: None,
-                                rolling: false,
-                            });
-                        })?;
-                    self.pending_saves += 1;
-                    editor.recording(false);
-                } else {
-                    if locked {
-                        return Ok(());
-                    }
-                    self.playback.stop_clip();
-                    self.slot_recording =
-                        Some((Recording::start(None)?, wheel, slot, Instant::now()));
-                    editor.recording(true);
-                }
-                return Ok(());
-            }
-            CANCEL_RECORDING if notification == 0 => {
-                let stopped = self
-                    .slot_recording
-                    .take()
-                    .and_then(|(recording, ..)| recording.cancel().err());
-                editor.recording(false);
-                if let Some(error) = stopped {
-                    self.log_at("WARNING", format!("停止录制失败：{error}"));
-                }
-                return Ok(());
-            }
             CROP if notification == 0 => {
                 let item = self.config.settings().wheel(wheel).unwrap();
                 if item.slots[slot].is_empty() {
@@ -1579,7 +1491,7 @@ impl App {
                 return Ok(());
             }
             PLAY if notification == 0 => {
-                if self.slot_recording.is_some() || self.trim.is_some() {
+                if self.trim.is_some() {
                     return Ok(());
                 }
                 if let Some((_, text)) = self.editor_preview {
@@ -1769,5 +1681,31 @@ mod tests {
     #[test]
     fn native_dialogs_can_be_created_without_touching_live_config() {
         smoke_test().unwrap();
+    }
+
+    #[test]
+    fn audio_slot_editor_offers_import_preview_and_trim_without_recording() {
+        let instance = unsafe { GetModuleHandleW(ptr::null()) };
+        let host = Host(host_window(instance).unwrap());
+        let settings = Settings::default();
+        let settings_window = SettingsWindow::new(host.0, &settings).unwrap();
+        let editor = Editor::new_embedded(host.0, settings_window.hwnd(), &settings).unwrap();
+        let mut captions = Vec::new();
+        unsafe {
+            let mut child = GetWindow(editor.panel.0, GW_CHILD);
+            while !child.is_null() {
+                captions.push(window_text(child));
+                child = GetWindow(child, GW_HWNDNEXT);
+            }
+        }
+        assert!(
+            captions
+                .iter()
+                .all(|caption| caption != "录制" && caption != "取消"),
+            "recording controls are redundant with the background recording hotkey"
+        );
+        for action in ["导入", "试听", "截取", "清空"] {
+            assert!(captions.iter().any(|caption| caption == action));
+        }
     }
 }
