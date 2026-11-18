@@ -298,28 +298,6 @@ impl Drop for PcmStream {
     }
 }
 
-pub fn play_pcm(
-    endpoint: &Endpoint,
-    pcm: &Pcm,
-    gain: f64,
-    cancel: &AtomicBool,
-    progress: Option<&mut dyn FnMut(f64)>,
-) -> io::Result<()> {
-    if pcm.channels == 0 || !pcm.samples.len().is_multiple_of(usize::from(pcm.channels)) {
-        return Err(invalid_audio("PCM 数据未对齐到帧"));
-    }
-    let blocks = pcm.samples.chunks(1024 * usize::from(pcm.channels)).map(Ok);
-    play_blocks(
-        endpoint,
-        pcm.sample_rate,
-        pcm.channels,
-        blocks,
-        gain,
-        cancel,
-        progress,
-    )
-}
-
 pub fn play_wave(
     endpoint: &Endpoint,
     path: &Path,
@@ -637,22 +615,16 @@ impl Drop for Loopback {
     }
 }
 
-static SLOT_CAPTURE_ACTIVE: AtomicBool = AtomicBool::new(false);
 static ROLLING_CAPTURE_ACTIVE: AtomicBool = AtomicBool::new(false);
 
 struct CaptureReservation(&'static AtomicBool);
 
 impl CaptureReservation {
-    fn take(rolling: bool) -> io::Result<Self> {
-        let active = if rolling {
-            &ROLLING_CAPTURE_ACTIVE
-        } else {
-            &SLOT_CAPTURE_ACTIVE
-        };
-        active
+    fn take() -> io::Result<Self> {
+        ROLLING_CAPTURE_ACTIVE
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .map_err(|_| io::Error::other("上一次录音设备尚未停止，请稍后重试"))?;
-        Ok(Self(active))
+        Ok(Self(&ROLLING_CAPTURE_ACTIVE))
     }
 }
 
@@ -666,16 +638,14 @@ pub struct Recording {
     stop: Arc<AtomicBool>,
     worker: thread::JoinHandle<()>,
     finished: mpsc::Receiver<(Pcm, Duration)>,
-    started: Instant,
 }
 
 impl Recording {
-    pub fn start(window: Option<Duration>) -> io::Result<Self> {
-        if window.is_some_and(|duration| duration.is_zero() || duration > Duration::from_secs(300))
-        {
+    pub fn start(duration: Duration) -> io::Result<Self> {
+        if duration.is_zero() || duration > Duration::from_secs(300) {
             return Err(invalid_audio("无效的后台录制时长"));
         }
-        let reservation = CaptureReservation::take(window.is_some())?;
+        let reservation = CaptureReservation::take()?;
         let stop = Arc::new(AtomicBool::new(false));
         let stop_worker = Arc::clone(&stop);
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
@@ -695,13 +665,9 @@ impl Recording {
                 if ready_tx.send(Ok(started)).is_err() {
                     return;
                 }
-                let limit = window.map(|duration| {
-                    (duration.as_secs_f64() * f64::from(stream.sample_rate)) as usize
-                });
-                let mut buffer = CaptureBuffer::new(stream.channels, limit);
-                while !stop_worker.load(Ordering::Acquire)
-                    && (window.is_some() || started.elapsed() < Duration::from_secs(60))
-                {
+                let limit = (duration.as_secs_f64() * f64::from(stream.sample_rate)) as usize;
+                let mut buffer = CaptureBuffer::new(stream.channels, Some(limit));
+                while !stop_worker.load(Ordering::Acquire) {
                     match stream.read_into(&mut buffer) {
                         Ok(true) => {}
                         Ok(false) => thread::park_timeout(POLL),
@@ -723,11 +689,10 @@ impl Recording {
                 let _ = finished_tx.send((pcm, elapsed));
             })?;
         match ready_rx.recv_timeout(JOIN_TIMEOUT) {
-            Ok(Ok(started)) => Ok(Self {
+            Ok(Ok(_)) => Ok(Self {
                 stop,
                 worker,
                 finished,
-                started,
             }),
             Ok(Err(error)) => Err(error),
             Err(error) => {
@@ -736,14 +701,6 @@ impl Recording {
                 Err(io::Error::other(format!("无法启动系统声音录制：{error}")))
             }
         }
-    }
-
-    pub fn is_running(&self) -> bool {
-        !self.worker.is_finished()
-    }
-
-    pub fn elapsed(&self) -> Duration {
-        self.started.elapsed()
     }
 
     pub fn stop(self) -> io::Result<Pcm> {
