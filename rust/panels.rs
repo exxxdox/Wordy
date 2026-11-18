@@ -13,9 +13,9 @@ use windows_sys::Win32::UI::Controls::{
 };
 use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    EnableWindow, GetFocus, GetKeyState, ReleaseCapture, SetCapture, SetFocus, TME_LEAVE,
-    TRACKMOUSEEVENT, TrackMouseEvent, VK_DOWN, VK_LEFT, VK_RETURN, VK_RIGHT, VK_SHIFT, VK_SPACE,
-    VK_UP,
+    EnableWindow, GetFocus, GetKeyState, IsWindowEnabled, ReleaseCapture, SetCapture, SetFocus,
+    TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, VK_DOWN, VK_LEFT, VK_RETURN, VK_RIGHT, VK_SHIFT,
+    VK_SPACE, VK_UP,
 };
 use windows_sys::Win32::UI::Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass};
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
@@ -304,6 +304,7 @@ fn suppress_button_erase(panel: HWND) {
 fn paint_gain(hwnd: HWND, dc: HDC, rect: RECT, background: u32) {
     fill(dc, rect, background);
     let (channel, x) = slider::thumb_geometry(hwnd);
+    let enabled = unsafe { IsWindowEnabled(hwnd) != 0 };
     let y = (rect.top + rect.bottom) / 2;
     let track = RECT {
         left: channel.left,
@@ -316,19 +317,22 @@ fn paint_gain(hwnd: HWND, dc: HDC, rect: RECT, background: u32) {
         ..track
     };
     rounded(dc, track, 6, Some(SEPARATOR), SEPARATOR);
-    rounded(dc, progress, 6, Some(ACCENT), ACCENT);
+    if enabled {
+        rounded(dc, progress, 6, Some(ACCENT), ACCENT);
+    }
     let thumb = RECT {
         left: x - 8,
         top: y - 8,
         right: x + 8,
         bottom: y + 8,
     };
-    let ring = if unsafe { GetFocus() } == hwnd {
+    let thumb_color = if enabled { PRIMARY } else { MUTED };
+    let ring = if enabled && unsafe { GetFocus() } == hwnd {
         ACCENT
     } else {
-        PRIMARY
+        thumb_color
     };
-    rounded(dc, thumb, 16, Some(PRIMARY), ring);
+    rounded(dc, thumb, 16, Some(thumb_color), ring);
 }
 
 unsafe extern "system" fn slider_proc(
@@ -351,7 +355,7 @@ unsafe extern "system" fn slider_proc(
                 });
                 0
             }
-            WM_SETFOCUS | WM_KILLFOCUS | WM_KEYDOWN | WM_MOUSEWHEEL => {
+            WM_SETFOCUS | WM_KILLFOCUS | WM_KEYDOWN | WM_MOUSEWHEEL | WM_ENABLE => {
                 let result = DefSubclassProc(hwnd, message, wparam, lparam);
                 InvalidateRect(hwnd, ptr::null(), 0);
                 result
@@ -546,7 +550,11 @@ fn draw_button(item: &DRAWITEMSTRUCT, state: &ChromeState) {
     } else if pressing {
         (0x242426, SEPARATOR)
     } else if id == PRECISE {
-        (PANEL_SURFACE, PANEL_SURFACE)
+        // Keep the collapsed control quiet while retaining visible mouse and keyboard feedback.
+        (
+            if hovering { ELEVATED } else { PANEL_SURFACE },
+            if focus { ACCENT } else { PANEL_SURFACE },
+        )
     } else if hovering {
         (
             if danger { 0x32262a } else { 0x3a3a3e },
@@ -787,9 +795,6 @@ fn render_preview(child: HWND, state: &mut PreviewState) {
     let labels = state.labels.clone();
     let mut frame = WheelFrame::new(&labels, state.style);
     frame.editing = true;
-    if !state.embedded {
-        frame.center_hint = Some("选择槽位");
-    }
     frame.selected = state.selected;
     let mut highlights = [0.0; 8];
     if let Some(slot) = state.selected {
@@ -1100,8 +1105,15 @@ impl Editor {
             }
         }
         layout_editor(self.panel.0, &self.chrome.state);
+        let content = if has_text {
+            "文字"
+        } else if has_audio {
+            "音频"
+        } else {
+            "空槽"
+        };
         self.panel
-            .set_text(INFO, &format!("音频 {}", self.slot + 1));
+            .set_text(INFO, &format!("槽位 {} · {content}", self.slot + 1));
         self.preview.draw(
             &wheel_labels(&wheel),
             WheelStyle::from_config(&settings.chat_wheel_style),
@@ -1181,7 +1193,7 @@ fn layout_editor(hwnd: HWND, state: &ChromeState) {
     at(i32::from(STYLE), width - px(136), 0, px(136), 200);
     for (id, x, y, w, h) in [
         (INFO, 0, 60, 180, 23),
-        (302, 0, 96, 44, 20),
+        (302, 0, 92, 44, 20),
         (AUDIO_MODE, 43, 86, 42, 32),
         (TEXT_MODE, 93, 86, 42, 32),
         (304, 0, 126, 44, 20),
@@ -1332,9 +1344,9 @@ impl Trim {
             settings.rolling_buffer_target[1],
         ));
         let mut template = if rolling {
-            Template::with_size("保存后台录制", 440, 367)
+            Template::with_size("保存后台录制", 440, 345)
         } else {
-            Template::with_size("截取录音", 440, 205)
+            Template::with_size("截取录音", 440, 190)
         };
         label(
             &mut template,
@@ -1345,31 +1357,32 @@ impl Trim {
         template.control(0x82, WAVE, "", BASE | TABS, [6, 28, 428, 90]);
         label(&mut template, LOADING, "正在加载波形…", [321, 127, 107, 12]);
         label(&mut template, RANGE_SUMMARY, "", [12, 127, 306, 12]);
-        button(&mut template, PRECISE, "▸ 精确调整", [8, 147, 61, 15]);
-        label(&mut template, START_LABEL, "开始（秒）", [12, 168, 55, 16]);
-        edit(&mut template, START, [69, 165, 73, 16]);
-        label(&mut template, END_LABEL, "结束（秒）", [155, 168, 55, 16]);
-        edit(&mut template, END, [212, 165, 73, 16]);
-        let action_y = if rolling { 341 } else { 183 };
+        // Keep expanded time fields alongside the toggle so collapsing them doesn't leave an empty row.
+        button(&mut template, PRECISE, "▸ 精确调整", [8, 143, 73, 17]);
+        label(&mut template, START_LABEL, "开始（秒）", [92, 143, 52, 17]);
+        edit(&mut template, START, [145, 143, 62, 17]);
+        label(&mut template, END_LABEL, "结束（秒）", [221, 143, 52, 17]);
+        edit(&mut template, END, [274, 143, 62, 17]);
+        let action_y = if rolling { 319 } else { 167 };
         button(&mut template, PLAY, "试听片段", [12, action_y, 72, 17]);
         if rolling {
             // Keep the wheel large enough to read its labels, with the save fields alongside it.
-            label(&mut template, 303, "保存到", [225, 192, 198, 14]);
-            combo(&mut template, WHEEL, [225, 207, 137, 80]);
-            button(&mut template, ADD, "新增轮盘", [368, 207, 60, 17]);
-            label(&mut template, 304, "名称", [225, 230, 198, 14]);
-            edit(&mut template, LABEL, [225, 245, 203, 17]);
-            label(&mut template, 305, "音量", [225, 268, 198, 14]);
-            edit(&mut template, GAIN, [225, 282, 163, 17]);
-            label(&mut template, GAIN_VALUE, "100%", [394, 283, 34, 14]);
+            label(&mut template, 303, "保存到", [225, 170, 198, 14]);
+            combo(&mut template, WHEEL, [225, 185, 137, 80]);
+            button(&mut template, ADD, "新增轮盘", [368, 185, 60, 17]);
+            label(&mut template, 304, "名称", [225, 208, 198, 14]);
+            edit(&mut template, LABEL, [225, 223, 203, 17]);
+            label(&mut template, 305, "音量", [225, 246, 198, 14]);
+            edit(&mut template, GAIN, [225, 260, 163, 17]);
+            label(&mut template, GAIN_VALUE, "100%", [394, 261, 34, 14]);
             template.control(
                 0x82,
                 PICK,
                 "",
                 BASE | TABS | 0x0000_0100,
-                [12, 189, 205, 128],
+                [12, 167, 205, 128],
             );
-            label(&mut template, INFO, "", [12, 322, 416, 14]);
+            label(&mut template, INFO, "", [12, 300, 416, 14]);
         } else {
             // Regular trims keep their current slot label and volume via the shared action contract.
             edit(&mut template, LABEL, [0, 0, 1, 1]);
@@ -1455,19 +1468,19 @@ impl Trim {
                 let text = &wheel.texts[self.slot];
                 let preview: String = text.chars().take(38).collect();
                 let ellipsis = if text.chars().count() > 38 { "…" } else { "" };
-                format!("原有文字：{preview}{ellipsis}（保存将替换）")
+                format!("保存将替换原有文字：{preview}{ellipsis}")
             } else if !wheel.slots[self.slot].is_empty() {
                 let label = if wheel.labels[self.slot].is_empty() {
                     &wheel.slots[self.slot]
                 } else {
                     &wheel.labels[self.slot]
                 };
-                format!("原有音频：{label}（保存将替换）")
+                format!("保存将替换原有音频：{label}")
             } else {
                 "空槽".into()
             };
             self.panel
-                .set_text(INFO, &format!("音频 {} · {detail}", self.slot + 1));
+                .set_text(INFO, &format!("槽位 {} · {detail}", self.slot + 1));
             preview.draw(
                 &wheel_labels(&wheel),
                 WheelStyle::from_config(&settings.chat_wheel_style),
@@ -1916,6 +1929,26 @@ fn paint_wave(dc: HDC, state: &WaveState, plot: Plot, rect: RECT, focused: bool)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recording_trim_keeps_precise_time_fields_on_the_toggle_row() {
+        let mut settings = Settings::default();
+        settings.chat_wheel_texts[0] = "原有文字".repeat(20);
+        let trim = Trim::new(ptr::null_mut(), ptr::null_mut(), &settings, None, 3.0, 1.0).unwrap();
+        assert!(
+            trim.panel
+                .text(INFO)
+                .starts_with("槽位 1 · 保存将替换原有文字")
+        );
+        let mut toggle = RECT::default();
+        let mut start = RECT::default();
+        unsafe {
+            GetWindowRect(trim.panel.child(PRECISE), &mut toggle);
+            GetWindowRect(trim.panel.child(START), &mut start);
+        }
+        assert!(start.left > toggle.right);
+        assert!((toggle.top..toggle.bottom).contains(&((start.top + start.bottom) / 2)));
+    }
 
     #[test]
     fn moving_gain_repaints_the_old_thumb_and_progress_track() {

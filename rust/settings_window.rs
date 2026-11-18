@@ -188,8 +188,8 @@ const PAGES: [(Page, Field, &str, &str, &str); 5] = [
         Page::Wheels,
         Field::TabWheels,
         "聊天轮盘",
-        "音频轮盘",
-        "按住快捷键，移向音频，松开播放；回到中心或按 Esc 取消。",
+        "聊天轮盘",
+        "按住快捷键，移向槽位后松开播放；回到中心或按 Esc 取消。",
     ),
     (
         Page::Rolling,
@@ -867,7 +867,7 @@ impl SettingsWindow {
                 "通过 Windows 将所选麦克风送至 CABLE Input。",
                 [578, 244, 440, 22],
             ),
-            (Audio, None, Label, "麦克风输入", [578, 278, 440, 22]),
+            (Audio, None, Label, "侦听输出设备", [578, 278, 440, 22]),
             (
                 Audio,
                 Some(VirtualMic),
@@ -888,23 +888,16 @@ impl SettingsWindow {
             (Tts, None, Column, "生成方式", [48, 171, 395, 38]),
             (Tts, None, Label, "TTS 服务商", [48, 222, 395, 22]),
             (Tts, Some(Provider), Combo, "", [48, 250, 395, 160]),
-            (
-                Tts,
-                None,
-                Muted,
-                "选择 TTS 服务商，下方设置区同步切换。",
-                [48, 281, 395, 24],
-            ),
-            (Tts, None, Label, "生成模式", [48, 316, 395, 22]),
-            (Tts, Some(Backend), Combo, "", [48, 343, 395, 160]),
+            (Tts, None, Label, "生成模式", [48, 302, 395, 22]),
+            (Tts, Some(Backend), Combo, "", [48, 330, 395, 160]),
             (
                 Tts,
                 None,
                 Muted,
                 "Bytes：完整生成后播放。Streaming：边生成边播放。",
-                [48, 375, 395, 24],
+                [48, 362, 395, 24],
             ),
-            (Tts, None, Column, "音色与密钥", [479, 171, 440, 38]),
+            (Tts, None, Column, "密钥与音色", [495, 171, 577, 38]),
             (Tts, None, Label, "API Key", [495, 222, 577, 22]),
             (Tts, Some(KeyStatus), Muted, "", [495, 244, 576, 22]),
             (Tts, Some(Key), Password, "", [495, 271, 385, 32]),
@@ -943,8 +936,8 @@ impl SettingsWindow {
             (Tts, Some(VoiceHint), Muted, "", [495, 437, 577, 22]),
             (Tts, None, Muted, "Speaker ID", [495, 463, 124, 32]),
             (Tts, Some(VoiceId), Edit, "", [624, 465, 448, 32]),
-            (Tts, None, Muted, "名称", [495, 504, 76, 32]),
-            (Tts, Some(VoiceName), Edit, "", [576, 505, 496, 32]),
+            (Tts, None, Muted, "名称", [495, 505, 124, 32]),
+            (Tts, Some(VoiceName), Edit, "", [624, 505, 448, 32]),
             (
                 Tts,
                 Some(SaveVoice),
@@ -959,37 +952,54 @@ impl SettingsWindow {
                 "编辑聊天轮盘",
                 [48, 181, 200, 32],
             ),
-            (Rolling, None, Label, "录制设置", [48, 174, 440, 22]),
+            (Rolling, None, Column, "录制设置", [48, 171, 440, 38]),
             (
                 Rolling,
                 Some(RollingHotkeyValue),
                 Current,
                 "",
-                [48, 201, 333, 32],
+                [48, 222, 333, 32],
             ),
             (
                 Rolling,
                 Some(RollingHotkey),
                 Button,
                 "录制快捷键",
-                [397, 201, 91, 32],
+                [397, 222, 91, 32],
             ),
             (
                 Rolling,
                 None,
                 Muted,
                 "点击录制后按下新的快捷键组合",
-                [48, 234, 440, 24],
+                [48, 256, 440, 24],
             ),
-            (Rolling, None, Label, "保留时长", [48, 261, 84, 34]),
+            (Rolling, None, Label, "保留时长", [48, 289, 84, 34]),
             (
                 Rolling,
                 Some(RollingSeconds),
                 Number,
                 "",
-                [132, 261, 116, 34],
+                [132, 289, 116, 34],
             ),
-            (Rolling, None, Muted, "秒", [252, 261, 35, 34]),
+            (Rolling, None, Muted, "秒（5–300）", [258, 289, 100, 34]),
+            (Rolling, None, Column, "录制与保存", [578, 171, 440, 38]),
+            (Rolling, None, Label, "开始和结束录制", [578, 222, 440, 22]),
+            (
+                Rolling,
+                None,
+                Muted,
+                "按一次快捷键开始录制，再按一次打开保存窗口。",
+                [578, 247, 440, 24],
+            ),
+            (Rolling, None, Label, "保存到轮盘", [578, 290, 440, 22]),
+            (
+                Rolling,
+                None,
+                Muted,
+                "拖选片段，试听后选择轮盘槽位并保存。",
+                [578, 315, 440, 24],
+            ),
         ] {
             self.add(field, Some(page), kind, caption, bounds)?;
         }
@@ -2628,6 +2638,20 @@ mod tests {
         assert_eq!(slider_position(2.0, 0.5), 30);
         assert_eq!(slider_position(1.0, 0.30), 14);
         assert_eq!(slider_value(2, 0.30), 0.4);
+    }
+
+    #[test]
+    fn tts_voice_fields_share_aligned_edges() {
+        let settings = SettingsWindow::new(ptr::null_mut(), &Settings::default()).unwrap();
+        let bounds = |field| {
+            let mut rect = RECT::default();
+            unsafe { GetWindowRect(settings.control(field), &mut rect) };
+            rect
+        };
+        let voice_id = bounds(Field::VoiceId);
+        let name = bounds(Field::VoiceName);
+        assert_eq!((voice_id.left, voice_id.right), (name.left, name.right));
+        assert!(voice_id.bottom < name.top);
     }
 
     #[test]

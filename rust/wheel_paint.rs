@@ -52,7 +52,6 @@ pub struct WheelFrame<'a> {
     pub selected: Option<usize>,
     pub highlights: Option<[f64; SLOT_COUNT]>,
     pub editing: bool,
-    pub(crate) center_hint: Option<&'static str>,
     pub opacity: f64,
     pub anchor: Option<Point>,
 }
@@ -65,7 +64,6 @@ impl<'a> WheelFrame<'a> {
             selected: None,
             highlights: None,
             editing: false,
-            center_hint: None,
             opacity: 1.0,
             anchor: None,
         }
@@ -519,10 +517,8 @@ impl Drawing<'_> {
             hint_size,
             DWRITE_FONT_WEIGHT_NORMAL,
         )?;
-        let hint = if let Some(hint) = frame.center_hint {
-            hint
-        } else if frame.editing {
-            "点击编辑"
+        let hint = if frame.editing {
+            "选择槽位"
         } else if title.is_empty() {
             "移回取消"
         } else {
