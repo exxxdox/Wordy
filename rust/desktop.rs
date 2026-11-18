@@ -534,15 +534,6 @@ fn copy_wide(target: &mut [u16], text: &str) {
 }
 
 const CENTERED_EDIT: usize = 9;
-const EDIT_BORDER: windows_sys::core::PCWSTR = w!("WordyEditBorder");
-
-/// Same centring as [`center_edit_text`], plus a hairline border painted with
-/// the non-client bands (panels have no custom border renderer of their own).
-#[allow(clippy::not_unsafe_ptr_arg_deref)]
-pub fn frame_edit_text(hwnd: HWND, background: u32, border: u32) {
-    unsafe { SetPropW(hwnd, EDIT_BORDER, border as usize as _) };
-    center_edit_text(hwnd, background);
-}
 
 /// Win32 draws single-line edit text at the top of the client area. Shrink the
 /// client to one text line so the text sits vertically centered, and paint the
@@ -634,29 +625,11 @@ unsafe extern "system" fn centered_edit_proc(
                         FillRect(dc, &band, brush);
                     }
                     DeleteObject(brush);
-                    let border = GetPropW(hwnd, EDIT_BORDER) as usize;
-                    if border != 0 {
-                        let brush = CreateSolidBrush(border as u32);
-                        FrameRect(
-                            dc,
-                            &RECT {
-                                left: 0,
-                                top: 0,
-                                right: width,
-                                bottom: height,
-                            },
-                            brush,
-                        );
-                        DeleteObject(brush);
-                    }
                     ReleaseDC(hwnd, dc);
                 }
                 DefSubclassProc(hwnd, message, wparam, lparam)
             }
-            WM_NCDESTROY => {
-                RemovePropW(hwnd, EDIT_BORDER);
-                DefSubclassProc(hwnd, message, wparam, lparam)
-            }
+            WM_NCDESTROY => DefSubclassProc(hwnd, message, wparam, lparam),
             // The centred band depends on the font height; recompute when the
             // caller applies the settings font after construction.
             WM_SETFONT => {

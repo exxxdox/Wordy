@@ -32,7 +32,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::*;
 use windows_sys::core::w;
 
 use crate::config::Settings;
-use crate::desktop::{frame_edit_text, paint_buffered, paint_buffered_rect, wide, window_text};
+use crate::desktop::{center_edit_text, paint_buffered, paint_buffered_rect, wide, window_text};
 use crate::dialog::{Panel, Template};
 use crate::selector::style_selector;
 use crate::settings_backdrop::paint_embedded_backdrop;

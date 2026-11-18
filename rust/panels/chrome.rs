@@ -126,10 +126,13 @@ impl Chrome {
             }
         }
         // Single-line edits draw their text at the top; center it in the field.
+        // Rounded corners match the card and the dropdowns instead of the flat
+        // framed rectangle the panels used before.
+        let card = if trim { PANEL_SURFACE } else { EDITOR_CARD };
         for id in [GAIN, NAME, LABEL, TEXT, START, END] {
             let child = panel.child(id);
             if !child.is_null() {
-                frame_edit_text(child, ELEVATED, SEPARATOR);
+                style_card_edit(child, ELEVATED, card);
                 let margin = logical_px(panel.0, 8);
                 unsafe {
                     SendMessageW(
@@ -169,6 +172,69 @@ impl Drop for ChromeState {
             DeleteObject(self.elevated);
             DeleteObject(self.card);
         }
+    }
+}
+
+const EDIT_CORNER: windows_sys::core::PCWSTR = windows_sys::core::w!("Wordy.EditCorner");
+const EDIT_SUBCLASS: usize = 12;
+
+/// Centres the single-line text and rounds the field: the corners outside the
+/// border show the card behind the edit instead of the edit's flat fill.
+fn style_card_edit(hwnd: HWND, fill_color: u32, corner: u32) {
+    unsafe {
+        SetPropW(hwnd, EDIT_CORNER, corner as usize as _);
+        SetWindowSubclass(hwnd, Some(card_edit_proc), EDIT_SUBCLASS, 0);
+    }
+    center_edit_text(hwnd, fill_color);
+}
+
+unsafe extern "system" fn card_edit_proc(
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    _id: usize,
+    _data: usize,
+) -> LRESULT {
+    unsafe {
+        let result = DefSubclassProc(hwnd, message, wparam, lparam);
+        if message == WM_NCDESTROY {
+            RemovePropW(hwnd, EDIT_CORNER);
+        }
+        if message != WM_PAINT {
+            return result;
+        }
+        let corner = GetPropW(hwnd, EDIT_CORNER) as u32;
+        let dc = GetWindowDC(hwnd);
+        if dc.is_null() || corner == 0 {
+            return result;
+        }
+        let mut window = RECT::default();
+        GetWindowRect(hwnd, &mut window);
+        let rect = RECT {
+            left: 0,
+            top: 0,
+            right: window.right - window.left,
+            bottom: window.bottom - window.top,
+        };
+        let full = CreateRectRgn(0, 0, rect.right + 1, rect.bottom + 1);
+        let rounded_region = CreateRoundRectRgn(0, 0, rect.right + 1, rect.bottom + 1, 16, 16);
+        if !full.is_null() && !rounded_region.is_null() {
+            CombineRgn(full, full, rounded_region, RGN_DIFF);
+            let saved = SaveDC(dc);
+            ExtSelectClipRgn(dc, full, RGN_AND);
+            fill(dc, rect, corner);
+            RestoreDC(dc, saved);
+        }
+        if !full.is_null() {
+            DeleteObject(full);
+        }
+        if !rounded_region.is_null() {
+            DeleteObject(rounded_region);
+        }
+        rounded(dc, rect, 16, None, SEPARATOR);
+        ReleaseDC(hwnd, dc);
+        result
     }
 }
 

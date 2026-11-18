@@ -573,6 +573,27 @@ mod tests {
                 assert!(black.is_empty(), "{label} shows black pixels at {black:?}");
             }
         }
+        unsafe fn assert_corners(label: &str, hwnd: HWND, expected: u32) {
+            unsafe {
+                let dc = GetWindowDC(hwnd);
+                let mut window = RECT::default();
+                GetWindowRect(hwnd, &mut window);
+                let (width, height) = (window.right - window.left, window.bottom - window.top);
+                for (x, y) in [
+                    (0, 0),
+                    (width - 1, 0),
+                    (0, height - 1),
+                    (width - 1, height - 1),
+                ] {
+                    let live = GetPixel(dc, x, y) & 0x00ff_ffff;
+                    assert_eq!(
+                        live, expected,
+                        "{label} corner {x},{y} does not show the surface behind it"
+                    );
+                }
+                ReleaseDC(hwnd, dc);
+            }
+        }
         let mut window = SettingsWindow::new(ptr::null_mut(), &Settings::default()).unwrap();
         unsafe { ShowWindow(window.hwnd(), SW_SHOW) };
         for page in [Page::Local, Page::Audio, Page::Tts, Page::Rolling] {
@@ -665,6 +686,12 @@ mod tests {
             ] {
                 if IsWindowVisible(editor.panel.child(id)) != 0 {
                     assert_clean(&format!("editor edit {id}"), editor.panel.child(id));
+                    // The editor card sits behind the rounded fields.
+                    assert_corners(
+                        &format!("editor edit {id}"),
+                        editor.panel.child(id),
+                        0x003e_3b3b,
+                    );
                 }
             }
         }
@@ -695,6 +722,11 @@ mod tests {
                 pump();
                 assert_clean("trim combo", trim.panel.child(crate::panels::WHEEL));
                 assert_clean("trim edit", trim.panel.child(crate::panels::LABEL));
+                assert_corners(
+                    "trim edit",
+                    trim.panel.child(crate::panels::LABEL),
+                    0x001e_1c1c,
+                );
                 ShowWindow(trim.panel.0, SW_HIDE);
             }
             ShowWindow(editor.panel.0, SW_HIDE);
