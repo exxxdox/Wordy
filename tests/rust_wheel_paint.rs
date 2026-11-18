@@ -57,6 +57,27 @@ fn game_pointer_belongs_only_to_the_current_playable_sector() {
 }
 
 #[test]
+fn game_picker_knob_stays_with_selected_slot_while_hovering_elsewhere() {
+    let renderer = WheelRenderer::new().unwrap();
+    let labels = std::array::from_fn(|_| String::new());
+    let mut frame = WheelFrame::new(&labels, WheelStyle::Game);
+    frame.editing = true;
+    frame.selected = Some(0);
+    frame.highlights = Some([1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
+    let selected = renderer.render(frame, 1.0).unwrap();
+    frame.highlights = Some([1.0, 0.45, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
+    let hovered = renderer.render(frame, 1.0).unwrap();
+    assert_ne!(
+        selected.pixels, hovered.pixels,
+        "hover still highlights the sector"
+    );
+    assert!(
+        (232..309).all(|y| (287..348).all(|x| pixel(&selected, x, y) == pixel(&hovered, x, y))),
+        "hover must leave the central knob unchanged"
+    );
+}
+
+#[test]
 fn classic_shadow_fades_outside_the_disc() {
     let renderer = WheelRenderer::new().unwrap();
     let labels = std::array::from_fn(|_| String::new());

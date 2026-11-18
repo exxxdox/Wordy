@@ -1,6 +1,9 @@
 use std::{cell::Cell, io, mem, ptr};
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
-use windows_sys::Win32::Graphics::Dwm::{DWMWA_USE_IMMERSIVE_DARK_MODE, DwmSetWindowAttribute};
+use windows_sys::Win32::Graphics::Dwm::{
+    DWMWA_CAPTION_COLOR, DWMWA_USE_IMMERSIVE_DARK_MODE, DWMWA_WINDOW_CORNER_PREFERENCE,
+    DWMWCP_ROUND, DwmSetWindowAttribute,
+};
 use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::System::SystemServices::SS_OWNERDRAW;
 use windows_sys::Win32::UI::Controls::{
@@ -178,13 +181,19 @@ impl Chrome {
         }
         if trim {
             unsafe {
-                let enabled = 1_i32;
-                DwmSetWindowAttribute(
-                    panel.0,
-                    DWMWA_USE_IMMERSIVE_DARK_MODE as u32,
-                    ptr::from_ref(&enabled).cast(),
-                    mem::size_of_val(&enabled) as u32,
-                );
+                // Match the dark client while retaining the system frame and shadow.
+                for (attribute, value) in [
+                    (DWMWA_USE_IMMERSIVE_DARK_MODE, 1),
+                    (DWMWA_CAPTION_COLOR, PANEL_SURFACE),
+                    (DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND as u32),
+                ] {
+                    DwmSetWindowAttribute(
+                        panel.0,
+                        attribute as u32,
+                        ptr::from_ref(&value).cast(),
+                        mem::size_of_val(&value) as u32,
+                    );
+                }
                 precise_controls(panel.0, false);
                 if !rolling {
                     ShowWindow(panel.child(LABEL), SW_HIDE);
@@ -800,6 +809,9 @@ fn render_preview(child: HWND, state: &mut PreviewState) {
     let labels = state.labels.clone();
     let mut frame = WheelFrame::new(&labels, state.style);
     frame.editing = true;
+    if !state.embedded {
+        frame.center_hint = Some("选择槽位");
+    }
     frame.selected = state.selected;
     let mut highlights = [0.0; 8];
     if let Some(slot) = state.selected {
@@ -1385,7 +1397,11 @@ impl Trim {
             settings.rolling_buffer_target[0],
             settings.rolling_buffer_target[1],
         ));
-        let mut template = Template::with_size("截取录音", 440, if rolling { 386 } else { 205 });
+        let mut template = if rolling {
+            Template::with_size("保存后台录制", 440, 367)
+        } else {
+            Template::with_size("截取录音", 440, 205)
+        };
         label(
             &mut template,
             300,
@@ -1393,32 +1409,33 @@ impl Trim {
             [12, 13, 414, 12],
         );
         template.control(0x82, WAVE, "", BASE | TABS, [6, 28, 428, 90]);
-        label(&mut template, LOADING, "正在加载波形…", [12, 119, 416, 10]);
-        label(&mut template, RANGE_SUMMARY, "", [12, 133, 415, 12]);
+        label(&mut template, LOADING, "正在加载波形…", [321, 127, 107, 12]);
+        label(&mut template, RANGE_SUMMARY, "", [12, 127, 306, 12]);
         button(&mut template, PRECISE, "▸ 精确调整", [8, 147, 61, 15]);
         label(&mut template, START_LABEL, "开始（秒）", [12, 168, 55, 16]);
         edit(&mut template, START, [69, 165, 73, 16]);
         label(&mut template, END_LABEL, "结束（秒）", [155, 168, 55, 16]);
         edit(&mut template, END, [212, 165, 73, 16]);
-        let action_y = if rolling { 362 } else { 183 };
+        let action_y = if rolling { 341 } else { 183 };
         button(&mut template, PLAY, "试听片段", [12, action_y, 72, 17]);
         if rolling {
-            label(&mut template, 303, "保存到", [12, 190, 32, 14]);
-            combo(&mut template, WHEEL, [47, 186, 111, 80]);
-            button(&mut template, ADD, "新增轮盘", [164, 186, 60, 18]);
-            label(&mut template, 304, "名称", [12, 212, 32, 14]);
-            edit(&mut template, LABEL, [47, 208, 381, 17]);
-            label(&mut template, 305, "音量", [12, 234, 32, 14]);
-            edit(&mut template, GAIN, [47, 229, 333, 17]);
-            label(&mut template, GAIN_VALUE, "100%", [387, 233, 41, 14]);
+            // Keep the wheel large enough to read its labels, with the save fields alongside it.
+            label(&mut template, 303, "保存到", [225, 192, 198, 14]);
+            combo(&mut template, WHEEL, [225, 207, 137, 80]);
+            button(&mut template, ADD, "新增轮盘", [368, 207, 60, 17]);
+            label(&mut template, 304, "名称", [225, 230, 198, 14]);
+            edit(&mut template, LABEL, [225, 245, 203, 17]);
+            label(&mut template, 305, "音量", [225, 268, 198, 14]);
+            edit(&mut template, GAIN, [225, 282, 163, 17]);
+            label(&mut template, GAIN_VALUE, "100%", [394, 283, 34, 14]);
             template.control(
                 0x82,
                 PICK,
                 "",
                 BASE | TABS | 0x0000_0100,
-                [145, 250, 150, 90],
+                [12, 189, 205, 128],
             );
-            label(&mut template, INFO, "", [12, 342, 416, 14]);
+            label(&mut template, INFO, "", [12, 322, 416, 14]);
         } else {
             // Regular trims keep their current slot label and volume via the shared action contract.
             edit(&mut template, LABEL, [0, 0, 1, 1]);
@@ -1962,6 +1979,31 @@ fn paint_wave(dc: HDC, state: &WaveState, plot: Plot, width: i32, height: i32, f
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rolling_trim_shows_a_large_wheel_beside_its_save_fields() {
+        let trim = Trim::new(
+            ptr::null_mut(),
+            ptr::null_mut(),
+            &Settings::default(),
+            None,
+            3.0,
+            1.0,
+        )
+        .unwrap();
+        let bounds = |id| {
+            let mut rect = RECT::default();
+            assert_ne!(unsafe { GetWindowRect(trim.panel.child(id), &mut rect) }, 0);
+            rect
+        };
+        let wheel = bounds(PICK);
+        let name = bounds(LABEL);
+        let info = bounds(INFO);
+        assert_eq!(window_text(trim.panel.0), "保存后台录制");
+        assert!(wheel.right <= name.left && (wheel.top..wheel.bottom).contains(&name.top));
+        assert!(wheel.bottom <= info.top && info.bottom < bounds(SAVE).top);
+        assert!(wheel.bottom - wheel.top >= logical_px(trim.panel.0, 220));
+    }
 
     #[test]
     fn selection_orders_and_clamps_dragged_bounds() {

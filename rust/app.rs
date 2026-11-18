@@ -1096,7 +1096,8 @@ impl App {
                     let _ = events.send(Background::Rolling(result));
                 })?;
             self.pending_saves += 1;
-            self.notify("后台录制已结束".into());
+            // The save window is the next step; a late system notification would cover it.
+            self.log("后台录制已结束，正在准备保存窗口".into());
         } else if self.pending_saves == 0 && self.trim.is_none() {
             let seconds = self.config.settings().rolling_buffer_seconds;
             self.recording = Some(Recording::start(Some(Duration::from_secs_f64(seconds)))?);
@@ -1138,7 +1139,6 @@ impl App {
             gain,
         )?;
         self.settings_window.apply_panel_font(window.panel.0);
-        window.panel.show();
         if let Some((wheel, slot)) = target
             && let Some(wheel) = self.config.settings().wheel(wheel)
         {
@@ -1158,7 +1158,7 @@ impl App {
                 let result = audio::waveform_peaks(file.path(), &cancel_waveform, 1600);
                 let _ = events.send(Background::Waveform { id, result });
             })?;
-        self.trim = Some(TrimSession {
+        let trim = self.trim.insert(TrimSession {
             window,
             id,
             source,
@@ -1166,6 +1166,8 @@ impl App {
             preview: None,
             busy: false,
         });
+        // Activate only after the label and session are ready for the first paint and input.
+        trim.window.panel.show();
         Ok(())
     }
 
