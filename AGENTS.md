@@ -7,7 +7,8 @@
 | 路径 | 职责 |
 |------|------|
 | `rust/app.rs` | 单实例、热键分发、窗口消息循环、设置动作、后台任务、日志 |
-| `rust/desktop.rs` | 悬浮输入框、托盘、通知相关 Win32 封装 |
+| `rust/desktop.rs` | Win32 宿主窗口、托盘、通知和共用控件辅助函数 |
+| `rust/desktop/overlay.rs` | 悬浮输入框、输入事件、背景和按钮绘制 |
 | `rust/settings_window.rs` / `rust/settings_window/controls.rs` | 设置窗口、DPI 布局、设置控件绘制 |
 | `rust/settings_backdrop.rs` | 设置窗口和嵌入控件共用的玻璃背景及绘制缓存 |
 | `rust/panels.rs` / `rust/panels/` | 共用面板控件、轮盘编辑器、截取对话框和轮盘预览 |
