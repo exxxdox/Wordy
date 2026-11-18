@@ -41,7 +41,7 @@ impl Editor {
         button(&mut template, HOTKEY, "录制快捷键", [172, 7, 80, 18]);
         button(&mut template, ADD, "新增", [256, 7, 32, 32]);
         button(&mut template, REMOVE, "删除", [294, 7, 32, 32]);
-        button(&mut template, RENAME, "重命名", [0, 0, 1, 1]);
+        button(&mut template, RENAME, "重命名", [551, 0, 58, 32]);
         label(&mut template, 307, "样式", [407, 11, 28, 14]);
         combo(&mut template, STYLE, [435, 7, 63, 100]);
         template.control(0x82, PICK, "", BASE | TABS | 0x0000_0100, [3, 33, 198, 212]);
@@ -228,7 +228,7 @@ pub(super) fn layout_editor(hwnd: HWND, state: &ChromeState) {
         (HOTKEY, 318, 0, 145, 32),
         (ADD, 471, 0, 32, 32),
         (REMOVE, 511, 0, 32, 32),
-        (RENAME, 591, 0, 58, 32),
+        (RENAME, 551, 0, 58, 32),
         (PICK, 0, 44, 400, 400),
     ] {
         at(i32::from(id), px(x), y, px(w), h);
@@ -348,6 +348,23 @@ mod tests {
         for id in [IMPORT, PLAY, CROP, CLEAR, AUDIO_MODE, TEXT_MODE, REMOVE] {
             assert_eq!(size(id), expected, "icon button {id} differs");
         }
+    }
+
+    #[test]
+    fn rename_follows_remove_with_the_same_gap_as_add() {
+        let settings = Settings::default();
+        let window =
+            crate::settings_window::SettingsWindow::new(ptr::null_mut(), &settings).unwrap();
+        let editor = Editor::new_embedded(ptr::null_mut(), window.hwnd(), &settings).unwrap();
+        let bounds = |id| {
+            let mut rect = RECT::default();
+            unsafe { GetWindowRect(editor.panel.child(id), &mut rect) };
+            rect
+        };
+        let (hotkey, add, remove, rename) =
+            (bounds(HOTKEY), bounds(ADD), bounds(REMOVE), bounds(RENAME));
+        assert_eq!(add.left - hotkey.right, remove.left - add.right);
+        assert_eq!(rename.left - remove.right, remove.left - add.right);
     }
 
     #[test]
