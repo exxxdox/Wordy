@@ -2,12 +2,8 @@ use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::path::PathBuf;
 use std::ptr;
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-    mpsc,
-};
-use std::time::{Duration, Instant};
+use std::sync::{Arc, mpsc};
+use std::time::Instant;
 
 use windows_sys::Win32::Foundation::{HINSTANCE, HWND};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
@@ -34,6 +30,10 @@ use crate::status_toast::{Toasts, Tone};
 use crate::wheel::WheelStyle;
 use crate::wheel_window::WheelWindow;
 use crate::{backup, dialog};
+
+mod recording;
+
+use self::recording::{RecordingResult, TrimSession};
 
 const CONTROLS_TIMER: usize = 1;
 const LOG_LIMIT: usize = 5000;
@@ -227,42 +227,9 @@ struct App {
 }
 
 enum Background {
-    Rolling(io::Result<tempfile::NamedTempFile>),
-    Waveform {
-        id: u64,
-        result: io::Result<Vec<f32>>,
-    },
-    SlotClip {
-        wheel: usize,
-        slot: usize,
-        label: String,
-        gain: Option<f64>,
-        result: io::Result<audio::StagedClip>,
-        source: Option<tempfile::NamedTempFile>,
-        trim: Option<u64>,
-        rolling: bool,
-    },
-    TrimInput {
-        target: (usize, usize),
-        result: io::Result<tempfile::NamedTempFile>,
-    },
+    Recording(RecordingResult),
     NotificationFailed(String),
     FfmpegInstalled(io::Result<()>),
-}
-
-struct TrimSession {
-    window: Trim,
-    id: u64,
-    source: Arc<tempfile::NamedTempFile>,
-    cancel: Arc<AtomicBool>,
-    preview: Option<u64>,
-    busy: bool,
-}
-
-impl Drop for TrimSession {
-    fn drop(&mut self) {
-        self.cancel.store(true, Ordering::Release);
-    }
 }
 
 impl App {
@@ -446,11 +413,8 @@ impl App {
             match event {
                 Event::Finished { id, result } => {
                     self.previews.remove(&id);
-                    if let Some(trim) = &mut self.trim
-                        && trim.preview == Some(id)
-                    {
-                        trim.preview = None;
-                        trim.window.progress(None);
+                    if let Some(trim) = &mut self.trim {
+                        trim.playback_progress(id, None);
                     }
                     if self
                         .editor_preview
@@ -464,10 +428,8 @@ impl App {
                     }
                 }
                 Event::Progress { id, seconds } => {
-                    if let Some(trim) = &mut self.trim
-                        && trim.preview == Some(id)
-                    {
-                        trim.window.progress(Some(seconds));
+                    if let Some(trim) = &mut self.trim {
+                        trim.playback_progress(id, Some(seconds));
                     }
                 }
                 Event::Voices { id, result } if Some(id) == self.voices_request => {
@@ -521,82 +483,7 @@ impl App {
                     }
                 }
             }
-            Background::Rolling(result) => {
-                self.pending_saves -= 1;
-                if !exiting {
-                    self.save_rolling(result?)?;
-                }
-            }
-            Background::Waveform { id, result } => match result {
-                Ok(peaks) => {
-                    if let Some(trim) = &mut self.trim
-                        && trim.id == id
-                    {
-                        trim.window.set_peaks(peaks);
-                    }
-                }
-                Err(error) if error.kind() == io::ErrorKind::Interrupted => (),
-                Err(error) => return Err(error),
-            },
-            Background::TrimInput { target, result } => {
-                self.pending_saves -= 1;
-                if !exiting {
-                    self.open_trim(result?, Some(target))?;
-                }
-            }
-            Background::SlotClip {
-                wheel,
-                slot,
-                label,
-                gain,
-                result,
-                source,
-                trim,
-                rolling,
-            } => {
-                self.pending_saves -= 1;
-                let result = result.and_then(|staged| {
-                    audio::commit_slot_clip(&mut self.config, wheel, slot, staged, &label, gain)
-                });
-                if let Err(error) = result {
-                    if let Some(session) = &mut self.trim
-                        && Some(session.id) == trim
-                    {
-                        session.busy = false;
-                    }
-                    return if let Some(source) = source {
-                        match source.keep() {
-                            Ok((_, path)) => Err(io::Error::other(format!(
-                                "{error}（临时文件保留在 {}）",
-                                path.display()
-                            ))),
-                            Err(retain) => Err(io::Error::other(format!(
-                                "{error}（无法保留临时文件：{retain}）"
-                            ))),
-                        }
-                    } else {
-                        Err(error)
-                    };
-                }
-                if let Some(session) = &self.trim
-                    && Some(session.id) == trim
-                {
-                    self.trim = None;
-                }
-                if rolling {
-                    self.config
-                        .update(|settings| settings.rolling_buffer_target = [wheel, slot])?;
-                }
-                if !exiting {
-                    self.refresh_editor()?;
-                    // In-settings operations report where the user is looking.
-                    if self.settings_visible() {
-                        self.status(format!("已保存到轮盘 {} · 音频 {}", wheel + 1, slot + 1));
-                    } else {
-                        self.notify(format!("已保存到轮盘 {} · 音频 {}", wheel + 1, slot + 1));
-                    }
-                }
-            }
+            Background::Recording(result) => self.complete_recording(result, exiting)?,
         }
         Ok(())
     }
@@ -1082,217 +969,6 @@ impl App {
         }
     }
 
-    fn toggle_recording(&mut self) -> io::Result<()> {
-        if let Some(recording) = self.recording.take() {
-            self.tray.set_recording(false);
-            let events = self.jobs.clone();
-            std::thread::Builder::new()
-                .name("WordyRollingCapture".into())
-                .spawn(move || {
-                    let result = recording.stop().and_then(|pcm| audio::write_wave(&pcm));
-                    let _ = events.send(Background::Rolling(result));
-                })?;
-            self.pending_saves += 1;
-            // The save window is the next step; a late system notification would cover it.
-            self.log("后台录制已结束，正在准备保存窗口".into());
-        } else if self.pending_saves == 0 && self.trim.is_none() {
-            let seconds = self.config.settings().rolling_buffer_seconds;
-            self.recording = Some(Recording::start(Some(Duration::from_secs_f64(seconds)))?);
-            self.tray.set_recording(true);
-            self.notify(format!(
-                "后台录制已开始（保留最近 {seconds:.0} 秒；再按一次结束并截取）"
-            ));
-        }
-        Ok(())
-    }
-
-    fn save_rolling(&mut self, source: tempfile::NamedTempFile) -> io::Result<()> {
-        self.open_trim(source, None)
-    }
-
-    fn open_trim(
-        &mut self,
-        source: tempfile::NamedTempFile,
-        target: Option<(usize, usize)>,
-    ) -> io::Result<()> {
-        if self.trim.is_some() {
-            return Err(io::Error::other("请先关闭当前截取窗口"));
-        }
-        let duration = audio::recording_duration(source.path())?;
-        let gain = target
-            .and_then(|(wheel, slot)| {
-                self.config
-                    .settings()
-                    .wheel(wheel)
-                    .map(|wheel| wheel.volumes[slot])
-            })
-            .unwrap_or(1.0);
-        let window = Trim::new(
-            self.host,
-            self.settings_window.hwnd(),
-            self.config.settings(),
-            target,
-            duration,
-            gain,
-        )?;
-        self.settings_window.apply_panel_font(window.panel.0);
-        if let Some((wheel, slot)) = target
-            && let Some(wheel) = self.config.settings().wheel(wheel)
-        {
-            window.panel.set_text(panels::LABEL, &wheel.labels[slot]);
-        } else {
-            window.panel.set_text(panels::LABEL, &recording_label());
-        }
-        let source = Arc::new(source);
-        let cancel = Arc::new(AtomicBool::new(false));
-        let id = self.id();
-        let events = self.jobs.clone();
-        let file = source.clone();
-        let cancel_waveform = cancel.clone();
-        std::thread::Builder::new()
-            .name("WordyWaveform".into())
-            .spawn(move || {
-                let result = audio::waveform_peaks(file.path(), &cancel_waveform, 1600);
-                let _ = events.send(Background::Waveform { id, result });
-            })?;
-        let trim = self.trim.insert(TrimSession {
-            window,
-            id,
-            source,
-            cancel,
-            preview: None,
-            busy: false,
-        });
-        // Activate only after the label and session are ready for the first paint and input.
-        trim.window.panel.show();
-        Ok(())
-    }
-
-    fn trim_action(&mut self, command: usize, hwnd: HWND) -> io::Result<()> {
-        use panels::*;
-        const CANCEL: u16 = IDCANCEL as u16;
-        let Some(session) = &mut self.trim else {
-            return Ok(());
-        };
-        if session.window.panel.0 != hwnd || session.busy {
-            return Ok(());
-        }
-        let (action, notification) = (command as u16, (command >> 16) as u32);
-        match action {
-            PICK => {
-                if let Some(slot) = session.window.take_slot() {
-                    session.window.slot = slot;
-                    session.window.refresh(self.config.settings())?;
-                }
-            }
-            WHEEL if notification == CBN_SELCHANGE => {
-                session.window.wheel = selected(&session.window.panel, WHEEL);
-                session.window.refresh(self.config.settings())?;
-            }
-            ADD if notification == 0 => {
-                let Some(value) =
-                    dialog::prompt(hwnd, "新增轮盘", "快捷键（例如 f9）", "f9", false)
-                else {
-                    return Ok(());
-                };
-                let hotkey = value.trim().to_owned();
-                parse_hotkey(&hotkey)
-                    .map_err(|error| io::Error::other(format!("快捷键无效：{error}")))?;
-                let mut next = self.config.settings().clone();
-                next.additional_chat_wheels
-                    .push(crate::config::Wheel::new(hotkey));
-                self.hotkeys.update(&mut self.config, next)?;
-                session.window.wheel = self.config.settings().wheel_count() - 1;
-                session.window.slot = 0;
-                session.window.refresh(self.config.settings())?;
-            }
-            WAVE | STOP => {
-                if session.preview.take().is_some() {
-                    self.playback.stop_clip();
-                }
-                session.window.progress(None);
-                if action == WAVE {
-                    session.window.update_range_fields();
-                }
-            }
-            START | END if notification == EN_KILLFOCUS => {
-                if session.preview.take().is_some() {
-                    self.playback.stop_clip();
-                }
-                session.window.progress(None);
-                session.window.range()?;
-            }
-            PLAY if notification == 0 => {
-                let range = session.window.range()?;
-                let gain = gain(&session.window.panel.text(GAIN))?;
-                let clip = audio::trim_recording(session.source.path(), range.start, range.end)?;
-                let path = clip.path().to_path_buf();
-                self.next_job += 1;
-                let id = self.next_job;
-                session.preview = Some(id);
-                session.window.set_previewing(true);
-                self.previews.insert(id, clip);
-                self.playback.play_clip(
-                    id,
-                    path,
-                    gain,
-                    session.window.rolling,
-                    self.config.settings(),
-                );
-            }
-            SAVE if notification == 0 => {
-                if session.preview.take().is_some() {
-                    self.playback.stop_clip();
-                }
-                let range = session.window.range()?;
-                let gain = gain(&session.window.panel.text(GAIN))?;
-                let label = session.window.panel.text(LABEL).trim().to_owned();
-                let (wheel, slot) = (session.window.wheel, session.window.slot);
-                let source = session.source.clone();
-                let id = session.id;
-                let rolling = session.window.rolling;
-                let config = self.config.path().to_path_buf();
-                let events = self.jobs.clone();
-                std::thread::Builder::new()
-                    .name("WordyTrimSave".into())
-                    .spawn(move || {
-                        let clip = audio::trim_recording(source.path(), range.start, range.end);
-                        let (result, source) = match clip {
-                            Ok(clip) => (
-                                audio::stage_clip(clip.path(), &config, &AtomicBool::new(false)),
-                                Some(clip),
-                            ),
-                            Err(error) => (Err(error), None),
-                        };
-                        let _ = events.send(Background::SlotClip {
-                            wheel,
-                            slot,
-                            label: if label.is_empty() {
-                                "录音片段".into()
-                            } else {
-                                label
-                            },
-                            gain: Some(gain),
-                            result,
-                            source,
-                            trim: Some(id),
-                            rolling,
-                        });
-                    })?;
-                session.busy = true;
-                self.pending_saves += 1;
-            }
-            CANCEL if notification == 0 => {
-                if session.preview.is_some() {
-                    self.playback.stop_clip();
-                }
-                self.trim = None;
-            }
-            _ => (),
-        }
-        Ok(())
-    }
-
     fn close_editor(&mut self) -> io::Result<()> {
         if let Some((_, text)) = self.editor_preview.take() {
             if text {
@@ -1462,31 +1138,7 @@ impl App {
                 else {
                     return Ok(());
                 };
-                self.playback.stop_clip();
-                let label = path
-                    .file_stem()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .into_owned();
-                let config = self.config.path().to_path_buf();
-                let events = self.jobs.clone();
-                std::thread::Builder::new()
-                    .name("WordyClipImport".into())
-                    .spawn(move || {
-                        let result = audio::stage_clip(&path, &config, &AtomicBool::new(false));
-                        let _ = events.send(Background::SlotClip {
-                            wheel,
-                            slot,
-                            label,
-                            gain: None,
-                            result,
-                            source: None,
-                            trim: None,
-                            rolling: false,
-                        });
-                    })?;
-                self.pending_saves += 1;
-                return Ok(());
+                return self.import_slot_clip(wheel, slot, path);
             }
             CROP if notification == 0 => {
                 let item = self.config.settings().wheel(wheel).unwrap();
@@ -1494,25 +1146,7 @@ impl App {
                     return Ok(());
                 }
                 let path = audio::resolve_clip(self.config.path(), &item.slots[slot])?;
-                let events = self.jobs.clone();
-                self.playback.stop_clip();
-                std::thread::Builder::new()
-                    .name("WordyDecodeTrim".into())
-                    .spawn(move || {
-                        let result = (|| {
-                            let decoded = audio::decode_clip(&path, &AtomicBool::new(false))?;
-                            let mut source = std::fs::File::open(decoded.as_ref())?;
-                            let mut copy = tempfile::Builder::new().suffix(".wav").tempfile()?;
-                            io::copy(&mut source, copy.as_file_mut())?;
-                            Ok(copy)
-                        })();
-                        let _ = events.send(Background::TrimInput {
-                            target: (wheel, slot),
-                            result,
-                        });
-                    })?;
-                self.pending_saves += 1;
-                return Ok(());
+                return self.prepare_trim(wheel, slot, path);
             }
             PLAY if notification == 0 => {
                 if self.trim.is_some() {
@@ -1727,11 +1361,6 @@ fn capture_binding(hotkeys: &mut Hotkeys, owner: HWND, single: bool) -> io::Resu
     } else {
         Err(io::Error::other(failures.join("；")))
     }
-}
-
-fn recording_label() -> String {
-    let now = local_time();
-    format!("录音 {:02}{:02}{:02}", now.wHour, now.wMinute, now.wSecond)
 }
 
 fn local_time() -> windows_sys::Win32::Foundation::SYSTEMTIME {

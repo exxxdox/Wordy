@@ -104,6 +104,7 @@ cargo add <crate>
 | 路径 | 说明 |
 |------|------|
 | `rust/main.rs` / `rust/app.rs` | 进程入口、单实例、热键分发与窗口消息循环 |
+| `rust/app/recording.rs` | 后台录制、音频截取、试听和保存 |
 | `rust/audio.rs` + `rust/audio/` | WASAPI 设备枚举、播放/返听、VB-CABLE 路由、Windows 侦听策略、回环录制、裁剪与波形、托管音频 |
 | `rust/tts.rs` + `rust/tts/` | TTS 引擎、Cartesia HTTP/WebSocket、Volcengine SSE、音色标签 |
 | `rust/desktop.rs` | 宿主窗口、托盘、Windows 通知 |
