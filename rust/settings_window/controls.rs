@@ -21,7 +21,9 @@ use super::{
 };
 use crate::{
     desktop::paint_buffered,
-    settings_backdrop::{fill, outline, paint_embedded_backdrop, rgb, round, stroke},
+    settings_backdrop::{
+        fill, outline, paint_embedded_backdrop, paint_embedded_backdrop_in, rgb, round, stroke,
+    },
     slider,
 };
 
@@ -338,6 +340,26 @@ pub(super) unsafe extern "system" fn style_control(
         } else {
             CONTROL_BORDER
         };
+        // The edit window stays square while the field is rounded. Fill the four
+        // corner triangles outside the border with the page backdrop; leaving
+        // them in the edit's flat fill reads as dark notches against the glass.
+        let full = unsafe { CreateRectRgn(0, 0, rect.right + 1, rect.bottom + 1) };
+        let rounded = unsafe { CreateRoundRectRgn(0, 0, rect.right + 1, rect.bottom + 1, 18, 18) };
+        if !full.is_null() && !rounded.is_null() {
+            unsafe { CombineRgn(full, full, rounded, RGN_DIFF) };
+            let saved = unsafe { SaveDC(dc) };
+            unsafe { ExtSelectClipRgn(dc, full, RGN_AND) };
+            paint_embedded_backdrop_in(hwnd, dc, rect);
+            unsafe { RestoreDC(dc, saved) };
+        }
+        unsafe {
+            if !full.is_null() {
+                DeleteObject(full);
+            }
+            if !rounded.is_null() {
+                DeleteObject(rounded);
+            }
+        }
         outline(dc, &rect, 9, border);
         unsafe { ReleaseDC(hwnd, dc) };
     }

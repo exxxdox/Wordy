@@ -575,7 +575,7 @@ mod tests {
         }
         let mut window = SettingsWindow::new(ptr::null_mut(), &Settings::default()).unwrap();
         unsafe { ShowWindow(window.hwnd(), SW_SHOW) };
-        for page in [Page::Local, Page::Audio, Page::Tts] {
+        for page in [Page::Local, Page::Audio, Page::Tts, Page::Rolling] {
             window.page = page;
             window.show_page();
             unsafe { pump() };
@@ -597,7 +597,52 @@ mod tests {
                     assert_clean(
                         &format!("settings {kind} {}", widget.field.map_or(0, |f| f as u16)),
                         widget.hwnd,
-                    )
+                    );
+                    if matches!(widget.kind, Kind::Edit | Kind::Password | Kind::Number) {
+                        // The rounded border leaves four corner triangles to the
+                        // page glass; they must not keep the edit's flat fill.
+                        let dc = GetWindowDC(widget.hwnd);
+                        let mut window = RECT::default();
+                        GetWindowRect(widget.hwnd, &mut window);
+                        let (width, height) =
+                            (window.right - window.left, window.bottom - window.top);
+                        let area = RECT {
+                            left: 0,
+                            top: 0,
+                            right: width,
+                            bottom: height,
+                        };
+                        let screen = GetDC(ptr::null_mut());
+                        let memory = CreateCompatibleDC(screen);
+                        let bitmap = CreateCompatibleBitmap(screen, width, height);
+                        let previous = SelectObject(memory, bitmap);
+                        crate::settings_backdrop::fill(memory, &area, 0x00ff00ff);
+                        crate::settings_backdrop::paint_embedded_backdrop_in(
+                            widget.hwnd,
+                            memory,
+                            area,
+                        );
+                        for (x, y) in [
+                            (0, 0),
+                            (width - 1, 0),
+                            (0, height - 1),
+                            (width - 1, height - 1),
+                        ] {
+                            let live = GetPixel(dc, x, y) & 0x00ff_ffff;
+                            let glass = GetPixel(memory, x, y) & 0x00ff_ffff;
+                            assert_eq!(
+                                live,
+                                glass,
+                                "settings edit {} corner {x},{y} is not the page glass",
+                                widget.field.map_or(0, |f| f as u16)
+                            );
+                        }
+                        SelectObject(memory, previous);
+                        DeleteObject(bitmap);
+                        DeleteDC(memory);
+                        ReleaseDC(ptr::null_mut(), screen);
+                        ReleaseDC(widget.hwnd, dc);
+                    }
                 };
             }
         }

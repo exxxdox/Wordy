@@ -301,12 +301,19 @@ fn glass_pixel(x: i32, y: i32, width: i32, height: i32) -> u32 {
 }
 
 pub(crate) fn paint_embedded_backdrop(hwnd: HWND, dc: HDC) {
+    let mut child = RECT::default();
+    unsafe { GetClientRect(hwnd, &mut child) };
+    paint_embedded_backdrop_in(hwnd, dc, child);
+}
+
+/// Same backdrop, clipped to `child` instead of the control's client: edits
+/// shrink their client to the text band, but their rounded corners live in the
+/// non-client bands and still need the page glass behind them.
+pub(crate) fn paint_embedded_backdrop_in(hwnd: HWND, dc: HDC, child: RECT) {
     let parent = unsafe { GetAncestor(hwnd, GA_ROOT) };
     let mut client = RECT::default();
-    let mut child = RECT::default();
     let mut origin = POINT::default();
     unsafe {
-        GetClientRect(hwnd, &mut child);
         GetClientRect(parent, &mut client);
         ClientToScreen(hwnd, &mut origin);
         ScreenToClient(parent, &mut origin);
