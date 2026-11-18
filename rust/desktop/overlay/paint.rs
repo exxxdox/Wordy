@@ -118,12 +118,13 @@ pub(super) fn capsule_color(x: f32, y: f32, glow: f32) -> [u8; 3] {
         (x as u32).wrapping_mul(0x045d_9f3b).rotate_right(9) ^ (y as u32).wrapping_mul(0x9e37_79b9);
     let grain = if noise.count_ones() & 1 == 0 { 255 } else { 0 };
     color = blend(color, [grain; 3], 0.009);
-    // The hairline sits inside a darker transition so it follows the capsule instead of reading as an outline.
-    if distance >= -4.0 {
+    // A wide, shallow inner shade keeps the bright edge readable. A narrow dark
+    // hairline looked like black teeth where it stair-stepped around the arcs.
+    if distance >= -6.0 {
         color = blend(
             color,
             [0; 3],
-            (distance + 4.0).clamp(0.0, 1.0) * (72.0 / 255.0),
+            (distance + 6.0).clamp(0.0, 1.0) * (22.0 / 255.0),
         );
     }
     if distance >= -2.0 {
@@ -188,6 +189,11 @@ thread_local! {
 }
 
 pub(super) fn overlay_bitmap(width: u32, height: u32, opacity: f32, glow: f32) -> WheelBitmap {
+    // The hairline is barely a pixel wide. Point sampling makes its arc
+    // alternate between bright and dark pixels, which reads as black jaggies,
+    // so pixels on the silhouette average a 4x4 grid of subpixel samples.
+    const SAMPLES: i32 = 4;
+    let opacity = opacity.clamp(0.0, 1.0);
     let mut pixels = vec![0; (width * height * 4) as usize];
     let scale = width as f32 / WIDTH as f32;
     for (index, pixel) in pixels.as_chunks_mut::<4>().0.iter_mut().enumerate() {
@@ -195,25 +201,46 @@ pub(super) fn overlay_bitmap(width: u32, height: u32, opacity: f32, glow: f32) -
         let y = index / width as usize;
         let px = (x as f32 + 0.5) / scale;
         let py = (y as f32 + 0.5) / scale;
-        let shadow = u32::from(capsule_shadow(px, py, opacity.clamp(0.0, 1.0)));
-        let inside = capsule_alpha(px, py);
-        let background = (opacity.clamp(0.0, 1.0) * inside * 255.0).round() as u32;
-        // Both layers are dark; premultiplied color is the capsule tint only.
-        let [red, green, blue] = capsule_color(px, py, glow);
-        let alpha = background + shadow * (255 - background) / 255;
-        if alpha == 0 {
-            continue;
-        }
-        pixel[0] = (u32::from(blue) * background / 255) as u8;
-        pixel[1] = (u32::from(green) * background / 255) as u8;
-        pixel[2] = (u32::from(red) * background / 255) as u8;
-        pixel[3] = alpha as u8;
+        let color = if (-4.0..2.5).contains(&capsule_distance(px, py)) {
+            let mut sum = [0u32; 4];
+            for row in 0..SAMPLES {
+                for column in 0..SAMPLES {
+                    let offset_x = (column as f32 + 0.5) / SAMPLES as f32 - 0.5;
+                    let offset_y = (row as f32 + 0.5) / SAMPLES as f32 - 0.5;
+                    let sample =
+                        overlay_pixel(px + offset_x / scale, py + offset_y / scale, opacity, glow);
+                    for (total, value) in sum.iter_mut().zip(sample) {
+                        *total += u32::from(value);
+                    }
+                }
+            }
+            sum.map(|total| (total / (SAMPLES * SAMPLES) as u32) as u8)
+        } else {
+            overlay_pixel(px, py, opacity, glow)
+        };
+        pixel.copy_from_slice(&color);
     }
     WheelBitmap {
         width,
         height,
         pixels,
     }
+}
+
+/// One premultiplied BGRA sample, the layout `UpdateLayeredWindow` expects.
+fn overlay_pixel(px: f32, py: f32, opacity: f32, glow: f32) -> [u8; 4] {
+    let shadow = u32::from(capsule_shadow(px, py, opacity));
+    let inside = capsule_alpha(px, py);
+    let background = (opacity * inside * 255.0).round() as u32;
+    // Both layers are dark; premultiplied color is the capsule tint only.
+    let [red, green, blue] = capsule_color(px, py, glow);
+    let alpha = background + shadow * (255 - background) / 255;
+    [
+        (u32::from(blue) * background / 255) as u8,
+        (u32::from(green) * background / 255) as u8,
+        (u32::from(red) * background / 255) as u8,
+        alpha as u8,
+    ]
 }
 
 pub(super) fn capsule_alpha(x: f32, y: f32) -> f32 {
@@ -225,7 +252,9 @@ pub(super) fn capsule_alpha(x: f32, y: f32) -> f32 {
     let dx = (LEFT + RADIUS - x).max(x - (RIGHT - RADIUS)).max(0.0);
     let dy = (TOP + RADIUS - y).max(y - (BOTTOM - RADIUS)).max(0.0);
     let distance = (dx * dx + dy * dy).sqrt() - RADIUS;
-    (0.5 - distance).clamp(0.0, 1.0)
+    // A one-pixel silhouette ramp leaves high-contrast teeth on the arcs; a
+    // two-pixel ramp reads as a smooth edge instead.
+    (0.5 - distance * 0.5).clamp(0.0, 1.0)
 }
 
 pub(super) fn capsule_icon_color(gear: bool, hovered: bool, enabled: bool) -> [u8; 3] {
