@@ -14,8 +14,8 @@ use windows_sys::{
             Controls::{
                 DRAWITEMSTRUCT, EM_SETLIMITTEXT, EM_SETMARGINS, ICC_BAR_CLASSES,
                 INITCOMMONCONTROLSEX, InitCommonControlsEx, ODS_COMBOBOXEDIT, ODS_DISABLED,
-                ODS_FOCUS, ODS_SELECTED, ODT_BUTTON, ODT_COMBOBOX, ODT_STATIC, TBM_GETCHANNELRECT,
-                TBM_GETTHUMBRECT, TBM_SETPOS, TBM_SETRANGEMAX, TRACKBAR_CLASSW, WM_MOUSELEAVE,
+                ODS_FOCUS, ODS_SELECTED, ODT_BUTTON, ODT_COMBOBOX, ODT_STATIC, TBM_SETPOS,
+                TBM_SETRANGEMAX, TRACKBAR_CLASSW, WM_MOUSELEAVE,
             },
             HiDpi::{GetDpiForMonitor, GetDpiForWindow, MDT_EFFECTIVE_DPI},
             Input::KeyboardAndMouse::{
@@ -36,10 +36,10 @@ use crate::{
     },
     credentials::{Provider, normalize_api_key_input},
     desktop::set_dwm,
+    slider::{self, TBM_GETPOS},
 };
 
 pub const SETTINGS_ACTION_MESSAGE: u32 = WM_APP + 10;
-const TBM_GETPOS: u32 = WM_USER;
 const CLASS: PCWSTR = w!("Wordy.Rust.Settings");
 const CLIENT_WIDTH: i32 = 1120;
 const EDGE_PAD: i32 = 12;
@@ -2297,6 +2297,9 @@ unsafe extern "system" fn style_control(
 ) -> LRESULT {
     let combo = kind == Kind::Combo as usize;
     let slider = kind == Kind::Slider as usize;
+    if slider && let Some(result) = slider::handle_pointer(hwnd, message, lparam) {
+        return result;
+    }
     let check = kind == Kind::Check as usize;
     let edit = [Kind::Edit, Kind::Password, Kind::Number]
         .into_iter()
@@ -2472,22 +2475,8 @@ fn paint_check(hwnd: HWND, dc: HDC, rect: RECT) {
 }
 
 fn paint_slider(hwnd: HWND, dc: HDC, rect: RECT) {
-    let mut channel = RECT::default();
-    let mut thumb = RECT::default();
-    send(
-        hwnd,
-        TBM_GETCHANNELRECT,
-        0,
-        ptr::from_mut(&mut channel) as LPARAM,
-    );
-    send(
-        hwnd,
-        TBM_GETTHUMBRECT,
-        0,
-        ptr::from_mut(&mut thumb) as LPARAM,
-    );
+    let (channel, x) = slider::thumb_geometry(hwnd);
     let y = (rect.top + rect.bottom) / 2;
-    let x = (thumb.left + thumb.right) / 2;
     let track = RECT {
         left: channel.left,
         top: y - 3,
@@ -2631,6 +2620,21 @@ mod tests {
         assert_eq!(slider_position(2.0, 0.5), 30);
         assert_eq!(slider_position(1.0, 0.30), 14);
         assert_eq!(slider_value(2, 0.30), 0.4);
+    }
+
+    #[test]
+    fn clicking_the_settings_sliders_jumps_to_the_clicked_value() {
+        let settings = SettingsWindow::new(ptr::null_mut(), &Settings::default()).unwrap();
+        for (field, position) in [(Field::Volume, 15), (Field::Opacity, 7)] {
+            let slider = settings.control(field);
+            let mut rect = RECT::default();
+            unsafe { GetClientRect(slider, &mut rect) };
+            let point = (rect.right as isize / 2) | ((rect.bottom as isize / 2) << 16);
+            set_slider(slider, 0);
+            send(slider, WM_LBUTTONDOWN, 1, point);
+            send(slider, WM_LBUTTONUP, 0, point);
+            assert_eq!(send(slider, TBM_GETPOS, 0, 0), position);
+        }
     }
 
     #[test]

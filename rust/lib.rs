@@ -26,6 +26,8 @@ mod selector;
 #[cfg(windows)]
 pub mod settings_window;
 #[cfg(windows)]
+mod slider;
+#[cfg(windows)]
 mod status_toast;
 #[cfg(windows)]
 pub mod tts;

@@ -8,9 +8,8 @@ use windows_sys::Win32::Graphics::Gdi::*;
 use windows_sys::Win32::System::SystemServices::SS_OWNERDRAW;
 use windows_sys::Win32::UI::Controls::{
     DRAWITEMSTRUCT, EM_SETLIMITTEXT, EM_SETMARGINS, ODS_COMBOBOXEDIT, ODS_DISABLED, ODS_FOCUS,
-    ODS_SELECTED, ODT_BUTTON, ODT_COMBOBOX, ODT_STATIC, TB_ENDTRACK, TBM_GETCHANNELRECT,
-    TBM_GETTHUMBRECT, TBM_SETPAGESIZE, TBM_SETPOS, TBM_SETRANGE, TBS_NOTICKS, TRACKBAR_CLASSW,
-    WM_MOUSELEAVE,
+    ODS_SELECTED, ODT_BUTTON, ODT_COMBOBOX, ODT_STATIC, TB_ENDTRACK, TBM_SETPAGESIZE, TBM_SETPOS,
+    TBM_SETRANGE, TBS_NOTICKS, TRACKBAR_CLASSW, WM_MOUSELEAVE,
 };
 use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
@@ -26,6 +25,7 @@ use crate::desktop::{frame_edit_text, wide, window_text};
 use crate::dialog::{Panel, Template};
 use crate::selector::style_selector;
 use crate::settings_window::paint_embedded_backdrop;
+use crate::slider::{self, TBM_GETPOS};
 use crate::wheel::{CANVAS_HEIGHT, CANVAS_WIDTH, Point, WheelStyle, picker_slot_at};
 use crate::wheel_paint::{WheelBitmap, WheelFrame, WheelRenderer};
 
@@ -63,7 +63,6 @@ const GAIN_VALUE: u16 = 227;
 const GAIN_SLIDER: u16 = 228;
 const RENAME: u16 = 229;
 const GAIN_SUBCLASS: usize = 11;
-const TBM_GETPOS: u32 = WM_USER;
 
 // COLORREF stores red, green, blue in least-to-most-significant byte order.
 const PANEL_SURFACE: u32 = 0x1e1c1c;
@@ -304,24 +303,8 @@ fn suppress_button_erase(panel: HWND) {
 
 fn paint_gain(hwnd: HWND, dc: HDC, rect: RECT, background: u32) {
     fill(dc, rect, background);
-    let mut channel = RECT::default();
-    let mut thumb = RECT::default();
-    unsafe {
-        SendMessageW(
-            hwnd,
-            TBM_GETCHANNELRECT,
-            0,
-            ptr::from_mut(&mut channel) as LPARAM,
-        );
-        SendMessageW(
-            hwnd,
-            TBM_GETTHUMBRECT,
-            0,
-            ptr::from_mut(&mut thumb) as LPARAM,
-        );
-    }
+    let (channel, x) = slider::thumb_geometry(hwnd);
     let y = (rect.top + rect.bottom) / 2;
-    let x = (thumb.left + thumb.right) / 2;
     let track = RECT {
         left: channel.left,
         top: y - 3,
@@ -356,6 +339,9 @@ unsafe extern "system" fn slider_proc(
     _id: usize,
     background: usize,
 ) -> LRESULT {
+    if let Some(result) = slider::handle_pointer(hwnd, message, lparam) {
+        return result;
+    }
     unsafe {
         match message {
             WM_ERASEBKGND => 1,
@@ -365,8 +351,7 @@ unsafe extern "system" fn slider_proc(
                 });
                 0
             }
-            WM_SETFOCUS | WM_KILLFOCUS | WM_LBUTTONDOWN | WM_LBUTTONUP | WM_MOUSEMOVE
-            | WM_KEYDOWN => {
+            WM_SETFOCUS | WM_KILLFOCUS | WM_KEYDOWN => {
                 let result = DefSubclassProc(hwnd, message, wparam, lparam);
                 InvalidateRect(hwnd, ptr::null(), 0);
                 result
@@ -1963,6 +1948,39 @@ fn paint_wave(dc: HDC, state: &WaveState, plot: Plot, rect: RECT, focused: bool)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn trim_gain_click_and_drag_follow_the_visible_track() {
+        let trim = Trim::new(
+            ptr::null_mut(),
+            ptr::null_mut(),
+            &Settings::default(),
+            None,
+            3.0,
+            1.0,
+        )
+        .unwrap();
+        let gain = trim.chrome.state.gain;
+        let (width, height) = dimensions(gain);
+        let pointer = |x: i32| (x as u16 as isize) | ((height as isize / 2) << 16);
+        unsafe {
+            SendMessageW(gain, WM_LBUTTONDOWN, 1, pointer(width / 2));
+        }
+        assert_eq!(trim.panel.text(GAIN), "150");
+        unsafe {
+            SendMessageW(gain, WM_MOUSEMOVE, 1, pointer(width));
+        }
+        assert_eq!(trim.panel.text(GAIN), "300");
+        unsafe {
+            SendMessageW(gain, WM_MOUSEMOVE, 1, pointer(-1));
+            SendMessageW(gain, WM_LBUTTONUP, 0, pointer(-1));
+        }
+        assert_eq!(trim.panel.text(GAIN), "0");
+        assert_ne!(
+            unsafe { windows_sys::Win32::UI::Input::KeyboardAndMouse::GetCapture() },
+            gain
+        );
+    }
 
     #[test]
     fn preview_progress_invalidates_only_the_changed_playhead_pixels() {
