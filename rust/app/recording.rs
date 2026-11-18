@@ -55,6 +55,12 @@ impl Drop for TrimSession {
 }
 
 impl TrimSession {
+    pub(super) fn discard(self) {
+        // No save happens: dropping the session removes the temporary source
+        // once the waveform reader observes the cancel flag.
+        drop(self);
+    }
+
     pub(super) fn playback_progress(&mut self, id: u64, seconds: Option<f64>) {
         if self.preview == Some(id) {
             if seconds.is_none() {
@@ -269,7 +275,10 @@ impl App {
                 if session.preview.is_some() {
                     self.playback.stop_clip();
                 }
-                self.trim = None;
+                if let Some(session) = self.trim.take() {
+                    session.discard();
+                }
+                self.log("已取消保存录音".into());
             }
             _ => (),
         }
@@ -447,7 +456,12 @@ fn preserve_rolling(file: tempfile::NamedTempFile) -> io::Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Settings;
+    use crate::desktop::host_window;
+    use crate::panels::Trim;
     use std::io::Write;
+    use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows_sys::Win32::UI::WindowsAndMessaging::DestroyWindow;
 
     #[test]
     fn preserving_a_stopped_recording_keeps_the_file_on_disk() {
@@ -457,5 +471,34 @@ mod tests {
         let path = preserve_rolling(file).unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), b"audio");
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn discarding_a_trim_session_deletes_the_recording_source() {
+        let instance = unsafe { GetModuleHandleW(std::ptr::null()) };
+        let host = host_window(instance).unwrap();
+        let window = Trim::new(
+            host,
+            std::ptr::null_mut(),
+            &Settings::default(),
+            None,
+            1.0,
+            1.0,
+        )
+        .unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let file = tempfile::NamedTempFile::new_in(directory.path()).unwrap();
+        let path = file.path().to_owned();
+        TrimSession {
+            window,
+            id: 1,
+            source: Arc::new(file),
+            cancel: Arc::new(AtomicBool::new(false)),
+            preview: None,
+            busy: false,
+        }
+        .discard();
+        assert!(!path.exists());
+        unsafe { DestroyWindow(host) };
     }
 }
