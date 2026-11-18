@@ -81,7 +81,7 @@ impl App {
             self.log("后台录制已结束，正在准备保存窗口".into());
         } else if self.pending_saves == 0 && self.trim.is_none() {
             let seconds = self.config.settings().rolling_buffer_seconds;
-            self.recording = Some(Recording::start(Some(Duration::from_secs_f64(seconds)))?);
+            self.recording = Some(Recording::start(Duration::from_secs_f64(seconds))?);
             self.tray.set_recording(true);
             self.notify(format!(
                 "后台录制已开始（保留最近 {seconds:.0} 秒；再按一次结束并截取）"
@@ -344,7 +344,17 @@ impl App {
         match result {
             RecordingResult::Rolling(result) => {
                 self.pending_saves -= 1;
-                if !exiting {
+                if exiting {
+                    // The save window cannot open during shutdown. Keep the stopped
+                    // recording instead of dropping its only temporary file.
+                    match result {
+                        Ok(file) => match preserve_rolling(file) {
+                            Ok(path) => self.log(format!("已停止的录音保存在 {}", path.display())),
+                            Err(error) => self.log(format!("无法保留录音临时文件：{error}")),
+                        },
+                        Err(error) => self.log(format!("后台录制保存失败：{error}")),
+                    }
+                } else {
                     self.open_trim(result?, None)?;
                 }
             }
@@ -426,4 +436,26 @@ impl App {
 fn recording_label() -> String {
     let now = local_time();
     format!("录音 {:02}{:02}{:02}", now.wHour, now.wMinute, now.wSecond)
+}
+
+fn preserve_rolling(file: tempfile::NamedTempFile) -> io::Result<PathBuf> {
+    file.keep()
+        .map(|(_, path)| path)
+        .map_err(|error| error.error)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    #[test]
+    fn preserving_a_stopped_recording_keeps_the_file_on_disk() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut file = tempfile::NamedTempFile::new_in(directory.path()).unwrap();
+        file.write_all(b"audio").unwrap();
+        let path = preserve_rolling(file).unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"audio");
+        std::fs::remove_file(path).unwrap();
+    }
 }

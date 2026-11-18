@@ -283,6 +283,9 @@ impl App {
                 Err(error) => app.log(format!("无法写入日志文件：{error}")),
             }
         }
+        if let Some(warning) = app.config.take_load_warning() {
+            app.notify(warning);
+        }
         for failure in failures {
             app.notify(failure);
         }
@@ -870,7 +873,10 @@ impl App {
         if enabled && new.is_some() && cable.is_none() {
             return Err(io::Error::other("未检测到 VB-CABLE"));
         }
-        if let Some(old) = old
+        // Without Wordy routing, the old microphone's Windows listen state is the
+        // user's own setting; switching the Wordy selection must not turn it off.
+        if enabled
+            && let Some(old) = old
             && old_state.as_ref().is_some_and(|state| state.enabled)
         {
             audio::set_listen(old, None, false)?;
@@ -1165,9 +1171,16 @@ impl App {
                     return Ok(());
                 }
                 let text = !item.texts[slot].is_empty();
+                let preview_id = self.next_job + 1;
                 editor.panel.set_text(PLAY, "停止");
-                self.editor_preview = Some((self.next_job + 1, text));
-                return self.play_slot(wheel, slot);
+                self.editor_preview = Some((preview_id, text));
+                let result = self.play_slot(wheel, slot);
+                if result.is_err() && self.editor_preview.is_some_and(|(id, _)| id == preview_id) {
+                    // Nothing was queued, so no Finished event will unlock the editor.
+                    self.editor_preview = None;
+                    self.editor.panel.set_text(PLAY, "试听");
+                }
+                return result;
             }
             _ => return Ok(()),
         }
@@ -1199,7 +1212,8 @@ impl App {
             now.wYear, now.wMonth, now.wDay, now.wHour, now.wMinute, now.wSecond
         );
         eprintln!("{message}");
-        if self.logs.len() == LOG_LIMIT {
+        let trim = self.logs.len() == LOG_LIMIT;
+        if trim {
             self.logs.pop_front();
         }
         if let Some(log) = &mut self.file_log
@@ -1208,6 +1222,9 @@ impl App {
             eprintln!("写入日志失败：{error}");
         }
         if let Some(window) = &self.log_window {
+            if trim {
+                window.trim_front();
+            }
             window.append(&message);
         }
         self.logs.push_back(message);
@@ -1279,7 +1296,15 @@ impl App {
     fn failure(&mut self, message: String) {
         // Report through the toast/tray only; forcing the settings window open
         // on every background error made a plain launch look like a request for it.
-        self.toasts.push(&message, Tone::Error);
+        let settings_visible =
+            self.settings_visible() && unsafe { IsIconic(self.settings_window.hwnd()) == 0 };
+        if settings_visible {
+            self.toasts.push(&message, Tone::Error);
+        } else {
+            // Toast cards only exist over the settings window; without it the
+            // next tick would clear them before the user could read one.
+            self.tray.notify(&message);
+        }
         self.log_at("ERROR", message);
     }
 

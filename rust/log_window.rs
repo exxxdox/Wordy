@@ -10,7 +10,7 @@ use windows_sys::Win32::{
     },
     System::LibraryLoader::GetModuleHandleW,
     UI::{
-        Controls::{EM_REPLACESEL, EM_SCROLLCARET, EM_SETSEL},
+        Controls::{EM_LINEINDEX, EM_REPLACESEL, EM_SCROLLCARET, EM_SETSEL},
         HiDpi::GetDpiForSystem,
         WindowsAndMessaging::{
             CREATESTRUCTW, CreateWindowExW, DefWindowProcW, DestroyIcon, DestroyWindow,
@@ -150,6 +150,22 @@ impl LogWindow {
         self.write(&format!("\r\n{line}"));
     }
 
+    pub fn trim_front(&self) {
+        let state = unsafe { &*(GetWindowLongPtrW(self.hwnd, GWLP_USERDATA) as *const State) };
+        if state.edit.is_null() {
+            return;
+        }
+        let next = unsafe { SendMessageW(state.edit, EM_LINEINDEX, 1, 0) };
+        if next <= 0 {
+            return;
+        }
+        let empty = crate::desktop::wide("");
+        unsafe {
+            SendMessageW(state.edit, EM_SETSEL, 0, next as isize);
+            SendMessageW(state.edit, EM_REPLACESEL, 0, empty.as_ptr() as isize);
+        }
+    }
+
     fn write(&self, text: &str) {
         let state = unsafe { &*(GetWindowLongPtrW(self.hwnd, GWLP_USERDATA) as *const State) };
         if state.edit.is_null() {
@@ -250,5 +266,27 @@ unsafe extern "system" fn window_proc(
             }
             _ => DefWindowProcW(hwnd, message, wparam, lparam),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use windows_sys::Win32::UI::Controls::EM_GETLINECOUNT;
+
+    #[test]
+    fn trimming_removes_only_the_oldest_line() {
+        let window = LogWindow::open(ptr::null_mut()).unwrap();
+        window.set_lines(&["one".into(), "two".into(), "three".into()]);
+        let state = unsafe { &*(GetWindowLongPtrW(window.hwnd, GWLP_USERDATA) as *const State) };
+        assert_eq!(
+            unsafe { SendMessageW(state.edit, EM_GETLINECOUNT, 0, 0) },
+            3
+        );
+        window.trim_front();
+        assert_eq!(
+            unsafe { SendMessageW(state.edit, EM_GETLINECOUNT, 0, 0) },
+            2
+        );
     }
 }
