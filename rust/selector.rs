@@ -11,7 +11,7 @@ use windows_sys::Win32::{
     },
 };
 
-use crate::desktop::{wide, window_text};
+use crate::desktop::{paint_buffered, wide, window_text};
 use crate::settings_backdrop::paint_embedded_backdrop;
 
 const SUBCLASS: usize = 1;
@@ -110,7 +110,12 @@ unsafe extern "system" fn selector_proc(
                 }
                 0
             }
-            WM_PAINT => paint(hwnd, glass != 0),
+            WM_PAINT => {
+                // Publish one complete field: a partial repaint (the exposed band
+                // under a dropdown list) must never show an empty or half text frame.
+                paint_buffered(hwnd, |dc, rect| paint_field(hwnd, dc, rect, glass != 0));
+                0
+            }
             WM_PRINTCLIENT => {
                 let mut client = RECT::default();
                 GetClientRect(hwnd, &mut client);
@@ -124,18 +129,6 @@ unsafe extern "system" fn selector_proc(
             WM_MOUSEWHEEL if SendMessageW(hwnd, CB_GETDROPPEDSTATE, 0, 0) == 0 => 0,
             _ => DefSubclassProc(hwnd, message, wparam, lparam),
         }
-    }
-}
-
-fn paint(hwnd: HWND, glass: bool) -> LRESULT {
-    unsafe {
-        let mut paint = PAINTSTRUCT::default();
-        let dc = BeginPaint(hwnd, &mut paint);
-        let mut client = RECT::default();
-        GetClientRect(hwnd, &mut client);
-        paint_field(hwnd, dc, client, glass);
-        EndPaint(hwnd, &paint);
-        0
     }
 }
 
