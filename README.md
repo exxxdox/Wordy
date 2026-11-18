@@ -5,12 +5,12 @@
 
 常驻热键输入 → TTS 生成 → 播放：支持通过 Windows 原生“侦听此设备”和 VB-CABLE，将 TTS 与麦克风输出到同一虚拟设备。
 
-快捷键聊天轮盘：按住热键唤出八向轮盘，松开即播放选中的音频，或用当前音色朗读选中的文字。输出跟随当前播放设备；启用音频侦听时同样进入 VB-CABLE。
+快捷键聊天轮盘：按住热键唤出八向轮盘，松开即播放选中的音频，或用当前音色朗读选中的文字。音频与朗读固定输出到 CABLE Input；开启返听时同时输出到本机播放设备。
 
 ## 环境要求
 
 - Windows 10/11
-- VB-CABLE（可选，[音频侦听](#音频侦听vb-cable) 功能需要）
+- VB-CABLE（主播放输出与[音频侦听](#音频侦听vb-cable)需要；可在音频设置中关闭「启用主播放输出」）
 - FFmpeg（用于 MP3、FLAC 等格式及非 PCM16 WAV。缺少时可在 Wordy 提示中通过 WinGet 安装）
 - Rust stable（MSVC 工具链）：源码开发与打包
 
@@ -35,11 +35,11 @@
 
 ### 返听
 
-在设置 → **音频设置** 中选择「播放设备」，例如耳机或扬声器。F10 录制后的试听使用该设备。启用音频侦听后，勾选「启用返听」可让朗读和轮盘音频同时通过该设备播放。
+在设置 → **音频设置** → 返听 中选择「返听播放设备」，例如耳机或扬声器。勾选「启用返听」后，朗读和轮盘音频同时通过该设备播放；F10 截取的试听也使用该设备。返听独立开关，不需要开启音频侦听。
 
 ### 音频侦听（VB-CABLE）
 
-安装 VB-CABLE 后，「麦克风输入」自动选择 CABLE Input。音频侦听将 TTS 直接输出到 CABLE Input，并让 Windows 把选定麦克风侦听到同一端点。其他应用选择 CABLE Output 即可接收两路声音。Wordy 不采集麦克风，也不维护软件混音流。
+安装 VB-CABLE 后，主播放输出固定送到 CABLE Input（「侦听输出设备」只读显示该端点）；音频侦听再让 Windows 把选定麦克风侦听到同一端点。其他应用选择 CABLE Output 即可接收两路声音。Wordy 不采集麦克风，也不维护软件混音流。
 
 #### 安装 VB-CABLE
 
@@ -50,11 +50,11 @@
 
 #### 启用音频侦听
 
-1. 启动应用后打开设置 → **音频侦听** 选项卡
-2. 勾选"启用音频侦听"
-3. 选择要侦听的麦克风
+1. 启动应用后打开设置 → **音频设置** → 麦克风与侦听
+2. 勾选「启用音频侦听」
+3. 在「侦听麦克风」中选择要侦听的麦克风
 
-设置会立即保存并生效。停用路由或退出应用时，Wordy 会恢复麦克风原有的 Windows 侦听状态。
+设置会立即保存并生效。关闭侦听会同时关闭该麦克风的 Windows 侦听；退出应用时保留 Windows 当前的侦听状态。
 
 ## 运行发布版
 
@@ -112,7 +112,8 @@ cargo add <crate>
 | `rust/settings_window.rs` / `rust/settings_window/controls.rs` | 设置窗口、DPI 布局和控件绘制 |
 | `rust/settings_backdrop.rs` | 设置窗口和嵌入控件共用的玻璃背景 |
 | `rust/panels.rs` / `rust/panels/` | 共用面板控件、轮盘编辑器、截取对话框和轮盘预览 |
-| `rust/wheel*.rs` | 轮盘运行窗口、四种样式绘制、托盘与设置预览 |
+| `rust/wheel*.rs` | 轮盘运行窗口、四种样式绘制与设置预览 |
+| `rust/playback.rs` / `rust/ffmpeg.rs` | 播放调度、FFmpeg 查找与 WinGet 安装 |
 | `rust/config.rs`/`backup*.rs`/`credentials.rs` | 配置持久化、加密备份、凭据库 |
 | `rust/hotkey.rs`/`instance.rs`/`file_log.rs` | 快捷键解析与注册、单实例、日志轮转 |
 | `rust/log_window.rs`/`status_toast.rs`/`dialog.rs` | 日志窗口、反馈提示、原生对话框 |
