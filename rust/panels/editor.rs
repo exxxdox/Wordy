@@ -48,8 +48,8 @@ impl Editor {
         edit(&mut template, NAME, [0, 0, 1, 1]);
         label(&mut template, INFO, "", [217, 42, 252, 16]);
         label(&mut template, 302, "内容", [217, 64, 26, 15]);
-        button(&mut template, AUDIO_MODE, "音频", [245, 60, 34, 18]);
-        button(&mut template, TEXT_MODE, "文字", [283, 60, 34, 18]);
+        button(&mut template, AUDIO_MODE, "音频", [245, 60, 52, 18]);
+        button(&mut template, TEXT_MODE, "文字", [303, 60, 52, 18]);
         label(&mut template, 304, "音量", [217, 88, 26, 15]);
         edit(&mut template, GAIN, [245, 83, 112, 18]);
         label(&mut template, GAIN_VALUE, "100%", [362, 87, 41, 15]);
@@ -57,10 +57,10 @@ impl Editor {
         edit(&mut template, LABEL, [217, 125, 272, 18]);
         label(&mut template, 303, "朗读文字", [217, 150, 60, 15]);
         edit(&mut template, TEXT, [217, 167, 272, 18]);
-        button(&mut template, IMPORT, "导入", [217, 152, 33, 18]);
-        button(&mut template, PLAY, "试听", [342, 152, 42, 18]);
-        button(&mut template, CROP, "截取", [388, 152, 33, 18]);
-        button(&mut template, CLEAR, "清空", [425, 152, 33, 18]);
+        button(&mut template, IMPORT, "导入", [217, 152, 52, 18]);
+        button(&mut template, PLAY, "试听", [275, 152, 52, 18]);
+        button(&mut template, CROP, "截取", [333, 152, 52, 18]);
+        button(&mut template, CLEAR, "清空", [391, 152, 52, 18]);
         let panel = Panel::new(parent, &template, host, EDITOR_MESSAGE)?;
         let chrome = Chrome::attach(&panel, false, false)?;
         layout_editor(panel.0, &chrome.state);
@@ -249,8 +249,8 @@ pub(super) fn layout_editor(hwnd: HWND, state: &ChromeState) {
     for (id, x, y, w, h) in [
         (INFO, 0, 60, 180, 23),
         (302, 0, 92, 44, 20),
-        (AUDIO_MODE, 43, 86, 42, 32),
-        (TEXT_MODE, 93, 86, 42, 32),
+        (AUDIO_MODE, 43, 86, 52, 32),
+        (TEXT_MODE, 101, 86, 52, 32),
         (304, 0, 126, 44, 20),
         (GAIN_VALUE, 268, 126, 50, 20),
         (
@@ -295,10 +295,10 @@ pub(super) fn layout_editor(hwnd: HWND, state: &ChromeState) {
     let action_y = if mode { 244 } else { 222 };
     let (mut x, gap) = (0, 6);
     for (id, control_width, visible) in [
-        (IMPORT, 42, !mode),
-        (PLAY, 64, true),
-        (CROP, 42, !mode),
-        (CLEAR, 42, true),
+        (IMPORT, 52, !mode),
+        (PLAY, 52, true),
+        (CROP, 52, !mode),
+        (CLEAR, 52, true),
     ] {
         if visible {
             at_card(i32::from(id), x, action_y, control_width, 32);
@@ -321,6 +321,23 @@ mod tests {
 
     use super::*;
     use crate::slider;
+
+    #[test]
+    fn editor_icon_buttons_share_the_same_width() {
+        let settings = Settings::default();
+        let window =
+            crate::settings_window::SettingsWindow::new(ptr::null_mut(), &settings).unwrap();
+        let editor = Editor::new_embedded(ptr::null_mut(), window.hwnd(), &settings).unwrap();
+        let width = |id| {
+            let mut rect = RECT::default();
+            unsafe { GetWindowRect(editor.panel.child(id), &mut rect) };
+            rect.right - rect.left
+        };
+        let expected = width(ADD);
+        for id in [IMPORT, PLAY, CROP, CLEAR, AUDIO_MODE, TEXT_MODE, REMOVE] {
+            assert_eq!(width(id), expected, "icon button {id} width differs");
+        }
+    }
 
     #[test]
     fn editor_card_is_vertically_centered_on_the_wheel_preview() {

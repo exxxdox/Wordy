@@ -704,6 +704,15 @@ fn icon_line(dc: HDC, from: POINT, to: POINT) {
     }
 }
 
+fn icon_ellipse(dc: HDC, cx: i32, cy: i32, radius: i32, color: u32, stroke: i32) {
+    with_pen(dc, stroke, color, || unsafe {
+        let brush = GetStockObject(NULL_BRUSH);
+        let old = SelectObject(dc, brush);
+        Ellipse(dc, cx - radius, cy - radius, cx + radius, cy + radius);
+        SelectObject(dc, old);
+    });
+}
+
 fn icon_polygon(dc: HDC, points: &[POINT], color: u32) {
     unsafe {
         let brush = CreateSolidBrush(color);
@@ -724,7 +733,7 @@ fn draw_editor_icon(dc: HDC, rect: RECT, id: u16, color: u32, label: &str) -> bo
         return false;
     }
     let height = rect.bottom - rect.top;
-    let size = (height * 5 / 11).clamp(10, 22);
+    let size = (height * 9 / 16).clamp(12, 24);
     let half = size / 2;
     let (cx, cy) = ((rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2);
     let stroke = (size / 8).max(1);
@@ -738,10 +747,12 @@ fn draw_editor_icon(dc: HDC, rect: RECT, id: u16, color: u32, label: &str) -> bo
             line(cx - half, cy, cx + half, cy);
         }),
         IMPORT => with_pen(dc, stroke, color, || {
+            line(cx - half, cy + half / 3, cx - half, cy + half);
+            line(cx - half, cy + half, cx + half, cy + half);
+            line(cx + half, cy + half, cx + half, cy + half / 3);
             line(cx, cy - half, cx, cy + half / 3);
             line(cx - half / 3, cy, cx, cy + half / 3);
             line(cx + half / 3, cy, cx, cy + half / 3);
-            line(cx - half, cy + half, cx + half, cy + half);
         }),
         PLAY if label != "停止" => icon_polygon(
             dc,
@@ -771,12 +782,26 @@ fn draw_editor_icon(dc: HDC, rect: RECT, id: u16, color: u32, label: &str) -> bo
             },
             color,
         ),
-        CROP => with_pen(dc, stroke, color, || {
-            line(cx - half, cy - half / 2, cx - half / 2, cy - half / 2);
-            line(cx - half / 2, cy - half / 2, cx - half / 2, cy + half);
-            line(cx + half / 2, cy - half, cx + half, cy - half);
-            line(cx + half, cy - half, cx + half, cy + half / 2);
-        }),
+        CROP => {
+            let loop_radius = (size / 6).max(2);
+            let loop_x = cx - half + loop_radius;
+            icon_ellipse(dc, loop_x, cy - half / 3, loop_radius, color, stroke);
+            icon_ellipse(dc, loop_x, cy + half / 3, loop_radius, color, stroke);
+            with_pen(dc, stroke, color, || {
+                line(
+                    loop_x + loop_radius,
+                    cy - half / 3,
+                    cx + half,
+                    cy + half / 2,
+                );
+                line(
+                    loop_x + loop_radius,
+                    cy + half / 3,
+                    cx + half,
+                    cy - half / 2,
+                );
+            });
+        }
         CLEAR => with_pen(dc, stroke, color, || {
             line(cx - half, cy - half / 2, cx + half, cy - half / 2);
             line(cx - half / 3, cy - half, cx + half / 3, cy - half);
@@ -836,8 +861,9 @@ fn draw_editor_icon(dc: HDC, rect: RECT, id: u16, color: u32, label: &str) -> bo
             });
         }
         TEXT_MODE => with_pen(dc, stroke, color, || {
-            line(cx - half / 2, cy - half, cx + half / 2, cy - half);
-            line(cx, cy - half, cx, cy + half);
+            line(cx - half, cy - half / 2, cx + half, cy - half / 2);
+            line(cx - half, cy, cx + half / 2, cy);
+            line(cx - half, cy + half / 2, cx + half / 3, cy + half / 2);
         }),
         _ => return false,
     }
