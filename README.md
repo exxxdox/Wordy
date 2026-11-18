@@ -109,7 +109,7 @@ cargo add <crate>
 | `rust/desktop.rs` | 悬浮输入框、托盘、Windows 通知 |
 | `rust/settings_window.rs` / `rust/settings_window/controls.rs` | 设置窗口、DPI 布局和控件绘制 |
 | `rust/settings_backdrop.rs` | 设置窗口和嵌入控件共用的玻璃背景 |
-| `rust/panels.rs` | 轮盘编辑器和截取对话框 |
+| `rust/panels.rs` / `rust/panels/` | 共用面板控件、轮盘编辑器、截取对话框和轮盘预览 |
 | `rust/wheel*.rs` | 轮盘运行窗口、四种样式绘制、托盘与设置预览 |
 | `rust/config.rs`/`backup*.rs`/`credentials.rs` | 配置持久化、加密备份、凭据库 |
 | `rust/hotkey.rs`/`instance.rs`/`file_log.rs` | 快捷键解析与注册、单实例、日志轮转 |

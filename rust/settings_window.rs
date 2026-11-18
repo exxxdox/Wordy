@@ -38,8 +38,6 @@ use crate::{
 mod controls;
 use controls::{paint_item, style_control};
 
-pub(crate) use crate::settings_backdrop::paint_embedded_backdrop;
-
 pub const SETTINGS_ACTION_MESSAGE: u32 = WM_APP + 10;
 const CLASS: PCWSTR = w!("Wordy.Rust.Settings");
 const CLIENT_WIDTH: i32 = 1120;

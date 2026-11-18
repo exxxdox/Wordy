@@ -10,7 +10,7 @@
 | `rust/desktop.rs` | 悬浮输入框、托盘、通知相关 Win32 封装 |
 | `rust/settings_window.rs` / `rust/settings_window/controls.rs` | 设置窗口、DPI 布局、设置控件绘制 |
 | `rust/settings_backdrop.rs` | 设置窗口和嵌入控件共用的玻璃背景及绘制缓存 |
-| `rust/panels.rs` | 轮盘编辑器和截取对话框 |
+| `rust/panels.rs` / `rust/panels/` | 共用面板控件、轮盘编辑器、截取对话框和轮盘预览 |
 | `rust/wheel.rs` / `wheel_paint.rs` / `wheel_window.rs` | 轮盘状态、四种样式绘制、运行时窗口 |
 | `rust/audio.rs` + `rust/audio/` | WASAPI 设备枚举、播放/返听、VB-CABLE 路由、Windows 侦听、回环录制、裁剪/波形、托管音频 |
 | `rust/tts.rs` + `rust/tts/realtime.rs` | TTS 引擎、Cartesia HTTP/WebSocket、Volcengine SSE、音色标签 |
