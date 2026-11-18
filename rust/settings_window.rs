@@ -531,6 +531,15 @@ impl SettingsWindow {
         self.refresh_provider();
     }
 
+    pub(crate) fn sync_debounced_inputs(&mut self, settings: &Settings) {
+        // The controls already show the user's edits. Rebuilding the page on a drag flashes its siblings.
+        self.settings.volume = settings.volume;
+        self.settings.overlay_opacity = settings.overlay_opacity;
+        self.settings
+            .overlay_placeholder
+            .clone_from(&settings.overlay_placeholder);
+    }
+
     pub fn set_output_devices(&mut self, outputs: Vec<AudioIdentity>) {
         self.outputs = outputs;
         self.refresh_audio_choices();
@@ -632,11 +641,17 @@ impl SettingsWindow {
             Field::Listen => Some(SetListen(checked(control))),
             Field::Volume => {
                 let value = slider_value(send(control, TBM_GETPOS, 0, 0), 0.5);
+                if value == self.settings.volume {
+                    return None;
+                }
                 set_text(self.control(Field::VolumeValue), &format!("{value:.2}x"));
                 Some(SetVolume(value))
             }
             Field::Opacity => {
                 let value = slider_value(send(control, TBM_GETPOS, 0, 0), 0.30);
+                if value == self.settings.overlay_opacity {
+                    return None;
+                }
                 set_text(
                     self.control(Field::OpacityValue),
                     &format!("{:.0}%", value * 100.0),
@@ -2671,6 +2686,23 @@ mod tests {
             Some(SettingsAction::SetOpacity(value)) => assert_eq!(value, 0.65),
             _ => panic!("the opacity slider should emit its new value"),
         }
+    }
+
+    #[test]
+    fn dragging_a_settings_slider_leaves_unrelated_controls_untouched() {
+        let mut committed = Settings::default();
+        let mut window = SettingsWindow::new(ptr::null_mut(), &committed).unwrap();
+        let fonts = window.control(Field::UiFont);
+        fill_choices(fonts, ["临时字体选项"], 0);
+        slider::set_position(window.control(Field::Opacity), 5);
+        let Some(SettingsAction::SetOpacity(value)) = window.action(Field::Opacity as u16) else {
+            panic!("the opacity slider should report its value");
+        };
+        committed.overlay_opacity = value;
+        window.sync_debounced_inputs(&committed);
+        assert_eq!(text(window.control(Field::OpacityValue)), "55%");
+        assert_eq!(combo_text(fonts, 0), "临时字体选项");
+        assert!(window.action(Field::Opacity as u16).is_none());
     }
 
     #[test]

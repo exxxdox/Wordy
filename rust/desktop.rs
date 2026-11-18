@@ -805,18 +805,25 @@ impl Overlay {
         if !self.is_visible() {
             return Ok(());
         }
+        let dpi = unsafe { GetDpiForWindow(self.hwnd) }.max(96);
+        self.set_visual_settings(settings, dpi)
+    }
+
+    pub fn apply_opacity(&self, opacity: f64) -> io::Result<()> {
+        if !self.is_visible() {
+            return Ok(());
+        }
         let mut bounds = RECT::default();
         if unsafe { GetWindowRect(self.hwnd, &mut bounds) } == 0 {
             return Err(io::Error::last_os_error());
         }
-        let dpi = unsafe { GetDpiForWindow(self.hwnd) }.max(96);
-        self.set_visual_settings(settings, dpi)?;
+        // Opacity belongs to the backdrop, so an active drag leaves the text and icons intact.
         self.paint_shadow(
             bounds.left,
             bounds.top,
             bounds.right - bounds.left,
             bounds.bottom - bounds.top,
-            settings.overlay_opacity,
+            opacity,
         )
     }
 
@@ -827,14 +834,8 @@ impl Overlay {
         } else {
             &settings.ui_font
         });
-        let alpha = (settings.overlay_opacity.clamp(0.0, 1.0) * 1000.0).round() as usize;
         let placeholder = wide(&settings.overlay_placeholder);
         unsafe {
-            SetPropW(
-                self.hwnd,
-                OVERLAY_OPACITY,
-                ptr::without_provenance_mut(alpha),
-            );
             if SetPropW(
                 self.entry,
                 w!("WordyPlaceholder"),
@@ -873,7 +874,7 @@ impl Overlay {
     }
 
     fn paint_shadow(
-        &mut self,
+        &self,
         x: i32,
         y: i32,
         width: i32,
@@ -882,7 +883,16 @@ impl Overlay {
     ) -> io::Result<()> {
         draw_backdrop(self.backdrop, x, y, width, height, opacity, unsafe {
             capsule_glow(self.hwnd)
-        })
+        })?;
+        let alpha = (opacity.clamp(0.0, 1.0) * 1000.0).round() as usize;
+        unsafe {
+            SetPropW(
+                self.hwnd,
+                OVERLAY_OPACITY,
+                ptr::without_provenance_mut(alpha),
+            )
+        };
+        Ok(())
     }
 
     pub fn is_visible(&self) -> bool {
@@ -1741,6 +1751,32 @@ mod overlay_visual_tests {
         for (opacity, alpha) in [(0.30, 77), (0.65, 166), (1.0, 255)] {
             let backdrop = overlay_bitmap(WIDTH as u32, HEIGHT as u32, opacity, 0.0);
             assert_eq!(backdrop.pixels[center + 3], alpha);
+        }
+    }
+
+    #[test]
+    fn updating_visible_overlay_opacity_leaves_its_text_layer_intact() {
+        unsafe {
+            let instance = windows_sys::Win32::System::LibraryLoader::GetModuleHandleW(ptr::null());
+            let mut overlay = Overlay::new(instance, ptr::null_mut()).unwrap();
+            overlay
+                .set_visual_settings(&Settings::default(), 96)
+                .unwrap();
+            SendMessageW(overlay.entry, WM_SETTEXT, 0, w!("保留输入") as LPARAM);
+            SetWindowPos(
+                overlay.hwnd,
+                ptr::null_mut(),
+                -32000,
+                -32000,
+                WIDTH,
+                HEIGHT,
+                SWP_NOACTIVATE | SWP_NOZORDER | SWP_SHOWWINDOW,
+            );
+            let font = SendMessageW(overlay.entry, WM_GETFONT, 0, 0);
+            overlay.apply_opacity(0.55).unwrap();
+            assert_eq!(GetPropW(overlay.hwnd, OVERLAY_OPACITY) as usize, 550);
+            assert_eq!(SendMessageW(overlay.entry, WM_GETFONT, 0, 0), font);
+            assert_eq!(overlay.text(), "保留输入");
         }
     }
 

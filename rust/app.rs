@@ -708,7 +708,8 @@ impl App {
 
     fn edit_debounced(&mut self, update: impl FnOnce(&mut Settings)) -> io::Result<()> {
         self.config.update_debounced(update)?;
-        self.settings_window.refresh(self.config.settings());
+        self.settings_window
+            .sync_debounced_inputs(self.config.settings());
         Ok(())
     }
 
@@ -737,7 +738,8 @@ impl App {
             SetVolume(volume) => self.edit_debounced(|s| s.volume = volume)?,
             SetOpacity(opacity) => {
                 self.edit_debounced(|s| s.overlay_opacity = opacity)?;
-                self.overlay.apply_visual_settings(self.config.settings())?;
+                self.overlay
+                    .apply_opacity(self.config.settings().overlay_opacity)?;
             }
             SetPlaceholder(value) => {
                 self.edit_debounced(|s| s.overlay_placeholder = value)?;
