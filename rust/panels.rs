@@ -1,6 +1,7 @@
 use std::{
     cell::{Cell, RefCell},
     io, mem, ptr,
+    sync::OnceLock,
 };
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Dwm::{
@@ -625,7 +626,10 @@ fn draw_button(item: &DRAWITEMSTRUCT, state: &ChromeState) {
     } else {
         PRIMARY
     };
-    if !state.trim && draw_editor_icon(item.hDC, item.rcItem, id, color, &label) {
+    if !state.trim
+        && editor_emoji(id, &label)
+            .is_some_and(|emoji| draw_emoji(item.hwndItem, item.hDC, item.rcItem, emoji, color))
+    {
         return;
     }
     let text = wide(&label);
@@ -697,175 +701,114 @@ fn install_editor_tooltips(panel: &Panel) {
     }
 }
 
-fn icon_line(dc: HDC, from: POINT, to: POINT) {
-    unsafe {
-        MoveToEx(dc, from.x, from.y, ptr::null_mut());
-        LineTo(dc, to.x, to.y);
+const EMOJI_FONT: &str = "Segoe UI Emoji";
+
+fn emoji_supported() -> bool {
+    static SUPPORT: OnceLock<bool> = OnceLock::new();
+    *SUPPORT.get_or_init(|| unsafe {
+        let dc = CreateCompatibleDC(ptr::null_mut());
+        if dc.is_null() {
+            return false;
+        }
+        let family = wide(EMOJI_FONT);
+        let font = CreateFontW(
+            -16,
+            0,
+            0,
+            0,
+            FW_NORMAL as i32,
+            0,
+            0,
+            0,
+            DEFAULT_CHARSET as u32,
+            0,
+            0,
+            0,
+            0,
+            family.as_ptr(),
+        );
+        if font.is_null() {
+            DeleteDC(dc);
+            return false;
+        }
+        let previous = SelectObject(dc, font);
+        let mut name = [0u16; 64];
+        let length = GetTextFaceW(dc, name.len() as i32, name.as_mut_ptr());
+        if !previous.is_null() {
+            SelectObject(dc, previous);
+        }
+        DeleteObject(font);
+        DeleteDC(dc);
+        if length <= 0 {
+            return false;
+        }
+        let end = name[..(length as usize).min(name.len())]
+            .iter()
+            .position(|&unit| unit == 0)
+            .unwrap_or(length as usize);
+        String::from_utf16_lossy(&name[..end]).eq_ignore_ascii_case(EMOJI_FONT)
+    })
+}
+
+fn editor_emoji(id: u16, label: &str) -> Option<&'static str> {
+    match id {
+        IMPORT => Some("📥"),
+        PLAY if label == "停止" => Some("⏹️"),
+        PLAY => Some("▶️"),
+        CROP => Some("✂️"),
+        CLEAR => Some("🗑️"),
+        AUDIO_MODE => Some("🔊"),
+        TEXT_MODE => Some("📝"),
+        ADD => Some("➕"),
+        REMOVE => Some("➖"),
+        _ => None,
     }
 }
 
-fn icon_ellipse(dc: HDC, cx: i32, cy: i32, radius: i32, color: u32, stroke: i32) {
-    with_pen(dc, stroke, color, || unsafe {
-        let brush = GetStockObject(NULL_BRUSH);
-        let old = SelectObject(dc, brush);
-        Ellipse(dc, cx - radius, cy - radius, cx + radius, cy + radius);
-        SelectObject(dc, old);
-    });
-}
-
-fn icon_polygon(dc: HDC, points: &[POINT], color: u32) {
-    unsafe {
-        let brush = CreateSolidBrush(color);
-        let old_brush = SelectObject(dc, brush);
-        let old_pen = SelectObject(dc, GetStockObject(NULL_PEN));
-        Polygon(dc, points.as_ptr(), points.len() as i32);
-        SelectObject(dc, old_pen);
-        SelectObject(dc, old_brush);
-        DeleteObject(brush);
-    }
-}
-
-fn draw_editor_icon(dc: HDC, rect: RECT, id: u16, color: u32, label: &str) -> bool {
-    if !matches!(
-        id,
-        IMPORT | PLAY | CROP | CLEAR | AUDIO_MODE | TEXT_MODE | ADD | REMOVE
-    ) {
+fn draw_emoji(hwnd: HWND, dc: HDC, rect: RECT, emoji: &str, color: u32) -> bool {
+    if !emoji_supported() {
         return false;
     }
-    let height = rect.bottom - rect.top;
-    let size = (height * 9 / 16).clamp(12, 24);
-    let half = size / 2;
-    let (cx, cy) = ((rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2);
-    let stroke = (size / 8).max(1);
-    let line = |x1, y1, x2, y2| icon_line(dc, POINT { x: x1, y: y1 }, POINT { x: x2, y: y2 });
-    match id {
-        ADD => with_pen(dc, stroke, color, || {
-            line(cx - half, cy, cx + half, cy);
-            line(cx, cy - half, cx, cy + half);
-        }),
-        REMOVE => with_pen(dc, stroke, color, || {
-            line(cx - half, cy, cx + half, cy);
-        }),
-        IMPORT => with_pen(dc, stroke, color, || {
-            line(cx - half, cy + half / 3, cx - half, cy + half);
-            line(cx - half, cy + half, cx + half, cy + half);
-            line(cx + half, cy + half, cx + half, cy + half / 3);
-            line(cx, cy - half, cx, cy + half / 3);
-            line(cx - half / 3, cy, cx, cy + half / 3);
-            line(cx + half / 3, cy, cx, cy + half / 3);
-        }),
-        PLAY if label != "停止" => icon_polygon(
+    let dpi = unsafe { GetDpiForWindow(hwnd) }.max(96) as i32;
+    let family = wide(EMOJI_FONT);
+    let font = unsafe {
+        CreateFontW(
+            -((17 * dpi) / 96),
+            0,
+            0,
+            0,
+            FW_NORMAL as i32,
+            0,
+            0,
+            0,
+            DEFAULT_CHARSET as u32,
+            0,
+            0,
+            0,
+            0,
+            family.as_ptr(),
+        )
+    };
+    if font.is_null() {
+        return false;
+    }
+    let previous = unsafe { SelectObject(dc, font) };
+    let mut text = wide(emoji);
+    let mut area = rect;
+    unsafe {
+        SetBkMode(dc, TRANSPARENT as i32);
+        SetTextColor(dc, color);
+        DrawTextW(
             dc,
-            &[
-                POINT {
-                    x: cx - half + stroke,
-                    y: cy - half,
-                },
-                POINT {
-                    x: cx - half + stroke,
-                    y: cy + half,
-                },
-                POINT {
-                    x: cx + half,
-                    y: cy,
-                },
-            ],
-            color,
-        ),
-        PLAY => fill(
-            dc,
-            RECT {
-                left: cx - half / 2,
-                top: cy - half / 2,
-                right: cx + half / 2,
-                bottom: cy + half / 2,
-            },
-            color,
-        ),
-        CROP => {
-            let loop_radius = (size / 6).max(2);
-            let loop_x = cx - half + loop_radius;
-            icon_ellipse(dc, loop_x, cy - half / 3, loop_radius, color, stroke);
-            icon_ellipse(dc, loop_x, cy + half / 3, loop_radius, color, stroke);
-            with_pen(dc, stroke, color, || {
-                line(
-                    loop_x + loop_radius,
-                    cy - half / 3,
-                    cx + half,
-                    cy + half / 2,
-                );
-                line(
-                    loop_x + loop_radius,
-                    cy + half / 3,
-                    cx + half,
-                    cy - half / 2,
-                );
-            });
+            text.as_mut_ptr(),
+            -1,
+            &mut area,
+            DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
+        );
+        if !previous.is_null() {
+            SelectObject(dc, previous);
         }
-        CLEAR => with_pen(dc, stroke, color, || {
-            line(cx - half, cy - half / 2, cx + half, cy - half / 2);
-            line(cx - half / 3, cy - half, cx + half / 3, cy - half);
-            let body = half - stroke;
-            line(cx - body, cy - half / 3, cx - body, cy + half);
-            line(cx + body, cy - half / 3, cx + body, cy + half);
-            line(cx - body, cy + half, cx + body, cy + half);
-            line(cx, cy, cx, cy + half - stroke);
-        }),
-        AUDIO_MODE => {
-            icon_polygon(
-                dc,
-                &[
-                    POINT {
-                        x: cx - half,
-                        y: cy - half / 3,
-                    },
-                    POINT {
-                        x: cx - half / 3,
-                        y: cy - half / 3,
-                    },
-                    POINT {
-                        x: cx,
-                        y: cy - half,
-                    },
-                    POINT {
-                        x: cx,
-                        y: cy + half,
-                    },
-                    POINT {
-                        x: cx - half / 3,
-                        y: cy + half / 3,
-                    },
-                    POINT {
-                        x: cx - half,
-                        y: cy + half / 3,
-                    },
-                ],
-                color,
-            );
-            with_pen(dc, stroke, color, || {
-                let wave = [
-                    POINT {
-                        x: cx + half / 3,
-                        y: cy - half / 2,
-                    },
-                    POINT {
-                        x: cx + half / 2,
-                        y: cy,
-                    },
-                    POINT {
-                        x: cx + half / 3,
-                        y: cy + half / 2,
-                    },
-                ];
-                unsafe { Polyline(dc, wave.as_ptr(), wave.len() as i32) };
-            });
-        }
-        TEXT_MODE => with_pen(dc, stroke, color, || {
-            line(cx - half, cy - half / 2, cx + half, cy - half / 2);
-            line(cx - half, cy, cx + half / 2, cy);
-            line(cx - half, cy + half / 2, cx + half / 3, cy + half / 2);
-        }),
-        _ => return false,
+        DeleteObject(font);
     }
     true
 }
