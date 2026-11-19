@@ -101,7 +101,8 @@ export default function DialogHost() {
         {dialog.kind === "record" ? (
           <>
             <p className="mt-2 text-xs text-[var(--muted)]">{dialog.message}</p>
-            <output className="field mt-3 block min-h-[2.4rem] justify-center text-lg">
+            {/* 不要加 block：它会覆盖 output.field 的 flex，文字就靠左了。 */}
+            <output className="field mt-3 min-h-[2.4rem] justify-center text-lg">
               {recording || "…"}
             </output>
             <p className="mt-2 text-xs text-[var(--muted)]">松开即保存，按 Esc 取消</p>
