@@ -30,6 +30,8 @@ body {
   user-select: none;
 }
 
+/* 放进 components 层：Tailwind 的宽度工具类（w-28/flex-1）才能覆盖默认宽度。 */
+@layer components {
 .field {
   display: block;
   width: 100%;
@@ -157,4 +159,5 @@ select.field option {
 
 ::-webkit-scrollbar-thumb:hover {
   background-color: rgba(255, 255, 255, 0.32);
+}
 }

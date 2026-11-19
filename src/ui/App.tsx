@@ -175,8 +175,11 @@ export default function App() {
   const info = providerInfo(settings, provider);
   const voices =
     provider === "Cartesia" ? snapshot.voices : settings.tts_providers.Volcengine.voice_list;
+  // Volcengine 用列表第一位作为当前音色，下拉框必须回显它，否则选完会跳回「无」。
   const selectedVoice =
-    provider === "Cartesia" ? settings.tts_providers.Cartesia.voice_id : null;
+    provider === "Cartesia"
+      ? settings.tts_providers.Cartesia.voice_id
+      : (settings.tts_providers.Volcengine.voice_list[0]?.id ?? null);
   const fontHint = !settings.ui_font
     ? "使用内置字体栈。"
     : snapshot.fonts.includes(settings.ui_font)
@@ -211,7 +214,7 @@ export default function App() {
               <Card title="快捷键与播放">
                 <Row label="全局快捷键">
                   <div className="flex gap-2">
-                    <output className="field flex-1">
+                    <output className="field min-w-0 flex-1 truncate">
                       {displayHotkey(settings.hotkey) || "未设置"}
                     </output>
                     <button className="btn" onClick={() => run({ type: "record_hotkey" })}>
@@ -226,7 +229,7 @@ export default function App() {
                       checked={settings.hold_key_enabled}
                       onChange={(value) => run({ type: "set_hold_key_enabled", value })}
                     />
-                    <output className="field flex-1">
+                    <output className="field min-w-0 flex-1 truncate">
                       {displayHotkey(settings.hold_key) || "未设置"}
                     </output>
                     <button className="btn" onClick={() => run({ type: "record_hold_key" })}>
@@ -535,12 +538,14 @@ export default function App() {
                       <button
                         className="btn"
                         disabled={
-                          !voiceId.trim() ||
+                          !(voiceId || selectedVoice) ||
                           !settings.tts_providers.Volcengine.voice_list.some(
-                            (voice) => voice.id === voiceId,
+                            (voice) => voice.id === (voiceId || selectedVoice),
                           )
                         }
-                        onClick={() => run({ type: "delete_volcengine_voice", id: voiceId })}
+                        onClick={() =>
+                          run({ type: "delete_volcengine_voice", id: voiceId || selectedVoice || "" })
+                        }
                       >
                         删除音色
                       </button>
@@ -568,7 +573,7 @@ export default function App() {
               <Card title="录制设置">
                 <Row label="后台录制快捷键">
                   <div className="flex gap-2">
-                    <output className="field flex-1">
+                    <output className="field min-w-0 flex-1 truncate">
                       {displayHotkey(settings.rolling_buffer_hotkey) || "未设置"}
                     </output>
                     <button className="btn" onClick={() => run({ type: "record_rolling_hotkey" })}>
@@ -592,7 +597,7 @@ export default function App() {
                         }
                       }}
                     />
-                    <span className="text-sm text-[var(--muted)]">秒（5–300）</span>
+                    <span className="whitespace-nowrap text-sm text-[var(--muted)]">秒（5–300）</span>
                   </div>
                 </Row>
               </Card>
