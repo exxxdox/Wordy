@@ -1,14 +1,32 @@
-﻿# Wordy 统一入口：.\wordy.ps1 [init|dev|build] [-Clean] [-NoPause]
-# 默认 dev；-Clean 仅用于 build，-NoPause 用于非交互执行。
+﻿# Wordy 统一入口：.\wordy.ps1 [init|dev|build] [-Port 1420] [-Clean] [-NoPause]
+# 默认 dev；-Port 是 dev 的起始端口，被占用时自动顺延；-Clean 仅用于 build。
 param(
     [Parameter(Position = 0)]
     [ValidateSet('init', 'dev', 'build')]
     [string]$Action = 'dev',
+    [ValidateRange(1, 65535)]
+    [int]$Port = 1420,
     [switch]$Clean,
     [switch]$NoPause
 )
 
 $ErrorActionPreference = 'Stop'
+
+function Find-FreePort([int]$Start) {
+    $limit = [Math]::Min($Start + 50, 65535)
+    for ($candidate = $Start; $candidate -lt $limit; $candidate++) {
+        $listener = $null
+        try {
+            $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $candidate)
+            $listener.Start()
+            $listener.Stop()
+            return $candidate
+        } catch {
+            if ($listener) { try { $listener.Stop() } catch { } }
+        }
+    }
+    throw "从 $Start 起找不到可用端口（已尝试 50 个）"
+}
 
 function Invoke-Pause {
     if ($Action -ne 'dev' -and -not $NoPause) {
@@ -63,14 +81,18 @@ try {
             if (-not (Test-Path -LiteralPath $frontend)) {
                 Invoke-Step $pnpm.Source @('install', '--allow-build=esbuild')
             }
-            # 上次未退出的 Vite 会占住 1420，Tauri 随后报一个难读的 dev server 错误。
-            $busy = Get-NetTCPConnection -LocalPort 1420 -State Listen -ErrorAction SilentlyContinue
-            if ($busy) {
-                $owners = ($busy | Select-Object -ExpandProperty OwningProcess -Unique) -join ', '
-                throw "端口 1420 已被进程 $owners 占用。结束该进程后重试（通常是上次未退出的 Vite）。"
+            $devPort = Find-FreePort $Port
+            if ($devPort -ne $Port) {
+                Write-Host "[dev] Port $Port is busy; using $devPort."
             }
-            Write-Host '[dev] Starting Wordy...'
-            Invoke-Step $cargoCommand.Source @('tauri', 'dev')
+            $env:WORDY_DEV_PORT = "$devPort"
+            # Tauri 必须和 Vite 使用同一个端口。Windows PowerShell 传参时会丢掉内联
+            # JSON 的引号，所以先写到临时文件再交给 --config。
+            $configPath = Join-Path $env:TEMP 'wordy-dev-config.json'
+            $configJson = '{"build":{"devUrl":"http://127.0.0.1:' + $devPort + '"}}'
+            [IO.File]::WriteAllText($configPath, $configJson)
+            Write-Host "[dev] Starting Wordy on port $devPort..."
+            Invoke-Step $cargoCommand.Source @('tauri', 'dev', '--config', $configPath)
         }
         'build' {
             $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()

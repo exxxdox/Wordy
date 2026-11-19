@@ -100,7 +100,7 @@ cargo add <crate>
 
 `init` 和 `build` 默认结束后等待回车，自动化执行时加 `-NoPause`；`-Clean` 执行 `cargo clean`。
 
-首次启动 `pnpm dev` 时 Tailwind 会扫描项目并编译一次样式，第一个 CSS 请求可能等待 10–40 秒；之后热更新恢复为秒级。
+首次启动 `pnpm dev` 时 Tailwind 会扫描项目并编译一次样式，第一个 CSS 请求可能等待 10–40 秒；之后热更新恢复为秒级。`\wordy.ps1 dev -Port 1421` 可指定起始端口；端口被占用时会自动顺延到下一个空闲端口。
 
 ### 项目结构
 
