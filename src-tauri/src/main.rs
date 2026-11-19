@@ -59,12 +59,23 @@ fn main() -> std::process::ExitCode {
 
             let handle = app.handle().clone();
             let closable = window.clone();
-            window.on_window_event(move |event| {
-                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+            let events = app.handle().clone();
+            window.on_window_event(move |event| match event {
+                tauri::WindowEvent::CloseRequested { api, .. } => {
                     // 关闭设置窗口只隐藏，托盘应用继续运行。
                     api.prevent_close();
                     let _ = closable.hide();
                 }
+                // 位置交给原生线程写配置；拖动时事件密集，原生侧会防抖。
+                // 只记录看得见的移动：程序化居中/恢复发生在显示前，不能覆盖配置。
+                tauri::WindowEvent::Moved(position) => {
+                    if closable.is_visible().unwrap_or(false)
+                        && let Some(native) = events.try_state::<NativeHandle>()
+                    {
+                        native.settings_moved(position.x, position.y);
+                    }
+                }
+                _ => (),
             });
 
             std::thread::Builder::new()

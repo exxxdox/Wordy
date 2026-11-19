@@ -348,6 +348,11 @@ fn validate_settings(table: &Table) -> io::Result<Settings> {
         "window_position".into(),
         "x=0\ny=0".parse::<Value>().map_err(io::Error::other)?,
     );
+    // 默认值为空时模板里没有这个键；有保存位置的新备份需要按位置表校验。
+    default_fields.insert(
+        "settings_window_position".into(),
+        "x=0\ny=0".parse::<Value>().map_err(io::Error::other)?,
+    );
     default_fields.insert(
         "audio_output_device".into(),
         "name=''\nhost_api_name=''\nid=''"

@@ -183,6 +183,8 @@ pub enum UiRequest {
     Snapshot(SyncSender<Snapshot>),
     Logs(SyncSender<Vec<String>>),
     Action(SettingsAction, SyncSender<Result<Snapshot, String>>),
+    /// 设置窗口移动后的物理坐标；只更新配置，不需要回复。
+    SettingsMoved(i32, i32),
 }
 
 /// 网页侧持有的原生线程句柄。事件句柄跨线程仅用于 SetEvent，语义安全。
@@ -233,6 +235,11 @@ impl NativeHandle {
         receiver
             .recv_timeout(ACTION_TIMEOUT)
             .map_err(|_| "操作超时".to_string())?
+    }
+
+    /// 窗口移动事件很密集，异步交给原生线程，不等待回复。
+    pub fn settings_moved(&self, x: i32, y: i32) {
+        let _ = self.send(UiRequest::SettingsMoved(x, y));
     }
 }
 

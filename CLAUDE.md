@@ -28,6 +28,7 @@ Rust（edition 2024）+ Tauri 2 桌面应用。设置界面是 React（Vite + Ta
 设置页由 WebView 渲染，原生逻辑不变：网页通过 `wordy_action` 发送动作，原生线程执行后回传完整 `Snapshot`，再用 `wordy://snapshot` 事件推送变化。配置仍以 `ConfigStore` 为唯一数据源，网页不做本地持久化。`ConfigStore::revision` 决定是否推送。
 
 - 关闭设置窗口只隐藏，托盘应用继续运行；`wordy_hide` 与窗口关闭事件都只隐藏。
+- 设置窗口首次打开居中，之后恢复拖动后的位置（`settings_window_position`，拖动时防抖写盘）；位置所在显示器失效时重新居中。
 - 确认、密码、快捷键录制弹窗与状态 Toast 都由 React 渲染；原生线程通过 `wordy://dialog` 请求并等待 `wordy_dialog_reply`。文件选择仍是系统对话框。
 - 桥命令 `wordy_action`/`wordy_snapshot`/`wordy_wheel_preview` 必须是 async：同步命令会占住 Tauri 主线程，弹窗事件无法送达，表现为“弹窗弹不出来”。
 - 状态提示由 React `wordy://feedback` 渲染；设置页隐藏时错误仍走托盘通知。

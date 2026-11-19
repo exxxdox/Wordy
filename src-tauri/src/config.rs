@@ -184,6 +184,8 @@ pub struct Settings {
     pub fixed_center: bool,
     pub log_level: String,
     pub window_position: Option<WindowPosition>,
+    /// 设置窗口上次所在位置；未设置时首次出现在屏幕中间。
+    pub settings_window_position: Option<WindowPosition>,
     pub main_playback_enabled: bool,
     pub audio_output_device_name: Option<String>,
     pub audio_output_device: Option<AudioIdentity>,
@@ -220,6 +222,7 @@ impl Default for Settings {
             fixed_center: true,
             log_level: "INFO".into(),
             window_position: None,
+            settings_window_position: None,
             main_playback_enabled: true,
             audio_output_device_name: None,
             audio_output_device: None,
@@ -307,6 +310,10 @@ impl Settings {
                 .unwrap_or(defaults.log_level),
             window_position: raw
                 .get("window_position")
+                .and_then(Value::as_table)
+                .and_then(read_position),
+            settings_window_position: raw
+                .get("settings_window_position")
                 .and_then(Value::as_table)
                 .and_then(read_position),
             main_playback_enabled: read_bool(
@@ -605,6 +612,16 @@ impl ConfigStore {
 
     pub fn save_deadline(&self) -> Option<Instant> {
         self.save_deadline
+    }
+
+    /// 记录设置窗口位置。拖动会连续触发移动事件，用防抖写盘；
+    /// 位置不参与网页快照，因此不递增 revision。
+    pub fn remember_settings_position(&mut self, position: WindowPosition) {
+        if self.settings.settings_window_position == Some(position) {
+            return;
+        }
+        self.settings.settings_window_position = Some(position);
+        self.save_deadline = Some(Instant::now() + SAVE_DEBOUNCE);
     }
 
     pub fn save_if_due(&mut self, now: Instant) -> io::Result<bool> {
@@ -1045,6 +1062,24 @@ mod tests {
         fs::create_dir(&path).unwrap();
         assert!(config.flush().is_err());
         assert!(config.save_deadline().is_some());
+    }
+
+    #[test]
+    fn remembering_the_settings_window_position_defers_the_write() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let mut config = ConfigStore::load(&path).unwrap();
+        let revision = config.revision();
+        config.remember_settings_position(WindowPosition { x: 240, y: 160 });
+        // 位置不参与网页快照，revision 不变；写盘走防抖。
+        assert_eq!(config.revision(), revision);
+        assert!(config.save_deadline().is_some());
+        config.flush().unwrap();
+        let loaded = ConfigStore::load(&path).unwrap();
+        assert_eq!(
+            loaded.settings().settings_window_position,
+            Some(WindowPosition { x: 240, y: 160 })
+        );
     }
 
     #[test]

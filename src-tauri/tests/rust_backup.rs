@@ -7,7 +7,7 @@ use std::io::Write;
 use std::path::Path;
 use wordy::backup::{export_backup, import_backup};
 use wordy::backup_crypto::EncryptedWriter;
-use wordy::config::{ConfigStore, Settings, Wheel};
+use wordy::config::{ConfigStore, Settings, Wheel, WindowPosition};
 use wordy::credentials::{CredentialStore, Provider};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
@@ -167,6 +167,19 @@ fn accepts_a_wheel_kept_without_a_hotkey() {
     let mut wheel = Wheel::new("");
     wheel.labels[0] = "kept".into();
     settings.additional_chat_wheels.push(wheel);
+    let config = settings.to_toml().unwrap();
+    let result = import_entries(&[
+        ("manifest.json", MANIFEST),
+        ("config.toml", config.as_bytes()),
+        ("secrets.json", SECRETS),
+    ]);
+    assert!(result.is_ok());
+}
+
+#[test]
+fn accepts_a_backup_that_remembers_the_settings_window_position() {
+    let mut settings = Settings::default();
+    settings.settings_window_position = Some(WindowPosition { x: 120, y: 80 });
     let config = settings.to_toml().unwrap();
     let result = import_entries(&[
         ("manifest.json", MANIFEST),

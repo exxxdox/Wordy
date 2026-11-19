@@ -18,7 +18,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::*;
 use windows_sys::core::w;
 
 use crate::audio::{self, Recording};
-use crate::config::{AudioIdentity, ConfigStore, Settings, Voice};
+use crate::config::{AudioIdentity, ConfigStore, Settings, Voice, WindowPosition};
 use crate::credentials::{CredentialStore, Provider, WindowsCredentials, normalize_api_key_input};
 use crate::desktop::*;
 use crate::ffmpeg;
@@ -531,6 +531,10 @@ impl App {
                             .map_err(|error| error.to_string()),
                     );
                 }
+                UiRequest::SettingsMoved(x, y) => {
+                    self.config
+                        .remember_settings_position(WindowPosition { x, y });
+                }
             }
         }
     }
@@ -542,6 +546,7 @@ impl App {
     pub(super) fn show_settings(&mut self) -> io::Result<()> {
         self.overlay.hide(false);
         if let Some(window) = self.handle.get_webview_window("settings") {
+            place_settings_window(&window, self.config.settings().settings_window_position);
             let _ = window.unminimize();
             let _ = window.show();
             let _ = window.set_focus();
@@ -552,9 +557,7 @@ impl App {
     pub(super) fn settings_visible(&self) -> bool {
         let hwnd = self.ui_hwnd();
         !hwnd.is_null() && unsafe { IsWindowVisible(hwnd) != 0 && IsIconic(hwnd) == 0 }
-    }
-
-    fn complete_background(&mut self, result: Background, exiting: bool) -> io::Result<()> {
+    }    fn complete_background(&mut self, result: Background, exiting: bool) -> io::Result<()> {
         match result {
             Background::NotificationFailed(message) => {
                 // Fall back to the tray when the notification-center sender is unavailable.
@@ -603,6 +606,32 @@ impl App {
         Ok(())
     }
 }
+
+/// 第一次打开居中；之后恢复到上次位置。显示器变化导致位置失效时重新居中。
+fn place_settings_window(window: &tauri::WebviewWindow, saved: Option<WindowPosition>) {
+    if let Some(position) = saved.filter(|position| position_is_visible(window, *position)) {
+        let _ = window.set_position(tauri::PhysicalPosition::new(position.x, position.y));
+    } else {
+        let _ = window.center();
+    }
+}
+
+fn position_is_visible(window: &tauri::WebviewWindow, position: WindowPosition) -> bool {
+    window
+        .available_monitors()
+        .map(|monitors| {
+            monitors.iter().any(|monitor| {
+                let origin = monitor.position();
+                let size = monitor.size();
+                position.x >= origin.x
+                    && position.y >= origin.y
+                    && position.x < origin.x + size.width as i32
+                    && position.y < origin.y + size.height as i32
+            })
+        })
+        .unwrap_or(false)
+}
+
 impl App {
     fn ask_dialog(
         &mut self,
