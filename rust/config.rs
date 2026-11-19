@@ -123,7 +123,7 @@ impl Wheel {
 
     fn from_table(table: &Table) -> Option<Self> {
         // An unparseable hotkey must not delete the wheel and its slots. Keep it
-        // unbound, keep its data, and let the startup warning ask for a new key.
+        // unbound, keep its data, and let the wheel editor record a new key.
         let raw_hotkey = text(table, "hotkey").map(str::trim).unwrap_or_default();
         let hotkey = if parse_hotkey(raw_hotkey).is_ok() {
             raw_hotkey.to_owned()
@@ -963,6 +963,26 @@ mod tests {
         assert_eq!(wheel.slots[7], "x.wav");
         assert_eq!(wheel.labels[7], "名称");
         assert_eq!(wheel.volumes[7], 2.5);
+    }
+
+    #[test]
+    fn wheel_added_without_a_hotkey_survives_a_reload() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let mut config = ConfigStore::load(&path).unwrap();
+        config
+            .update(|settings| {
+                let mut wheel = Wheel::new("");
+                wheel.name = format!("轮盘 {}", settings.wheel_count() + 1);
+                settings.additional_chat_wheels.push(wheel);
+                settings.chat_wheel_last_index = settings.wheel_count() - 1;
+            })
+            .unwrap();
+        let loaded = ConfigStore::load(&path).unwrap();
+        assert_eq!(loaded.settings().wheel_count(), 2);
+        let wheel = loaded.settings().wheel(1).unwrap();
+        assert!(wheel.hotkey.is_empty());
+        assert_eq!(wheel.name, "轮盘 2");
     }
 
     #[test]

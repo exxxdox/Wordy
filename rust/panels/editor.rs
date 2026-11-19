@@ -104,8 +104,16 @@ impl Editor {
             style_index,
         );
         self.panel.set_text(NAME, &wheel.name);
-        self.panel
-            .set_text(HOTKEY, &crate::hotkey::display_hotkey(&wheel.hotkey));
+        let hotkey = crate::hotkey::display_hotkey(&wheel.hotkey);
+        // An unbound wheel still needs a label that says what clicking it does.
+        self.panel.set_text(
+            HOTKEY,
+            if hotkey.is_empty() {
+                "录制快捷键"
+            } else {
+                &hotkey
+            },
+        );
         self.panel.set_text(LABEL, &wheel.labels[self.slot]);
         self.panel.set_text(TEXT, &wheel.texts[self.slot]);
         self.chrome.gain(wheel.volumes[self.slot]);
@@ -330,6 +338,19 @@ mod tests {
         let _editor = Editor::new_embedded(ptr::null_mut(), window.hwnd(), &settings).unwrap();
         assert!(super::super::font_has_glyph("Segoe UI Emoji", "📥"));
         assert!(!super::super::font_has_glyph("Consolas", "📥"));
+    }
+
+    #[test]
+    fn unbound_wheel_offers_to_record_its_shortcut() {
+        let mut settings = Settings::default();
+        let mut wheel = crate::config::Wheel::new("");
+        wheel.name = "轮盘 2".into();
+        settings.additional_chat_wheels.push(wheel);
+        settings.chat_wheel_last_index = 1;
+        let window =
+            crate::settings_window::SettingsWindow::new(ptr::null_mut(), &settings).unwrap();
+        let editor = Editor::new_embedded(ptr::null_mut(), window.hwnd(), &settings).unwrap();
+        assert_eq!(editor.panel.text(HOTKEY), "录制快捷键");
     }
 
     #[test]

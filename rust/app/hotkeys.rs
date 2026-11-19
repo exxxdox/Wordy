@@ -63,11 +63,8 @@ impl Hotkeys {
                 failures.push(format!("快捷键 {value} 未启用：{error}"));
             }
         }
-        for (index, wheel) in settings.additional_chat_wheels.iter().enumerate() {
-            if wheel.hotkey.trim().is_empty() {
-                failures.push(format!("轮盘 {} 未设置快捷键，已跳过", index + 2));
-            }
-        }
+        // Unbound wheels are a supported state (new wheels start without a
+        // shortcut), so they do not produce a startup warning.
         failures
     }
 

@@ -12,7 +12,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{CBN_SELCHANGE, EN_KILLFOCUS, I
 use crate::audio::{self, Recording};
 use crate::panels::{self, Trim};
 
-use super::{App, Background, gain, local_time, record_new_wheel};
+use super::{App, Background, append_unbound_wheel, gain, local_time};
 
 // Handle clip saves alongside recording because both can update or close the trim session.
 pub(super) enum RecordingResult {
@@ -188,14 +188,8 @@ impl App {
                 session.window.refresh(self.config.settings())?;
             }
             ADD if notification == 0 => {
-                // Same recorder and append path as the wheel editor.
-                let font = self.config.settings().ui_font.clone();
-                let Some(index) =
-                    record_new_wheel(&mut self.config, &mut self.hotkeys, hwnd, &font)?
-                else {
-                    return Ok(());
-                };
-                session.window.wheel = index;
+                // Same unbound append path as the wheel editor.
+                session.window.wheel = append_unbound_wheel(&mut self.config, &mut self.hotkeys)?;
                 session.window.slot = 0;
                 session.window.refresh(self.config.settings())?;
             }

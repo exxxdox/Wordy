@@ -57,19 +57,9 @@ impl App {
                 self.config.update(|s| s.chat_wheel_style = style.into())?;
             }
             ADD if notification == 0 => {
-                // Record the wheel's shortcut like every other hotkey field;
-                // typing it into a text box left function keys unrecorded.
-                let font = self.config.settings().ui_font.clone();
-                let Some(index) = record_new_wheel(
-                    &mut self.config,
-                    &mut self.hotkeys,
-                    self.settings_window.hwnd(),
-                    &font,
-                )?
-                else {
-                    return Ok(());
-                };
-                editor.wheel = index;
+                // Add the wheel immediately; its shortcut can be recorded later
+                // with the "录制快捷键" button.
+                editor.wheel = append_unbound_wheel(&mut self.config, &mut self.hotkeys)?;
                 editor.slot = 0;
             }
             REMOVE if notification == 0 => {
