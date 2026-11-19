@@ -196,10 +196,21 @@ export default function App() {
   );
 
   // 无系统标题栏后，底部按钮负责关闭：通知原生端再隐藏窗口。
-  const closeSettings = () => {
+  const closeSettings = useCallback(() => {
     run({ type: "closed" });
     invoke("wordy_hide").catch((error) => console.error(error));
-  };
+  }, [run]);
+
+  // Esc 关闭设置页；弹窗、日志层自己处理 Esc，避免连设置页一起关掉。
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      if (document.querySelector(".overlay")) return;
+      closeSettings();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [closeSettings]);
 
   if (!snapshot) {
     return (
