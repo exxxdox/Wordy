@@ -6,7 +6,7 @@ use windows::Win32::Graphics::Direct2D::*;
 use windows::Win32::Graphics::DirectWrite::*;
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::Imaging::{
-    CLSID_WICImagingFactory, GUID_WICPixelFormat32bppPBGRA, IWICImagingFactory,
+    CLSID_WICImagingFactory, GUID_WICPixelFormat32bppPBGRA, IWICBitmap, IWICImagingFactory,
     WICBitmapCacheOnLoad,
 };
 use windows::Win32::System::Com::{
@@ -133,6 +133,18 @@ impl WheelRenderer {
     }
 
     pub fn render(&self, frame: WheelFrame<'_>, scale: f64) -> Result<WheelBitmap> {
+        let (bitmap, width, height) = self.paint_bitmap(frame, scale)?;
+        let stride = width * 4;
+        let mut pixels = vec![0; stride as usize * height as usize];
+        unsafe { bitmap.CopyPixels(ptr::null(), stride, &mut pixels)? };
+        Ok(WheelBitmap {
+            width,
+            height,
+            pixels,
+        })
+    }
+
+    fn paint_bitmap(&self, frame: WheelFrame<'_>, scale: f64) -> Result<(IWICBitmap, u32, u32)> {
         let width = (CANVAS_WIDTH * scale).round();
         let height = (CANVAS_HEIGHT * scale).round();
         if !scale.is_finite()
@@ -176,14 +188,7 @@ impl WheelRenderer {
         let finished = unsafe { target.EndDraw(None, None) };
         painted?;
         finished?;
-        let stride = width * 4;
-        let mut pixels = vec![0; stride as usize * height as usize];
-        unsafe { bitmap.CopyPixels(ptr::null(), stride, &mut pixels)? };
-        Ok(WheelBitmap {
-            width,
-            height,
-            pixels,
-        })
+        Ok((bitmap, width, height))
     }
 
     /// 设置页预览：走与运行时相同的绘制，输出 [宽 LE][高 LE][RGBA]。
@@ -200,11 +205,15 @@ impl WheelRenderer {
         // 设置页/截取窗口允许选中空槽（保存录制时常选空槽），空槽也要显示高亮。
         frame.editing = true;
         frame.font = font;
-        let bitmap = self.render(frame, scale)?;
-        let mut bytes = Vec::with_capacity(8 + bitmap.pixels.len());
-        bytes.extend_from_slice(&bitmap.width.to_le_bytes());
-        bytes.extend_from_slice(&bitmap.height.to_le_bytes());
-        bytes.extend_from_slice(&straight_rgba(&bitmap.pixels));
+        let (bitmap, width, height) = self.paint_bitmap(frame, scale)?;
+        let stride = width * 4;
+        let mut bytes = vec![0; 8 + stride as usize * height as usize];
+        bytes[..4].copy_from_slice(&width.to_le_bytes());
+        bytes[4..8].copy_from_slice(&height.to_le_bytes());
+        // 直接填充 IPC 缓冲并就地换色，省去两份中间像素缓冲。
+        let pixels = &mut bytes[8..];
+        unsafe { bitmap.CopyPixels(ptr::null(), stride, pixels)? };
+        straight_rgba(pixels);
         Ok(bytes)
     }
 }
@@ -226,24 +235,19 @@ fn byte(value: f32) -> u8 {
 }
 
 /// 预乘 BGRA → 直通 RGBA；alpha 为 0 时颜色归零，避免还原时溢出。
-fn straight_rgba(pixels: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(pixels.len());
-    for pixel in pixels.chunks_exact(4) {
-        let alpha = pixel[3];
-        let lift = match alpha {
-            0 => 0.0,
-            255 => 1.0,
-            _ => 255.0 / f32::from(alpha),
+fn straight_rgba(pixels: &mut [u8]) {
+    for pixel in pixels.as_chunks_mut::<4>().0 {
+        let [blue, green, red, alpha] = *pixel;
+        *pixel = match alpha {
+            0 => [0; 4],
+            255 => [red, green, blue, alpha],
+            _ => {
+                let lift = 255.0 / f32::from(alpha);
+                let channel = |value: u8| (f32::from(value) * lift).round().clamp(0.0, 255.0) as u8;
+                [channel(red), channel(green), channel(blue), alpha]
+            }
         };
-        let channel = |value: u8| (f32::from(value) * lift).round().clamp(0.0, 255.0) as u8;
-        out.extend_from_slice(&[
-            channel(pixel[2]),
-            channel(pixel[1]),
-            channel(pixel[0]),
-            alpha,
-        ]);
     }
-    out
 }
 fn native_color([r, g, b, a]: Color, opacity: f32) -> D2D1_COLOR_F {
     D2D1_COLOR_F {
@@ -265,9 +269,16 @@ mod tests {
     #[test]
     fn straight_rgba_unpremultiplies_and_swaps_channels() {
         // 预乘 BGRA (b=32,g=64,r=128,a=128) → 直通 RGBA (r=255,g=128,b=64,a=128)。
-        assert_eq!(straight_rgba(&[32, 64, 128, 128]), vec![255, 128, 64, 128]);
-        assert_eq!(straight_rgba(&[10, 20, 30, 255]), vec![30, 20, 10, 255]);
-        assert_eq!(straight_rgba(&[9, 9, 9, 0]), vec![0, 0, 0, 0]);
+        let mut frame = [
+            3, 0, 0, 0, 1, 0, 0, 0, 32, 64, 128, 128, 10, 20, 30, 255, 9, 9, 9, 0,
+        ];
+        straight_rgba(&mut frame[8..]);
+        assert_eq!(
+            frame,
+            [
+                3, 0, 0, 0, 1, 0, 0, 0, 255, 128, 64, 128, 30, 20, 10, 255, 0, 0, 0, 0
+            ]
+        );
     }
 }
 
