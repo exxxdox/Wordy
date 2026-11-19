@@ -186,7 +186,8 @@ impl WheelRenderer {
         })
     }
 
-    /// 设置页预览：走与运行时相同的绘制，输出 [宽 LE][高 LE][BGRA]。
+    /// 设置页预览：走与运行时相同的绘制，输出 [宽 LE][高 LE][RGBA]。
+    /// Canvas 的 putImageData 需要直通（非预乘）RGBA，转换放在这里完成。
     pub fn render_preview(
         &self,
         labels: &[String; SLOT_COUNT],
@@ -201,7 +202,7 @@ impl WheelRenderer {
         let mut bytes = Vec::with_capacity(8 + bitmap.pixels.len());
         bytes.extend_from_slice(&bitmap.width.to_le_bytes());
         bytes.extend_from_slice(&bitmap.height.to_le_bytes());
-        bytes.extend_from_slice(&bitmap.pixels);
+        bytes.extend_from_slice(&straight_rgba(&bitmap.pixels));
         Ok(bytes)
     }
 }
@@ -221,6 +222,27 @@ const fn alpha([r, g, b, _]: Color, a: u8) -> Color {
 fn byte(value: f32) -> u8 {
     value.round_ties_even() as u8
 }
+
+/// 预乘 BGRA → 直通 RGBA；alpha 为 0 时颜色归零，避免还原时溢出。
+fn straight_rgba(pixels: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(pixels.len());
+    for pixel in pixels.chunks_exact(4) {
+        let alpha = pixel[3];
+        let lift = match alpha {
+            0 => 0.0,
+            255 => 1.0,
+            _ => 255.0 / f32::from(alpha),
+        };
+        let channel = |value: u8| (f32::from(value) * lift).round().clamp(0.0, 255.0) as u8;
+        out.extend_from_slice(&[
+            channel(pixel[2]),
+            channel(pixel[1]),
+            channel(pixel[0]),
+            alpha,
+        ]);
+    }
+    out
+}
 fn native_color([r, g, b, a]: Color, opacity: f32) -> D2D1_COLOR_F {
     D2D1_COLOR_F {
         r: f32::from(r) / 255.0,
@@ -232,6 +254,19 @@ fn native_color([r, g, b, a]: Color, opacity: f32) -> D2D1_COLOR_F {
 
 fn mix(start: f32, end: f32, factor: f32) -> f32 {
     start + (end - start) * factor
+}
+
+#[cfg(test)]
+mod tests {
+    use super::straight_rgba;
+
+    #[test]
+    fn straight_rgba_unpremultiplies_and_swaps_channels() {
+        // 预乘 BGRA (b=32,g=64,r=128,a=128) → 直通 RGBA (r=255,g=128,b=64,a=128)。
+        assert_eq!(straight_rgba(&[32, 64, 128, 128]), vec![255, 128, 64, 128]);
+        assert_eq!(straight_rgba(&[10, 20, 30, 255]), vec![30, 20, 10, 255]);
+        assert_eq!(straight_rgba(&[9, 9, 9, 0]), vec![0, 0, 0, 0]);
+    }
 }
 
 fn ellipse(center: Vector2, radius: f32) -> D2D1_ELLIPSE {

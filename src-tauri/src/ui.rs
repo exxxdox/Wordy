@@ -3,6 +3,7 @@
 //! 原生线程继续独占配置、快捷键注册、音频路由和引擎状态；网页只发送动作，
 //! 并接收一份完整快照。命令线程通过自动重置事件唤醒原生消息循环。
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, SyncSender};
@@ -509,15 +510,34 @@ pub(crate) fn wheel_preview_bytes(
     let labels: [String; SLOT_COUNT] =
         std::array::from_fn(|index| labels.get(index).cloned().unwrap_or_default());
     let selected = selected.filter(|&index| index < SLOT_COUNT);
-    let renderer = WheelRenderer::new().map_err(|error| error.to_string())?;
-    renderer
-        .render_preview(
-            &labels,
-            selected,
-            crate::config::ui_font_family(font),
-            scale.clamp(0.1, 4.0),
-        )
-        .map_err(|error| error.to_string())
+    with_preview_renderer(|renderer| {
+        renderer
+            .render_preview(
+                &labels,
+                selected,
+                crate::config::ui_font_family(font),
+                scale.clamp(0.1, 4.0),
+            )
+            .map_err(|error| error.to_string())
+    })
+}
+
+thread_local! {
+    // D2D 单线程工厂只能在创建它的线程上使用，而 Tauri 命令会落在不同工作线程；
+    // 按线程缓存渲染器，避免每次切换槽位都重建 COM/D2D/DWrite/WIC 工厂。
+    static PREVIEW_RENDERER: RefCell<Option<WheelRenderer>> = const { RefCell::new(None) };
+}
+
+fn with_preview_renderer<T>(
+    paint: impl FnOnce(&WheelRenderer) -> Result<T, String>,
+) -> Result<T, String> {
+    PREVIEW_RENDERER.with(|cell| {
+        let mut renderer = cell.borrow_mut();
+        if renderer.is_none() {
+            *renderer = Some(WheelRenderer::new().map_err(|error| error.to_string())?);
+        }
+        paint(renderer.as_ref().expect("renderer created above"))
+    })
 }
 
 /// 网页里的「关闭」按钮只隐藏设置窗口，托盘应用继续运行。
@@ -560,6 +580,17 @@ mod tests {
         assert_eq!(u32::from_le_bytes(bytes[..4].try_into().unwrap()), 317);
         assert_eq!(u32::from_le_bytes(bytes[4..8].try_into().unwrap()), 270);
         assert_eq!(bytes.len(), 8 + 317 * 270 * 4);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn reused_preview_renderer_still_honours_the_selected_slot() {
+        let first = wheel_preview_bytes(&["北".into(), "南".into()], Some(0), "", 0.5).unwrap();
+        let second = wheel_preview_bytes(&["北".into(), "南".into()], Some(1), "", 0.5).unwrap();
+        assert_eq!(first[..8], second[..8]);
+        assert_eq!(first.len(), second.len());
+        // 高亮跟随所选槽位；渲染器复用后结果不能停留在上一次的选择上。
+        assert_ne!(first, second);
     }
 
     #[test]

@@ -36,25 +36,18 @@ export default function WheelCanvas({ labels, font, selected, onSelectSlot, clas
       invoke<ArrayBuffer>("wordy_wheel_preview", { labels, selected, font, scale })
         .then((buffer) => {
           if (disposed || id !== latest.current) return;
-          const view = new DataView(buffer);
-          const pixelWidth = view.getUint32(0, true);
-          const pixelHeight = view.getUint32(4, true);
-          const source = new Uint8Array(buffer, 8);
-          const image = new ImageData(pixelWidth, pixelHeight);
-          for (let index = 0; index < source.length; index += 4) {
-            const alpha = source[index + 3];
-            // 原生位图是预乘 BGRA；Canvas 需要直通 RGBA。
-            const lift = alpha === 0 || alpha === 255 ? 1 : 255 / alpha;
-            image.data[index] = source[index + 2] * lift;
-            image.data[index + 1] = source[index + 1] * lift;
-            image.data[index + 2] = source[index] * lift;
-            image.data[index + 3] = alpha;
-          }
+          const header = new DataView(buffer);
+          const pixelWidth = header.getUint32(0, true);
+          const pixelHeight = header.getUint32(4, true);
           if (element.width !== pixelWidth || element.height !== pixelHeight) {
             element.width = pixelWidth;
             element.height = pixelHeight;
           }
-          element.getContext("2d")?.putImageData(image, 0, 0);
+          // 原生已输出直通 RGBA，WebView 可直接交给 Canvas，无需逐像素转换。
+          const pixels = new Uint8ClampedArray(buffer, 8, pixelWidth * pixelHeight * 4);
+          element
+            .getContext("2d")
+            ?.putImageData(new ImageData(pixels, pixelWidth, pixelHeight), 0, 0);
         })
         .catch((error) => console.error(error));
     };
