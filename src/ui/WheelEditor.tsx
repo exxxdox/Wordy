@@ -48,6 +48,7 @@ export default function WheelEditor({ snapshot, run }: Props) {
   const [slot, setSlot] = useState(0);
   const [emptyTextMode, setEmptyTextMode] = useState(false);
   const [preview, setPreview] = useState<string | null>(null);
+  const previewCache = useRef(new Map<string, string>());
   const [gain, setGain] = useState(Math.round((wheel?.volumes[slot] ?? 1) * 100));
 
   const hasAudio = Boolean(wheel?.slots[slot]);
@@ -74,20 +75,68 @@ export default function WheelEditor({ snapshot, run }: Props) {
     setGain(Math.round((wheel?.volumes[slot] ?? 1) * 100));
   }, [wheel?.volumes[slot]]);
 
+  const previewKey = (targetSlot: number) => {
+    const width = Math.round(420 * (window.devicePixelRatio || 1));
+    return [
+      index,
+      targetSlot,
+      width,
+      settings.chat_wheel_style,
+      settings.ui_font,
+      JSON.stringify([wheel.labels, wheel.texts, wheel.slots]),
+    ].join("|");
+  };
+
   useEffect(() => {
+    // 同一轮盘/样式/槽位的图像缓存复用，切槽不再等原生重绘。
+    const width = Math.round(420 * (window.devicePixelRatio || 1));
+    const key = previewKey(slot);
+    const cached = previewCache.current.get(key);
+    if (cached) {
+      setPreview(cached);
+      return;
+    }
     let cancelled = false;
     const timer = window.setTimeout(() => {
-      invoke<string>("wordy_wheel_preview", { wheel: index, slot })
+      invoke<string>("wordy_wheel_preview", { wheel: index, slot, width })
         .then((source) => {
+          if (previewCache.current.size > 64) previewCache.current.clear();
+          previewCache.current.set(key, source);
           if (!cancelled) setPreview(source);
         })
         .catch(() => undefined);
-    }, 120);
+    }, 60);
     return () => {
       cancelled = true;
       window.clearTimeout(timer);
     };
   }, [index, slot, settings, wheel]);
+
+  useEffect(() => {
+    // 后台预热八张图；首次打开或改标签后切换槽位也能立即显示。
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      const width = Math.round(420 * (window.devicePixelRatio || 1));
+      for (let target = 0; target < 8 && !cancelled; target++) {
+        const key = previewKey(target);
+        if (previewCache.current.has(key)) continue;
+        try {
+          const source = await invoke<string>("wordy_wheel_preview", {
+            wheel: index,
+            slot: target,
+            width,
+          });
+          previewCache.current.set(key, source);
+        } catch {
+          return;
+        }
+      }
+    }, 400);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [index, settings, wheel]);
 
   if (!wheel) return null;
 
@@ -184,8 +233,8 @@ export default function WheelEditor({ snapshot, run }: Props) {
               </div>
             )}
           </div>
-          <p className="text-xs text-[var(--muted)]">
-            点击扇区选择槽位 · 当前：{slotTitle(wheel, slot)}
+          <p className="text-sm text-[var(--muted)]">
+            点击扇区选择槽位 · 当前：<span className="text-[var(--text)]">{slotTitle(wheel, slot)}</span>
           </p>
         </div>
       </section>

@@ -257,6 +257,7 @@ impl App {
         &mut self,
         index: usize,
         slot: usize,
+        width: u32,
     ) -> Result<String, String> {
         use base64::Engine;
         let settings = self.config.settings();
@@ -277,8 +278,9 @@ impl App {
             self.wheel_renderer = Some(WheelRenderer::new().map_err(|error| error.to_string())?);
         }
         let renderer = self.wheel_renderer.as_ref().expect("renderer initialized");
+        let width = f64::from(width.clamp(200, 1200));
         let bitmap = renderer
-            .render(frame, 420.0 / crate::wheel::CANVAS_WIDTH)
+            .render(frame, width / crate::wheel::CANVAS_WIDTH)
             .map_err(|error| error.to_string())?;
         let mut rgba = Vec::with_capacity(bitmap.pixels.len());
         for pixel in bitmap.pixels.as_chunks::<4>().0 {

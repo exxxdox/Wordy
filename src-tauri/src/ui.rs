@@ -60,6 +60,7 @@ pub enum UiRequest {
     Preview {
         wheel: usize,
         slot: usize,
+        width: u32,
         reply: SyncSender<Result<String, String>>,
     },
 }
@@ -106,9 +107,14 @@ impl NativeHandle {
             .map_err(|_| "读取日志超时".to_string())
     }
 
-    pub fn preview(&self, wheel: usize, slot: usize) -> Result<String, String> {
+    pub fn preview(&self, wheel: usize, slot: usize, width: u32) -> Result<String, String> {
         let (reply, receiver) = mpsc::sync_channel(1);
-        self.send(UiRequest::Preview { wheel, slot, reply })?;
+        self.send(UiRequest::Preview {
+            wheel,
+            slot,
+            width,
+            reply,
+        })?;
         receiver
             .recv_timeout(SNAPSHOT_TIMEOUT)
             .map_err(|_| "生成轮盘预览超时".to_string())?
@@ -398,7 +404,8 @@ pub fn wordy_logs(state: tauri::State<'_, NativeHandle>) -> Result<Vec<String>, 
 pub fn wordy_wheel_preview(
     wheel: usize,
     slot: usize,
+    width: Option<u32>,
     state: tauri::State<'_, NativeHandle>,
 ) -> Result<String, String> {
-    state.preview(wheel, slot)
+    state.preview(wheel, slot, width.unwrap_or(420))
 }

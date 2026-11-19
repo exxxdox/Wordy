@@ -125,6 +125,8 @@ struct App {
     listen_state: Option<ListenStatus>,
     font_families: Vec<String>,
     published_revision: u64,
+    published_locked: bool,
+    published_preview: Option<(usize, usize, bool)>,
     ui_dirty: bool,
     ui_connected: bool,
     toasts: Toasts,
@@ -205,6 +207,8 @@ impl App {
             listen_state: None,
             font_families: crate::fonts::installed_fonts(),
             published_revision: 0,
+            published_locked: false,
+            published_preview: None,
             ui_dirty: true,
             ui_connected: false,
             toasts: Toasts::new(),
@@ -462,6 +466,12 @@ impl App {
         while let Ok(result) = self.results.try_recv() {
             self.complete_background(result, false)?;
         }
+        // 截取、保存与试听状态改变 locked/preview；这些不写配置，必须单独触发推送。
+        if self.ui_locked() != self.published_locked
+            || self.ui_preview_key() != self.published_preview
+        {
+            self.ui_dirty = true;
+        }
         if self.ui_dirty || self.config.revision() != self.published_revision {
             self.emit_snapshot();
         }
@@ -478,12 +488,7 @@ impl App {
             listen: self.listen_state.clone(),
             fonts: self.font_families.clone(),
             busy: self.backup_running,
-            locked: self.pending_saves > 0
-                || self.trim.is_some()
-                || self
-                    .editor_preview
-                    .as_ref()
-                    .is_some_and(|preview| preview.text),
+            locked: self.ui_locked(),
             preview: self
                 .editor_preview
                 .as_ref()
@@ -495,9 +500,28 @@ impl App {
         }
     }
 
+    fn ui_locked(&self) -> bool {
+        self.pending_saves > 0
+            || self.trim.is_some()
+            || self
+                .editor_preview
+                .as_ref()
+                .is_some_and(|preview| preview.text)
+    }
+
+    fn ui_preview_key(&self) -> Option<(usize, usize, bool)> {
+        self.editor_preview
+            .as_ref()
+            .map(|preview| (preview.wheel, preview.slot, preview.text))
+    }
+
     fn emit_snapshot(&mut self) {
         let snapshot = self.snapshot();
         self.published_revision = self.config.revision();
+        self.published_locked = snapshot.locked;
+        self.published_preview = snapshot
+            .preview
+            .map(|preview| (preview.wheel, preview.slot, preview.text));
         self.ui_dirty = false;
         if let Err(error) = self.handle.emit(ui::SNAPSHOT_EVENT, snapshot) {
             eprintln!("无法更新设置界面：{error}");
@@ -519,8 +543,13 @@ impl App {
                     }
                     let _ = reply.send(self.snapshot());
                 }
-                UiRequest::Preview { wheel, slot, reply } => {
-                    let _ = reply.send(self.render_wheel_preview(wheel, slot));
+                UiRequest::Preview {
+                    wheel,
+                    slot,
+                    width,
+                    reply,
+                } => {
+                    let _ = reply.send(self.render_wheel_preview(wheel, slot, width));
                 }
                 UiRequest::Action(action, reply) => {
                     let result = self.settings_action(action);
