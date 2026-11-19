@@ -61,6 +61,23 @@ fn cursor_over(hwnd: HWND) -> bool {
     unsafe { GetCursorPos(&mut cursor) != 0 && WindowFromPoint(cursor) == hwnd }
 }
 
+/// Edits paint their rounded border in the non-client bands, so a state change
+/// must invalidate the frame as well as the text band.
+fn invalidate_field(hwnd: HWND, edit: bool) {
+    unsafe {
+        if edit {
+            RedrawWindow(
+                hwnd,
+                ptr::null(),
+                ptr::null_mut(),
+                RDW_INVALIDATE | RDW_FRAME,
+            );
+        } else {
+            InvalidateRect(hwnd, ptr::null(), 0);
+        }
+    }
+}
+
 pub(super) fn paint_item(parent: HWND, item: &DRAWITEMSTRUCT) {
     let dc = item.hDC;
     let hwnd = item.hwndItem;
@@ -281,7 +298,7 @@ pub(super) unsafe extern "system" fn style_control(
                 TrackMouseEvent(&mut tracking);
                 if GetPropW(hwnd, HOVER).is_null() {
                     SetPropW(hwnd, HOVER, 1 as _);
-                    InvalidateRect(hwnd, ptr::null(), 0);
+                    invalidate_field(hwnd, edit);
                 }
             }
         }
@@ -321,9 +338,10 @@ pub(super) unsafe extern "system" fn style_control(
         _ => {}
     }
     let result = unsafe { DefSubclassProc(hwnd, message, wparam, lparam) };
-    if message == WM_PAINT && edit {
+    if matches!(message, WM_PAINT | WM_NCPAINT) && edit {
         // The centered text lives in a shrunken client, so outline the whole
-        // field window; GetClientRect would only cover the text band.
+        // field window. Each paint DC is clipped to its update region (client
+        // or frame), so painting from both messages covers every border pixel.
         let dc = unsafe { GetWindowDC(hwnd) };
         let mut size = RECT::default();
         unsafe { GetWindowRect(hwnd, &mut size) };
@@ -363,7 +381,7 @@ pub(super) unsafe extern "system" fn style_control(
             | WM_SETTEXT
     ) {
         // Skip the class-brush erase: it flashes light before the custom paint runs.
-        unsafe { InvalidateRect(hwnd, ptr::null(), 0) };
+        invalidate_field(hwnd, edit);
     }
     result
 }

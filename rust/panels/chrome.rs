@@ -134,7 +134,7 @@ impl Chrome {
             let child = panel.child(id);
             if !child.is_null() {
                 style_card_edit(child, ELEVATED, card);
-                let margin = logical_px(panel.0, 8);
+                let margin = logical_px(panel.0, 10);
                 unsafe {
                     SendMessageW(
                         child,
@@ -178,6 +178,8 @@ impl Drop for ChromeState {
 
 const EDIT_CORNER: windows_sys::core::PCWSTR = windows_sys::core::w!("Wordy.EditCorner");
 const EDIT_SUBCLASS: usize = 12;
+// Same focus border as the settings edits, so every text field reacts alike.
+const FOCUS_ACCENT: u32 = 0x00ff_9c40;
 
 /// Centres the single-line text and rounds the field: the corners outside the
 /// border show the card behind the edit instead of the edit's flat fill.
@@ -202,7 +204,18 @@ unsafe extern "system" fn card_edit_proc(
         if message == WM_NCDESTROY {
             RemovePropW(hwnd, EDIT_CORNER);
         }
-        if message != WM_PAINT {
+        // The focus accent lives in both the client and frame bands.
+        if matches!(message, WM_SETFOCUS | WM_KILLFOCUS) {
+            RedrawWindow(
+                hwnd,
+                ptr::null(),
+                ptr::null_mut(),
+                RDW_INVALIDATE | RDW_FRAME,
+            );
+        }
+        // Each paint DC is clipped to its own update region (client or frame),
+        // so the border is drawn from both passes to cover all four edges.
+        if !matches!(message, WM_PAINT | WM_NCPAINT) {
             return result;
         }
         let corner = GetPropW(hwnd, EDIT_CORNER) as u32;
@@ -220,7 +233,12 @@ unsafe extern "system" fn card_edit_proc(
         };
         // GDI regions and `RoundRect` leave the corner arcs stair-stepped; blend
         // them against the card instead.
-        paint_round_field(dc, rect, 8, SEPARATOR, |memory| fill(memory, rect, corner));
+        let border = if GetFocus() == hwnd {
+            FOCUS_ACCENT
+        } else {
+            SEPARATOR
+        };
+        paint_round_field(dc, rect, 9, border, |memory| fill(memory, rect, corner));
         ReleaseDC(hwnd, dc);
         result
     }

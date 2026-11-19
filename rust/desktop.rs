@@ -791,6 +791,13 @@ unsafe extern "system" fn centered_edit_proc(
             WM_NCCALCSIZE if wparam != 0 => {
                 let result = DefSubclassProc(hwnd, message, wparam, lparam);
                 let bounds = &mut (*(lparam as *mut NCCALCSIZE_PARAMS)).rgrc[0];
+                // The 1px focus border lives in the non-client bands; if the
+                // client spans the full width, any client repaint (selection,
+                // caret, erase) cuts the left and right border away.
+                if bounds.right - bounds.left > 2 {
+                    bounds.left += 1;
+                    bounds.right -= 1;
+                }
                 let height = edit_line_height(hwnd).max(1);
                 let top = bounds.top + ((bounds.bottom - bounds.top - height) / 2).max(0);
                 bounds.top = top;
@@ -951,6 +958,50 @@ mod tests {
             DeleteObject(bitmap);
             DeleteDC(dc);
             assert!(blended > 0, "the corner arc is still hard edged");
+        }
+    }
+
+    #[test]
+    fn round_field_keeps_straight_side_borders() {
+        const BORDER: u32 = 0x3a3838;
+        unsafe {
+            let dc = CreateCompatibleDC(ptr::null_mut());
+            let mut info = BITMAPINFO::default();
+            info.bmiHeader.biSize = mem::size_of::<BITMAPINFOHEADER>() as u32;
+            info.bmiHeader.biWidth = 40;
+            info.bmiHeader.biHeight = -24;
+            info.bmiHeader.biPlanes = 1;
+            info.bmiHeader.biBitCount = 32;
+            info.bmiHeader.biCompression = BI_RGB;
+            let mut bits = ptr::null_mut();
+            let bitmap = CreateDIBSection(dc, &info, DIB_RGB_COLORS, &mut bits, ptr::null_mut(), 0);
+            assert!(!dc.is_null() && !bitmap.is_null() && !bits.is_null());
+            let previous = SelectObject(dc, bitmap);
+            let rect = RECT {
+                left: 0,
+                top: 0,
+                right: 40,
+                bottom: 24,
+            };
+            SetDCBrushColor(dc, 0x2e2c2c);
+            FillRect(dc, &rect, GetStockObject(DC_BRUSH) as HBRUSH);
+            paint_round_field(dc, rect, 6, BORDER, |memory| {
+                SetDCBrushColor(memory, 0x3e3b3b);
+                FillRect(memory, &rect, GetStockObject(DC_BRUSH) as HBRUSH);
+            });
+            let pixels = std::slice::from_raw_parts(bits.cast::<u8>(), 40 * 24 * 4);
+            let read = |x: usize, y: usize| {
+                let index = (y * 40 + x) * 4;
+                [pixels[index + 2], pixels[index + 1], pixels[index]]
+            };
+            let border = [0x38, 0x38, 0x3a];
+            assert_eq!(read(0, 12), border, "left border is missing");
+            assert_eq!(read(39, 12), border, "right border is missing");
+            assert_eq!(read(20, 0), border, "top border is missing");
+            assert_eq!(read(20, 23), border, "bottom border is missing");
+            SelectObject(dc, previous);
+            DeleteObject(bitmap);
+            DeleteDC(dc);
         }
     }
 

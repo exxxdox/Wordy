@@ -482,6 +482,9 @@ impl Drop for SettingsWindow {
 #[cfg(test)]
 mod tests {
     use windows_sys::Win32::UI::Controls::{ODS_COMBOBOXEDIT, ODT_COMBOBOX};
+    use windows_sys::Win32::UI::HiDpi::{
+        DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetThreadDpiAwarenessContext,
+    };
 
     use super::{controls::combo_text, *};
 
@@ -508,6 +511,47 @@ mod tests {
         assert_eq!(slider_position(2.0, 0.5), 30);
         assert_eq!(slider_position(1.0, 0.30), 14);
         assert_eq!(slider_value(2, 0.30), 0.4);
+    }
+
+    #[test]
+    fn focused_edit_paints_all_four_borders() {
+        unsafe {
+            // Match the packaged app so the field is laid out at the monitor DPI.
+            SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+            let instance = GetModuleHandleW(ptr::null());
+            let host = crate::desktop::host_window(instance).unwrap();
+            let window = SettingsWindow::new(host, &Settings::default()).unwrap();
+            window.show();
+            let edit = window.control(Field::Placeholder);
+            windows_sys::Win32::UI::Input::KeyboardAndMouse::SetFocus(edit);
+            RedrawWindow(
+                edit,
+                ptr::null(),
+                ptr::null_mut(),
+                RDW_INVALIDATE | RDW_FRAME | RDW_UPDATENOW,
+            );
+            SendMessageW(edit, windows_sys::Win32::UI::Controls::EM_SETSEL, 0, -1);
+            // A click repaints only the client band; the border must survive it.
+            let mut client = RECT::default();
+            GetClientRect(edit, &mut client);
+            InvalidateRect(edit, &client, 0);
+            UpdateWindow(edit);
+            let mut rect = RECT::default();
+            GetWindowRect(edit, &mut rect);
+            let (width, height) = (rect.right - rect.left, rect.bottom - rect.top);
+            let dc = GetWindowDC(edit);
+            let left = GetPixel(dc, 0, height / 2) & 0x00ff_ffff;
+            let right = GetPixel(dc, width - 1, height / 2) & 0x00ff_ffff;
+            let top = GetPixel(dc, width / 2, 0) & 0x00ff_ffff;
+            let bottom = GetPixel(dc, width / 2, height - 1) & 0x00ff_ffff;
+            ReleaseDC(edit, dc);
+            DestroyWindow(host);
+            let accent = rgb(64, 156, 255);
+            assert_eq!(left, accent, "the focused field lost its left border");
+            assert_eq!(right, accent, "the focused field lost its right border");
+            assert_eq!(top, accent, "the focused field lost its top border");
+            assert_eq!(bottom, accent, "the focused field lost its bottom border");
+        }
     }
 
     #[test]
@@ -958,7 +1002,13 @@ mod tests {
         let edit = window.control(Field::Placeholder);
         unsafe {
             ShowWindow(window.hwnd(), SW_SHOW);
-            ValidateRect(edit, ptr::null());
+            // Edits carry their border in the non-client bands, so flush both regions.
+            RedrawWindow(
+                edit,
+                ptr::null(),
+                ptr::null_mut(),
+                RDW_INVALIDATE | RDW_FRAME | RDW_UPDATENOW,
+            );
             SendMessageW(edit, WM_MOUSEMOVE, 0, 5 | (5 << 16));
         }
         let mut pending = RECT::default();
@@ -968,7 +1018,12 @@ mod tests {
             "entering the edit did not paint its hover border"
         );
         unsafe {
-            ValidateRect(edit, ptr::null());
+            RedrawWindow(
+                edit,
+                ptr::null(),
+                ptr::null_mut(),
+                RDW_INVALIDATE | RDW_FRAME | RDW_UPDATENOW,
+            );
             SendMessageW(edit, WM_MOUSEMOVE, 0, 6 | (6 << 16));
         }
         assert_eq!(

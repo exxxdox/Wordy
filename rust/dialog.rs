@@ -18,7 +18,8 @@ use windows_sys::Win32::System::SystemServices::{SS_CENTER, SS_LEFT, SS_NOPREFIX
 use windows_sys::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
 use windows_sys::Win32::UI::Controls::Dialogs::*;
 use windows_sys::Win32::UI::Controls::{
-    DRAWITEMSTRUCT, EM_SETSEL, ODS_DISABLED, ODS_FOCUS, ODS_SELECTED, ODT_BUTTON, WM_MOUSELEAVE,
+    DRAWITEMSTRUCT, EM_SETMARGINS, EM_SETSEL, ODS_DISABLED, ODS_FOCUS, ODS_SELECTED, ODT_BUTTON,
+    WM_MOUSELEAVE,
 };
 use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
@@ -786,6 +787,14 @@ unsafe extern "system" fn prompt_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                 // over the dialog surface and vertically centred text.
                 let field = GetDlgItem(hwnd, 101);
                 crate::panels::style_card_edit(field, FIELD, SURFACE);
+                let margin =
+                    crate::settings_backdrop::scaled(10, GetDpiForWindow(hwnd).max(96) as i32);
+                SendMessageW(
+                    field,
+                    EM_SETMARGINS,
+                    (EC_LEFTMARGIN | EC_RIGHTMARGIN) as usize,
+                    (margin | (margin << 16)) as isize,
+                );
                 PostMessageW(hwnd, FORCE_FOREGROUND, 0, 0);
                 let value = wide(data.value.as_deref().unwrap_or_default());
                 SetDlgItemTextW(hwnd, 101, value.as_ptr());
