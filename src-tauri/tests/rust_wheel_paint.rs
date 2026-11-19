@@ -47,6 +47,20 @@ fn preview_bytes_carry_dimensions_and_the_native_frame() {
 }
 
 #[test]
+fn preview_highlights_an_empty_selected_slot() {
+    let renderer = WheelRenderer::new().unwrap();
+    let labels = std::array::from_fn(|_| String::new());
+    let selected = renderer
+        .render_preview(&labels, Some(3), "Segoe UI Variable", 0.5)
+        .unwrap();
+    let none = renderer
+        .render_preview(&labels, None, "Segoe UI Variable", 0.5)
+        .unwrap();
+    // 空槽是录制保存时的常见目标，选中后必须有可见变化。
+    assert_ne!(selected, none);
+}
+
+#[test]
 fn game_pointer_belongs_only_to_the_current_playable_sector() {
     let renderer = WheelRenderer::new().unwrap();
     let mut labels = std::array::from_fn(|_| String::new());

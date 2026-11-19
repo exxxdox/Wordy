@@ -197,6 +197,8 @@ impl WheelRenderer {
     ) -> Result<Vec<u8>> {
         let mut frame = WheelFrame::new(labels);
         frame.selected = selected;
+        // 设置页/截取窗口允许选中空槽（保存录制时常选空槽），空槽也要显示高亮。
+        frame.editing = true;
         frame.font = font;
         let bitmap = self.render(frame, scale)?;
         let mut bytes = Vec::with_capacity(8 + bitmap.pixels.len());
