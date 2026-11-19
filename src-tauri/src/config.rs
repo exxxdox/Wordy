@@ -123,10 +123,15 @@ impl Wheel {
         }
     }
 
+    /// 槽位是否空白：只看音频与文字；标签只是显示名称，不算内容。
+    /// 默认落点与覆盖确认共用这一判定，避免两处结论不一致。
+    pub fn slot_is_empty(&self, slot: usize) -> bool {
+        self.slots[slot].is_empty() && self.texts[slot].is_empty()
+    }
+
     /// 槽位播放哪一类内容：两类都有时按模式，只有一类时直接用那一类。
     pub fn text_mode(&self, slot: usize) -> bool {
-        self.slots[slot].is_empty()
-            || (!self.texts[slot].is_empty() && self.text_modes[slot])
+        self.slots[slot].is_empty() || (!self.texts[slot].is_empty() && self.text_modes[slot])
     }
 
     fn from_table(table: &Table) -> Option<Self> {
@@ -394,7 +399,7 @@ impl Settings {
             .find_map(|index| {
                 let wheel = self.wheel(index)?;
                 (0..SLOT_COUNT)
-                    .find(|&slot| wheel.slots[slot].is_empty() && wheel.texts[slot].is_empty())
+                    .find(|&slot| wheel.slot_is_empty(slot))
                     .map(|slot| (index, slot))
             })
             .unwrap_or((0, 0))
@@ -1145,6 +1150,18 @@ mod tests {
         settings.chat_wheel_slots = std::array::from_fn(|_| "a.wav".into());
         settings.chat_wheel_texts = std::array::from_fn(|_| "文字".into());
         assert_eq!(settings.empty_slot_target(), (0, 0));
+    }
+
+    #[test]
+    fn label_only_slot_counts_as_empty() {
+        let mut settings = Settings::default();
+        settings.chat_wheel_labels[0] = "名称".into();
+        assert!(settings.wheel(0).unwrap().slot_is_empty(0));
+        assert_eq!(settings.empty_slot_target(), (0, 0));
+
+        settings.chat_wheel_texts[0] = "文字".into();
+        assert!(!settings.wheel(0).unwrap().slot_is_empty(0));
+        assert_eq!(settings.empty_slot_target(), (0, 1));
     }
 
     #[test]
