@@ -605,18 +605,28 @@ export default function App() {
                       ))}
                     </select>
                     {provider === "Volcengine" ? (
-                      // 删除只作用于下拉框中当前选中的音色；未选中时禁用。
-                      <button
-                        className="btn icon-btn danger"
-                        title="删除当前音色"
-                        aria-label="删除当前音色"
-                        disabled={!selectedVoice}
-                        onClick={() =>
-                          run({ type: "delete_volcengine_voice", id: selectedVoice ?? "" })
-                        }
-                      >
-                        <Icon name="close" size={18} />
-                      </button>
+                      <>
+                        <button
+                          className="btn icon-btn"
+                          title="新增音色"
+                          aria-label="新增音色"
+                          onClick={() => setVoiceDraft({ id: "", name: "" })}
+                        >
+                          <Icon name="plus" />
+                        </button>
+                        {/* 删除只作用于下拉框中当前选中的音色；未选中时禁用。 */}
+                        <button
+                          className="btn icon-btn danger"
+                          title="删除当前音色"
+                          aria-label="删除当前音色"
+                          disabled={!selectedVoice}
+                          onClick={() =>
+                            run({ type: "delete_volcengine_voice", id: selectedVoice ?? "" })
+                          }
+                        >
+                          <Icon name="close" size={18} />
+                        </button>
+                      </>
                     ) : (
                       <button
                         className="btn icon-btn"
@@ -628,11 +638,6 @@ export default function App() {
                       </button>
                     )}
                   </div>
-                  {provider === "Volcengine" && (
-                    <button className="btn mt-2" onClick={() => setVoiceDraft({ id: "", name: "" })}>
-                      新增音色
-                    </button>
-                  )}
                 </Row>
               </Panel>
             </>
