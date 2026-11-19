@@ -37,8 +37,8 @@ fn main() -> std::process::ExitCode {
                 tauri::WebviewUrl::App("index.html".into()),
             )
             .title("Wordy 设置")
-            .inner_size(1120.0, 820.0)
-            .min_inner_size(960.0, 640.0)
+            .inner_size(1280.0, 880.0)
+            .min_inner_size(1080.0, 760.0)
             .theme(Some(tauri::Theme::Dark))
             // WebView 首次绘制前用窗口底色兜底，避免白屏闪烁。
             .background_color(tauri::window::Color(19, 19, 22, 255))

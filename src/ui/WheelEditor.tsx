@@ -13,6 +13,9 @@ const STYLE_OPTIONS = [
 const CANVAS_WIDTH = 634;
 const CANVAS_HEIGHT = 540;
 
+// 模块级缓存：切换页签会卸载组件，图片不应重新等待原生绘制。
+const PREVIEW_CACHE = new Map<string, string>();
+
 type Props = {
   snapshot: Snapshot;
   run: (action: Record<string, unknown>) => void;
@@ -40,6 +43,23 @@ function slotTitle(wheel: Wheel, slot: number) {
   return `槽 ${slot + 1}`;
 }
 
+function previewCacheKey(
+  index: number,
+  slot: number,
+  settings: Snapshot["settings"],
+  wheel: Wheel,
+) {
+  const width = Math.round(420 * (window.devicePixelRatio || 1));
+  return [
+    index,
+    slot,
+    width,
+    settings.chat_wheel_style,
+    settings.ui_font,
+    JSON.stringify([wheel.labels, wheel.texts, wheel.slots]),
+  ].join("|");
+}
+
 export default function WheelEditor({ snapshot, run }: Props) {
   const settings = snapshot.settings;
   const wheels = wheelsOf(snapshot);
@@ -48,7 +68,6 @@ export default function WheelEditor({ snapshot, run }: Props) {
   const [slot, setSlot] = useState(0);
   const [emptyTextMode, setEmptyTextMode] = useState(false);
   const [preview, setPreview] = useState<string | null>(null);
-  const previewCache = useRef(new Map<string, string>());
   const [gain, setGain] = useState(Math.round((wheel?.volumes[slot] ?? 1) * 100));
 
   const hasAudio = Boolean(wheel?.slots[slot]);
@@ -75,23 +94,14 @@ export default function WheelEditor({ snapshot, run }: Props) {
     setGain(Math.round((wheel?.volumes[slot] ?? 1) * 100));
   }, [wheel?.volumes[slot]]);
 
-  const previewKey = (targetSlot: number) => {
-    const width = Math.round(420 * (window.devicePixelRatio || 1));
-    return [
-      index,
-      targetSlot,
-      width,
-      settings.chat_wheel_style,
-      settings.ui_font,
-      JSON.stringify([wheel.labels, wheel.texts, wheel.slots]),
-    ].join("|");
-  };
+  const previewKey = (targetSlot: number) =>
+    previewCacheKey(index, targetSlot, settings, wheel);
 
   useEffect(() => {
     // 同一轮盘/样式/槽位的图像缓存复用，切槽不再等原生重绘。
     const width = Math.round(420 * (window.devicePixelRatio || 1));
     const key = previewKey(slot);
-    const cached = previewCache.current.get(key);
+    const cached = PREVIEW_CACHE.get(key);
     if (cached) {
       setPreview(cached);
       return;
@@ -100,8 +110,8 @@ export default function WheelEditor({ snapshot, run }: Props) {
     const timer = window.setTimeout(() => {
       invoke<string>("wordy_wheel_preview", { wheel: index, slot, width })
         .then((source) => {
-          if (previewCache.current.size > 64) previewCache.current.clear();
-          previewCache.current.set(key, source);
+          if (PREVIEW_CACHE.size > 64) PREVIEW_CACHE.clear();
+          PREVIEW_CACHE.set(key, source);
           if (!cancelled) setPreview(source);
         })
         .catch(() => undefined);
@@ -119,14 +129,14 @@ export default function WheelEditor({ snapshot, run }: Props) {
       const width = Math.round(420 * (window.devicePixelRatio || 1));
       for (let target = 0; target < 8 && !cancelled; target++) {
         const key = previewKey(target);
-        if (previewCache.current.has(key)) continue;
+        if (PREVIEW_CACHE.has(key)) continue;
         try {
           const source = await invoke<string>("wordy_wheel_preview", {
             wheel: index,
             slot: target,
             width,
           });
-          previewCache.current.set(key, source);
+          PREVIEW_CACHE.set(key, source);
         } catch {
           return;
         }
@@ -209,29 +219,32 @@ export default function WheelEditor({ snapshot, run }: Props) {
             <p className="text-xs text-[var(--muted)]">点击下方轮盘扇区选择槽位</p>
           </div>
           <div className="rounded-xl border border-white/10 bg-black/20 p-2">
-            {preview ? (
-              <img
-                src={preview}
-                alt="轮盘预览"
-                title="点击扇区选择槽位"
-                className="mx-auto h-auto w-full max-w-[420px] cursor-pointer"
-                onClick={(event) => {
-                  const rect = event.currentTarget.getBoundingClientRect();
-                  const x = ((event.clientX - rect.left) / rect.width) * CANVAS_WIDTH;
-                  const y = ((event.clientY - rect.top) / rect.height) * CANVAS_HEIGHT;
-                  const dx = x - CANVAS_WIDTH / 2;
-                  const dy = y - CANVAS_HEIGHT / 2;
-                  const radius = Math.hypot(dx, dy);
-                  if (radius < 80 || radius > 232) return;
-                  const angle = ((Math.atan2(dx, -dy) * 180) / Math.PI + 360) % 360;
-                  setSlot(Math.floor(((angle + 22.5) % 360) / 45) % 8);
-                }}
-              />
-            ) : (
-              <div className="flex h-40 items-center justify-center text-xs text-[var(--muted)]">
-                正在生成预览…
-              </div>
-            )}
+            {/* 固定宽高比：占位与图片同尺寸，进入页面不再跳动。 */}
+            <div className="relative mx-auto aspect-[634/540] w-full max-w-[420px]">
+              {preview ? (
+                <img
+                  src={preview}
+                  alt="轮盘预览"
+                  title="点击扇区选择槽位"
+                  className="absolute inset-0 h-full w-full cursor-pointer object-contain"
+                  onClick={(event) => {
+                    const rect = event.currentTarget.getBoundingClientRect();
+                    const x = ((event.clientX - rect.left) / rect.width) * CANVAS_WIDTH;
+                    const y = ((event.clientY - rect.top) / rect.height) * CANVAS_HEIGHT;
+                    const dx = x - CANVAS_WIDTH / 2;
+                    const dy = y - CANVAS_HEIGHT / 2;
+                    const radius = Math.hypot(dx, dy);
+                    if (radius < 80 || radius > 232) return;
+                    const angle = ((Math.atan2(dx, -dy) * 180) / Math.PI + 360) % 360;
+                    setSlot(Math.floor(((angle + 22.5) % 360) / 45) % 8);
+                  }}
+                />
+              ) : (
+                <div className="absolute inset-0 flex items-center justify-center text-xs text-[var(--muted)]">
+                  正在生成预览…
+                </div>
+              )}
+            </div>
           </div>
           <p className="text-sm text-[var(--muted)]">
             点击扇区选择槽位 · 当前：<span className="text-[var(--text)]">{slotTitle(wheel, slot)}</span>

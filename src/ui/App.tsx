@@ -197,7 +197,7 @@ export default function App() {
       : `未安装「${settings.ui_font}」，已回退到内置字体。`;
 
   return (
-    <main className="relative mx-auto flex h-screen max-w-[1180px] flex-col px-6 pb-4 pt-5">
+    <main className="relative mx-auto flex h-screen max-w-[1240px] flex-col px-6 pb-4 pt-5">
       <header className="flex items-end justify-between gap-6">
         <h1 className="pb-2 text-2xl font-semibold tracking-tight">设置</h1>
         <nav className="flex gap-1 rounded-xl bg-white/5 p-1">
@@ -217,7 +217,7 @@ export default function App() {
         </nav>
       </header>
 
-      <div className="mt-4 flex-1 overflow-y-auto pr-1">
+      <div className="mt-4 flex-1 overflow-y-auto pr-1 [scrollbar-gutter:stable]">
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           {tab === "local" && (
             <>
