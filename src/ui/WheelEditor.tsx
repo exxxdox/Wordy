@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import type { Snapshot, Wheel } from "./App";
-import { Icon, Panel, Slider, displayHotkey } from "./Controls";
+import { Icon, Panel, Slider, displayHotkey, useSyncedInput } from "./Controls";
 import WheelCanvas from "./WheelCanvas";
 
 type Props = {
@@ -269,34 +269,4 @@ export default function WheelEditor({ snapshot, run }: Props) {
       </Panel>
     </>
   );
-}
-
-/// 输入框编辑期间不被快照回写覆盖；失焦或提交后以后端值为准。
-function useSyncedInput(initial: string, commit: (value: string) => void) {
-  const [draft, setDraft] = useState(initial);
-  const ref = useRef<HTMLInputElement>(null);
-  const timer = useRef(0);
-
-  useEffect(() => {
-    if (document.activeElement !== ref.current) setDraft(initial);
-  }, [initial]);
-
-  useEffect(() => () => window.clearTimeout(timer.current), []);
-
-  return {
-    ref,
-    draft,
-    onChange(value: string) {
-      setDraft(value);
-      window.clearTimeout(timer.current);
-      timer.current = window.setTimeout(() => commit(value), 300);
-    },
-    flush() {
-      window.clearTimeout(timer.current);
-      setDraft((value) => {
-        if (value !== initial) commit(value);
-        return value;
-      });
-    },
-  };
 }

@@ -5,7 +5,7 @@ import WheelEditor from "./WheelEditor";
 import TrimDialog from "./TrimDialog";
 import DialogHost from "./DialogHost";
 import ToastHost from "./ToastHost";
-import { Hint, Icon, Panel, Row, Slider, displayHotkey } from "./Controls";
+import { Hint, Icon, Panel, Row, Slider, displayHotkey, useSyncedInput } from "./Controls";
 
 type Provider = "Cartesia" | "Volcengine";
 
@@ -164,6 +164,15 @@ export default function App() {
       pending.current[key] = window.setTimeout(() => run(action), delay);
     },
     [run],
+  );
+
+  // 数字输入用本地草稿立即回显：快照回来前输入框不会跳回旧值，上下箭头才跟手。
+  const rollingSeconds = useSyncedInput(
+    snapshot ? String(snapshot.settings.rolling_buffer_seconds) : "",
+    (value) => {
+      const seconds = Number(value);
+      if (Number.isFinite(seconds)) run({ type: "set_rolling_seconds", value: seconds });
+    },
   );
 
   if (!snapshot) {
@@ -616,17 +625,14 @@ export default function App() {
                 <Row label="保留时长">
                   <div className="flex items-center gap-2">
                     <input
+                      ref={rollingSeconds.ref}
                       className="field w-28"
                       type="number"
                       min={5}
                       max={300}
-                      value={settings.rolling_buffer_seconds}
-                      onChange={(event) => {
-                        const value = Number(event.target.value);
-                        if (Number.isFinite(value)) {
-                          sendDebounced("rolling", 300, { type: "set_rolling_seconds", value });
-                        }
-                      }}
+                      value={rollingSeconds.draft}
+                      onChange={(event) => rollingSeconds.onChange(event.target.value)}
+                      onBlur={rollingSeconds.flush}
                     />
                     <span className="whitespace-nowrap text-sm text-[var(--muted)]">秒（5–300）</span>
                   </div>

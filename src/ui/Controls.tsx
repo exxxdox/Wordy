@@ -1,3 +1,4 @@
+import { useEffect, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 
 export function Panel({ title, children }: { title: string; children: ReactNode }) {
@@ -96,3 +97,33 @@ export const displayHotkey = (value: string) =>
       part.length === 1 ? part.toUpperCase() : part.charAt(0).toUpperCase() + part.slice(1),
     )
     .join(" + ");
+
+/// 输入框编辑期间不被快照回写覆盖；失焦或提交后以后端值为准。
+export function useSyncedInput(initial: string, commit: (value: string) => void) {
+  const [draft, setDraft] = useState(initial);
+  const ref = useRef<HTMLInputElement>(null);
+  const timer = useRef(0);
+
+  useEffect(() => {
+    if (document.activeElement !== ref.current) setDraft(initial);
+  }, [initial]);
+
+  useEffect(() => () => window.clearTimeout(timer.current), []);
+
+  return {
+    ref,
+    draft,
+    onChange(value: string) {
+      setDraft(value);
+      window.clearTimeout(timer.current);
+      timer.current = window.setTimeout(() => commit(value), 300);
+    },
+    flush() {
+      window.clearTimeout(timer.current);
+      setDraft((value) => {
+        if (value !== initial) commit(value);
+        return value;
+      });
+    },
+  };
+}
