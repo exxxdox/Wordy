@@ -202,7 +202,7 @@ impl Default for Settings {
         Self {
             hotkey: "f6".into(),
             name: "F6".into(),
-            chat_wheel_name: String::new(),
+            chat_wheel_name: "轮盘 1".into(),
             chat_wheel_hotkey: "f8".into(),
             chat_wheel_slots: Default::default(),
             chat_wheel_labels: Default::default(),
@@ -455,9 +455,16 @@ impl Settings {
         self.rolling_buffer_target[1] = self.rolling_buffer_target[1].min(SLOT_COUNT - 1);
         let mut first = self.wheel(0).expect("the first wheel always exists");
         first.normalize();
+        // 未命名的轮盘统一显示默认名，设置页与选择器保持一致。
+        if first.name.is_empty() {
+            first.name = "轮盘 1".into();
+        }
         self.assign_wheel(0, first);
-        for wheel in &mut self.additional_chat_wheels {
+        for (index, wheel) in self.additional_chat_wheels.iter_mut().enumerate() {
             wheel.normalize();
+            if wheel.name.is_empty() {
+                wheel.name = format!("轮盘 {}", index + 2);
+            }
         }
         if ![CARTESIA_BYTES, CARTESIA_REALTIME]
             .contains(&self.tts_providers.cartesia.backend.as_str())
@@ -1006,6 +1013,23 @@ mod tests {
     fn empty_ui_font_uses_the_built_in_family() {
         assert_eq!(ui_font_family(""), DEFAULT_UI_FONT);
         assert_eq!(ui_font_family("Consolas"), "Consolas");
+    }
+
+    #[test]
+    fn unnamed_wheels_get_numbered_default_names() {
+        let settings = Settings::from_toml("").unwrap();
+        assert_eq!(settings.chat_wheel_name, "轮盘 1");
+        let settings = Settings::from_toml(
+            r#"
+            additional_chat_wheels = [
+                { hotkey = "", slots = [""], labels = ["第一个"], texts = [""], volumes = [1.0] },
+                { name = "自定义", hotkey = "", slots = [""], labels = [""], texts = [""], volumes = [1.0] },
+            ]
+            "#,
+        )
+        .unwrap();
+        assert_eq!(settings.additional_chat_wheels[0].name, "轮盘 2");
+        assert_eq!(settings.additional_chat_wheels[1].name, "自定义");
     }
 
     #[test]
