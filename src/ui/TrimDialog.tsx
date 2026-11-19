@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { Snapshot } from "./App";
 
@@ -34,6 +35,7 @@ export default function TrimDialog({ snapshot, run }: Props) {
   const [wheel, setWheel] = useState(0);
   const [slot, setSlot] = useState(0);
   const [saving, setSaving] = useState(false);
+  const [targetPreview, setTargetPreview] = useState<string | null>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const drag = useRef<Drag | null>(null);
 
@@ -95,6 +97,20 @@ export default function TrimDialog({ snapshot, run }: Props) {
 
   useEffect(() => {
     if (!trim) return;
+    let cancelled = false;
+    const width = Math.round(200 * (window.devicePixelRatio || 1));
+    invoke<string>("wordy_wheel_preview", { wheel, slot, width })
+      .then((source) => {
+        if (!cancelled) setTargetPreview(source);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [trim, wheel, slot, snapshot.settings]);
+
+  useEffect(() => {
+    if (!trim) return;
     const element = canvas.current;
     if (!element) return;
     const draw = () =>
@@ -115,10 +131,17 @@ export default function TrimDialog({ snapshot, run }: Props) {
   if (!trim) return null;
 
   const duration = trim.duration;
-  const wheels = [
-    snapshot.settings.chat_wheel_name,
-    ...snapshot.settings.additional_chat_wheels.map((item) => item.name),
+  const wheelItems = [
+    {
+      name: snapshot.settings.chat_wheel_name,
+      labels: snapshot.settings.chat_wheel_labels,
+      texts: snapshot.settings.chat_wheel_texts,
+      slots: snapshot.settings.chat_wheel_slots,
+    },
+    ...snapshot.settings.additional_chat_wheels,
   ];
+  const targetWheel = wheelItems[Math.min(wheel, wheelItems.length - 1)];
+  const wheels = wheelItems.map((item, order) => item.name || `轮盘 ${order + 1}`);
   const timeAt = (clientX: number) => {
     const element = canvas.current;
     if (!element) return 0;
@@ -136,8 +159,13 @@ export default function TrimDialog({ snapshot, run }: Props) {
       drag.current = { mode: "start" };
     } else if (Math.abs(time - end) <= threshold) {
       drag.current = { mode: "end" };
-    } else if (time > start && time < end) {
+    } else if (time > start && time < end && end - start < duration - MIN_RANGE) {
       drag.current = { mode: "range", anchor: time, span: end - start };
+    } else if (time > start && time < end) {
+      // 整段选中时无法“移动”，改为从按下的位置重新拉出子区间。
+      drag.current = { mode: "new", anchor: time };
+      setStart(time);
+      setEnd(Math.min(duration, time + MIN_RANGE));
     } else {
       drag.current = { mode: "end" };
       setStart(time);
@@ -152,11 +180,16 @@ export default function TrimDialog({ snapshot, run }: Props) {
       setStart(Math.min(time, end - MIN_RANGE));
     } else if (active.mode === "end") {
       setEnd(Math.max(time, start + MIN_RANGE));
-    } else {
+    } else if (active.mode === "range") {
       const span = active.span;
       const next = clamp(time - (active.anchor - start), 0, duration - span);
       setStart(next);
       setEnd(next + span);
+    } else {
+      const from = Math.min(active.anchor, time);
+      const to = Math.max(active.anchor, time);
+      setStart(clamp(from, 0, duration - MIN_RANGE));
+      setEnd(clamp(Math.max(to, from + MIN_RANGE), MIN_RANGE, duration));
     }
   };
   const endDrag = () => {
@@ -235,60 +268,91 @@ export default function TrimDialog({ snapshot, run }: Props) {
             onChange={(event) => setLabel(event.target.value)}
           />
         </label>
-        <label className="w-32 text-[13px]">
-          音量 %
+        <div className="w-44">
+          <div className="mb-1.5 flex items-center justify-between text-[13px]">
+            <span>音量</span>
+            <span className="text-[var(--muted)]">{Math.round(gain)}%</span>
+          </div>
           <input
-            className="field mt-1"
-            type="number"
+            type="range"
+            className="range"
             min={0}
             max={300}
             step={5}
             value={Math.round(gain)}
             onChange={(event) => setGain(Number(event.target.value))}
           />
-        </label>
+        </div>
       </div>
 
-      {trim.rolling && (
-        <div className="mt-2 flex items-end gap-2">
-          <label className="min-w-0 flex-1 text-[13px]">
-            保存到轮盘
-            <select
-              className="field mt-1"
-              value={wheel}
-              onChange={(event) => setWheel(Number(event.target.value))}
-            >
-              {wheels.map((name, order) => (
-                <option key={order} value={order}>
-                  {name || `轮盘 ${order + 1}`}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="w-24 text-[13px]">
-            槽位
-            <select
-              className="field mt-1"
-              value={slot}
-              onChange={(event) => setSlot(Number(event.target.value))}
-            >
-              {Array.from({ length: 8 }, (_, order) => (
-                <option key={order} value={order}>
-                  {order + 1}
-                </option>
-              ))}
-            </select>
-          </label>
-          <button
-            className="btn icon-btn"
-            title="新增轮盘"
-            aria-label="新增轮盘"
-            onClick={() => run({ type: "add_wheel" })}
-          >
-            ➕
-          </button>
+      <div className="mt-3 flex gap-3">
+        <div className="relative aspect-[634/540] w-28 shrink-0 overflow-hidden rounded-lg border border-white/10 bg-black/30">
+          {targetPreview ? (
+            <img src={targetPreview} alt="目标槽位" className="h-full w-full object-contain" />
+          ) : (
+            <div className="flex h-full items-center justify-center text-[10px] text-[var(--muted)]">
+              预览
+            </div>
+          )}
         </div>
-      )}
+        <div className="min-w-0 flex-1">
+          {trim.rolling ? (
+            <>
+              <label className="block text-[13px]">
+                保存到轮盘
+                <select
+                  className="field mt-1"
+                  value={wheel}
+                  onChange={(event) => setWheel(Number(event.target.value))}
+                >
+                  {wheels.map((name, order) => (
+                    <option key={order} value={order}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <div className="mt-2">
+                <div className="mb-1 text-[13px]">槽位 {slot + 1}</div>
+                <div className="grid grid-cols-4 gap-1">
+                  {Array.from({ length: 8 }, (_, order) => (
+                    <button
+                      key={order}
+                      onClick={() => setSlot(order)}
+                      className={`truncate rounded-md border px-1.5 py-1 text-xs ${
+                        order === slot
+                          ? "border-[var(--accent)] bg-[var(--accent)]/20 text-white"
+                          : "border-white/10 bg-white/5 text-[var(--muted)] hover:text-white"
+                      }`}
+                    >
+                      {slotName(targetWheel, order)}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <button
+                className="btn icon-btn mt-2"
+                title="新增轮盘"
+                aria-label="新增轮盘"
+                onClick={() => {
+                  setWheel(wheelItems.length);
+                  run({ type: "add_wheel" });
+                }}
+              >
+                ➕
+              </button>
+            </>
+          ) : (
+            <p className="text-sm">
+              保存到：<span className="text-[var(--text)]">{wheels[wheel] ?? wheels[0]}</span>
+              <span className="text-[var(--muted)]">
+                {" "}
+                · 第 {slot + 1} 槽{targetWheel ? `（${slotName(targetWheel, slot)}）` : ""}
+              </span>
+            </p>
+          )}
+        </div>
+      </div>
 
       <footer className="mt-auto flex items-center justify-between pt-3">
         <span className="text-xs text-[var(--muted)]">
@@ -333,6 +397,7 @@ export default function TrimDialog({ snapshot, run }: Props) {
 type Drag =
   | { mode: "start" }
   | { mode: "end" }
+  | { mode: "new"; anchor: number }
   | { mode: "range"; anchor: number; span: number };
 
 const clamp = (value: number, min: number, max: number) =>
@@ -341,6 +406,13 @@ const clamp = (value: number, min: number, max: number) =>
 const round = (value: number) => Math.round(value * 1000) / 1000;
 
 const durationOf = (trim: Session) => trim.duration;
+
+function slotName(
+  wheel: { labels: string[]; texts: string[]; slots: string[] },
+  index: number,
+) {
+  return wheel.labels[index] || wheel.texts[index] || (wheel.slots[index] ? "音频" : `槽 ${index + 1}`);
+}
 
 function previewOrStop(
   trim: Session,
