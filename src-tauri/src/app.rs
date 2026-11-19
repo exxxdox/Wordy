@@ -10,7 +10,7 @@ use std::sync::{
 use std::time::{Duration, Instant};
 
 use tauri::{AppHandle, Emitter, Manager};
-use windows_sys::Win32::Foundation::{HANDLE, HINSTANCE, HWND, RECT, WAIT_FAILED, WAIT_OBJECT_0};
+use windows_sys::Win32::Foundation::{HANDLE, HINSTANCE, HWND, WAIT_FAILED, WAIT_OBJECT_0};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Threading::INFINITE;
 use windows_sys::Win32::UI::Shell::ShellExecuteW;
@@ -26,7 +26,6 @@ use crate::file_log::FileLog;
 use crate::hotkey::{display_hotkey, parse_hotkey, windows::Registration};
 use crate::playback::{EngineSettings, Event, Playback};
 use crate::settings_action::SettingsAction;
-use crate::status_toast::{Toasts, Tone};
 use crate::ui::{self, ListenStatus, Snapshot, UiRequest};
 use crate::wheel::WheelStyle;
 use crate::wheel_window::WheelWindow;
@@ -54,6 +53,7 @@ pub struct UiContext {
     pub hwnd: isize,
     pub wake: isize,
     pub requests: mpsc::Receiver<UiRequest>,
+    pub dialogs: ui::DialogBroker,
 }
 
 /// 在 Tauri 工作线程里运行原有 Win32 应用：
@@ -113,6 +113,7 @@ struct App {
     hwnd: isize,
     wake: HANDLE,
     requests: mpsc::Receiver<UiRequest>,
+    dialogs: ui::DialogBroker,
     outputs: Vec<AudioIdentity>,
     microphones: Vec<String>,
     cartesia_voices: Vec<Voice>,
@@ -124,7 +125,6 @@ struct App {
     published_preview: Option<(usize, usize, bool)>,
     ui_dirty: bool,
     ui_connected: bool,
-    toasts: Toasts,
     recording: Option<Recording>,
     trim: Option<trim::TrimSession>,
     previews: HashMap<u64, tempfile::NamedTempFile>,
@@ -195,6 +195,7 @@ impl App {
             hwnd: ui.hwnd,
             wake: ui.wake as HANDLE,
             requests: ui.requests,
+            dialogs: ui.dialogs,
             outputs: Vec::new(),
             microphones: Vec::new(),
             cartesia_voices: Vec::new(),
@@ -206,7 +207,6 @@ impl App {
             published_preview: None,
             ui_dirty: true,
             ui_connected: false,
-            toasts: Toasts::new(),
             recording: None,
             trim: None,
             previews: HashMap::new(),
@@ -384,14 +384,6 @@ impl App {
     }
 
     fn tick(&mut self) -> io::Result<()> {
-        if let Err(error) = self.toasts.tick(
-            self.hwnd as HWND,
-            self.toast_anchor(),
-            &self.config.settings().ui_font,
-        ) {
-            self.toasts.clear();
-            self.log_at("WARNING", format!("设置反馈显示失败：{error}"));
-        }
         if let Some(slot) = self.wheel.tick()
             && let Some(wheel) = self.active_wheel.take()
         {
@@ -569,16 +561,6 @@ impl App {
         !hwnd.is_null() && unsafe { IsWindowVisible(hwnd) != 0 && IsIconic(hwnd) == 0 }
     }
 
-    fn toast_anchor(&self) -> Option<RECT> {
-        let hwnd = self.ui_hwnd();
-        let mut rect = RECT::default();
-        if hwnd.is_null() || unsafe { GetWindowRect(hwnd, &mut rect) } == 0 {
-            None
-        } else {
-            Some(rect)
-        }
-    }
-
     fn complete_background(&mut self, result: Background, exiting: bool) -> io::Result<()> {
         match result {
             Background::NotificationFailed(message) => {
@@ -628,32 +610,78 @@ impl App {
         Ok(())
     }
 }
-fn capture_binding(
-    hotkeys: &mut Hotkeys,
-    owner: HWND,
-    single: bool,
-    font_family: &str,
-) -> io::Result<Option<String>> {
-    // Clear global registrations while capturing so the old shortcut cannot open a second surface.
-    let previous: Vec<_> = hotkeys
-        .current
-        .drain()
-        .map(|(binding, registered)| (binding, registered.action))
-        .collect();
-    let binding = dialog::record_key(owner, single, font_family);
-    let mut failures = Vec::new();
-    for (key, action) in previous {
-        match hotkeys.register_new(key, action) {
-            Ok(registration) => {
-                hotkeys.current.insert(key, registration);
+impl App {
+    fn ask_dialog(
+        &mut self,
+        kind: &str,
+        title: &str,
+        message: &str,
+        value: &str,
+        password: bool,
+        single: bool,
+    ) -> Option<String> {
+        // 网页弹窗只在设置窗口可见时才看得到。
+        if !self.settings_visible() {
+            let _ = self.show_settings();
+        }
+        let reply = self
+            .dialogs
+            .ask(&self.handle, kind, title, message, value, password, single);
+        reply.ok.then(|| reply.value.unwrap_or_default())
+    }
+
+    pub(super) fn confirm_dialog(&mut self, title: &str, message: &str) -> bool {
+        self.ask_dialog("confirm", title, message, "", false, false)
+            .is_some()
+    }
+
+    pub(super) fn prompt_dialog(
+        &mut self,
+        title: &str,
+        label: &str,
+        password: bool,
+    ) -> Option<String> {
+        self.ask_dialog("prompt", title, label, "", password, false)
+    }
+
+    pub(super) fn capture_binding(&mut self, single: bool) -> io::Result<Option<String>> {
+        // Clear global registrations while capturing so the old shortcut cannot open a second surface.
+        let previous: Vec<_> = self
+            .hotkeys
+            .current
+            .drain()
+            .map(|(binding, registered)| (binding, registered.action))
+            .collect();
+        let message = if single {
+            "请按下一个键"
+        } else {
+            "请按下要使用的快捷键组合"
+        };
+        let binding = self.ask_dialog("record", "录制快捷键", message, "", false, single);
+        let mut failures = Vec::new();
+        for (key, action) in previous {
+            match self.hotkeys.register_new(key, action) {
+                Ok(registration) => {
+                    self.hotkeys.current.insert(key, registration);
+                }
+                Err(error) => failures.push(format!("恢复快捷键失败：{error}")),
             }
-            Err(error) => failures.push(format!("恢复快捷键失败：{error}")),
+        }
+        if failures.is_empty() {
+            Ok(binding)
+        } else {
+            Err(io::Error::other(failures.join("；")))
         }
     }
-    if failures.is_empty() {
-        Ok(binding)
-    } else {
-        Err(io::Error::other(failures.join("；")))
+
+    pub(super) fn feedback(&self, message: &str, tone: &str) {
+        let _ = self.handle.emit(
+            ui::FEEDBACK_EVENT,
+            ui::Feedback {
+                message: message.into(),
+                tone: tone.into(),
+            },
+        );
     }
 }
 

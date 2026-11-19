@@ -54,6 +54,8 @@ fn main() -> std::process::ExitCode {
             }
             let wake_value = wake as isize;
             app.manage(NativeHandle::new(wake_value, requests));
+            let dialogs = wordy::ui::DialogBroker::default();
+            app.manage(dialogs.clone());
 
             let handle = app.handle().clone();
             let closable = window.clone();
@@ -73,6 +75,7 @@ fn main() -> std::process::ExitCode {
                         hwnd,
                         wake: wake_value,
                         requests: receiver,
+                        dialogs,
                     };
                     if let Err(error) = wordy::app::run_native(context) {
                         eprintln!("Wordy 启动失败：{error}");
@@ -87,7 +90,8 @@ fn main() -> std::process::ExitCode {
             wordy::ui::wordy_action,
             wordy::ui::wordy_hide,
             wordy::ui::wordy_logs,
-            wordy::ui::wordy_wheel_preview
+            wordy::ui::wordy_wheel_preview,
+            wordy::ui::wordy_dialog_reply
         ])
         .run(tauri::generate_context!());
 

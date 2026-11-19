@@ -38,6 +38,7 @@ pub(crate) fn set_dwm(hwnd: HWND, attribute: i32, value: i32) {
     };
 }
 
+#[cfg(test)]
 /// Fraction of the pixel covered by the field (inside the rounded boundary) and
 /// by its one-pixel border, given the signed distance inside the boundary.
 fn corner_coverage(distance: f32) -> (f32, f32) {
@@ -50,6 +51,7 @@ fn corner_coverage(distance: f32) -> (f32, f32) {
 /// Paint the four radius-sized corner squares with per-pixel coverage instead:
 /// `background` supplies the surface behind the field, the border is blended
 /// just inside the arc, and the control's own fill stays untouched inside.
+#[cfg(test)]
 pub(crate) fn paint_round_field(
     dc: HDC,
     rect: RECT,

@@ -118,66 +118,6 @@ pub fn virtual_key_for_key_name(name: &str) -> Option<u32> {
         .or_else(|| main_key(&key))
 }
 
-pub(crate) fn key_name(code: u32) -> Option<String> {
-    let name = match code {
-        0x08 => "backspace",
-        0x09 => "tab",
-        0x0c => "clear",
-        0x0d => "enter",
-        0x10 => "shift",
-        0x11 => "ctrl",
-        0x12 => "alt",
-        0x13 => "pause",
-        0x14 => "caps lock",
-        0x1b => "esc",
-        0x20 => "space",
-        0x21 => "page up",
-        0x22 => "page down",
-        0x23 => "end",
-        0x24 => "home",
-        0x25 => "left",
-        0x26 => "up",
-        0x27 => "right",
-        0x28 => "down",
-        0x2c => "print screen",
-        0x2d => "insert",
-        0x2e => "delete",
-        0x5b => "left windows",
-        0x5c => "right windows",
-        0x5d => "menu",
-        0x90 => "num lock",
-        0x91 => "scroll lock",
-        0xa0 => "left shift",
-        0xa1 => "right shift",
-        0xa2 => "left ctrl",
-        0xa3 => "right ctrl",
-        0xa4 => "left alt",
-        0xa5 => "right alt",
-        0xba => ";",
-        0xbb => "=",
-        0xbc => ",",
-        0xbd => "-",
-        0xbe => ".",
-        0xbf => "/",
-        0xc0 => "`",
-        0xdb => "[",
-        0xdc => "\\",
-        0xdd => "]",
-        0xde => "'",
-        0x30..=0x39 | 0x41..=0x5a => {
-            return Some(char::from(code as u8).to_ascii_lowercase().to_string());
-        }
-        0x60..=0x69 => return Some(format!("num {}", code - 0x60)),
-        0x70..=0x87 => return Some(format!("f{}", code - 0x70 + 1)),
-        _ => return None,
-    };
-    Some(name.into())
-}
-
-pub(crate) fn is_modifier(name: &str) -> bool {
-    modifier(name).is_some()
-}
-
 pub fn parse_hotkey(binding: &str) -> Result<(u32, u32), HotkeyError> {
     let mut modifiers = 0x4000; // MOD_NOREPEAT prevents repeated activation while held.
     let mut key_code = None;

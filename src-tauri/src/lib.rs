@@ -21,10 +21,6 @@ pub mod instance;
 pub mod playback;
 pub mod settings_action;
 #[cfg(windows)]
-mod settings_backdrop;
-#[cfg(windows)]
-mod status_toast;
-#[cfg(windows)]
 pub mod tts;
 #[cfg(windows)]
 pub mod ui;

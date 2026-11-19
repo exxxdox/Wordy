@@ -41,7 +41,7 @@ impl App {
     }
 
     pub(super) fn status(&mut self, message: String) {
-        self.toasts.push(&message, Tone::Success);
+        self.feedback(&message, "success");
         self.log(message);
     }
 
@@ -67,28 +67,18 @@ impl App {
             self.status("已检测到 FFmpeg，请重试刚才的音频操作".into());
             return Ok(());
         }
-        // 截取窗口现在由网页渲染，原生对话框一律挂在本线程的宿主窗口上。
-        let owner = if self.settings_visible() {
-            self.host
-        } else {
-            ptr::null_mut()
-        };
         let Some(winget) = ffmpeg::winget() else {
-            if dialog::confirm(
-                owner,
+            if self.confirm_dialog(
                 "缺少 FFmpeg",
                 "此音频需要 FFmpeg。系统未找到 WinGet，是否打开 FFmpeg 下载页面？安装后请将其目录加入 PATH。",
-                &self.config.settings().ui_font,
             ) {
                 self.open_url("https://ffmpeg.org/download.html")?;
             }
             return Ok(());
         };
-        if dialog::confirm(
-            owner,
+        if self.confirm_dialog(
             "缺少 FFmpeg",
             "此音频需要 FFmpeg。是否通过 Windows 程序包管理器（WinGet）下载并安装？",
-            &self.config.settings().ui_font,
         ) {
             let events = self.jobs.clone();
             // Installation can take time. Let the user keep working and report completion on the UI thread.
@@ -108,10 +98,8 @@ impl App {
         // Report through the toast/tray only; forcing the settings window open
         // on every background error made a plain launch look like a request for it.
         if self.settings_visible() {
-            self.toasts.push(&message, Tone::Error);
+            self.feedback(&message, "error");
         } else {
-            // Toast cards only exist over the settings window; without it the
-            // next tick would clear them before the user could read one.
             self.tray.notify(&message);
         }
         self.log_at("ERROR", message);

@@ -3,7 +3,10 @@
 //! 原生线程继续独占配置、快捷键注册、音频路由和引擎状态；网页只发送动作，
 //! 并接收一份完整快照。命令线程通过自动重置事件唤醒原生消息循环。
 
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, SyncSender};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -29,12 +32,103 @@ pub const TRIM_PEAKS_EVENT: &str = "wordy://trim-peaks";
 pub const TRIM_PROGRESS_EVENT: &str = "wordy://trim-progress";
 pub const TRIM_CLOSED_EVENT: &str = "wordy://trim-closed";
 pub const TRIM_SAVE_FAILED_EVENT: &str = "wordy://trim-save-failed";
+/// React 原生替代弹窗与状态提示。
+pub const DIALOG_EVENT: &str = "wordy://dialog";
+pub const FEEDBACK_EVENT: &str = "wordy://feedback";
 
 #[derive(Clone, Debug, Serialize)]
 pub struct ListenStatus {
     pub enabled: bool,
     pub output: Option<String>,
     pub output_available: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct Feedback {
+    pub message: String,
+    pub tone: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct DialogRequest {
+    pub id: u64,
+    pub kind: String,
+    pub title: String,
+    pub message: String,
+    pub value: String,
+    pub password: bool,
+    pub single: bool,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct DialogReply {
+    pub id: u64,
+    pub ok: bool,
+    pub value: Option<String>,
+}
+
+/// 原生线程请求网页渲染弹窗，并阻塞等待回答。
+#[derive(Clone, Default)]
+pub struct DialogBroker {
+    next: Arc<AtomicU64>,
+    pending: Arc<Mutex<HashMap<u64, SyncSender<DialogReply>>>>,
+}
+
+impl DialogBroker {
+    #[allow(clippy::too_many_arguments)]
+    pub fn ask(
+        &self,
+        app: &tauri::AppHandle,
+        kind: &str,
+        title: &str,
+        message: &str,
+        value: &str,
+        password: bool,
+        single: bool,
+    ) -> DialogReply {
+        use tauri::Emitter;
+        let id = self.next.fetch_add(1, Ordering::Relaxed) + 1;
+        let (reply, receiver) = mpsc::sync_channel(1);
+        self.pending
+            .lock()
+            .expect("dialog broker poisoned")
+            .insert(id, reply);
+        let _ = app.emit(
+            DIALOG_EVENT,
+            DialogRequest {
+                id,
+                kind: kind.into(),
+                title: title.into(),
+                message: message.into(),
+                value: value.into(),
+                password,
+                single,
+            },
+        );
+        let reply = receiver
+            .recv_timeout(ACTION_TIMEOUT)
+            .unwrap_or(DialogReply {
+                id,
+                ok: false,
+                value: None,
+            });
+        self.pending
+            .lock()
+            .expect("dialog broker poisoned")
+            .remove(&id);
+        reply
+    }
+
+    pub fn resolve(&self, reply: DialogReply) {
+        if let Some(sender) = self
+            .pending
+            .lock()
+            .expect("dialog broker poisoned")
+            .remove(&reply.id)
+        {
+            let _ = sender.send(reply);
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -404,12 +498,12 @@ fn provider_from(value: &str) -> Result<Provider, String> {
 }
 
 #[tauri::command]
-pub fn wordy_snapshot(state: tauri::State<'_, NativeHandle>) -> Result<Snapshot, String> {
+pub async fn wordy_snapshot(state: tauri::State<'_, NativeHandle>) -> Result<Snapshot, String> {
     state.snapshot()
 }
 
 #[tauri::command]
-pub fn wordy_action(
+pub async fn wordy_action(
     action: UiAction,
     state: tauri::State<'_, NativeHandle>,
 ) -> Result<Snapshot, String> {
@@ -463,16 +557,21 @@ mod tests {
 }
 
 #[tauri::command]
-pub fn wordy_logs(state: tauri::State<'_, NativeHandle>) -> Result<Vec<String>, String> {
+pub async fn wordy_logs(state: tauri::State<'_, NativeHandle>) -> Result<Vec<String>, String> {
     state.logs()
 }
 
 #[tauri::command]
-pub fn wordy_wheel_preview(
+pub async fn wordy_wheel_preview(
     wheel: usize,
     slot: usize,
     width: Option<u32>,
     state: tauri::State<'_, NativeHandle>,
 ) -> Result<String, String> {
     state.preview(wheel, slot, width.unwrap_or(420))
+}
+
+#[tauri::command]
+pub fn wordy_dialog_reply(reply: DialogReply, broker: tauri::State<'_, DialogBroker>) {
+    broker.resolve(reply);
 }

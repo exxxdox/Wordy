@@ -57,14 +57,7 @@ impl App {
             SetLogLevel(level) => self.edit(|s| s.log_level = level)?,
             SetHoldKeyEnabled(enabled) => self.edit(|s| s.hold_key_enabled = enabled)?,
             RecordHoldKey | RecordHotkey | RecordRollingHotkey => {
-                let owner = self.host;
-                let Some(value) = capture_binding(
-                    &mut self.hotkeys,
-                    owner,
-                    matches!(action, RecordHoldKey),
-                    &self.config.settings().ui_font,
-                )?
-                else {
+                let Some(value) = self.capture_binding(matches!(action, RecordHoldKey))? else {
                     return Ok(());
                 };
                 let mut next = self.config.settings().clone();
@@ -146,7 +139,7 @@ impl App {
                 self.trim_save(id, start, end, &label, gain, wheel, slot)?
             }
             TrimCancel(id) => self.trim_cancel(id),
-            Closed => self.toasts.clear(),
+            Closed => (),
         }
         Ok(())
     }
@@ -353,37 +346,21 @@ impl App {
             return Ok(());
         };
         if !export
-            && !dialog::confirm(
-                owner,
+            && !self.confirm_dialog(
                 title,
                 "将替换全部设置和 API 密钥。成功后 Wordy 会退出，请重新启动。是否继续？",
-                &self.config.settings().ui_font,
             )
         {
             return Ok(());
         }
-        let Some(password) = dialog::prompt(
-            owner,
-            title,
-            "备份密码",
-            "",
-            true,
-            &self.config.settings().ui_font,
-        ) else {
+        let Some(password) = self.prompt_dialog(title, "备份密码", true) else {
             return Ok(());
         };
         if password.is_empty() {
             return Err(io::Error::other("备份密码不能为空"));
         }
         if export {
-            let Some(check) = dialog::prompt(
-                owner,
-                title,
-                "确认备份密码",
-                "",
-                true,
-                &self.config.settings().ui_font,
-            ) else {
+            let Some(check) = self.prompt_dialog(title, "确认备份密码", true) else {
                 return Ok(());
             };
             if check != password {

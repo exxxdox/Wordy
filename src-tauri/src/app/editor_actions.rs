@@ -33,12 +33,7 @@ impl App {
         if next.wheel_count() == 1 {
             return Err(io::Error::other("至少保留一个轮盘"));
         }
-        if !dialog::confirm(
-            self.host,
-            "删除轮盘",
-            "删除此轮盘及其槽位？",
-            &self.config.settings().ui_font,
-        ) {
+        if !self.confirm_dialog("删除轮盘", "删除此轮盘及其槽位？") {
             return Ok(());
         }
         let removed = next
@@ -73,14 +68,7 @@ impl App {
     }
 
     pub(super) fn wheel_record_hotkey(&mut self, index: usize) -> io::Result<()> {
-        let owner = self.host;
-        let Some(hotkey) = capture_binding(
-            &mut self.hotkeys,
-            owner,
-            false,
-            &self.config.settings().ui_font,
-        )?
-        else {
+        let Some(hotkey) = self.capture_binding(false)? else {
             return Ok(());
         };
         let mut next = self.config.settings().clone();
@@ -154,12 +142,7 @@ impl App {
         let current = self.wheel_at(index)?;
         if to_text
             && !current.slots[slot].is_empty()
-            && !dialog::confirm(
-                self.host,
-                "切换为文字",
-                "切换为文字会删除该槽音频，继续？",
-                &self.config.settings().ui_font,
-            )
+            && !self.confirm_dialog("切换为文字", "切换为文字会删除该槽音频，继续？")
         {
             return Ok(());
         }

@@ -12,7 +12,7 @@ Rust（edition 2024）+ Tauri 2 桌面应用。设置界面是 React（Vite + Ta
 | `src-tauri/src/app/recording.rs` | 后台录制、音频截取与试听、异步导入与保存 |
 | `src-tauri/src/desktop.rs` | Win32 宿主窗口、托盘、通知和共用控件辅助函数 |
 | `src-tauri/src/desktop/overlay.rs` | 悬浮输入框、输入事件、背景和按钮绘制 |
-| `src-tauri/src/settings_backdrop.rs` | 原生面板共用的玻璃背景及绘制缓存 |
+
 | `src-tauri/src/app/trim.rs` | React 截取窗口的原生会话：临时 WAV、波形、试听与保存 |
 | `src-tauri/src/wheel.rs` / `wheel_paint.rs` / `wheel_window.rs` | 轮盘状态、四种样式绘制、运行时窗口 |
 | `src-tauri/src/audio.rs` + `src-tauri/src/audio/` | WASAPI 设备枚举、播放/返听、VB-CABLE 路由、Windows 侦听、回环录制、裁剪/波形、托管音频 |
@@ -28,8 +28,9 @@ Rust（edition 2024）+ Tauri 2 桌面应用。设置界面是 React（Vite + Ta
 设置页由 WebView 渲染，原生逻辑不变：网页通过 `wordy_action` 发送动作，原生线程执行后回传完整 `Snapshot`，再用 `wordy://snapshot` 事件推送变化。配置仍以 `ConfigStore` 为唯一数据源，网页不做本地持久化。`ConfigStore::revision` 决定是否推送。
 
 - 关闭设置窗口只隐藏，托盘应用继续运行；`wordy_hide` 与窗口关闭事件都只隐藏。
-- 原生对话框（录制快捷键、确认、备份密码）的 owner 使用 WebView 窗口句柄。
-- 反馈提示仍由原生 `status_toast` 绘制在设置窗口底部；设置页隐藏时错误改走托盘通知。
+- 确认、密码、快捷键录制弹窗与状态 Toast 都由 React 渲染；原生线程通过 `wordy://dialog` 请求并等待 `wordy_dialog_reply`。文件选择仍是系统对话框。
+- 桥命令 `wordy_action`/`wordy_snapshot`/`wordy_wheel_preview` 必须是 async：同步命令会占住 Tauri 主线程，弹窗事件无法送达，表现为“弹窗弹不出来”。
+- 状态提示由 React `wordy://feedback` 渲染；设置页隐藏时错误仍走托盘通知。
 - 轮盘编辑器由 React「轮盘」页签提供；预览通过 `wordy_wheel_preview` 返回与运行时轮盘同款绘制的 PNG。
 - 截取窗口由 React 渲染波形（Canvas）、拖选、试听与保存；原生只保留临时 WAV、裁剪与托管音频。
 - 日志面板由 React 渲染：`wordy_logs` 取历史，`wordy://log` 逐行推送，托盘动作会打开设置窗口并发出 `wordy://open-logs`。
