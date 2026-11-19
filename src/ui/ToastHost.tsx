@@ -34,8 +34,8 @@ export default function ToastHost() {
           key={card.id}
           className={`toast rounded-xl border px-3 py-2 text-sm shadow-lg backdrop-blur ${
             card.tone === "error"
-              ? "border-red-400/40 bg-red-950/85 text-red-100"
-              : "border-white/15 bg-[#1d1d21]/95 text-[var(--text)]"
+              ? "border-[var(--danger)]/45 bg-[#2a1b19]/95 text-[#f3cfc9]"
+              : "border-[var(--line)] bg-[var(--panel-hi)]/95 text-[var(--text)]"
           }`}
         >
           {card.message}

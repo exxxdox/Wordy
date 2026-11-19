@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import type { Snapshot } from "./App";
+import { Icon, Slider } from "./Controls";
 import WheelCanvas from "./WheelCanvas";
 
 type TrimOpen = {
@@ -176,20 +177,21 @@ export default function TrimDialog({ snapshot, run }: Props) {
   };
 
   return (
-    <section className="panel-in absolute inset-x-6 bottom-16 top-16 z-20 flex flex-col rounded-2xl border border-white/15 bg-[#17171a]/97 p-4 shadow-2xl backdrop-blur">
-      <header className="mb-2 flex items-center justify-between">
-        <h2 className="text-sm font-semibold">{trim.rolling ? "保存后台录制" : "截取录音"}</h2>
-        <button
-          className="btn icon-btn"
-          title="取消"
-          aria-label="取消截取"
-          onClick={() => run({ type: "trim_cancel", id: trim.id })}
-        >
-          ✕
-        </button>
-      </header>
+    <div className="overlay" role="dialog" aria-label={trim.rolling ? "保存后台录制" : "截取录音"}>
+      <section className="overlay-card panel-in flex h-[calc(100%-2rem)] w-[calc(100%-2rem)] max-w-[760px] flex-col p-4">
+        <header className="panel-head">
+          <h2 className="panel-title">{trim.rolling ? "保存后台录制" : "截取录音"}</h2>
+          <button
+            className="btn icon-btn"
+            title="取消"
+            aria-label="取消截取"
+            onClick={() => run({ type: "trim_cancel", id: trim.id })}
+          >
+            <Icon name="close" />
+          </button>
+        </header>
 
-      <div className="relative overflow-hidden rounded-xl border border-white/10 bg-black/30">
+        <div className="relative overflow-hidden rounded-lg border border-[var(--line-soft)] bg-[var(--field)]">
         <canvas
           ref={canvas}
           className="block h-[148px] w-full cursor-crosshair touch-none"
@@ -248,24 +250,20 @@ export default function TrimDialog({ snapshot, run }: Props) {
           />
         </label>
         <div className="w-44">
-          <div className="mb-1.5 flex items-center justify-between text-[13px]">
-            <span>音量</span>
-            <span className="tabular-nums text-[var(--muted)]">{Math.round(gain)}%</span>
-          </div>
-          <input
-            type="range"
-            className="range"
+          <Slider
+            label="音量"
+            value={Math.round(gain)}
             min={0}
             max={300}
             step={5}
-            value={Math.round(gain)}
-            onChange={(event) => setGain(Number(event.target.value))}
+            display={`${Math.round(gain)}%`}
+            onChange={setGain}
           />
         </div>
       </div>
 
       <div className="mt-3 flex gap-3">
-        <div className="relative aspect-[634/540] w-28 shrink-0 overflow-hidden rounded-lg border border-white/10 bg-black/30">
+        <div className="relative aspect-[634/540] w-28 shrink-0 overflow-hidden rounded-lg border border-[var(--line-soft)] bg-[var(--field)]">
           <WheelCanvas
             labels={targetLabels}
             font={snapshot.settings.ui_font}
@@ -304,7 +302,7 @@ export default function TrimDialog({ snapshot, run }: Props) {
                   run({ type: "add_wheel" });
                 }}
               >
-                ➕
+                <Icon name="plus" />
               </button>
             </>
           ) : (
@@ -320,22 +318,15 @@ export default function TrimDialog({ snapshot, run }: Props) {
       </div>
 
       <footer className="mt-auto flex items-center justify-between pt-3">
-        <span className="tabular-nums text-xs text-[var(--muted)]">
+        <span className="readout text-xs">
           已选 {round(end - start)} 秒 / 共 {round(duration)} 秒
         </span>
         <div className="flex gap-2">
-          <button
-            className="btn icon-btn"
-            title={trim.playing ? "停止试听" : "试听片段"}
-            aria-label={trim.playing ? "停止试听" : "试听片段"}
-            onClick={() => previewOrStop(trim, start, end, gain, run)}
-          >
-            {trim.playing ? "⏹️" : "▶️"}
+          <button className="btn" onClick={() => previewOrStop(trim, start, end, gain, run)}>
+            {trim.playing ? "停止试听" : "试听片段"}
           </button>
           <button
-            className="btn icon-btn"
-            title="保存片段"
-            aria-label="保存片段"
+            className="btn primary"
             disabled={saving}
             onClick={() => {
               setSaving(true);
@@ -351,11 +342,12 @@ export default function TrimDialog({ snapshot, run }: Props) {
               });
             }}
           >
-            💾
+            保存片段
           </button>
         </div>
       </footer>
-    </section>
+      </section>
+    </div>
   );
 }
 
@@ -410,7 +402,7 @@ function drawWave(
   if (!context) return;
   context.setTransform(ratio, 0, 0, ratio, 0, 0);
   context.clearRect(0, 0, width, height);
-  context.fillStyle = "#0d0d10";
+  context.fillStyle = "#0f1211";
   context.fillRect(0, 0, width, height);
   if (peaks.length === 0) return;
 
@@ -423,19 +415,19 @@ function drawWave(
     for (let index = from; index < to; index++) peak = Math.max(peak, peaks[index] ?? 0);
     const bar = Math.max(1, peak * (middle - 4));
     const selected = column >= x(start) && column <= x(end);
-    context.fillStyle = selected ? "#3d8df0" : "#2f4258";
+    context.fillStyle = selected ? "#e3a94b" : "#3a423c";
     context.fillRect(column, middle - bar, 1, bar * 2);
   }
 
-  context.fillStyle = "rgba(10, 132, 255, 0.12)";
+  context.fillStyle = "rgba(227, 169, 75, 0.12)";
   context.fillRect(x(start), 0, Math.max(1, x(end) - x(start)), height);
-  context.fillStyle = "rgba(10, 132, 255, 0.9)";
+  context.fillStyle = "rgba(227, 169, 75, 0.9)";
   context.fillRect(x(start), 0, 1.5, height);
   context.fillRect(x(end) - 1.5, 0, 1.5, height);
 
   if (seconds !== null) {
     const cursor = x(clamp(seconds, 0, duration));
-    context.fillStyle = "#ffd60a";
+    context.fillStyle = "#f0bd68";
     context.fillRect(cursor, 0, 1.5, height);
   }
 }

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { Snapshot, Wheel } from "./App";
-import { displayHotkey } from "./App";
+import { Icon, Panel, Slider, displayHotkey } from "./Controls";
 import WheelCanvas from "./WheelCanvas";
 
 type Props = {
@@ -74,11 +74,8 @@ export default function WheelEditor({ snapshot, run }: Props) {
 
   return (
     <>
-      <section className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
-        <h2 className="mb-3 text-[13px] font-semibold uppercase tracking-wider text-[var(--muted)]">
-          轮盘与快捷键
-        </h2>
-        <div className="space-y-3">
+      <Panel title="轮盘与快捷键">
+        <div className="flex flex-col gap-3">
           <div className="flex gap-2">
             <select
               className="field min-w-0 flex-1"
@@ -99,7 +96,7 @@ export default function WheelEditor({ snapshot, run }: Props) {
               disabled={locked}
               onClick={() => run({ type: "add_wheel" })}
             >
-              ➕
+              <Icon name="plus" />
             </button>
             <button
               className="btn icon-btn"
@@ -108,7 +105,7 @@ export default function WheelEditor({ snapshot, run }: Props) {
               disabled={locked || wheels.length <= 1}
               onClick={() => run({ type: "remove_wheel", index })}
             >
-              🗑️
+              <Icon name="trash" />
             </button>
           </div>
           <div className="flex gap-2">
@@ -116,13 +113,12 @@ export default function WheelEditor({ snapshot, run }: Props) {
               {displayHotkey(wheel.hotkey) || "未绑定快捷键"}
             </output>
             <button
-              className="btn icon-btn"
+              className="btn"
               title="录制快捷键"
-              aria-label="录制快捷键"
               disabled={locked}
               onClick={() => run({ type: "record_wheel_hotkey", index })}
             >
-              ⌨️
+              录制
             </button>
           </div>
           <label className="block text-[13px]">
@@ -140,7 +136,7 @@ export default function WheelEditor({ snapshot, run }: Props) {
             <div className="mb-1.5 text-[13px]">槽位</div>
             <p className="text-xs text-[var(--muted)]">点击下方轮盘扇区选择槽位</p>
           </div>
-          <div className="rounded-xl border border-white/10 bg-black/20 p-2">
+          <div className="rounded-xl border border-[var(--line-soft)] bg-[var(--field)] p-2">
             <div className="relative mx-auto aspect-[634/540] w-full max-w-[420px]">
               <WheelCanvas
                 labels={wheelLabels(wheel)}
@@ -155,20 +151,15 @@ export default function WheelEditor({ snapshot, run }: Props) {
             点击扇区选择槽位 · 当前：<span className="text-[var(--text)]">{slotTitle(wheel, slot)}</span>
           </p>
         </div>
-      </section>
+      </Panel>
 
-      <section className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
-        <h2 className="mb-3 text-[13px] font-semibold uppercase tracking-wider text-[var(--muted)]">
-          槽位内容 · 第 {slot + 1} 槽
-        </h2>
-        <div className="space-y-3">
+      <Panel title={`槽位内容 · 第 ${slot + 1} 槽`}>
+        <div className="flex flex-col gap-3">
           <div>
             <div className="mb-1.5 text-[13px]">内容类型</div>
-            <div className="flex gap-2">
+            <div className="seg" role="group" aria-label="内容类型">
               <button
-                className={`btn flex-1 ${!textMode ? "border-[var(--accent)] bg-[var(--accent)]/20" : ""}`}
-                title="音频槽"
-                aria-label="音频槽"
+                className="seg-item"
                 aria-pressed={!textMode}
                 disabled={locked}
                 onClick={() => {
@@ -179,9 +170,7 @@ export default function WheelEditor({ snapshot, run }: Props) {
                 音频
               </button>
               <button
-                className={`btn flex-1 ${textMode ? "border-[var(--accent)] bg-[var(--accent)]/20" : ""}`}
-                title="文字槽"
-                aria-label="文字槽"
+                className="seg-item"
                 aria-pressed={textMode}
                 disabled={locked}
                 onClick={() => {
@@ -201,26 +190,19 @@ export default function WheelEditor({ snapshot, run }: Props) {
             </p>
           </div>
           {!textMode && (
-            <div>
-              <div className="mb-1.5 flex items-center justify-between text-[13px]">
-                <span>音量</span>
-                <span className="tabular-nums text-[var(--muted)]">{gain}%</span>
-              </div>
-              <input
-                type="range"
-                className="range"
-                min={0}
-                max={300}
-                step={5}
-                value={gain}
-                disabled={locked || !hasAudio}
-                onChange={(event) => {
-                  const value = Number(event.target.value);
-                  setGain(value);
-                  run({ type: "set_slot_volume", index, slot, value });
-                }}
-              />
-            </div>
+            <Slider
+              label="音量"
+              value={gain}
+              min={0}
+              max={300}
+              step={5}
+              display={`${gain}%`}
+              disabled={locked || !hasAudio}
+              onChange={(value) => {
+                setGain(value);
+                run({ type: "set_slot_volume", index, slot, value });
+              }}
+            />
           )}
           <label className="block text-[13px]">
             名称
@@ -249,50 +231,42 @@ export default function WheelEditor({ snapshot, run }: Props) {
           <div className="flex flex-wrap gap-2">
             {!textMode && (
               <button
-                className="btn icon-btn"
-                title="导入音频"
-                aria-label="导入音频"
+                className="btn"
                 disabled={locked}
                 onClick={() => run({ type: "import_slot_audio", index, slot })}
               >
-                📥
+                导入音频
               </button>
             )}
             <button
-              className="btn icon-btn"
-              title={playing ? "停止试听" : "试听"}
-              aria-label={playing ? "停止试听" : "试听"}
+              className="btn"
               disabled={!hasAudio && !hasText}
               onClick={() => run({ type: "preview_slot", index, slot })}
             >
-              {playing ? "⏹️" : "▶️"}
+              {playing ? "停止" : "试听"}
             </button>
             {!textMode && (
               <button
-                className="btn icon-btn"
-                title="截取片段"
-                aria-label="截取片段"
+                className="btn"
                 disabled={locked || !hasAudio}
                 onClick={() => run({ type: "crop_slot_audio", index, slot })}
               >
-                ✂️
+                截取
               </button>
             )}
             <button
-              className="btn icon-btn"
-              title="清空槽位"
-              aria-label="清空槽位"
+              className="btn ghost"
               disabled={locked}
               onClick={() => run({ type: "clear_slot", index, slot })}
             >
-              🧹
+              清空
             </button>
           </div>
           {snapshot.locked && (
             <p className="text-xs text-[var(--muted)]">正在导入或保存音频，请稍候…</p>
           )}
         </div>
-      </section>
+      </Panel>
     </>
   );
 }

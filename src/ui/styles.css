@@ -2,12 +2,25 @@
 
 :root {
   color-scheme: dark;
-  --text: #f5f5f7;
-  --muted: #98989d;
-  --accent: #0a84ff;
-  --field: rgba(255, 255, 255, 0.06);
-  --field-hover: rgba(255, 255, 255, 0.09);
-  --border: rgba(255, 255, 255, 0.12);
+  /* 石墨黑底 + 琥珀信号色：对应调音台面板与 VU 表。 */
+  --bg: #131614;
+  --rail: #0e110f;
+  --panel: #191d1a;
+  --panel-hi: #1f2420;
+  --field: #0f1211;
+  --line: rgba(235, 232, 222, 0.12);
+  --line-soft: rgba(235, 232, 222, 0.07);
+  --text: #ece9e1;
+  --label: #c3c5bc;
+  --muted: #8e938a;
+  --accent: #e3a94b;
+  --accent-hi: #f0bd68;
+  --accent-ink: #1a1408;
+  --accent-soft: rgba(227, 169, 75, 0.14);
+  --ok: #7cc98f;
+  --danger: #e2776b;
+  --font-ui: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+  --font-num: "Cascadia Mono", Consolas, "Segoe UI", monospace;
 }
 
 html,
@@ -21,11 +34,10 @@ body {
   overflow: hidden;
   color: var(--text);
   background:
-    radial-gradient(120% 90% at 12% 0%, rgba(10, 132, 255, 0.16), transparent 58%),
-    radial-gradient(90% 80% at 96% 8%, rgba(255, 255, 255, 0.06), transparent 52%),
-    #131316;
-  font-family: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
-  font-size: 14px;
+    radial-gradient(120% 70% at 100% 0%, rgba(227, 169, 75, 0.05), transparent 60%),
+    var(--bg);
+  font-family: var(--font-ui);
+  font-size: 13.5px;
   -webkit-font-smoothing: antialiased;
   user-select: none;
 }
@@ -41,7 +53,8 @@ p {
 }
 
 /* 秒数、百分比、音量等随操作变化的数字固定字宽，避免读数时整行抖动。 */
-input[type="number"] {
+input[type="number"],
+.readout {
   font-variant-numeric: tabular-nums;
 }
 
@@ -84,7 +97,8 @@ input[type="number"] {
   }
 
   .btn,
-  .field {
+  .field,
+  .rail-item {
     transition: none;
   }
 
@@ -95,173 +109,555 @@ input[type="number"] {
 
 /* 放进 components 层：Tailwind 的宽度工具类（w-28/flex-1）才能覆盖默认宽度。 */
 @layer components {
-.field {
-  display: block;
-  width: 100%;
-  padding: 7px 10px;
-  border: 1px solid var(--border);
-  border-radius: 9px;
-  background: var(--field);
-  color: var(--text);
-  font: inherit;
-  outline: none;
-  transition: border-color 120ms ease, background 120ms ease;
-}
+  /* —— 外壳 —— */
 
-.field:hover {
-  background: var(--field-hover);
-}
+  .app-shell {
+    position: relative;
+    display: flex;
+    height: 100vh;
+  }
 
-.field:focus {
-  border-color: var(--accent);
-  background: rgba(10, 132, 255, 0.08);
-  box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.22);
-}
+  .rail {
+    display: flex;
+    flex: none;
+    flex-direction: column;
+    width: 200px;
+    padding: 18px 12px 14px;
+    border-right: 1px solid var(--line-soft);
+    background: var(--rail);
+  }
 
-.field:disabled {
-  opacity: 0.45;
-}
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    padding: 0 8px 18px;
+    font-family: Bahnschrift, "Segoe UI Variable Display", "Segoe UI", sans-serif;
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+  }
 
-select.field {
-  appearance: none;
-  padding-right: 28px;
-  background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%),
-    linear-gradient(135deg, var(--muted) 50%, transparent 50%);
-  background-position: calc(100% - 15px) 14px, calc(100% - 10px) 14px;
-  background-size: 5px 5px, 5px 5px;
-  background-repeat: no-repeat;
-}
+  .brand-mark {
+    width: 9px;
+    height: 9px;
+    border-radius: 2px;
+    background: var(--accent);
+    box-shadow: 0 0 12px rgba(227, 169, 75, 0.6);
+  }
 
-select.field option {
-  background: #1f1f23;
-  color: var(--text);
-}
+  .rail-nav {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
 
-.btn {
-  padding: 7px 14px;
-  border: 1px solid var(--border);
-  border-radius: 9px;
-  background: rgba(255, 255, 255, 0.07);
-  color: var(--text);
-  font: inherit;
-  font-size: 13px;
-  white-space: nowrap;
-  cursor: pointer;
-  transition: background 120ms ease, border-color 120ms ease, transform 80ms ease;
-}
+  .rail-item {
+    position: relative;
+    height: 34px;
+    padding: 0 10px;
+    border: 0;
+    border-radius: 7px;
+    background: transparent;
+    color: var(--muted);
+    font: inherit;
+    font-size: 13px;
+    text-align: left;
+    cursor: pointer;
+    transition: background 120ms ease, color 120ms ease;
+  }
 
-.btn:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.12);
-  border-color: rgba(255, 255, 255, 0.2);
-}
+  .rail-item::before {
+    content: "";
+    position: absolute;
+    top: 7px;
+    bottom: 7px;
+    left: 0;
+    width: 2px;
+    border-radius: 2px;
+    background: var(--accent);
+    opacity: 0;
+    transition: opacity 120ms ease;
+  }
 
-.btn:active:not(:disabled) {
-  transform: translateY(1px);
-}
+  .rail-item:hover {
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--text);
+  }
 
-.btn:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
+  .rail-item[aria-current="page"] {
+    background: var(--accent-soft);
+    color: var(--text);
+  }
 
-.btn.icon-btn {
-  position: relative;
-  min-width: 36px;
-  min-height: 34px;
-  padding: 6px 9px;
-  font-family: "Segoe UI Emoji", "Apple Color Emoji", "Segoe UI Symbol", sans-serif;
-  font-size: 15px;
-  line-height: 1;
-}
+  .rail-item[aria-current="page"]::before {
+    opacity: 1;
+  }
 
-/* 图标按钮视觉保持紧凑，点击区域扩到约 42×40；相邻按钮间距 8px，扩展区不重叠。 */
-.btn.icon-btn::after {
-  content: "";
-  position: absolute;
-  inset: -3px;
-}
+  .rail-item:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
 
-.btn:disabled {
-  opacity: 0.4;
-  cursor: default;
-}
+  .rail-foot {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-top: auto;
+  }
 
-/* 主操作在深色界面上需要比次要按钮更强的层级。 */
-.btn.primary {
-  border-color: transparent;
-  background: var(--accent);
-  color: #fff;
-  box-shadow: 0 6px 16px -10px rgba(10, 132, 255, 0.9);
-}
+  .rail-note {
+    margin: 4px 0 0;
+    padding: 0 8px;
+    font-size: 11px;
+    color: var(--muted);
+  }
 
-.btn.primary:hover:not(:disabled) {
-  border-color: transparent;
-  background: #2a93ff;
-}
+  .content {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    min-width: 0;
+  }
 
-.check {
-  width: 15px;
-  height: 15px;
-  accent-color: var(--accent);
-  cursor: pointer;
-}
+  .content-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 20px;
+    padding: 22px 26px 16px;
+  }
 
-.check:disabled {
-  cursor: default;
-  opacity: 0.4;
-}
+  .content-title {
+    margin: 0;
+    font-size: 20px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+  }
 
-.check:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
+  .content-sub {
+    margin: 4px 0 0;
+    font-size: 12.5px;
+    color: var(--muted);
+  }
 
-.range {
-  width: 100%;
-  height: 20px;
-  appearance: none;
-  background: transparent;
-  cursor: pointer;
-}
+  .content-body {
+    flex: 1;
+    padding: 0 26px 8px;
+    overflow-y: auto;
+    scrollbar-gutter: stable;
+  }
 
-.range::-webkit-slider-runnable-track {
-  height: 4px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.16);
-}
+  .section-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 14px;
+    align-items: start;
+  }
 
-.range::-webkit-slider-thumb {
-  appearance: none;
-  width: 16px;
-  height: 16px;
-  margin-top: -6px;
-  border-radius: 999px;
-  background: #fff;
-  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.5);
-}
+  .content-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px 26px 14px;
+    border-top: 1px solid var(--line-soft);
+    font-size: 11.5px;
+    color: var(--muted);
+  }
 
-.range:disabled {
-  cursor: default;
-  opacity: 0.4;
-}
+  /* —— 面板 —— */
 
-.range:focus-visible::-webkit-slider-thumb {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
+  .panel {
+    padding: 16px;
+    border: 1px solid var(--line-soft);
+    border-radius: 12px;
+    background: var(--panel);
+  }
 
-::-webkit-scrollbar {
-  width: 10px;
-}
+  .panel-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 12px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--line-soft);
+  }
 
-::-webkit-scrollbar-thumb {
-  border: 3px solid transparent;
-  border-radius: 999px;
-  background-clip: content-box;
-  background-color: rgba(255, 255, 255, 0.2);
-}
+  .panel-title {
+    margin: 0;
+    font-size: 12.5px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
 
-::-webkit-scrollbar-thumb:hover {
-  background-color: rgba(255, 255, 255, 0.32);
-}
+  .panel-body {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  .field-row-label {
+    margin-bottom: 6px;
+    font-size: 12.5px;
+    color: var(--label);
+  }
+
+  .hint {
+    margin: 6px 0 0;
+    font-size: 11.5px;
+    line-height: 1.55;
+    color: var(--muted);
+  }
+
+  .checkbox-line {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+  }
+
+  .readout {
+    font-family: var(--font-num);
+    font-size: 12px;
+    color: var(--label);
+  }
+
+  .slider-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 6px;
+    font-size: 12.5px;
+  }
+
+  /* —— 状态 —— */
+
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    height: 26px;
+    padding: 0 10px;
+    border: 1px solid var(--line-soft);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.03);
+    font-size: 11.5px;
+    color: var(--label);
+    white-space: nowrap;
+  }
+
+  .chip .mono {
+    font-family: var(--font-num);
+    letter-spacing: 0.02em;
+  }
+
+  .chip-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--muted);
+  }
+
+  .chip-dot.ok {
+    background: var(--ok);
+    box-shadow: 0 0 8px rgba(124, 201, 143, 0.55);
+  }
+
+  .chip-dot.off {
+    background: var(--danger);
+  }
+
+  /* —— 控件 —— */
+
+  .field {
+    display: block;
+    width: 100%;
+    height: 34px;
+    padding: 0 10px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--field);
+    color: var(--text);
+    font: inherit;
+    font-size: 13px;
+    outline: none;
+    transition: border-color 120ms ease, box-shadow 120ms ease;
+  }
+
+  .field:hover {
+    border-color: rgba(235, 232, 222, 0.2);
+  }
+
+  .field:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+  }
+
+  .field:disabled {
+    opacity: 0.45;
+  }
+
+  output.field {
+    display: flex;
+    align-items: center;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    color: var(--label);
+    font-family: var(--font-num);
+    font-size: 12.5px;
+    letter-spacing: 0.01em;
+  }
+
+  select.field {
+    appearance: none;
+    padding-right: 28px;
+    background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%),
+      linear-gradient(135deg, var(--muted) 50%, transparent 50%);
+    background-position: calc(100% - 15px) 14px, calc(100% - 10px) 14px;
+    background-size: 5px 5px, 5px 5px;
+    background-repeat: no-repeat;
+  }
+
+  select.field option {
+    background: #1f2420;
+    color: var(--text);
+  }
+
+  .btn {
+    height: 34px;
+    padding: 0 12px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.045);
+    color: var(--text);
+    font: inherit;
+    font-size: 12.5px;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background 120ms ease, border-color 120ms ease, transform 80ms ease;
+  }
+
+  .btn:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.09);
+    border-color: rgba(235, 232, 222, 0.2);
+  }
+
+  .btn:active:not(:disabled) {
+    transform: translateY(1px);
+  }
+
+  .btn:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  .btn.icon-btn {
+    position: relative;
+    display: grid;
+    place-items: center;
+    width: 34px;
+    min-width: 34px;
+    padding: 0;
+    color: var(--label);
+  }
+
+  /* 图标按钮视觉保持紧凑，点击区域扩到约 40×40；相邻按钮间距 8px，扩展区不重叠。 */
+  .btn.icon-btn::after {
+    content: "";
+    position: absolute;
+    inset: -3px;
+  }
+
+  .btn.icon-btn:hover:not(:disabled) {
+    color: var(--text);
+  }
+
+  .btn.ghost {
+    border-color: transparent;
+    background: transparent;
+    color: var(--label);
+  }
+
+  .btn.ghost:hover:not(:disabled) {
+    border-color: transparent;
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--text);
+  }
+
+  .btn.primary {
+    border-color: transparent;
+    background: var(--accent);
+    color: var(--accent-ink);
+    font-weight: 600;
+  }
+
+  .btn.primary:hover:not(:disabled) {
+    border-color: transparent;
+    background: var(--accent-hi);
+  }
+
+  .btn.sm {
+    height: 28px;
+    padding: 0 10px;
+    font-size: 12px;
+  }
+
+  .btn:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+
+  .seg {
+    display: flex;
+    gap: 2px;
+    padding: 2px;
+    border: 1px solid var(--line-soft);
+    border-radius: 9px;
+    background: var(--field);
+  }
+
+  .seg-item {
+    flex: 1;
+    height: 28px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--muted);
+    font: inherit;
+    font-size: 12.5px;
+    cursor: pointer;
+    transition: background 120ms ease, color 120ms ease;
+  }
+
+  .seg-item:hover:not(:disabled) {
+    color: var(--text);
+  }
+
+  .seg-item[aria-pressed="true"] {
+    background: var(--accent-soft);
+    color: var(--text);
+  }
+
+  .seg-item:disabled {
+    opacity: 0.45;
+    cursor: default;
+  }
+
+  .seg-item:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+
+  .check {
+    width: 15px;
+    height: 15px;
+    accent-color: var(--accent);
+    cursor: pointer;
+  }
+
+  .check:disabled {
+    cursor: default;
+    opacity: 0.4;
+  }
+
+  .check:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  .range {
+    display: block;
+    width: 100%;
+    height: 20px;
+    appearance: none;
+    background: transparent;
+    cursor: pointer;
+  }
+
+  .range::-webkit-slider-runnable-track {
+    height: 4px;
+    border-radius: 999px;
+    background: linear-gradient(
+      90deg,
+      var(--accent) 0 var(--fill, 0%),
+      rgba(255, 255, 255, 0.13) var(--fill, 0%) 100%
+    );
+  }
+
+  .range::-webkit-slider-thumb {
+    width: 14px;
+    height: 14px;
+    margin-top: -5px;
+    appearance: none;
+    border-radius: 50%;
+    background: var(--text);
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+  }
+
+  .range:hover:not(:disabled)::-webkit-slider-thumb {
+    background: #fff;
+  }
+
+  .range:disabled {
+    cursor: default;
+    opacity: 0.4;
+  }
+
+  .range:focus-visible::-webkit-slider-thumb {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  /* —— 浮层 —— */
+
+  .overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 30;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(6, 8, 7, 0.55);
+    backdrop-filter: blur(2px);
+  }
+
+  .overlay-card {
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    background: var(--panel-hi);
+    box-shadow: 0 40px 80px -40px #000;
+  }
+
+  .log-list {
+    flex: 1;
+    margin: 0;
+    padding: 0;
+    overflow-y: auto;
+    list-style: none;
+    font-family: var(--font-num);
+    font-size: 11.5px;
+    line-height: 1.7;
+    color: var(--muted);
+    user-select: text;
+    word-break: break-all;
+    white-space: pre-wrap;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    border: 3px solid transparent;
+    border-radius: 999px;
+    background-clip: content-box;
+    background-color: rgba(235, 232, 222, 0.18);
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(235, 232, 222, 0.3);
+  }
 }

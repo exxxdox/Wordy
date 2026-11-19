@@ -77,18 +77,18 @@ export default function DialogHost() {
   }
 
   return (
-    <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/45">
+    <div className="overlay">
       <section
         role="dialog"
         aria-modal="true"
         aria-label={dialog.title}
-        className="panel-in w-[26rem] rounded-2xl border border-white/15 bg-[#1d1d21] p-5 shadow-2xl"
+        className="overlay-card panel-in w-[26rem] p-5"
       >
         <h2 className="text-sm font-semibold">{dialog.title}</h2>
         {dialog.kind === "record" ? (
           <>
             <p className="mt-2 text-xs text-[var(--muted)]">{dialog.message}</p>
-            <output className="field mt-3 block min-h-[2.4rem] text-center text-lg">
+            <output className="field mt-3 block min-h-[2.4rem] justify-center text-lg">
               {recording || "…"}
             </output>
             <p className="mt-2 text-xs text-[var(--muted)]">松开即保存，按 Esc 取消</p>

@@ -5,6 +5,7 @@ import WheelEditor from "./WheelEditor";
 import TrimDialog from "./TrimDialog";
 import DialogHost from "./DialogHost";
 import ToastHost from "./ToastHost";
+import { Hint, Icon, Panel, Row, Slider, displayHotkey } from "./Controls";
 
 type Provider = "Cartesia" | "Volcengine";
 
@@ -86,21 +87,13 @@ const BACKENDS: Record<Provider, string[]> = {
 
 type Tab = "local" | "audio" | "tts" | "wheels" | "rolling";
 
-const TABS: { id: Tab; label: string }[] = [
-  { id: "local", label: "本地" },
-  { id: "audio", label: "音频" },
-  { id: "tts", label: "TTS" },
-  { id: "wheels", label: "轮盘" },
-  { id: "rolling", label: "后台录制" },
+const TABS: { id: Tab; label: string; hint: string }[] = [
+  { id: "local", label: "本地", hint: "快捷键、朗读音量与界面显示。" },
+  { id: "audio", label: "音频", hint: "主播放输出、返听与麦克风侦听。" },
+  { id: "tts", label: "TTS", hint: "服务商、密钥与朗读音色。" },
+  { id: "wheels", label: "轮盘", hint: "每个轮盘八个槽位，绑定快捷键后随时调用。" },
+  { id: "rolling", label: "后台录制", hint: "循环保留最近一段录音，随时截取保存。" },
 ];
-
-export const displayHotkey = (value: string) =>
-  value
-    .split("+")
-    .map((part) =>
-      part.length === 1 ? part.toUpperCase() : part.charAt(0).toUpperCase() + part.slice(1),
-    )
-    .join(" + ");
 
 function providerInfo(settings: Settings, provider: Provider) {
   return provider === "Cartesia"
@@ -196,46 +189,93 @@ export default function App() {
     : snapshot.fonts.includes(settings.ui_font)
       ? `界面使用「${settings.ui_font}」。`
       : `未安装「${settings.ui_font}」，已回退到内置字体。`;
+  const current = TABS.find((item) => item.id === tab) ?? TABS[0];
+  const outputChip = !settings.main_playback_enabled
+    ? { tone: "", text: "主输出已关闭" }
+    : snapshot.cable_available
+      ? { tone: "ok", text: "CABLE 就绪" }
+      : { tone: "off", text: "CABLE 未安装" };
+  const openLogs = () =>
+    invoke<string[]>("wordy_logs")
+      .then(setLogs)
+      .catch((error) => console.error(error));
 
   return (
-    <main className="relative mx-auto flex h-screen max-w-[1240px] flex-col px-6 pb-4 pt-5">
-      <header className="flex items-end justify-between gap-6">
-        <h1 className="pb-2 text-2xl font-semibold tracking-tight">设置</h1>
-        <nav className="flex gap-1 rounded-xl bg-white/5 p-1">
+    <main className="app-shell">
+      <aside className="rail">
+        <div className="brand">
+          <span className="brand-mark" aria-hidden="true" />
+          Wordy
+        </div>
+        <nav className="rail-nav" aria-label="设置分区">
           {TABS.map((item) => (
             <button
               key={item.id}
               onClick={() => setTab(item.id)}
-              aria-pressed={tab === item.id}
-              className={`rounded-lg px-4 py-1.5 text-sm transition ${
-                tab === item.id
-                  ? "bg-[var(--accent)] text-white"
-                  : "text-[var(--muted)] hover:bg-white/8 hover:text-white"
-              }`}
+              aria-current={tab === item.id ? "page" : undefined}
+              className="rail-item"
             >
               {item.label}
             </button>
           ))}
         </nav>
-      </header>
+        <div className="rail-foot">
+          <button className="btn ghost w-full" onClick={openLogs}>
+            查看日志
+          </button>
+          <div className="flex gap-2">
+            <button
+              className="btn ghost flex-1"
+              disabled={snapshot.busy}
+              onClick={() => run({ type: "export_backup" })}
+            >
+              导出备份
+            </button>
+            <button
+              className="btn ghost flex-1"
+              disabled={snapshot.busy}
+              onClick={() => run({ type: "import_backup" })}
+            >
+              导入备份
+            </button>
+          </div>
+          <p className="rail-note">设置自动保存</p>
+        </div>
+      </aside>
 
-      <div className="mt-4 flex-1 overflow-y-auto pr-1 [scrollbar-gutter:stable]">
-        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+      <div className="content">
+        <header className="content-head">
+          <div>
+            <h1 className="content-title">{current.label}</h1>
+            <p className="content-sub">{current.hint}</p>
+          </div>
+          <div className="flex flex-wrap justify-end gap-2">
+            <span className="chip">
+              <span className="mono">{displayHotkey(settings.hotkey) || "未绑定快捷键"}</span>
+            </span>
+            <span className="chip">
+              <span className={`chip-dot ${outputChip.tone}`} aria-hidden="true" />
+              {outputChip.text}
+            </span>
+          </div>
+        </header>
+
+        <div className="content-body">
+          <div className="section-grid">
           {tab === "local" && (
             <>
-              <Card title="快捷键与播放">
+              <Panel title="快捷键与播放">
                 <Row label="全局快捷键">
                   <div className="flex gap-2">
                     <output className="field min-w-0 flex-1 truncate">
                       {displayHotkey(settings.hotkey) || "未设置"}
                     </output>
                     <button
-                      className="btn icon-btn"
+                      className="btn"
                       title="录制快捷键"
-                      aria-label="录制快捷键"
                       onClick={() => run({ type: "record_hotkey" })}
                     >
-                      ⌨️
+                      录制
                     </button>
                   </div>
                   <Hint>点击录制后按下新的快捷键组合</Hint>
@@ -250,12 +290,11 @@ export default function App() {
                       {displayHotkey(settings.hold_key) || "未设置"}
                     </output>
                     <button
-                      className="btn icon-btn"
+                      className="btn"
                       title="录制按住键"
-                      aria-label="录制按住键"
                       onClick={() => run({ type: "record_hold_key" })}
                     >
-                      ⌨️
+                      录制
                     </button>
                   </div>
                   <Hint>开启后，播放语音前自动按下该键，结束后松开。</Hint>
@@ -270,9 +309,9 @@ export default function App() {
                   onChange={(value) => run({ type: "set_volume", value })}
                 />
                 <Hint>范围 0.50x - 2.00x，默认 1.00x</Hint>
-              </Card>
+              </Panel>
 
-              <Card title="界面与显示">
+              <Panel title="界面与显示">
                 <Row label="界面字体">
                   <select
                     className="field"
@@ -310,7 +349,7 @@ export default function App() {
                 />
                 <Hint>30% 更透明，100% 完全不透明；文字保持清晰。</Hint>
                 <Row label="输入栏位置">
-                  <label className="flex items-center gap-2 text-sm">
+                  <label className="checkbox-line">
                     <Check
                       checked={settings.fixed_center}
                       onChange={(value) => run({ type: "set_fixed_center", value })}
@@ -331,15 +370,15 @@ export default function App() {
                   </select>
                   <Hint>设置日志记录的详细程度。</Hint>
                 </Row>
-              </Card>
+              </Panel>
             </>
           )}
 
           {tab === "audio" && (
             <>
-              <Card title="播放与返听">
+              <Panel title="播放与返听">
                 <Row label="主播放输出">
-                  <label className="flex items-center gap-2 text-sm">
+                  <label className="checkbox-line">
                     <Check
                       checked={settings.main_playback_enabled}
                       onChange={(value) => run({ type: "set_main_playback", value })}
@@ -358,7 +397,7 @@ export default function App() {
                   )}
                 </Row>
                 <Row label="返听">
-                  <label className="flex items-center gap-2 text-sm">
+                  <label className="checkbox-line">
                     <Check
                       checked={settings.sidetone_enabled}
                       onChange={(value) => run({ type: "set_sidetone", value })}
@@ -392,9 +431,9 @@ export default function App() {
                       : `已找到 ${snapshot.outputs.length} 个输出设备。`}
                   </Hint>
                 </Row>
-              </Card>
+              </Panel>
 
-              <Card title="麦克风与侦听">
+              <Panel title="麦克风与侦听">
                 <Row label="音频侦听">
                   <Hint>通过 Windows 将所选麦克风送至 CABLE Input。</Hint>
                 </Row>
@@ -404,7 +443,7 @@ export default function App() {
                   </output>
                 </Row>
                 <Row>
-                  <label className="flex items-center gap-2 text-sm">
+                  <label className="checkbox-line">
                     <input
                       type="checkbox"
                       className="check"
@@ -436,13 +475,13 @@ export default function App() {
                   </select>
                   <Hint>{listenStatus(snapshot)}</Hint>
                 </Row>
-              </Card>
+              </Panel>
             </>
           )}
 
           {tab === "tts" && (
             <>
-              <Card title="生成方式">
+              <Panel title="生成方式">
                 <Row label="TTS 服务商">
                   <select
                     className="field"
@@ -465,9 +504,9 @@ export default function App() {
                   </select>
                   <Hint>Bytes：完整生成后播放。Streaming：边生成边播放。</Hint>
                 </Row>
-              </Card>
+              </Panel>
 
-              <Card title="密钥与音色">
+              <Panel title="密钥与音色">
                 <Row label="API Key">
                   <Hint>{info.api_key_set ? "API Key 已保存" : "API Key 未保存"}</Hint>
                   <div className="mt-2 flex gap-2">
@@ -479,24 +518,20 @@ export default function App() {
                       onChange={(event) => setKeyInput(event.target.value)}
                     />
                     <button
-                      className="btn icon-btn"
-                      title="保存 API Key"
-                      aria-label="保存 API Key"
+                      className="btn primary"
                       onClick={() => {
                         run({ type: "save_key", provider: provider.toLowerCase(), text: keyInput });
                         setKeyInput("");
                       }}
                     >
-                      💾
+                      保存
                     </button>
                     <button
-                      className="btn icon-btn"
-                      title="删除 API Key"
-                      aria-label="删除 API Key"
+                      className="btn ghost"
                       disabled={!info.api_key_set}
                       onClick={() => run({ type: "delete_key", provider: provider.toLowerCase() })}
                     >
-                      🗑️
+                      删除
                     </button>
                   </div>
                   <Hint>密钥保存在 Windows 凭据管理器中。</Hint>
@@ -529,7 +564,7 @@ export default function App() {
                       aria-label="刷新音色"
                       onClick={() => run({ type: "refresh_voices" })}
                     >
-                      🔄
+                      <Icon name="refresh" />
                     </button>
                   </div>
                   <Hint>
@@ -556,9 +591,8 @@ export default function App() {
                     </Row>
                     <div className="mt-2 flex gap-2">
                       <button
-                        className="btn icon-btn"
+                        className="btn"
                         title="添加 / 保存音色"
-                        aria-label="添加 / 保存音色"
                         onClick={() =>
                           run({
                             type: "save_volcengine_voice",
@@ -566,12 +600,11 @@ export default function App() {
                           })
                         }
                       >
-                        💾
+                        保存音色
                       </button>
                       <button
-                        className="btn icon-btn"
+                        className="btn ghost"
                         title="删除音色"
-                        aria-label="删除音色"
                         disabled={
                           !(voiceId || selectedVoice) ||
                           !settings.tts_providers.Volcengine.voice_list.some(
@@ -582,12 +615,12 @@ export default function App() {
                           run({ type: "delete_volcengine_voice", id: voiceId || selectedVoice || "" })
                         }
                       >
-                        🗑️
+                        删除
                       </button>
                     </div>
                   </>
                 )}
-              </Card>
+              </Panel>
             </>
           )}
 
@@ -595,14 +628,14 @@ export default function App() {
 
           {tab === "rolling" && (
             <>
-              <Card title="录制设置">
+              <Panel title="录制设置">
                 <Row label="后台录制快捷键">
                   <div className="flex gap-2">
                     <output className="field min-w-0 flex-1 truncate">
                       {displayHotkey(settings.rolling_buffer_hotkey) || "未设置"}
                     </output>
                     <button className="btn" onClick={() => run({ type: "record_rolling_hotkey" })}>
-                      录制快捷键
+                      录制
                     </button>
                   </div>
                   <Hint>点击录制后按下新的快捷键组合</Hint>
@@ -625,83 +658,66 @@ export default function App() {
                     <span className="whitespace-nowrap text-sm text-[var(--muted)]">秒（5–300）</span>
                   </div>
                 </Row>
-              </Card>
-              <Card title="录制与保存">
+              </Panel>
+              <Panel title="录制与保存">
                 <Row label="开始和结束录制">
                   <Hint>按一次快捷键开始录制，再按一次打开保存窗口。</Hint>
                 </Row>
                 <Row label="保存到轮盘">
                   <Hint>拖选片段，试听后选择轮盘槽位并保存。</Hint>
                 </Row>
-              </Card>
+              </Panel>
             </>
           )}
+          </div>
         </div>
-      </div>
 
-      {logs && (
-        <section className="panel-in absolute inset-x-6 bottom-16 top-16 flex flex-col rounded-2xl border border-white/15 bg-[#17171a]/95 p-4 shadow-2xl backdrop-blur">
-          <header className="mb-2 flex items-center justify-between">
-            <h2 className="text-sm font-semibold">日志</h2>
-            <button className="btn" onClick={() => setLogs(null)}>
-              关闭
-            </button>
-          </header>
-          <ol className="flex-1 select-text overflow-y-auto whitespace-pre-wrap break-all font-mono text-xs leading-relaxed text-[var(--muted)]">
-            {logs.length === 0 && <li>暂无日志</li>}
-            {logs.map((line, index) => (
-              <li key={index}>{line}</li>
-            ))}
-          </ol>
-        </section>
-      )}
-
-      <TrimDialog snapshot={snapshot} run={run} />
-      <DialogHost />
-      <ToastHost />
-
-      <footer className="mt-3 flex items-center justify-between gap-3 border-t border-white/10 pt-3 text-xs text-[var(--muted)]">
-        <span>设置自动保存</span>
-        <div className="flex gap-2">
-          <button
-            className="btn icon-btn"
-            title="查看日志"
-            aria-label="查看日志"
-            onClick={() =>
-              invoke<string[]>("wordy_logs")
-                .then(setLogs)
-                .catch((error) => console.error(error))
-            }
-          >
-            📜
-          </button>
+        <footer className="content-foot">
+          <span>关闭窗口后在托盘继续运行</span>
           <button
             className="btn"
-            disabled={snapshot.busy}
-            onClick={() => run({ type: "export_backup" })}
-          >
-            导出备份
-          </button>
-          <button
-            className="btn"
-            disabled={snapshot.busy}
-            onClick={() => run({ type: "import_backup" })}
-          >
-            导入备份
-          </button>
-          <button
-            className="btn icon-btn"
-            title="关闭设置"
-            aria-label="关闭设置"
             onClick={() => {
               run({ type: "closed" });
               invoke("wordy_hide").catch((error) => console.error(error));
             }}
           >
-            ✕
+            关闭设置
           </button>
+        </footer>
+      </div>
+
+      {logs && (
+        <div className="overlay" role="dialog" aria-label="日志">
+          <section className="overlay-card panel-in flex h-[calc(100%-3rem)] w-[calc(100%-3rem)] max-w-[860px] flex-col p-4">
+            <header className="panel-head">
+              <h2 className="panel-title">日志</h2>
+              <div className="flex gap-2">
+                <button className="btn sm ghost" onClick={openLogs}>
+                  刷新
+                </button>
+                <button
+                  className="btn icon-btn"
+                  title="关闭日志"
+                  aria-label="关闭日志"
+                  onClick={() => setLogs(null)}
+                >
+                  <Icon name="close" />
+                </button>
+              </div>
+            </header>
+            <ol className="log-list">
+              {logs.length === 0 && <li>暂无日志</li>}
+              {logs.map((line, index) => (
+                <li key={index}>{line}</li>
+              ))}
+            </ol>
+          </section>
         </div>
-      </footer>
+      )}
+
+      <TrimDialog snapshot={snapshot} run={run} />
+      <DialogHost />
+      <ToastHost />
     </main>
   );
 }
@@ -762,30 +778,6 @@ function voiceLabel(voices: Voice[], index: number) {
   return duplicate ? `${voice.name} (${voice.id.slice(0, 8)})` : voice.name;
 }
 
-function Card({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <section className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 shadow-[0_18px_50px_-30px_rgba(0,0,0,0.9)]">
-      <h2 className="mb-3 text-[13px] font-semibold uppercase tracking-wider text-[var(--muted)]">
-        {title}
-      </h2>
-      <div className="space-y-3">{children}</div>
-    </section>
-  );
-}
-
-function Row({ label, children }: { label?: string; children: React.ReactNode }) {
-  return (
-    <div>
-      {label && <div className="mb-1.5 text-[13px] text-[var(--text)]">{label}</div>}
-      {children}
-    </div>
-  );
-}
-
-function Hint({ children }: { children: React.ReactNode }) {
-  return <p className="mt-1 text-xs leading-relaxed text-[var(--muted)]">{children}</p>;
-}
-
 function Check({
   checked,
   onChange,
@@ -800,41 +792,5 @@ function Check({
       checked={checked}
       onChange={(event) => onChange(event.target.checked)}
     />
-  );
-}
-
-function Slider({
-  label,
-  value,
-  min,
-  max,
-  step,
-  display,
-  onChange,
-}: {
-  label: string;
-  value: number;
-  min: number;
-  max: number;
-  step: number;
-  display: string;
-  onChange: (value: number) => void;
-}) {
-  return (
-    <div>
-      <div className="mb-1.5 flex items-center justify-between text-[13px]">
-        <span>{label}</span>
-        <span className="tabular-nums text-[var(--muted)]">{display}</span>
-      </div>
-      <input
-        type="range"
-        className="range"
-        min={min}
-        max={max}
-        step={step}
-        value={value}
-        onChange={(event) => onChange(Number(event.target.value))}
-      />
-    </div>
   );
 }
