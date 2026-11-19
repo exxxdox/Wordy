@@ -13,8 +13,10 @@ const CANVAS_WIDTH = 634;
 const CANVAS_HEIGHT = 540;
 const CENTER_X = CANVAS_WIDTH / 2;
 const CENTER_Y = CANVAS_HEIGHT / 2;
-const RING_INNER = 80;
-const RING_OUTER = 232;
+// 与 wheel_paint 的 wedge(256.0, 62.0) 一致：点击范围必须等于实际绘制的扇区，
+// 否则扇区内沿（62–80）和淡出外沿（232–256）会出现点不中或误选。
+const RING_INNER = 62;
+const RING_OUTER = 256;
 
 export default function WheelCanvas({ labels, font, selected, onSelectSlot, className }: Props) {
   const canvas = useRef<HTMLCanvasElement>(null);
