@@ -15,8 +15,7 @@ impl App {
 
     pub(super) fn settings_action(&mut self, action: SettingsAction) -> io::Result<()> {
         use SettingsAction::*;
-        // A background backup owns config.toml and the credential store. Closed
-        // only clears transient UI state, so it must still reach close_editor.
+        // 后台备份独占配置与凭据；Closed 只清理临时 UI 状态。
         if self.backup_running && !matches!(action, SettingsAction::Closed) {
             return Ok(());
         }
@@ -52,7 +51,6 @@ impl App {
             }
             SetUiFont(value) => {
                 self.edit(|s| s.ui_font = value)?;
-                self.refresh_editor()?;
                 if let Some(trim) = &mut self.trim {
                     trim.window.refresh(self.config.settings())?;
                 }
@@ -127,18 +125,25 @@ impl App {
             })?,
             ExportBackup => self.backup(true)?,
             ImportBackup => self.backup(false)?,
-            EditWheels => {
-                self.refresh_editor()?;
-                self.editor.show();
-            }
             DownloadVbCable => self.open_url("https://vb-audio.com/Cable/")?,
             OpenLogs => self.show_logs()?,
             RequestAudioDevices => self.load_audio_settings()?,
             Feedback(message) => self.failure(message),
-            Closed => {
-                self.toasts.clear();
-                self.close_editor()?;
-            }
+            SelectWheel(index) => self.wheel_select(index)?,
+            AddWheel => self.wheel_add()?,
+            RemoveWheel(index) => self.wheel_remove(index)?,
+            SetWheelName(index, value) => self.wheel_set_name(index, &value)?,
+            SetWheelStyle(style) => self.wheel_set_style(&style)?,
+            RecordWheelHotkey(index) => self.wheel_record_hotkey(index)?,
+            SetSlotLabel(index, slot, value) => self.slot_set_label(index, slot, &value)?,
+            SetSlotText(index, slot, value) => self.slot_set_text(index, slot, &value)?,
+            SetSlotVolume(index, slot, value) => self.slot_set_volume(index, slot, value)?,
+            SetSlotMode(index, slot, text) => self.slot_set_mode(index, slot, text)?,
+            ClearSlot(index, slot) => self.slot_clear(index, slot)?,
+            ImportSlotAudio(index, slot) => self.slot_import(index, slot)?,
+            CropSlotAudio(index, slot) => self.slot_crop(index, slot)?,
+            PreviewSlot(index, slot) => self.slot_preview(index, slot)?,
+            Closed => self.toasts.clear(),
         }
         Ok(())
     }

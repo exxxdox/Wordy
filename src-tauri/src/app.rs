@@ -24,7 +24,7 @@ use crate::desktop::*;
 use crate::ffmpeg;
 use crate::file_log::FileLog;
 use crate::hotkey::{display_hotkey, parse_hotkey, windows::Registration};
-use crate::panels::{self, Editor, Trim};
+use crate::panels::{self, Trim};
 use crate::playback::{EngineSettings, Event, Playback};
 use crate::settings_action::SettingsAction;
 use crate::status_toast::{Toasts, Tone};
@@ -79,12 +79,19 @@ pub fn smoke_test() -> io::Result<()> {
     let settings = Settings::default();
     let _input = Overlay::new(instance, host.0)?;
     let _wheel = WheelWindow::new(instance).map_err(io::Error::other)?;
-    let editor = Editor::new(host.0, &settings)?;
     let trim = Trim::new(host.0, host.0, &settings, None, 1.0, 1.0)?;
-    if editor.panel.text(panels::GAIN) != "100" || trim.panel.text(panels::END) != "1.000" {
-        return Err(io::Error::other("轮盘编辑器或截取窗口未正确初始化"));
+    if trim.panel.text(panels::END) != "1.000" {
+        return Err(io::Error::other("截取窗口未正确初始化"));
     }
     Ok(())
+}
+
+#[derive(Clone, Copy)]
+struct EditorPreview {
+    id: u64,
+    text: bool,
+    wheel: usize,
+    slot: usize,
 }
 
 struct Host(HWND);
@@ -106,7 +113,6 @@ struct App {
     overlay: Overlay,
     wheel: WheelWindow,
     active_wheel: Option<usize>,
-    editor: Editor,
     handle: AppHandle,
     /// Tauri 窗口句柄：原生对话框的 owner、到托盘反馈的锚点。
     hwnd: isize,
@@ -125,7 +131,8 @@ struct App {
     recording: Option<Recording>,
     trim: Option<TrimSession>,
     previews: HashMap<u64, tempfile::NamedTempFile>,
-    editor_preview: Option<(u64, bool)>,
+    editor_preview: Option<EditorPreview>,
+    wheel_renderer: Option<crate::wheel_paint::WheelRenderer>,
     jobs: mpsc::Sender<Background>,
     results: mpsc::Receiver<Background>,
     pending_saves: usize,
@@ -175,7 +182,6 @@ impl App {
         let tray = Tray::install(host)?;
         let overlay = Overlay::new(instance, host)?;
         let wheel = WheelWindow::new(instance).map_err(io::Error::other)?;
-        let editor = Editor::new(host, config.settings())?;
         let (jobs, results) = mpsc::channel();
         let mut app = Self {
             host,
@@ -188,7 +194,6 @@ impl App {
             overlay,
             wheel,
             active_wheel: None,
-            editor,
             handle: ui.app,
             hwnd: ui.hwnd,
             wake: ui.wake as HANDLE,
@@ -207,6 +212,7 @@ impl App {
             trim: None,
             previews: HashMap::new(),
             editor_preview: None,
+            wheel_renderer: None,
             jobs,
             results,
             pending_saves: 0,
@@ -309,9 +315,6 @@ impl App {
                     _ => Ok(()),
                 },
                 OVERLAY_MESSAGE if message.hwnd == self.host => self.overlay_action(message.wParam),
-                panels::EDITOR_MESSAGE if message.hwnd == self.host => {
-                    self.editor_action(message.wParam, message.lParam as HWND)
-                }
                 panels::TRIM_MESSAGE if message.hwnd == self.host => {
                     self.trim_action(message.wParam, message.lParam as HWND)
                 }
@@ -320,8 +323,7 @@ impl App {
                     let handled = self
                         .trim
                         .as_ref()
-                        .is_some_and(|trim| trim.window.accepts(&message))
-                        || self.editor.panel.accepts(&message);
+                        .is_some_and(|trim| trim.window.accepts(&message));
                     if !handled {
                         unsafe {
                             TranslateMessage(&message);
@@ -400,8 +402,6 @@ impl App {
             self.toasts.clear();
             self.log_at("WARNING", format!("设置反馈显示失败：{error}"));
         }
-        let busy = self.pending_saves > 0 || self.trim.is_some() || self.editor_preview.is_some();
-        self.editor.busy(busy);
         if let Some(slot) = self.wheel.tick()
             && let Some(wheel) = self.active_wheel.take()
         {
@@ -421,10 +421,11 @@ impl App {
                     }
                     if self
                         .editor_preview
-                        .is_some_and(|(preview, _)| preview == id)
+                        .as_ref()
+                        .is_some_and(|preview| preview.id == id)
                     {
                         self.editor_preview = None;
-                        self.editor.panel.set_text(panels::PLAY, "试听");
+                        self.ui_dirty = true;
                     }
                     if let Err(error) = result {
                         self.report_error("播放失败", error);
@@ -477,6 +478,20 @@ impl App {
             listen: self.listen_state.clone(),
             fonts: self.font_families.clone(),
             busy: self.backup_running,
+            locked: self.pending_saves > 0
+                || self.trim.is_some()
+                || self
+                    .editor_preview
+                    .as_ref()
+                    .is_some_and(|preview| preview.text),
+            preview: self
+                .editor_preview
+                .as_ref()
+                .map(|preview| ui::PreviewState {
+                    wheel: preview.wheel,
+                    slot: preview.slot,
+                    text: preview.text,
+                }),
         }
     }
 
@@ -504,6 +519,9 @@ impl App {
                     }
                     let _ = reply.send(self.snapshot());
                 }
+                UiRequest::Preview { wheel, slot, reply } => {
+                    let _ = reply.send(self.render_wheel_preview(wheel, slot));
+                }
                 UiRequest::Action(action, reply) => {
                     let result = self.settings_action(action);
                     if let Err(error) = &result {
@@ -527,7 +545,6 @@ impl App {
 
     pub(super) fn show_settings(&mut self) -> io::Result<()> {
         self.overlay.hide(false);
-        self.refresh_editor()?;
         if let Some(window) = self.handle.get_webview_window("settings") {
             let _ = window.unminimize();
             let _ = window.show();
@@ -683,30 +700,5 @@ mod tests {
     #[test]
     fn native_dialogs_can_be_created_without_touching_live_config() {
         smoke_test().unwrap();
-    }
-
-    #[test]
-    fn audio_slot_editor_offers_import_preview_and_trim_without_recording() {
-        let instance = unsafe { GetModuleHandleW(ptr::null()) };
-        let host = Host(host_window(instance).unwrap());
-        let settings = Settings::default();
-        let editor = Editor::new(host.0, &settings).unwrap();
-        let mut captions = Vec::new();
-        unsafe {
-            let mut child = GetWindow(editor.panel.0, GW_CHILD);
-            while !child.is_null() {
-                captions.push(window_text(child));
-                child = GetWindow(child, GW_HWNDNEXT);
-            }
-        }
-        assert!(
-            captions
-                .iter()
-                .all(|caption| caption != "录制" && caption != "取消"),
-            "recording controls are redundant with the background recording hotkey"
-        );
-        for action in ["导入", "试听", "截取", "清空"] {
-            assert!(captions.iter().any(|caption| caption == action));
-        }
     }
 }

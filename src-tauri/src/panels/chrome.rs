@@ -14,7 +14,6 @@ pub(crate) struct ChromeState {
     trim: bool,
     precise: Cell<bool>,
     pub(super) previewing: Cell<bool>,
-    pub(super) text_mode: Cell<bool>,
     ui_font: RefCell<String>,
 }
 
@@ -32,13 +31,9 @@ impl Chrome {
             trim,
             precise: Cell::new(false),
             previewing: Cell::new(false),
-            text_mode: Cell::new(false),
             ui_font: RefCell::new(String::new()),
         });
-        if !trim {
-            install_editor_tooltips(panel);
-        }
-        if !trim || rolling {
+        if rolling {
             // Keep the numeric field as the existing app-message contract and display a slider instead.
             let edit = panel.child(GAIN);
             let mut rect = RECT::default();
@@ -398,26 +393,6 @@ unsafe extern "system" fn chrome_proc(
     unsafe {
         let state = &*(data as *const ChromeState);
         match msg {
-            WM_SIZE if !state.trim => {
-                layout_editor(hwnd, state);
-                DefSubclassProc(hwnd, msg, wp, lp)
-            }
-            WM_ERASEBKGND if !state.trim => 1,
-            WM_PAINT if !state.trim => {
-                // Limit the background paint to the dialog's uncovered client area.
-                let mut paint = PAINTSTRUCT::default();
-                let dc = BeginPaint(hwnd, &mut paint);
-                paint_embedded_backdrop(hwnd, dc);
-                rounded(
-                    dc,
-                    editor_card(hwnd, state.text_mode.get()),
-                    logical_px(hwnd, 24),
-                    Some(EDITOR_CARD),
-                    0x4b4848,
-                );
-                EndPaint(hwnd, &paint);
-                0
-            }
             WM_CTLCOLORDLG => state.surface as LRESULT,
             WM_CTLCOLORSTATIC | WM_CTLCOLORBTN | WM_CTLCOLOREDIT | WM_CTLCOLORLISTBOX => {
                 let dc = wp as HDC;
@@ -470,14 +445,6 @@ unsafe extern "system" fn chrome_proc(
             WM_HSCROLL if lp != 0 && lp as HWND == state.gain => {
                 let value = SendMessageW(state.gain, TBM_GETPOS, 0, 0) as i32;
                 set_gain_readout(hwnd, value);
-                if !state.trim && wp as u16 as u32 == TB_ENDTRACK {
-                    PostMessageW(
-                        hwnd,
-                        WM_COMMAND,
-                        usize::from(GAIN) | ((EN_KILLFOCUS as usize) << 16),
-                        state.gain as LPARAM,
-                    );
-                }
                 0
             }
             // The selector's border follows the dropped state; these are the
@@ -511,26 +478,6 @@ unsafe extern "system" fn chrome_proc(
                 PostMessageW(hwnd, WM_COMMAND, usize::from(STOP), 0);
                 1
             }
-            WM_COMMAND if !state.trim && wp as u16 == RENAME => {
-                let current = window_text(GetDlgItem(hwnd, i32::from(NAME)));
-                let ui_font = state.ui_font.borrow().clone();
-                if let Some(name) =
-                    crate::dialog::prompt(hwnd, "重命名轮盘", "轮盘名称", &current, false, &ui_font)
-                {
-                    let name = name.trim().to_owned();
-                    if name != current {
-                        // Reuse the NAME edit's commit path so the app owns persistence.
-                        set_control_text(hwnd, NAME, &name);
-                        PostMessageW(
-                            hwnd,
-                            WM_COMMAND,
-                            usize::from(NAME) | ((EN_KILLFOCUS as usize) << 16),
-                            0,
-                        );
-                    }
-                }
-                1
-            }
             _ => DefSubclassProc(hwnd, msg, wp, lp),
         }
     }
@@ -538,14 +485,12 @@ unsafe extern "system" fn chrome_proc(
 
 fn draw_button(item: &DRAWITEMSTRUCT, state: &ChromeState) {
     let id = item.CtlID as u16;
-    let selected = (matches!(id, AUDIO_MODE) && !state.text_mode.get())
-        || (matches!(id, TEXT_MODE) && state.text_mode.get());
     let disabled = item.itemState & ODS_DISABLED != 0;
     let pressing = item.itemState & ODS_SELECTED != 0;
     let focus = item.itemState & ODS_FOCUS != 0;
     let hovering = !disabled && hovering(item.hwndItem);
     let danger = matches!(id, REMOVE | CLEAR);
-    let (background, border) = if selected || state.trim && id == SAVE {
+    let (background, border) = if state.trim && id == SAVE {
         (
             if hovering { 0x7b4a26 } else { 0x673c1c },
             if focus { PRIMARY } else { ACCENT },
@@ -566,24 +511,7 @@ fn draw_button(item: &DRAWITEMSTRUCT, state: &ChromeState) {
     } else {
         (ELEVATED, if focus { ACCENT } else { SEPARATOR })
     };
-    let card_button =
-        !state.trim && matches!(id, AUDIO_MODE | TEXT_MODE | IMPORT | PLAY | CROP | CLEAR);
-    // Toolbar buttons sit on the glass, so their rounded corners must show the
-    // glass; a solid surface fill would leave dark corner squares.
-    let toolbar = !state.trim && matches!(id, HOTKEY | ADD | REMOVE | RENAME);
-    if toolbar {
-        paint_embedded_backdrop(item.hwndItem, item.hDC);
-    } else {
-        fill(
-            item.hDC,
-            item.rcItem,
-            if card_button {
-                EDITOR_CARD
-            } else {
-                PANEL_SURFACE
-            },
-        );
-    }
+    fill(item.hDC, item.rcItem, PANEL_SURFACE);
     rounded(item.hDC, item.rcItem, 10, Some(background), border);
     let label = window_text(item.hwndItem);
     let color = if disabled {
@@ -593,20 +521,6 @@ fn draw_button(item: &DRAWITEMSTRUCT, state: &ChromeState) {
     } else {
         PRIMARY
     };
-    if !state.trim {
-        let ui_font = state.ui_font.borrow().clone();
-        if draw_slot_glyph(
-            item.hwndItem,
-            item.hDC,
-            item.rcItem,
-            id,
-            &label,
-            color,
-            &ui_font,
-        ) {
-            return;
-        }
-    }
     let text = wide(&label);
     let mut area = item.rcItem;
     unsafe {
@@ -630,48 +544,5 @@ fn draw_button(item: &DRAWITEMSTRUCT, state: &ChromeState) {
         if !previous.is_null() {
             SelectObject(item.hDC, previous);
         }
-    }
-}
-
-fn install_editor_tooltips(panel: &Panel) {
-    let tip = unsafe {
-        CreateWindowExW(
-            WS_EX_TOPMOST,
-            TOOLTIPS_CLASSW,
-            ptr::null(),
-            WS_POPUP | TTS_ALWAYSTIP,
-            0,
-            0,
-            0,
-            0,
-            panel.0,
-            ptr::null_mut(),
-            GetModuleHandleW(ptr::null()),
-            ptr::null(),
-        )
-    };
-    if tip.is_null() {
-        return;
-    }
-    for (id, text) in [
-        (IMPORT, w!("导入音频")),
-        (PLAY, w!("试听 / 停止")),
-        (CROP, w!("截取片段")),
-        (CLEAR, w!("清空当前槽位")),
-        (AUDIO_MODE, w!("音频内容")),
-        (TEXT_MODE, w!("文字内容")),
-        (ADD, w!("新增轮盘")),
-        (REMOVE, w!("删除轮盘")),
-    ] {
-        let child = panel.child(id);
-        let mut tool = TTTOOLINFOW {
-            cbSize: mem::size_of::<TTTOOLINFOW>() as u32,
-            uFlags: TTF_IDISHWND | TTF_SUBCLASS,
-            hwnd: panel.0,
-            uId: child as usize,
-            lpszText: text.cast_mut(),
-            ..Default::default()
-        };
-        unsafe { SendMessageW(tip, TTM_ADDTOOLW, 0, ptr::from_mut(&mut tool) as isize) };
     }
 }

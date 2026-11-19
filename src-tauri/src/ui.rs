@@ -31,6 +31,13 @@ pub struct ListenStatus {
     pub output_available: bool,
 }
 
+#[derive(Clone, Copy, Debug, Serialize)]
+pub struct PreviewState {
+    pub wheel: usize,
+    pub slot: usize,
+    pub text: bool,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct Snapshot {
     pub settings: Settings,
@@ -41,12 +48,20 @@ pub struct Snapshot {
     pub listen: Option<ListenStatus>,
     pub fonts: Vec<String>,
     pub busy: bool,
+    /// 导入、保存或截取阻塞编辑控件。
+    pub locked: bool,
+    pub preview: Option<PreviewState>,
 }
 
 pub enum UiRequest {
     Snapshot(SyncSender<Snapshot>),
     Logs(SyncSender<Vec<String>>),
     Action(SettingsAction, SyncSender<Result<Snapshot, String>>),
+    Preview {
+        wheel: usize,
+        slot: usize,
+        reply: SyncSender<Result<String, String>>,
+    },
 }
 
 /// 网页侧持有的原生线程句柄。事件句柄跨线程仅用于 SetEvent，语义安全。
@@ -91,6 +106,14 @@ impl NativeHandle {
             .map_err(|_| "读取日志超时".to_string())
     }
 
+    pub fn preview(&self, wheel: usize, slot: usize) -> Result<String, String> {
+        let (reply, receiver) = mpsc::sync_channel(1);
+        self.send(UiRequest::Preview { wheel, slot, reply })?;
+        receiver
+            .recv_timeout(SNAPSHOT_TIMEOUT)
+            .map_err(|_| "生成轮盘预览超时".to_string())?
+    }
+
     pub fn action(&self, action: SettingsAction) -> Result<Snapshot, String> {
         let (reply, receiver) = mpsc::sync_channel(1);
         self.send(UiRequest::Action(action, reply))?;
@@ -107,36 +130,130 @@ pub fn channel() -> (Sender<UiRequest>, Receiver<UiRequest>) {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum UiAction {
-    SetProvider { provider: String },
-    SetBackend { backend: String },
-    SetVolume { value: f64 },
-    SetOpacity { value: f64 },
-    SetPlaceholder { value: String },
-    SetUiFont { value: String },
-    SetFixedCenter { value: bool },
-    SetLogLevel { value: String },
-    SetHoldKeyEnabled { value: bool },
+    SetProvider {
+        provider: String,
+    },
+    SetBackend {
+        backend: String,
+    },
+    SetVolume {
+        value: f64,
+    },
+    SetOpacity {
+        value: f64,
+    },
+    SetPlaceholder {
+        value: String,
+    },
+    SetUiFont {
+        value: String,
+    },
+    SetFixedCenter {
+        value: bool,
+    },
+    SetLogLevel {
+        value: String,
+    },
+    SetHoldKeyEnabled {
+        value: bool,
+    },
     RecordHoldKey,
     RecordHotkey,
     RecordRollingHotkey,
-    SetRollingSeconds { value: f64 },
-    SetOutputDevice { device: Option<AudioIdentity> },
-    SetMic { name: Option<String> },
-    SetMainPlayback { value: bool },
-    SetSidetone { value: bool },
-    SetListen { value: bool },
-    SaveKey { provider: String, text: String },
-    DeleteKey { provider: String },
+    SetRollingSeconds {
+        value: f64,
+    },
+    SetOutputDevice {
+        device: Option<AudioIdentity>,
+    },
+    SetMic {
+        name: Option<String>,
+    },
+    SetMainPlayback {
+        value: bool,
+    },
+    SetSidetone {
+        value: bool,
+    },
+    SetListen {
+        value: bool,
+    },
+    SaveKey {
+        provider: String,
+        text: String,
+    },
+    DeleteKey {
+        provider: String,
+    },
     RefreshVoices,
-    SelectVoice { provider: String, voice: Voice },
-    SaveVolcengineVoice { voice: Voice },
-    DeleteVolcengineVoice { id: String },
+    SelectVoice {
+        provider: String,
+        voice: Voice,
+    },
+    SaveVolcengineVoice {
+        voice: Voice,
+    },
+    DeleteVolcengineVoice {
+        id: String,
+    },
     ExportBackup,
     ImportBackup,
-    EditWheels,
     DownloadVbCable,
     OpenLogs,
     RequestAudioDevices,
+    SelectWheel {
+        index: usize,
+    },
+    AddWheel,
+    RemoveWheel {
+        index: usize,
+    },
+    SetWheelName {
+        index: usize,
+        name: String,
+    },
+    SetWheelStyle {
+        style: String,
+    },
+    RecordWheelHotkey {
+        index: usize,
+    },
+    SetSlotLabel {
+        index: usize,
+        slot: usize,
+        value: String,
+    },
+    SetSlotText {
+        index: usize,
+        slot: usize,
+        value: String,
+    },
+    SetSlotVolume {
+        index: usize,
+        slot: usize,
+        value: f64,
+    },
+    SetSlotMode {
+        index: usize,
+        slot: usize,
+        text: bool,
+    },
+    ClearSlot {
+        index: usize,
+        slot: usize,
+    },
+    ImportSlotAudio {
+        index: usize,
+        slot: usize,
+    },
+    CropSlotAudio {
+        index: usize,
+        slot: usize,
+    },
+    PreviewSlot {
+        index: usize,
+        slot: usize,
+    },
     Closed,
 }
 
@@ -175,10 +292,31 @@ impl UiAction {
             Self::DeleteVolcengineVoice { id } => SettingsAction::DeleteVolcengineVoice(id),
             Self::ExportBackup => SettingsAction::ExportBackup,
             Self::ImportBackup => SettingsAction::ImportBackup,
-            Self::EditWheels => SettingsAction::EditWheels,
             Self::DownloadVbCable => SettingsAction::DownloadVbCable,
             Self::OpenLogs => SettingsAction::OpenLogs,
             Self::RequestAudioDevices => SettingsAction::RequestAudioDevices,
+            Self::SelectWheel { index } => SettingsAction::SelectWheel(index),
+            Self::AddWheel => SettingsAction::AddWheel,
+            Self::RemoveWheel { index } => SettingsAction::RemoveWheel(index),
+            Self::SetWheelName { index, name } => SettingsAction::SetWheelName(index, name),
+            Self::SetWheelStyle { style } => SettingsAction::SetWheelStyle(style),
+            Self::RecordWheelHotkey { index } => SettingsAction::RecordWheelHotkey(index),
+            Self::SetSlotLabel { index, slot, value } => {
+                SettingsAction::SetSlotLabel(index, slot, value)
+            }
+            Self::SetSlotText { index, slot, value } => {
+                SettingsAction::SetSlotText(index, slot, value)
+            }
+            Self::SetSlotVolume { index, slot, value } => {
+                SettingsAction::SetSlotVolume(index, slot, value)
+            }
+            Self::SetSlotMode { index, slot, text } => {
+                SettingsAction::SetSlotMode(index, slot, text)
+            }
+            Self::ClearSlot { index, slot } => SettingsAction::ClearSlot(index, slot),
+            Self::ImportSlotAudio { index, slot } => SettingsAction::ImportSlotAudio(index, slot),
+            Self::CropSlotAudio { index, slot } => SettingsAction::CropSlotAudio(index, slot),
+            Self::PreviewSlot { index, slot } => SettingsAction::PreviewSlot(index, slot),
             Self::Closed => SettingsAction::Closed,
         })
     }
@@ -254,4 +392,13 @@ mod tests {
 #[tauri::command]
 pub fn wordy_logs(state: tauri::State<'_, NativeHandle>) -> Result<Vec<String>, String> {
     state.logs()
+}
+
+#[tauri::command]
+pub fn wordy_wheel_preview(
+    wheel: usize,
+    slot: usize,
+    state: tauri::State<'_, NativeHandle>,
+) -> Result<String, String> {
+    state.preview(wheel, slot)
 }

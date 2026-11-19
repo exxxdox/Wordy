@@ -1,225 +1,312 @@
 use super::*;
+use crate::config::{CHAT_WHEEL_STYLES, SLOT_COUNT, WHEEL_NAME_MAX_LENGTH, Wheel};
+use crate::wheel::WheelStyle;
+use crate::wheel_paint::{WheelFrame, WheelRenderer};
+
+const SLOT_LABEL_LIMIT: usize = 40;
+const SLOT_TEXT_LIMIT: usize = 200;
 
 impl App {
-    pub(super) fn close_editor(&mut self) -> io::Result<()> {
-        if let Some((_, text)) = self.editor_preview.take() {
-            if text {
+    fn wheel_at(&self, index: usize) -> io::Result<Wheel> {
+        self.config
+            .settings()
+            .wheel(index)
+            .ok_or_else(|| io::Error::other("轮盘不存在"))
+    }
+
+    pub(super) fn wheel_select(&mut self, index: usize) -> io::Result<()> {
+        self.wheel_at(index)?;
+        self.config
+            .update(|settings| settings.chat_wheel_last_index = index)?;
+        self.ui_dirty = true;
+        Ok(())
+    }
+
+    pub(super) fn wheel_add(&mut self) -> io::Result<()> {
+        append_unbound_wheel(&mut self.config, &mut self.hotkeys)?;
+        self.ui_dirty = true;
+        Ok(())
+    }
+
+    pub(super) fn wheel_remove(&mut self, index: usize) -> io::Result<()> {
+        let mut next = self.config.settings().clone();
+        if next.wheel_count() == 1 {
+            return Err(io::Error::other("至少保留一个轮盘"));
+        }
+        if !dialog::confirm(
+            self.ui_hwnd(),
+            "删除轮盘",
+            "删除此轮盘及其槽位？",
+            &self.config.settings().ui_font,
+        ) {
+            return Ok(());
+        }
+        let removed = next
+            .wheel(index)
+            .ok_or_else(|| io::Error::other("轮盘不存在"))?;
+        next.discard_wheel(index);
+        next.chat_wheel_last_index = index.min(next.wheel_count() - 1);
+        self.hotkeys.update(&mut self.config, next)?;
+        for path in removed.slots.iter().filter(|path| !path.is_empty()) {
+            let _ = audio::remove_unreferenced_clip(&self.config, path);
+        }
+        self.ui_dirty = true;
+        Ok(())
+    }
+
+    pub(super) fn wheel_set_name(&mut self, index: usize, value: &str) -> io::Result<()> {
+        let name: String = value.trim().chars().take(WHEEL_NAME_MAX_LENGTH).collect();
+        self.config
+            .update_wheel(index, |wheel| wheel.name.clone_from(&name))?;
+        self.ui_dirty = true;
+        Ok(())
+    }
+
+    pub(super) fn wheel_set_style(&mut self, style: &str) -> io::Result<()> {
+        if !CHAT_WHEEL_STYLES.contains(&style) {
+            return Err(io::Error::other("未知轮盘样式"));
+        }
+        self.config
+            .update(|settings| settings.chat_wheel_style = style.into())?;
+        self.ui_dirty = true;
+        Ok(())
+    }
+
+    pub(super) fn wheel_record_hotkey(&mut self, index: usize) -> io::Result<()> {
+        let owner = self.ui_hwnd();
+        let Some(hotkey) = capture_binding(
+            &mut self.hotkeys,
+            owner,
+            false,
+            &self.config.settings().ui_font,
+        )?
+        else {
+            return Ok(());
+        };
+        let mut next = self.config.settings().clone();
+        let mut wheel = next
+            .wheel(index)
+            .ok_or_else(|| io::Error::other("轮盘不存在"))?;
+        wheel.hotkey = hotkey;
+        next.assign_wheel(index, wheel);
+        self.hotkeys.update(&mut self.config, next)?;
+        self.ui_dirty = true;
+        Ok(())
+    }
+
+    pub(super) fn slot_set_label(
+        &mut self,
+        index: usize,
+        slot: usize,
+        value: &str,
+    ) -> io::Result<()> {
+        let label: String = value.trim().chars().take(SLOT_LABEL_LIMIT).collect();
+        self.config
+            .update_wheel(index, |wheel| wheel.labels[slot].clone_from(&label))?;
+        self.ui_dirty = true;
+        Ok(())
+    }
+
+    pub(super) fn slot_set_text(
+        &mut self,
+        index: usize,
+        slot: usize,
+        value: &str,
+    ) -> io::Result<()> {
+        let current = self.wheel_at(index)?;
+        // 音频槽与文字互斥；音频槽的文字输入不生效。
+        if !current.slots[slot].is_empty() {
+            return Ok(());
+        }
+        let text: String = value.trim().chars().take(SLOT_TEXT_LIMIT).collect();
+        self.config
+            .update_wheel(index, |wheel| wheel.texts[slot].clone_from(&text))?;
+        self.ui_dirty = true;
+        Ok(())
+    }
+
+    /// 网页滑块传百分比（0–300），配置保存为 0.0–3.0 的增益。
+    pub(super) fn slot_set_volume(
+        &mut self,
+        index: usize,
+        slot: usize,
+        percent: f64,
+    ) -> io::Result<()> {
+        if !percent.is_finite() {
+            return Err(io::Error::other("请输入有效音量"));
+        }
+        let gain = percent.clamp(0.0, 300.0) / 100.0;
+        self.config.update_wheel(index, |wheel| {
+            if !wheel.slots[slot].is_empty() {
+                wheel.volumes[slot] = gain;
+            }
+        })?;
+        self.ui_dirty = true;
+        Ok(())
+    }
+
+    pub(super) fn slot_set_mode(
+        &mut self,
+        index: usize,
+        slot: usize,
+        to_text: bool,
+    ) -> io::Result<()> {
+        let current = self.wheel_at(index)?;
+        if to_text
+            && !current.slots[slot].is_empty()
+            && !dialog::confirm(
+                self.ui_hwnd(),
+                "切换为文字",
+                "切换为文字会删除该槽音频，继续？",
+                &self.config.settings().ui_font,
+            )
+        {
+            return Ok(());
+        }
+        self.stop_editor_preview();
+        if (to_text && !current.slots[slot].is_empty())
+            || (!to_text && !current.texts[slot].is_empty())
+        {
+            self.config.update_wheel(index, |wheel| {
+                wheel.slots[slot].clear();
+                wheel.texts[slot].clear();
+            })?;
+            if !current.slots[slot].is_empty() {
+                let _ = audio::remove_unreferenced_clip(&self.config, &current.slots[slot]);
+            }
+            self.ui_dirty = true;
+        }
+        Ok(())
+    }
+
+    pub(super) fn slot_clear(&mut self, index: usize, slot: usize) -> io::Result<()> {
+        self.stop_editor_preview();
+        let old = self.wheel_at(index)?.slots[slot].clone();
+        self.config.update_wheel(index, |wheel| {
+            wheel.slots[slot].clear();
+            wheel.labels[slot].clear();
+            wheel.texts[slot].clear();
+        })?;
+        if !old.is_empty() {
+            let _ = audio::remove_unreferenced_clip(&self.config, &old);
+        }
+        self.ui_dirty = true;
+        Ok(())
+    }
+
+    pub(super) fn slot_import(&mut self, index: usize, slot: usize) -> io::Result<()> {
+        let filter = "音频文件\0*.wav;*.mp3;*.ogg;*.flac;*.m4a;*.aac;*.wma;*.aiff;*.aif;*.opus\0";
+        let directory = std::env::current_dir()?;
+        let Some(path) = dialog::file(self.ui_hwnd(), "导入音频", filter, &directory, None, false)
+        else {
+            return Ok(());
+        };
+        self.import_slot_clip(index, slot, path)
+    }
+
+    pub(super) fn slot_crop(&mut self, index: usize, slot: usize) -> io::Result<()> {
+        let item = self.wheel_at(index)?;
+        if item.slots[slot].is_empty() {
+            return Ok(());
+        }
+        let path = audio::resolve_clip(self.config.path(), &item.slots[slot])?;
+        self.prepare_trim(index, slot, path)
+    }
+
+    pub(super) fn slot_preview(&mut self, index: usize, slot: usize) -> io::Result<()> {
+        if self.editor_preview.is_some() {
+            self.stop_editor_preview();
+            return Ok(());
+        }
+        if self.trim.is_some() {
+            return Ok(());
+        }
+        let item = self.wheel_at(index)?;
+        if item.texts[slot].is_empty() && item.slots[slot].is_empty() {
+            return Ok(());
+        }
+        let text = !item.texts[slot].is_empty();
+        let id = self.next_job + 1;
+        self.editor_preview = Some(EditorPreview {
+            id,
+            text,
+            wheel: index,
+            slot,
+        });
+        if let Err(error) = self.play_slot(index, slot) {
+            self.editor_preview = None;
+            return Err(error);
+        }
+        self.ui_dirty = true;
+        Ok(())
+    }
+
+    pub(super) fn stop_editor_preview(&mut self) {
+        if let Some(preview) = self.editor_preview.take() {
+            if preview.text {
                 self.playback.stop_speech();
             } else {
                 self.playback.stop_clip();
             }
+            self.ui_dirty = true;
         }
-        self.editor.panel.set_text(panels::PLAY, "试听");
-        self.editor.hide();
-        Ok(())
     }
 
-    pub(super) fn refresh_editor(&mut self) -> io::Result<()> {
-        self.editor.refresh(self.config.settings())
-    }
-
-    pub(super) fn editor_action(&mut self, command: usize, hwnd: HWND) -> io::Result<()> {
-        use panels::*;
-        const CANCEL: u16 = IDCANCEL as u16;
-        if self.backup_running {
-            return Ok(());
+    /// 网页预览：用与运行时轮盘相同的绘制器生成 PNG（data URI）。
+    pub(super) fn render_wheel_preview(
+        &mut self,
+        index: usize,
+        slot: usize,
+    ) -> Result<String, String> {
+        use base64::Engine;
+        let settings = self.config.settings();
+        let wheel = settings
+            .wheel(index)
+            .ok_or_else(|| "轮盘不存在".to_string())?;
+        let labels = panels::wheel_labels(&wheel);
+        let mut frame =
+            WheelFrame::new(&labels, WheelStyle::from_config(&settings.chat_wheel_style));
+        frame.font = crate::config::ui_font_family(&settings.ui_font);
+        frame.editing = true;
+        let slot = slot.min(SLOT_COUNT - 1);
+        frame.selected = Some(slot);
+        let mut highlights = [0.0; SLOT_COUNT];
+        highlights[slot] = 1.0;
+        frame.highlights = Some(highlights);
+        if self.wheel_renderer.is_none() {
+            self.wheel_renderer = Some(WheelRenderer::new().map_err(|error| error.to_string())?);
         }
-        let editor = &mut self.editor;
-        if editor.panel.0 != hwnd {
-            return Ok(());
+        let renderer = self.wheel_renderer.as_ref().expect("renderer initialized");
+        let bitmap = renderer
+            .render(frame, 420.0 / crate::wheel::CANVAS_WIDTH)
+            .map_err(|error| error.to_string())?;
+        let mut rgba = Vec::with_capacity(bitmap.pixels.len());
+        for pixel in bitmap.pixels.as_chunks::<4>().0 {
+            let [b, g, r, a] = *pixel;
+            if a == 0 {
+                rgba.extend_from_slice(&[0, 0, 0, 0]);
+            } else {
+                let scale = 255.0 / f32::from(a);
+                rgba.extend_from_slice(&[
+                    (f32::from(r) * scale).min(255.0) as u8,
+                    (f32::from(g) * scale).min(255.0) as u8,
+                    (f32::from(b) * scale).min(255.0) as u8,
+                    a,
+                ]);
+            }
         }
-        let (action, notification) = (command as u16, (command >> 16) as u32);
-        if action == CANCEL && notification == 0 {
-            return self.close_editor();
-        }
-        let locked = self.pending_saves > 0
-            || self.trim.is_some()
-            || self.editor_preview.is_some_and(|(_, is_text)| is_text);
-        if locked && action != PLAY {
-            return Ok(());
-        }
-        let (wheel, slot) = (editor.wheel, editor.slot);
-        match action {
-            PICK => {
-                if let Some(slot) = editor.take_slot() {
-                    editor.slot = slot;
-                    editor.empty_text_mode = false;
-                }
-            }
-            WHEEL if notification == CBN_SELCHANGE => {
-                editor.wheel = selected(&editor.panel, WHEEL);
-                editor.empty_text_mode = false;
-                let index = editor.wheel;
-                self.config
-                    .update(|settings| settings.chat_wheel_last_index = index)?;
-            }
-            STYLE if notification == CBN_SELCHANGE => {
-                let style = crate::config::CHAT_WHEEL_STYLES[selected(&editor.panel, STYLE)];
-                self.config.update(|s| s.chat_wheel_style = style.into())?;
-            }
-            ADD if notification == 0 => {
-                // Add the wheel immediately; its shortcut can be recorded later
-                // with the "录制快捷键" button.
-                editor.wheel = append_unbound_wheel(&mut self.config, &mut self.hotkeys)?;
-                editor.slot = 0;
-            }
-            REMOVE if notification == 0 => {
-                let mut next = self.config.settings().clone();
-                if next.wheel_count() == 1 {
-                    return Err(io::Error::other("至少保留一个轮盘"));
-                }
-                if !dialog::confirm(
-                    hwnd,
-                    "删除轮盘",
-                    "删除此轮盘及其槽位？",
-                    &self.config.settings().ui_font,
-                ) {
-                    return Ok(());
-                }
-                let removed = next.wheel(wheel).unwrap();
-                next.discard_wheel(wheel);
-                next.chat_wheel_last_index = wheel.min(next.wheel_count() - 1);
-                self.hotkeys.update(&mut self.config, next)?;
-                for path in removed.slots.iter().filter(|path| !path.is_empty()) {
-                    let _ = audio::remove_unreferenced_clip(&self.config, path);
-                }
-            }
-            HOTKEY if notification == 0 => {
-                let Some(hotkey) = capture_binding(
-                    &mut self.hotkeys,
-                    hwnd,
-                    false,
-                    &self.config.settings().ui_font,
-                )?
-                else {
-                    return Ok(());
-                };
-                let mut next = self.config.settings().clone();
-                let mut edited = next.wheel(wheel).unwrap();
-                edited.hotkey = hotkey;
-                next.assign_wheel(wheel, edited);
-                self.hotkeys.update(&mut self.config, next)?;
-            }
-            NAME | LABEL | TEXT | GAIN if notification == EN_KILLFOCUS => {
-                let value = editor.panel.text(action).trim().to_owned();
-                let current = self.config.settings().wheel(wheel).unwrap();
-                // Each field commits independently, so a focus change cannot overwrite another slot.
-                match action {
-                    NAME if value != current.name => self
-                        .config
-                        .update_wheel(wheel, |wheel| wheel.name = value)?,
-                    LABEL if value != current.labels[slot] => self
-                        .config
-                        .update_wheel(wheel, |wheel| wheel.labels[slot] = value)?,
-                    TEXT if current.slots[slot].is_empty() && value != current.texts[slot] => {
-                        editor.empty_text_mode = true;
-                        self.config
-                            .update_wheel(wheel, |wheel| wheel.texts[slot] = value)?;
-                    }
-                    GAIN if !current.slots[slot].is_empty() => {
-                        let gain = gain(&value)?;
-                        if gain != current.volumes[slot] {
-                            self.config
-                                .update_wheel(wheel, |wheel| wheel.volumes[slot] = gain)?;
-                        }
-                        // Dragging already updated the controls; saving must not rebuild the editor.
-                        return Ok(());
-                    }
-                    _ => return Ok(()),
-                }
-                if action == NAME {
-                    // The selector lists wheel names, so it has to follow the rename.
-                    self.refresh_editor()?;
-                }
-            }
-            AUDIO_MODE | TEXT_MODE if notification == 0 => {
-                let to_text = action == TEXT_MODE;
-                let current = self.config.settings().wheel(wheel).unwrap();
-                if to_text
-                    && !current.slots[slot].is_empty()
-                    && !dialog::confirm(
-                        hwnd,
-                        "切换为文字",
-                        "切换为文字会删除该槽音频，继续？",
-                        &self.config.settings().ui_font,
-                    )
-                {
-                    return Ok(());
-                }
-                editor.empty_text_mode = to_text;
-                if (to_text && !current.slots[slot].is_empty())
-                    || (!to_text && !current.texts[slot].is_empty())
-                {
-                    self.playback.stop_clip();
-                    self.config.update_wheel(wheel, |wheel| {
-                        wheel.slots[slot].clear();
-                        wheel.texts[slot].clear();
-                    })?;
-                    if !current.slots[slot].is_empty() {
-                        let _ = audio::remove_unreferenced_clip(&self.config, &current.slots[slot]);
-                    }
-                }
-            }
-            CLEAR if notification == 0 => {
-                self.playback.stop_clip();
-                let old = self.config.settings().wheel(wheel).unwrap().slots[slot].clone();
-                self.config.update_wheel(wheel, |wheel| {
-                    wheel.slots[slot].clear();
-                    wheel.labels[slot].clear();
-                    wheel.texts[slot].clear();
-                })?;
-                if !old.is_empty() {
-                    let _ = audio::remove_unreferenced_clip(&self.config, &old);
-                }
-            }
-            IMPORT if notification == 0 => {
-                let filter =
-                    "音频文件\0*.wav;*.mp3;*.ogg;*.flac;*.m4a;*.aac;*.wma;*.aiff;*.aif;*.opus\0";
-                let directory = std::env::current_dir()?;
-                let Some(path) = dialog::file(hwnd, "导入音频", filter, &directory, None, false)
-                else {
-                    return Ok(());
-                };
-                return self.import_slot_clip(wheel, slot, path);
-            }
-            CROP if notification == 0 => {
-                let item = self.config.settings().wheel(wheel).unwrap();
-                if item.slots[slot].is_empty() {
-                    return Ok(());
-                }
-                let path = audio::resolve_clip(self.config.path(), &item.slots[slot])?;
-                return self.prepare_trim(wheel, slot, path);
-            }
-            PLAY if notification == 0 => {
-                if self.trim.is_some() {
-                    return Ok(());
-                }
-                if let Some((_, text)) = self.editor_preview {
-                    if text {
-                        self.playback.stop_speech();
-                    } else {
-                        self.playback.stop_clip();
-                    }
-                    return Ok(());
-                }
-                let item = self.config.settings().wheel(wheel).unwrap();
-                if item.texts[slot].is_empty() && item.slots[slot].is_empty() {
-                    return Ok(());
-                }
-                let text = !item.texts[slot].is_empty();
-                let preview_id = self.next_job + 1;
-                editor.panel.set_text(PLAY, "停止");
-                self.editor_preview = Some((preview_id, text));
-                let result = self.play_slot(wheel, slot);
-                if result.is_err() && self.editor_preview.is_some_and(|(id, _)| id == preview_id) {
-                    // Nothing was queued, so no Finished event will unlock the editor.
-                    self.editor_preview = None;
-                    self.editor.panel.set_text(PLAY, "试听");
-                }
-                return result;
-            }
-            _ => return Ok(()),
-        }
-        self.refresh_editor()
+        let mut encoded = Vec::new();
+        let mut encoder = png::Encoder::new(&mut encoded, bitmap.width, bitmap.height);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut writer = encoder.write_header().map_err(|error| error.to_string())?;
+        writer
+            .write_image_data(&rgba)
+            .map_err(|error| error.to_string())?;
+        writer.finish().map_err(|error| error.to_string())?;
+        Ok(format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(encoded)
+        ))
     }
 }

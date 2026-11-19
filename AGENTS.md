@@ -13,7 +13,7 @@ Rust（edition 2024）+ Tauri 2 桌面应用。设置界面是 React（Vite + Ta
 | `src-tauri/src/desktop.rs` | Win32 宿主窗口、托盘、通知和共用控件辅助函数 |
 | `src-tauri/src/desktop/overlay.rs` | 悬浮输入框、输入事件、背景和按钮绘制 |
 | `src-tauri/src/settings_backdrop.rs` | 原生面板共用的玻璃背景及绘制缓存 |
-| `src-tauri/src/panels.rs` / `src-tauri/src/panels/` | 共用面板控件、轮盘编辑器、截取对话框和轮盘预览 |
+| `src-tauri/src/panels.rs` / `src-tauri/src/panels/` | 共用面板控件、截取对话框和轮盘预览 |
 | `src-tauri/src/wheel.rs` / `wheel_paint.rs` / `wheel_window.rs` | 轮盘状态、四种样式绘制、运行时窗口 |
 | `src-tauri/src/audio.rs` + `src-tauri/src/audio/` | WASAPI 设备枚举、播放/返听、VB-CABLE 路由、Windows 侦听、回环录制、裁剪/波形、托管音频 |
 | `src-tauri/src/tts.rs` + `src-tauri/src/tts/realtime.rs` | TTS 引擎、Cartesia HTTP/WebSocket、Volcengine SSE、音色标签 |
@@ -30,7 +30,7 @@ Rust（edition 2024）+ Tauri 2 桌面应用。设置界面是 React（Vite + Ta
 - 关闭设置窗口只隐藏，托盘应用继续运行；`wordy_hide` 与窗口关闭事件都只隐藏。
 - 原生对话框（录制快捷键、确认、备份密码）的 owner 使用 WebView 窗口句柄。
 - 反馈提示仍由原生 `status_toast` 绘制在设置窗口底部；设置页隐藏时错误改走托盘通知。
-- 轮盘编辑器改为独立原生窗口，由「编辑聊天轮盘」动作打开；关闭只隐藏。
+- 轮盘编辑器由 React「轮盘」页签提供；预览通过 `wordy_wheel_preview` 返回与运行时轮盘同款绘制的 PNG，截取窗口仍为原生。
 - 日志面板由 React 渲染：`wordy_logs` 取历史，`wordy://log` 逐行推送，托盘动作会打开设置窗口并发出 `wordy://open-logs`。
 - 设置页文案保持中文，不写内部实现说明。
 

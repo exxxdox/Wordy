@@ -115,7 +115,7 @@ cargo add <crate>
 | `src-tauri/src/desktop.rs` | 宿主窗口、托盘、Windows 通知 |
 | `src-tauri/src/desktop/overlay.rs` | 悬浮输入框和绘制 |
 | `src-tauri/src/fonts.rs` | 系统字体枚举与回退 |
-| `src-tauri/src/panels.rs` / `src-tauri/src/panels/` | 共用面板控件、轮盘编辑器、截取对话框和轮盘预览 |
+| `src-tauri/src/panels.rs` / `src-tauri/src/panels/` | 共用面板控件、截取对话框和轮盘预览 |
 | `src-tauri/src/wheel*.rs` | 轮盘运行窗口、四种样式绘制与设置预览 |
 | `src-tauri/src/playback.rs` / `ffmpeg.rs` | 播放调度、FFmpeg 查找与 WinGet 安装 |
 | `src-tauri/src/config.rs` / `backup*.rs` / `credentials.rs` | 配置持久化、加密备份、凭据库 |

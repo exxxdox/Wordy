@@ -427,7 +427,6 @@ impl App {
                         .update(|settings| settings.rolling_buffer_target = [wheel, slot])?;
                 }
                 if !exiting {
-                    self.refresh_editor()?;
                     // In-settings operations report where the user is looking.
                     if self.settings_visible() {
                         self.status(format!("已保存到轮盘 {} · 音频 {}", wheel + 1, slot + 1));

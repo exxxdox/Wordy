@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import WheelEditor from "./WheelEditor";
 
 type Provider = "Cartesia" | "Volcengine";
 
@@ -12,7 +13,7 @@ type AudioIdentity = {
   id?: string | null;
 };
 
-type Wheel = {
+export type Wheel = {
   name: string;
   hotkey: string;
   slots: string[];
@@ -21,10 +22,16 @@ type Wheel = {
   volumes: number[];
 };
 
-type Settings = {
+export type Settings = {
   hotkey: string;
   chat_wheel_hotkey: string;
   chat_wheel_name: string;
+  chat_wheel_style: string;
+  chat_wheel_slots: string[];
+  chat_wheel_labels: string[];
+  chat_wheel_texts: string[];
+  chat_wheel_volumes: number[];
+  chat_wheel_last_index: number;
   rolling_buffer_hotkey: string;
   rolling_buffer_seconds: number;
   hold_key_enabled: boolean;
@@ -56,7 +63,7 @@ type Settings = {
 
 type ListenStatus = { enabled: boolean; output: string | null; output_available: boolean };
 
-type Snapshot = {
+export type Snapshot = {
   settings: Settings;
   outputs: AudioIdentity[];
   microphones: string[];
@@ -65,6 +72,8 @@ type Snapshot = {
   listen: ListenStatus | null;
   fonts: string[];
   busy: boolean;
+  locked: boolean;
+  preview: { wheel: number; slot: number; text: boolean } | null;
 };
 
 const LOG_LEVELS = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"];
@@ -83,7 +92,7 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "rolling", label: "后台录制" },
 ];
 
-const displayHotkey = (value: string) =>
+export const displayHotkey = (value: string) =>
   value
     .split("+")
     .map((part) =>
@@ -556,17 +565,7 @@ export default function App() {
             </>
           )}
 
-          {tab === "wheels" && (
-            <Card title="聊天轮盘">
-              <Hint>
-                共 {settings.additional_chat_wheels.length + 1}{" "}
-                个轮盘。轮盘的快捷键、槽位和样式在编辑器里设置。
-              </Hint>
-              <button className="btn mt-3" onClick={() => run({ type: "edit_wheels" })}>
-                编辑聊天轮盘
-              </button>
-            </Card>
-          )}
+          {tab === "wheels" && <WheelEditor snapshot={snapshot} run={run} />}
 
           {tab === "rolling" && (
             <>

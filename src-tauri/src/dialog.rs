@@ -866,16 +866,6 @@ impl Template {
         )
     }
 
-    pub fn embedded(width: u16, height: u16) -> Self {
-        Self::with_style(
-            "",
-            width,
-            height,
-            WS_CHILD | WS_CLIPCHILDREN | DS_CONTROL as u32 | DS_SETFONT as u32,
-            WS_EX_CONTROLPARENT,
-        )
-    }
-
     fn with_style(title: &str, width: u16, height: u16, style: u32, ex_style: u32) -> Self {
         let mut template = Self {
             words: Vec::with_capacity(128),
