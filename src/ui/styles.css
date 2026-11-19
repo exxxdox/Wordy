@@ -475,6 +475,13 @@ input[type="number"],
     color: var(--text);
   }
 
+  /* 删除音色等破坏性图标按钮，悬停时才显示危险色。 */
+  .btn.icon-btn.danger:hover:not(:disabled) {
+    border-color: rgba(226, 119, 107, 0.45);
+    background: rgba(226, 119, 107, 0.12);
+    color: var(--danger);
+  }
+
   .btn.ghost {
     border-color: transparent;
     background: transparent;

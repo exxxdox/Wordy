@@ -105,8 +105,8 @@ export default function App() {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [tab, setTab] = useState<Tab>("local");
   const [keyInput, setKeyInput] = useState("");
-  const [voiceId, setVoiceId] = useState("");
-  const [voiceName, setVoiceName] = useState("");
+  // 新增音色弹窗的草稿；为 null 时关闭。
+  const [voiceDraft, setVoiceDraft] = useState<{ id: string; name: string } | null>(null);
   const [placeholder, setPlaceholder] = useState("");
   const [logs, setLogs] = useState<string[] | null>(null);
   const pending = useRef<Record<string, number>>({});
@@ -558,8 +558,20 @@ export default function App() {
                         </option>
                       ))}
                     </select>
-                    {/* Volcengine 音色来自本地列表，没有可刷新的远端数据。 */}
-                    {provider === "Cartesia" && (
+                    {provider === "Volcengine" ? (
+                      // 删除只作用于下拉框中当前选中的音色；未选中时禁用。
+                      <button
+                        className="btn icon-btn danger"
+                        title="删除当前音色"
+                        aria-label="删除当前音色"
+                        disabled={!selectedVoice}
+                        onClick={() =>
+                          run({ type: "delete_volcengine_voice", id: selectedVoice ?? "" })
+                        }
+                      >
+                        <Icon name="close" size={18} />
+                      </button>
+                    ) : (
                       <button
                         className="btn icon-btn"
                         title="刷新音色"
@@ -575,54 +587,12 @@ export default function App() {
                       ? `当前 Speaker ID：${settings.tts_providers.Volcengine.voice_list[0]?.id ?? "无"}`
                       : "选择当前用于朗读的音色。"}
                   </Hint>
+                  {provider === "Volcengine" && (
+                    <button className="btn mt-2" onClick={() => setVoiceDraft({ id: "", name: "" })}>
+                      新增音色
+                    </button>
+                  )}
                 </Row>
-                {provider === "Volcengine" && (
-                  <>
-                    <Row label="Speaker ID">
-                      <input
-                        className="field"
-                        value={voiceId}
-                        onChange={(event) => setVoiceId(event.target.value)}
-                      />
-                    </Row>
-                    <Row label="名称">
-                      <input
-                        className="field"
-                        value={voiceName}
-                        onChange={(event) => setVoiceName(event.target.value)}
-                      />
-                    </Row>
-                    <div className="mt-2 flex gap-2">
-                      <button
-                        className="btn"
-                        title="添加 / 保存音色"
-                        onClick={() =>
-                          run({
-                            type: "save_volcengine_voice",
-                            voice: { id: voiceId, name: voiceName },
-                          })
-                        }
-                      >
-                        保存音色
-                      </button>
-                      <button
-                        className="btn ghost"
-                        title="删除音色"
-                        disabled={
-                          !(voiceId || selectedVoice) ||
-                          !settings.tts_providers.Volcengine.voice_list.some(
-                            (voice) => voice.id === (voiceId || selectedVoice),
-                          )
-                        }
-                        onClick={() =>
-                          run({ type: "delete_volcengine_voice", id: voiceId || selectedVoice || "" })
-                        }
-                      >
-                        删除
-                      </button>
-                    </div>
-                  </>
-                )}
               </Panel>
             </>
           )}
@@ -715,6 +685,56 @@ export default function App() {
               ))}
             </ol>
           </section>
+        </div>
+      )}
+
+      {voiceDraft && (
+        <div
+          className="overlay"
+          onKeyDown={(event) => {
+            if (event.key === "Escape") setVoiceDraft(null);
+          }}
+        >
+          <form
+            role="dialog"
+            aria-modal="true"
+            aria-label="新增音色"
+            className="overlay-card panel-in w-[26rem] p-5"
+            onSubmit={(event) => {
+              event.preventDefault();
+              const id = voiceDraft.id.trim();
+              if (!id) return;
+              run({ type: "save_volcengine_voice", voice: { id, name: voiceDraft.name.trim() } });
+              setVoiceDraft(null);
+            }}
+          >
+            <h2 className="text-sm font-semibold">新增音色</h2>
+            <label className="mt-3 block text-[13px]">
+              Speaker ID
+              <input
+                autoFocus
+                className="field mt-1.5"
+                value={voiceDraft.id}
+                onChange={(event) => setVoiceDraft({ ...voiceDraft, id: event.target.value })}
+              />
+            </label>
+            <label className="mt-3 block text-[13px]">
+              名称
+              <input
+                className="field mt-1.5"
+                value={voiceDraft.name}
+                onChange={(event) => setVoiceDraft({ ...voiceDraft, name: event.target.value })}
+              />
+            </label>
+            <div className="mt-4 flex justify-end gap-2">
+              <button type="button" className="btn" onClick={() => setVoiceDraft(null)}>
+                取消
+              </button>
+              <button className="btn primary" disabled={!voiceDraft.id.trim()}>
+                添加
+              </button>
+            </div>
+          </form>
         </div>
       )}
 
