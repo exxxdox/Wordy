@@ -1,3 +1,4 @@
+use wordy::config::Wheel;
 use wordy::wheel::{
     POLL_MS, Point, Rect, WheelHover, WheelState, picker_slot_at, wheel_label_text,
 };
@@ -172,6 +173,29 @@ fn picker_shares_directions_but_limits_hits_to_the_scaled_ring() {
             None
         );
     }
+}
+
+#[test]
+fn slot_label_and_playback_follow_the_persisted_mode() {
+    let mut wheel = Wheel::new("f8");
+    wheel.slots[0] = "a.wav".into();
+    wheel.texts[0] = "文字".into();
+    wheel.text_modes[0] = true;
+    wheel.slots[1] = "b.wav".into();
+    wheel.texts[1] = "另一段".into();
+
+    assert!(wheel.text_mode(0));
+    assert!(!wheel.text_mode(1));
+    let labels = wordy::wheel::labels(&wheel);
+    assert_eq!(labels[0], "文字");
+    assert_eq!(labels[1], "b.wav");
+
+    // 模式选中的内容为空时回退到另一类，避免槽位无声。
+    wheel.texts[2] = "只有文字".into();
+    wheel.slots[3] = "c.wav".into();
+    wheel.text_modes[3] = true;
+    assert!(wheel.text_mode(2));
+    assert!(!wheel.text_mode(3));
 }
 
 #[test]

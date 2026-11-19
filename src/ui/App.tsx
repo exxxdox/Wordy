@@ -26,6 +26,7 @@ export type Wheel = {
   slots: string[];
   labels: string[];
   texts: string[];
+  text_modes: boolean[];
   volumes: number[];
 };
 
@@ -36,6 +37,7 @@ export type Settings = {
   chat_wheel_slots: string[];
   chat_wheel_labels: string[];
   chat_wheel_texts: string[];
+  chat_wheel_text_modes: boolean[];
   chat_wheel_volumes: number[];
   chat_wheel_last_index: number;
   rolling_buffer_hotkey: string;

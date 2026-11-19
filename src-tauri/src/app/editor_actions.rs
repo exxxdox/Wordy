@@ -25,13 +25,10 @@ impl App {
             })
     }
 
-    /// 导入或保存录音会覆盖目标槽：先清文字、再删除旧音频，不可撤销。
+    /// 导入或保存录音只替换音频并切到音频模式，文字仍保留。
     pub(super) fn confirm_slot_replace(&mut self, index: usize, slot: usize) -> bool {
         !self.slot_has_content(index, slot)
-            || self.confirm_dialog(
-                "替换槽位",
-                "该槽已有内容，继续会清空文字并删除旧音频。是否继续？",
-            )
+            || self.confirm_dialog("替换槽位", "该槽已有内容，继续会覆盖旧音频。是否继续？")
     }
 
     pub(super) fn wheel_select(&mut self, index: usize) -> io::Result<()> {
@@ -111,11 +108,7 @@ impl App {
         slot: usize,
         value: &str,
     ) -> io::Result<()> {
-        let current = self.wheel_at(index)?;
-        // 音频槽与文字互斥；音频槽的文字输入不生效。
-        if !current.slots[slot].is_empty() {
-            return Ok(());
-        }
+        self.wheel_at(index)?;
         let text: String = value.trim().chars().take(SLOT_TEXT_LIMIT).collect();
         self.config
             .update_wheel(index, |wheel| wheel.texts[slot].clone_from(&text))?;
@@ -149,26 +142,12 @@ impl App {
         slot: usize,
         to_text: bool,
     ) -> io::Result<()> {
-        let current = self.wheel_at(index)?;
-        if to_text
-            && !current.slots[slot].is_empty()
-            && !self.confirm_dialog("切换为文字", "切换为文字会删除该槽音频，继续？")
-        {
-            return Ok(());
-        }
+        // 只切播放模式，音频与文字都保留，切回时恢复原来的内容和设置。
+        self.wheel_at(index)?;
         self.stop_editor_preview();
-        if (to_text && !current.slots[slot].is_empty())
-            || (!to_text && !current.texts[slot].is_empty())
-        {
-            self.config.update_wheel(index, |wheel| {
-                wheel.slots[slot].clear();
-                wheel.texts[slot].clear();
-            })?;
-            if !current.slots[slot].is_empty() {
-                let _ = audio::remove_unreferenced_clip(&self.config, &current.slots[slot]);
-            }
-            self.ui_dirty = true;
-        }
+        self.config
+            .update_wheel(index, |wheel| wheel.text_modes[slot] = to_text)?;
+        self.ui_dirty = true;
         Ok(())
     }
 
@@ -185,6 +164,7 @@ impl App {
             wheel.slots[slot].clear();
             wheel.labels[slot].clear();
             wheel.texts[slot].clear();
+            wheel.text_modes[slot] = false;
         })?;
         if !old.is_empty() {
             let _ = audio::remove_unreferenced_clip(&self.config, &old);
@@ -224,7 +204,7 @@ impl App {
         if item.texts[slot].is_empty() && item.slots[slot].is_empty() {
             return Ok(());
         }
-        let text = !item.texts[slot].is_empty();
+        let text = item.text_mode(slot);
         let id = self.next_job + 1;
         self.editor_preview = Some(EditorPreview {
             id,

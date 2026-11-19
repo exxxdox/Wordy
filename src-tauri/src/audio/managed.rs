@@ -86,7 +86,8 @@ pub fn commit_slot_clip(
     store.update_wheel(wheel, |wheel| {
         wheel.slots[slot].clone_from(&name);
         wheel.labels[slot] = label.to_owned();
-        wheel.texts[slot].clear();
+        // 导入音频只切到音频模式，原文字保留，切回文字模式即可恢复。
+        wheel.text_modes[slot] = false;
         if let Some(gain) = gain {
             wheel.volumes[slot] = gain;
         }

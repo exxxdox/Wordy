@@ -105,6 +105,8 @@ pub struct Wheel {
     pub slots: [String; SLOT_COUNT],
     pub labels: [String; SLOT_COUNT],
     pub texts: [String; SLOT_COUNT],
+    /// true 表示该槽播放文字；音频与文字可以同时保留，模式决定播放哪一类。
+    pub text_modes: [bool; SLOT_COUNT],
     pub volumes: [f64; SLOT_COUNT],
 }
 
@@ -116,8 +118,15 @@ impl Wheel {
             slots: Default::default(),
             labels: Default::default(),
             texts: Default::default(),
+            text_modes: Default::default(),
             volumes: [1.0; SLOT_COUNT],
         }
+    }
+
+    /// 槽位播放哪一类内容：两类都有时按模式，只有一类时直接用那一类。
+    pub fn text_mode(&self, slot: usize) -> bool {
+        self.slots[slot].is_empty()
+            || (!self.texts[slot].is_empty() && self.text_modes[slot])
     }
 
     fn from_table(table: &Table) -> Option<Self> {
@@ -129,12 +138,15 @@ impl Wheel {
         } else {
             String::new()
         };
+        let slots = read_slot_texts(table, "slots", true);
+        let texts = read_slot_texts(table, "texts", false);
         let wheel = Self {
             name: text(table, "name").map(wheel_name).unwrap_or_default(),
             hotkey,
-            slots: read_slot_texts(table, "slots", true),
+            text_modes: read_slot_modes(table, "text_modes", &texts),
+            slots,
             labels: read_slot_texts(table, "labels", false),
-            texts: read_slot_texts(table, "texts", false),
+            texts,
             volumes: read_slot_volumes(table, "volumes"),
         };
         let has_data = !wheel.name.is_empty()
@@ -169,6 +181,7 @@ pub struct Settings {
     pub chat_wheel_slots: [String; SLOT_COUNT],
     pub chat_wheel_labels: [String; SLOT_COUNT],
     pub chat_wheel_texts: [String; SLOT_COUNT],
+    pub chat_wheel_text_modes: [bool; SLOT_COUNT],
     pub chat_wheel_volumes: [f64; SLOT_COUNT],
     pub additional_chat_wheels: Vec<Wheel>,
     pub chat_wheel_last_index: usize,
@@ -206,6 +219,7 @@ impl Default for Settings {
             chat_wheel_slots: Default::default(),
             chat_wheel_labels: Default::default(),
             chat_wheel_texts: Default::default(),
+            chat_wheel_text_modes: Default::default(),
             chat_wheel_volumes: [1.0; SLOT_COUNT],
             additional_chat_wheels: Vec::new(),
             chat_wheel_last_index: 0,
@@ -252,6 +266,9 @@ impl Settings {
             .filter_map(Wheel::from_table)
             .collect();
         let last_wheel = additional_chat_wheels.len();
+        let chat_wheel_texts = read_slot_texts(raw, "chat_wheel_texts", false);
+        let chat_wheel_text_modes =
+            read_slot_modes(raw, "chat_wheel_text_modes", &chat_wheel_texts);
         let mut settings = Self {
             name: hotkey
                 .map(|key| {
@@ -266,7 +283,8 @@ impl Settings {
                 .unwrap_or(defaults.chat_wheel_hotkey),
             chat_wheel_slots: read_slot_texts(raw, "chat_wheel_slots", true),
             chat_wheel_labels: read_slot_texts(raw, "chat_wheel_labels", false),
-            chat_wheel_texts: read_slot_texts(raw, "chat_wheel_texts", false),
+            chat_wheel_texts,
+            chat_wheel_text_modes,
             chat_wheel_volumes: read_slot_volumes(raw, "chat_wheel_volumes"),
             additional_chat_wheels,
             chat_wheel_last_index: raw
@@ -362,6 +380,7 @@ impl Settings {
                 slots: self.chat_wheel_slots.clone(),
                 labels: self.chat_wheel_labels.clone(),
                 texts: self.chat_wheel_texts.clone(),
+                text_modes: self.chat_wheel_text_modes,
                 volumes: self.chat_wheel_volumes,
             })
         } else {
@@ -434,6 +453,7 @@ impl Settings {
             self.chat_wheel_slots = wheel.slots;
             self.chat_wheel_labels = wheel.labels;
             self.chat_wheel_texts = wheel.texts;
+            self.chat_wheel_text_modes = wheel.text_modes;
             self.chat_wheel_volumes = wheel.volumes;
         } else {
             self.additional_chat_wheels[index - 1] = wheel;
@@ -736,6 +756,17 @@ fn read_slot_texts(table: &Table, key: &str, filenames: bool) -> [String; SLOT_C
             .filter(|value| !filenames || is_clip_name(value))
             .unwrap_or_default()
             .into()
+    })
+}
+
+/// 旧配置没有模式字段：文字非空即视为文字模式，与原先的互斥规则一致。
+fn read_slot_modes(table: &Table, key: &str, texts: &[String; SLOT_COUNT]) -> [bool; SLOT_COUNT] {
+    let values = table.get(key).and_then(Value::as_array);
+    std::array::from_fn(|index| {
+        values
+            .and_then(|entries| entries.get(index))
+            .and_then(Value::as_bool)
+            .unwrap_or_else(|| !texts[index].is_empty())
     })
 }
 
@@ -1114,6 +1145,39 @@ mod tests {
         settings.chat_wheel_slots = std::array::from_fn(|_| "a.wav".into());
         settings.chat_wheel_texts = std::array::from_fn(|_| "文字".into());
         assert_eq!(settings.empty_slot_target(), (0, 0));
+    }
+
+    #[test]
+    fn slot_mode_round_trips_and_legacy_text_slots_infer_text_mode() {
+        let settings = Settings::from_toml(
+            r#"
+            chat_wheel_texts = ["旧文字"]
+            chat_wheel_text_modes = [false]
+            "#,
+        )
+        .unwrap();
+        // 显式模式优先：文字保留，但槽位切到音频。
+        assert!(!settings.chat_wheel_text_modes[0]);
+        assert_eq!(settings.chat_wheel_texts[0], "旧文字");
+        assert_eq!(
+            Settings::from_toml(&settings.to_toml().unwrap()).unwrap(),
+            settings
+        );
+
+        // 旧配置没有模式字段：有文字的槽位以文字朗读。
+        let legacy = Settings::from_toml(r#"chat_wheel_texts = ["旧文字"]"#).unwrap();
+        assert!(legacy.chat_wheel_text_modes[0]);
+        assert!(!legacy.chat_wheel_text_modes[1]);
+
+        let settings = Settings::from_toml(
+            r#"
+            additional_chat_wheels = [
+                { slots = ["a.wav"], texts = ["字"], text_modes = [true] },
+            ]
+            "#,
+        )
+        .unwrap();
+        assert!(settings.additional_chat_wheels[0].text_mode(0));
     }
 
     #[test]

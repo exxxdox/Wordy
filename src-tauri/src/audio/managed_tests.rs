@@ -12,7 +12,10 @@ fn installing_clip_copies_source_and_commits_slot_as_one_change() {
     })
     .unwrap();
     store
-        .update_wheel(0, |wheel| wheel.texts[2] = "old text".into())
+        .update_wheel(0, |wheel| {
+            wheel.texts[2] = "old text".into();
+            wheel.text_modes[2] = true;
+        })
         .unwrap();
     let clip = stage_clip(source.path(), store.path(), &AtomicBool::new(false)).unwrap();
     let saved = commit_slot_clip(&mut store, 0, 2, clip, "sample", Some(2.0)).unwrap();
@@ -27,7 +30,9 @@ fn installing_clip_copies_source_and_commits_slot_as_one_change() {
     let wheel = restored.settings().wheel(0).unwrap();
     assert_eq!(wheel.slots[2], saved);
     assert_eq!(wheel.labels[2], "sample");
-    assert!(wheel.texts[2].is_empty());
+    // 导入音频不删除原文字，只把槽位切到音频模式。
+    assert_eq!(wheel.texts[2], "old text");
+    assert!(!wheel.text_modes[2]);
     assert_eq!(wheel.volumes[2], 2.0);
 }
 

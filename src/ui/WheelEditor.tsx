@@ -17,6 +17,7 @@ function wheelsOf(snapshot: Snapshot): Wheel[] {
       slots: settings.chat_wheel_slots,
       labels: settings.chat_wheel_labels,
       texts: settings.chat_wheel_texts,
+      text_modes: settings.chat_wheel_text_modes,
       volumes: settings.chat_wheel_volumes,
     },
     ...settings.additional_chat_wheels,
@@ -25,15 +26,17 @@ function wheelsOf(snapshot: Snapshot): Wheel[] {
 
 function slotTitle(wheel: Wheel, slot: number) {
   if (wheel.labels[slot]) return wheel.labels[slot];
-  if (wheel.texts[slot]) return wheel.texts[slot];
-  if (wheel.slots[slot]) return "音频";
-  return "";
+  if (wheel.text_modes[slot] && wheel.texts[slot]) return wheel.texts[slot];
+  return wheel.slots[slot] ? "音频" : wheel.texts[slot];
 }
 
 function wheelLabels(wheel: Wheel) {
   return Array.from({ length: 8 }, (_, index) => {
     if (!wheel.slots[index] && !wheel.texts[index]) return "";
-    return wheel.labels[index] || wheel.texts[index] || wheel.slots[index];
+    if (wheel.labels[index]) return wheel.labels[index];
+    return wheel.text_modes[index]
+      ? wheel.texts[index] || wheel.slots[index]
+      : wheel.slots[index] || wheel.texts[index];
   });
 }
 
@@ -43,12 +46,12 @@ export default function WheelEditor({ snapshot, run }: Props) {
   const index = Math.min(settings.chat_wheel_last_index, wheels.length - 1);
   const wheel = wheels[index] ?? wheels[0];
   const [slot, setSlot] = useState(0);
-  const [emptyTextMode, setEmptyTextMode] = useState(false);
   const [gain, setGain] = useState(Math.round((wheel?.volumes[slot] ?? 1) * 100));
 
   const hasAudio = Boolean(wheel?.slots[slot]);
   const hasText = Boolean(wheel?.texts[slot]);
-  const textMode = hasText || (hasAudio === false && emptyTextMode);
+  // 模式持久化在配置里：两类内容可以同时保留，来回切换不会丢数据。
+  const textMode = Boolean(wheel?.text_modes[slot]);
   const locked = snapshot.locked;
   const playing = snapshot.preview?.wheel === index && snapshot.preview?.slot === slot;
 
@@ -61,10 +64,6 @@ export default function WheelEditor({ snapshot, run }: Props) {
   const text = useSyncedInput(wheel?.texts[slot] ?? "", (value) =>
     run({ type: "set_slot_text", index, slot, value }),
   );
-
-  useEffect(() => {
-    setEmptyTextMode(false);
-  }, [index, slot]);
 
   useEffect(() => {
     setGain(Math.round((wheel?.volumes[slot] ?? 1) * 100));
@@ -175,8 +174,7 @@ export default function WheelEditor({ snapshot, run }: Props) {
                 aria-pressed={!textMode}
                 disabled={locked}
                 onClick={() => {
-                  setEmptyTextMode(false);
-                  if (hasText) run({ type: "set_slot_mode", index, slot, text: false });
+                  if (textMode) run({ type: "set_slot_mode", index, slot, text: false });
                 }}
               >
                 音频
@@ -186,19 +184,20 @@ export default function WheelEditor({ snapshot, run }: Props) {
                 aria-pressed={textMode}
                 disabled={locked}
                 onClick={() => {
-                  setEmptyTextMode(true);
-                  if (hasAudio) run({ type: "set_slot_mode", index, slot, text: true });
+                  if (!textMode) run({ type: "set_slot_mode", index, slot, text: true });
                 }}
               >
                 文字
               </button>
             </div>
             <p className="mt-1 wrap-anywhere text-xs text-[var(--muted)]">
-              {hasAudio
-                ? wheel.slots[slot]
-                : hasText
+              {textMode
+                ? hasText
                   ? "当前槽以文字朗读"
-                  : "选择音频或输入朗读文字"}
+                  : "输入文字后可试听朗读"
+                : hasAudio
+                  ? wheel.slots[slot]
+                  : "导入音频后可试听"}
             </p>
           </div>
           {!textMode && (

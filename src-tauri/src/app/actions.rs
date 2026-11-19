@@ -29,7 +29,8 @@ impl App {
         self.log(format!("播放轮盘 {} · 音频 {}", index + 1, slot + 1));
         if let Some(wheel) = self.config.settings().wheel(index) {
             let id = self.id();
-            if !wheel.texts[slot].is_empty() {
+            // 两类内容可同时存在，按槽位模式选择播放哪一类。
+            if wheel.text_mode(slot) && !wheel.texts[slot].is_empty() {
                 self.playback.speak(
                     id,
                     wheel.texts[slot].clone(),
