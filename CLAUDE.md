@@ -38,7 +38,7 @@ Rust（edition 2024）+ Tauri 2 桌面应用。设置界面是 React（Vite + Ta
 - 日志面板由 React 渲染：`wordy_logs` 取历史，`wordy://log` 逐行推送，托盘动作会打开设置窗口并发出 `wordy://open-logs`。
 - 设置页文案保持中文，不写内部实现说明。
 
-持久化目录：`config_directory()`（`XDG_CONFIG_HOME/wordy`，未设置时 `%USERPROFILE%\.config\wordy`），含 `config.toml` 与 `audio_clips/`；托管音频从配置文件父目录推导。日志仅 `packaged` 构建在 exe 同目录写 `wordy.log`（5 MiB × 5）。图标资源在 `src-tauri/src/assets/wordy.ico`，运行时经 `include_bytes!` 使用；exe 图标由 `src-tauri/icons/icon.ico` 经 tauri-build 嵌入。
+持久化目录：`config_directory()`（`XDG_CONFIG_HOME/wordy`，未设置时 `%USERPROFILE%\.config\wordy`），含 `config.toml`、`audio_clips/` 与解包出来的 `bin/ffmpeg.exe`；托管音频从配置文件父目录推导。日志仅 `packaged` 构建在 exe 同目录写 `wordy.log`（5 MiB × 5）。图标资源在 `src-tauri/src/assets/wordy.ico`，运行时经 `include_bytes!` 使用；exe 图标由 `src-tauri/icons/icon.ico` 经 tauri-build 嵌入。精简 FFmpeg 在 `src-tauri/assets/ffmpeg.exe`（约 3.2 MB，7.1.1 交叉编译），`build.rs` 复制到 `OUT_DIR` 后同样经 `include_bytes!` 嵌入；缺失时构建仍通过，但运行时退回系统 FFmpeg。
 
 ## 构建与验证
 
@@ -65,7 +65,7 @@ cargo test --manifest-path src-tauri/Cargo.toml
 
 ## 轮盘
 
-轮盘导入、播放和截取原生以外的音频格式时使用系统安装的 FFmpeg，从系统 `PATH` 和 WinGet 命令目录查找。有效的 PCM16 WAV 直接读取。缺少解码器时提示通过 WinGet 安装，发布产物只包含 `Wordy.exe`。
+轮盘导入、播放和截取原生以外的音频格式时需要 FFmpeg。默认使用随 exe 打包的精简版：构建时从 `src-tauri/assets/ffmpeg.exe` 复制并由 `include_bytes!` 嵌入，首次使用时解包到配置目录 `bin/ffmpeg.exe`（大小一致即复用）。没有打包或解包失败时才回退系统 `PATH` 与 WinGet 目录中的 FFmpeg；两者都没有时提示通过 WinGet 安装。有效的 PCM16 WAV 直接读取，不经过 FFmpeg。发布产物仍只有 `Wordy.exe`。
 
 设置中的轮盘 UI 与运行时轮盘必须保持一致。只保留竞技样式，由 `wheel_paint` 绘制；设置页预览调用同一渲染器（`wordy_wheel_preview`）。画布 634×540（盘体 540×540 居中），名称居中 hover 放大仍完整显示。动画仅影响显示：120ms 淡入、90ms 淡出、90ms 高亮；松键立即提交播放，淡出停止接收选择。
 
