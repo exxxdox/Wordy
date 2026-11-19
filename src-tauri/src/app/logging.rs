@@ -95,6 +95,10 @@ impl App {
     }
 
     pub(super) fn failure(&mut self, message: String) {
+        if self.exiting {
+            self.log_at("ERROR", message);
+            return;
+        }
         // Report through the toast/tray only; forcing the settings window open
         // on every background error made a plain launch look like a request for it.
         if self.settings_visible() {

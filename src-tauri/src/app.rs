@@ -134,6 +134,7 @@ struct App {
     pending_saves: usize,
     background_cancel: Arc<AtomicBool>,
     backup_running: bool,
+    exiting: bool,
     skip_config_flush: bool,
     voices_request: Option<u64>,
     ffmpeg_installing: bool,
@@ -215,6 +216,7 @@ impl App {
             pending_saves: 0,
             background_cancel: Arc::default(),
             backup_running: false,
+            exiting: false,
             skip_config_flush: false,
             voices_request: None,
             ffmpeg_installing: false,
@@ -325,6 +327,8 @@ impl App {
                 self.report_error("操作失败", error);
             }
         }
+        // 退出流程里的错误只写日志，不再弹失败提示。
+        self.exiting = true;
         unsafe { KillTimer(self.host, CONTROLS_TIMER) };
         self.wheel.cancel();
         self.playback.stop_speech();
@@ -373,8 +377,8 @@ impl App {
         if self.skip_config_flush {
             Ok(())
         } else if let Err(error) = self.config.flush() {
-            // A save failure during quit is not a startup failure.
-            self.failure(format!("保存设置失败：{error}"));
+            // 退出时无法保存只记录，不再弹通知打断退出。
+            self.log_at("ERROR", format!("保存设置失败：{error}"));
             Ok(())
         } else {
             Ok(())
