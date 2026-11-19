@@ -96,7 +96,8 @@ impl App {
             }
             // 密钥存在 Windows 凭据管理器，删除后只能重新输入。
             DeleteKey(provider) => {
-                if self.confirm_dialog("删除密钥", "删除已保存的 API 密钥？删除后需要重新输入。") {
+                if self.confirm_dialog("删除密钥", "删除已保存的 API 密钥？删除后需要重新输入。")
+                {
                     self.change_key(provider, None)?;
                 }
             }

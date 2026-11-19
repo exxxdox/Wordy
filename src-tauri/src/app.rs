@@ -553,7 +553,8 @@ impl App {
     pub(super) fn settings_visible(&self) -> bool {
         let hwnd = self.ui_hwnd();
         !hwnd.is_null() && unsafe { IsWindowVisible(hwnd) != 0 && IsIconic(hwnd) == 0 }
-    }    fn complete_background(&mut self, result: Background, exiting: bool) -> io::Result<()> {
+    }
+    fn complete_background(&mut self, result: Background, exiting: bool) -> io::Result<()> {
         match result {
             Background::NotificationFailed(message) => {
                 // Fall back to the tray when the notification-center sender is unavailable.
