@@ -27,7 +27,7 @@ function slotTitle(wheel: Wheel, slot: number) {
   if (wheel.labels[slot]) return wheel.labels[slot];
   if (wheel.texts[slot]) return wheel.texts[slot];
   if (wheel.slots[slot]) return "音频";
-  return `槽 ${slot + 1}`;
+  return "";
 }
 
 function wheelLabels(wheel: Wheel) {
@@ -74,11 +74,12 @@ export default function WheelEditor({ snapshot, run }: Props) {
 
   return (
     <>
-      <Panel title="轮盘与快捷键">
+      <Panel title="轮盘与快捷键" icon="wheels">
         <div className="flex flex-col gap-3">
           <div className="flex gap-2">
             <select
               className="field min-w-0 flex-1"
+              aria-label="当前轮盘"
               value={index}
               disabled={locked}
               onChange={(event) => run({ type: "select_wheel", index: Number(event.target.value) })}
@@ -99,7 +100,7 @@ export default function WheelEditor({ snapshot, run }: Props) {
               <Icon name="plus" />
             </button>
             <button
-              className="btn icon-btn"
+              className="btn icon-btn danger"
               title="删除轮盘"
               aria-label="删除轮盘"
               disabled={locked || wheels.length <= 1}
@@ -108,13 +109,13 @@ export default function WheelEditor({ snapshot, run }: Props) {
               <Icon name="trash" />
             </button>
           </div>
-          <div className="flex gap-2">
-            <output className="field min-w-0 flex-1 truncate" title="当前快捷键">
+          <div className="hotkey-control">
+            <kbd title="当前快捷键">
               {displayHotkey(wheel.hotkey) || "未绑定快捷键"}
-            </output>
+            </kbd>
             <button
-              className="btn"
-              title="录制快捷键"
+              className="btn record-btn"
+              aria-label="录制轮盘快捷键"
               disabled={locked}
               onClick={() => run({ type: "record_wheel_hotkey", index })}
             >
@@ -132,11 +133,7 @@ export default function WheelEditor({ snapshot, run }: Props) {
               onBlur={name.flush}
             />
           </label>
-          <div>
-            <div className="mb-1.5 text-sm">槽位</div>
-            <p className="text-xs text-[var(--muted)]">点击下方轮盘扇区选择槽位</p>
-          </div>
-          <div className="rounded-xl border border-[var(--line-soft)] bg-[var(--field)] p-2">
+          <div className="wheel-preview">
             <div className="relative mx-auto aspect-[634/540] w-full max-w-[420px]">
               <WheelCanvas
                 labels={wheelLabels(wheel)}
@@ -147,14 +144,29 @@ export default function WheelEditor({ snapshot, run }: Props) {
               />
             </div>
           </div>
-          <p className="text-sm text-[var(--muted)]">
-            点击扇区选择槽位 · 当前：<span className="text-[var(--text)]">{slotTitle(wheel, slot)}</span>
-          </p>
         </div>
       </Panel>
 
-      <Panel title={`槽位内容 · 第 ${slot + 1} 槽`}>
+      <Panel title={`槽位内容 · 第 ${slot + 1} 槽`} icon="audio">
         <div className="flex flex-col gap-3">
+          <label className="block text-sm">
+            槽位
+            {/* 下拉框与扇区共用选中状态，键盘也能选择槽位。 */}
+            <select
+              className="field mt-1.5"
+              value={slot}
+              onChange={(event) => setSlot(Number(event.target.value))}
+            >
+              {wheel.slots.map((_, i) => {
+                const title = slotTitle(wheel, i);
+                return (
+                  <option key={i} value={i}>
+                    第 {i + 1} 槽{title && ` · ${title}`}
+                  </option>
+                );
+              })}
+            </select>
+          </label>
           <div>
             <div className="mb-1.5 text-sm">内容类型</div>
             <div className="seg" role="group" aria-label="内容类型">
@@ -181,7 +193,7 @@ export default function WheelEditor({ snapshot, run }: Props) {
                 文字
               </button>
             </div>
-            <p className="mt-1 text-xs text-[var(--muted)]">
+            <p className="mt-1 wrap-anywhere text-xs text-[var(--muted)]">
               {hasAudio
                 ? wheel.slots[slot]
                 : hasText
@@ -231,7 +243,7 @@ export default function WheelEditor({ snapshot, run }: Props) {
           <div className="flex flex-wrap gap-2">
             {!textMode && (
               <button
-                className="btn"
+                className="btn primary"
                 disabled={locked}
                 onClick={() => run({ type: "import_slot_audio", index, slot })}
               >

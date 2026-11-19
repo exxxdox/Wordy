@@ -11,20 +11,20 @@
 :root {
   color-scheme: dark;
   /* 石墨黑底 + 琥珀信号色：对应调音台面板与 VU 表。 */
-  --bg: #131614;
-  --rail: #0e110f;
-  --panel: #191d1a;
-  --panel-hi: #1f2420;
-  --field: #0f1211;
-  --line: rgba(235, 232, 222, 0.12);
-  --line-soft: rgba(235, 232, 222, 0.07);
-  --text: #ece9e1;
+  --bg: #1b1e1b;
+  --rail: #151715;
+  --panel: #212521;
+  --panel-hi: #272d27;
+  --field: #191d19;
+  --line: rgba(235, 232, 222, 0.19);
+  --line-soft: rgba(235, 232, 222, 0.10);
+  --text: #f4f1e8;
   --label: #c3c5bc;
-  --muted: #8e938a;
-  --accent: #e3a94b;
-  --accent-hi: #f0bd68;
+  --muted: #a6aca2;
+  --accent: #f1ba65;
+  --accent-hi: #ffd18a;
   --accent-ink: #1a1408;
-  --accent-soft: rgba(227, 169, 75, 0.14);
+  --accent-soft: rgba(241, 186, 101, 0.14);
   --ok: #7cc98f;
   --danger: #e2776b;
   /* 设置里的「界面字体」写入 *-configured；未安装时回落到内置字体栈。 */
@@ -44,9 +44,7 @@ body {
   margin: 0;
   overflow: hidden;
   color: var(--text);
-  background:
-    radial-gradient(120% 70% at 100% 0%, rgba(227, 169, 75, 0.05), transparent 60%),
-    var(--bg);
+  background: var(--bg);
   font-family: var(--font-ui);
   font-size: 15px;
   -webkit-font-smoothing: antialiased;
@@ -132,77 +130,85 @@ input[type="number"],
     display: flex;
     flex: none;
     flex-direction: column;
-    width: 200px;
-    padding: 18px 12px 14px;
+    width: 208px;
+    padding: 24px 14px 16px;
     border-right: 1px solid var(--line-soft);
     background: var(--rail);
+    overflow-y: auto;
   }
 
   .brand {
     display: flex;
     align-items: center;
-    gap: 9px;
-    padding: 0 8px 18px;
-    font-family: Bahnschrift, "Segoe UI Variable Display", "Segoe UI", sans-serif;
-    font-size: 16px;
-    font-weight: 600;
-    letter-spacing: 0.1em;
+    gap: 12px;
+    padding: 0 10px;
+    margin-bottom: 30px;
+    line-height: 1.1;
+  }
+
+  .brand strong {
+    display: block;
+    font-family: "Segoe UI Variable Display", "Segoe UI", sans-serif;
+    font-size: 24px;
+    font-weight: 650;
   }
 
   .brand-mark {
-    width: 9px;
-    height: 9px;
-    border-radius: 2px;
-    background: var(--accent);
-    box-shadow: 0 0 12px rgba(227, 169, 75, 0.6);
+    display: grid;
+    flex: none;
+    place-items: center;
+    width: 40px;
+    height: 40px;
+    border-radius: 10px;
+    background: linear-gradient(155deg, var(--accent-hi), #d8953a);
+    color: var(--accent-ink);
   }
 
-  .rail-nav {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
+  .brand-caption {
+    display: block;
+    margin-top: 4px;
+    color: var(--muted);
+    font-size: 13px;
+  }
+
+  .rail-nav,
+  .rail-foot {
+    display: grid;
+    gap: 4px;
   }
 
   .rail-item {
-    position: relative;
-    height: 34px;
-    padding: 0 10px;
-    border: 0;
-    border-radius: 7px;
-    background: transparent;
-    color: var(--muted);
-    font: inherit;
-    font-size: 14px;
-    text-align: left;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 45px;
+    padding: 0 12px;
+    border: 1px solid transparent;
+    border-left: 2px solid transparent;
+    border-radius: 8px;
+    color: var(--label);
+    font-size: 15px;
+    text-align: start;
+    white-space: nowrap;
     cursor: pointer;
     transition: background 120ms ease, color 120ms ease;
   }
 
-  .rail-item::before {
-    content: "";
-    position: absolute;
-    top: 7px;
-    bottom: 7px;
-    left: 0;
-    width: 2px;
-    border-radius: 2px;
-    background: var(--accent);
-    opacity: 0;
-    transition: opacity 120ms ease;
-  }
-
-  .rail-item:hover {
-    background: rgba(255, 255, 255, 0.05);
+  .rail-item:not([aria-current="page"]):hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.06);
     color: var(--text);
   }
 
   .rail-item[aria-current="page"] {
+    border-color: rgba(241, 186, 101, 0.12);
+    border-left-color: var(--accent);
     background: var(--accent-soft);
     color: var(--text);
+    font-weight: 600;
   }
 
-  .rail-item[aria-current="page"]::before {
-    opacity: 1;
+  .rail-item[aria-current="page"] svg {
+    color: var(--accent);
   }
 
   .rail-item:focus-visible {
@@ -210,16 +216,34 @@ input[type="number"],
     outline-offset: 1px;
   }
 
+  .rail-item:disabled {
+    opacity: 0.45;
+    cursor: default;
+  }
+
   .rail-foot {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
     margin-top: auto;
+    padding-top: 16px;
+  }
+
+  .rail-foot::before {
+    content: "";
+    margin: 0 8px 3px;
+    border-top: 1px solid var(--line-soft);
+  }
+
+  .rail-foot .rail-item {
+    min-height: 34px;
+    font-size: 13px;
   }
 
   .rail-note {
-    margin: 4px 0 0;
-    padding: 0 8px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 5px 8px 0;
+    padding: 12px 5px 0;
+    border-top: 1px solid var(--line-soft);
     font-size: 12px;
     color: var(--muted);
   }
@@ -229,58 +253,76 @@ input[type="number"],
     flex: 1;
     flex-direction: column;
     min-width: 0;
+    min-height: 0;
+  }
+
+  .content-head,
+  .content-foot,
+  .content-body {
+    padding-inline: clamp(16px, 2.7vw, 36px);
+  }
+
+  .content-head,
+  .content-foot {
+    display: flex;
+    flex: none;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
   }
 
   .content-head {
+    min-height: 85px;
+    padding-block: 16px;
+  }
+
+  .content-heading {
     display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 20px;
-    padding: 22px 26px 16px;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 4px 15px;
   }
 
   .content-title {
-    margin: 0;
-    font-size: 22px;
-    font-weight: 600;
-    letter-spacing: -0.01em;
+    flex: none;
+    font-size: 29px;
+    line-height: 1.2;
+    font-weight: 680;
   }
 
   .content-sub {
-    margin: 4px 0 0;
-    font-size: 14px;
     color: var(--muted);
+    font-size: 13px;
   }
 
   .content-body {
+    display: grid;
     flex: 1;
-    padding: 0 26px 8px;
+    grid-template-columns: minmax(0, 1fr);
+    align-content: start;
+    align-items: start;
+    gap: 16px;
+    min-height: 0;
+    padding-bottom: 18px;
     overflow-y: auto;
     scrollbar-gutter: stable;
   }
 
-  .section-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-    gap: 14px;
-    align-items: start;
+  .wheel-grid {
+    grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
   }
 
   .content-foot {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 12px 26px 14px;
+    padding-block: 9px;
     border-top: 1px solid var(--line-soft);
-    font-size: 12.5px;
+    background: var(--rail);
     color: var(--muted);
+    font-size: 12px;
   }
 
-  /* —— 面板 —— */
-
+  /* 轮盘保留独立的预览和编辑区，常规设置用左右对齐的表单行。 */
   .panel {
-    padding: 16px;
+    min-width: 0;
     border: 1px solid var(--line-soft);
     border-radius: 12px;
     background: var(--panel);
@@ -289,95 +331,251 @@ input[type="number"],
   .panel-head {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    margin-bottom: 12px;
-    padding-bottom: 10px;
+    gap: 10px;
+    min-height: 46px;
     border-bottom: 1px solid var(--line-soft);
   }
 
+  .panel > .panel-head {
+    padding: 0 16px;
+    background: rgba(255, 255, 255, 0.022);
+    border-radius: 11px 11px 0 0;
+  }
+
+  .panel > .panel-head > svg {
+    flex: none;
+    color: var(--accent);
+  }
+
   .panel-title {
-    margin: 0;
-    font-size: 14px;
-    font-weight: 600;
-    letter-spacing: 0.02em;
+    flex: 1;
+    font-size: 16px;
+    font-weight: 650;
   }
 
   .panel-body {
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
+    padding: 0 16px;
   }
 
-  .field-row-label {
-    margin-bottom: 6px;
-    font-size: 14px;
-    color: var(--label);
+  .wheel-grid .panel-body {
+    padding-block: 14px;
+  }
+
+  .setting-row {
+    display: grid;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .content-body:not(.wheel-grid) .setting-row {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 0.97fr);
+    gap: 12px 20px;
+    min-height: 61px;
+    padding-block: 9px;
+  }
+
+  .content-body:not(.wheel-grid) .setting-row + .setting-row {
+    border-top: 1px solid var(--line-soft);
+  }
+
+  .setting-copy {
+    font-size: 15px;
+    font-weight: 600;
+    overflow-wrap: anywhere;
+  }
+
+  .setting-control,
+  .setting-control .field {
+    min-width: 0;
   }
 
   .hint {
-    margin: 6px 0 0;
-    font-size: 13px;
-    line-height: 1.55;
+    margin-top: 3px;
     color: var(--muted);
+    font-size: 12.5px;
+    font-weight: 400;
+    line-height: 1.5;
   }
 
-  .checkbox-line {
+  .hotkey-control,
+  .switch-control,
+  .slider {
     display: flex;
     align-items: center;
-    gap: 8px;
-    font-size: 14px;
+    gap: 10px;
+  }
+
+  .hotkey-control {
+    flex-wrap: wrap;
+  }
+
+  .switch-control {
+    justify-content: flex-end;
+  }
+
+  .hotkey-control .check {
+    margin-left: auto;
+  }
+
+  .hotkey-control kbd,
+  .readout,
+  .device-output {
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    background: var(--field);
+    color: var(--text);
+    font: 13px var(--font-num);
+  }
+
+  .hotkey-control kbd,
+  .device-output {
+    padding: 7px 9px;
+    overflow-wrap: anywhere;
   }
 
   .readout {
-    font-family: var(--font-num);
-    font-size: 13px;
-    color: var(--label);
+    min-width: 4.25rem;
+    padding: 5px 6px;
+    text-align: center;
   }
 
-  .slider-head {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    margin-bottom: 6px;
-    font-size: 14px;
+  .record-btn::before {
+    content: "";
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    margin-inline-end: 7px;
+    border-radius: 50%;
+    background: var(--danger);
+    vertical-align: 2px;
   }
 
-  /* —— 状态 —— */
+  .wheel-preview {
+    padding: 8px;
+    border: 1px solid var(--line-soft);
+    border-radius: 10px;
+    background: var(--field);
+  }
+
+  .device-output {
+    display: inline-block;
+    max-width: 100%;
+  }
 
   .chip {
     display: inline-flex;
+    flex: none;
     align-items: center;
-    gap: 7px;
-    height: 26px;
-    padding: 0 10px;
-    border: 1px solid var(--line-soft);
-    border-radius: 999px;
-    background: rgba(255, 255, 255, 0.03);
-    font-size: 12.5px;
+    gap: 8px;
     color: var(--label);
+    font-size: 13px;
     white-space: nowrap;
   }
 
-  .chip .mono {
-    font-family: var(--font-num);
-    letter-spacing: 0.02em;
-  }
-
   .chip-dot {
-    width: 6px;
-    height: 6px;
+    display: inline-block;
+    flex: none;
+    width: 7px;
+    height: 7px;
     border-radius: 50%;
     background: var(--muted);
   }
 
   .chip-dot.ok {
     background: var(--ok);
-    box-shadow: 0 0 8px rgba(124, 201, 143, 0.55);
   }
 
   .chip-dot.off {
     background: var(--danger);
+  }
+
+  @media (max-width: 850px) {
+    .rail {
+      width: 166px;
+    }
+
+    .content-heading {
+      display: block;
+    }
+
+    .content-sub {
+      margin-top: 4px;
+    }
+
+    .wheel-grid {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+
+  @media (max-width: 640px) {
+    .app-shell {
+      flex-direction: column;
+    }
+
+    .rail {
+      width: 100%;
+      padding: 8px 12px;
+      border-right: 0;
+      border-bottom: 1px solid var(--line-soft);
+    }
+
+    .brand {
+      display: none;
+    }
+
+    .rail-nav,
+    .rail-foot {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 2px;
+    }
+
+    .rail-item {
+      gap: 4px;
+      min-height: 36px;
+      padding: 0 6px;
+      font-size: 13px;
+    }
+
+    .rail-item svg {
+      width: 15px;
+      height: 15px;
+    }
+
+    .rail-foot {
+      align-items: center;
+      padding-top: 2px;
+    }
+
+    .rail-foot::before {
+      display: none;
+    }
+
+    .rail-note {
+      margin: 0 0 0 auto;
+      padding: 0;
+      border: 0;
+    }
+
+    .content-head {
+      min-height: auto;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .content-title {
+      font-size: 24px;
+    }
+
+    .content-body:not(.wheel-grid) .setting-row {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 8px;
+      padding-block: 11px;
+    }
+
+    .switch-control {
+      justify-content: flex-start;
+    }
   }
 
   /* —— 控件 —— */
@@ -427,13 +625,13 @@ input[type="number"],
     padding-right: 28px;
     background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%),
       linear-gradient(135deg, var(--muted) 50%, transparent 50%);
-    background-position: calc(100% - 15px) 15px, calc(100% - 10px) 15px;
+    background-position: calc(100% - 15px) center, calc(100% - 10px) center;
     background-size: 5px 5px, 5px 5px;
     background-repeat: no-repeat;
   }
 
   select.field option {
-    background: #1f2420;
+    background: var(--panel-hi);
     color: var(--text);
   }
 
@@ -570,10 +768,46 @@ input[type="number"],
   }
 
   .check {
-    width: 15px;
-    height: 15px;
-    accent-color: var(--accent);
+    display: grid;
+    flex: none;
+    align-items: center;
+    width: 40px;
+    height: 23px;
+    padding: 2px;
+    appearance: none;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: #454b43;
     cursor: pointer;
+  }
+
+  .check::before {
+    content: "";
+    width: 17px;
+    height: 17px;
+    border-radius: 50%;
+    background: var(--text);
+  }
+
+  .check:checked {
+    border-color: var(--accent);
+    background: var(--accent);
+  }
+
+  .check:checked::before {
+    justify-self: end;
+    background: var(--accent-ink);
+  }
+
+  @media (forced-colors: active) {
+    .check {
+      appearance: auto;
+      width: 23px;
+    }
+
+    .check::before {
+      display: none;
+    }
   }
 
   .check:disabled {
@@ -588,8 +822,10 @@ input[type="number"],
 
   .range {
     display: block;
+    flex: 1;
     width: 100%;
-    height: 20px;
+    min-width: 0;
+    height: 24px;
     appearance: none;
     background: transparent;
     cursor: pointer;
@@ -643,17 +879,27 @@ input[type="number"],
   }
 
   .overlay-card {
+    max-width: calc(100% - 24px);
+    max-height: calc(100% - 24px);
     border: 1px solid var(--line);
     border-radius: 14px;
     background: var(--panel-hi);
     box-shadow: 0 40px 80px -40px #000;
   }
 
+  .overlay-card > .panel-head {
+    margin-bottom: 10px;
+    padding-bottom: 8px;
+  }
+
   .log-list {
     flex: 1;
     margin: 0;
-    padding: 0;
+    padding: 10px;
     overflow-y: auto;
+    border: 1px solid var(--line-soft);
+    border-radius: 8px;
+    background: var(--field);
     list-style: none;
     font-family: var(--font-num);
     font-size: 12.5px;
