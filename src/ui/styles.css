@@ -1,5 +1,13 @@
 @import "tailwindcss";
 
+/* 放大设置页整体字号：Tailwind 的 text-xs/sm/base/lg 一起上调，避免逐处改类名。 */
+@theme {
+  --text-xs: 0.8125rem;
+  --text-sm: 0.9375rem;
+  --text-base: 1rem;
+  --text-lg: 1.1875rem;
+}
+
 :root {
   color-scheme: dark;
   /* 石墨黑底 + 琥珀信号色：对应调音台面板与 VU 表。 */
@@ -37,7 +45,7 @@ body {
     radial-gradient(120% 70% at 100% 0%, rgba(227, 169, 75, 0.05), transparent 60%),
     var(--bg);
   font-family: var(--font-ui);
-  font-size: 13.5px;
+  font-size: 15px;
   -webkit-font-smoothing: antialiased;
   user-select: none;
 }
@@ -133,7 +141,7 @@ input[type="number"],
     gap: 9px;
     padding: 0 8px 18px;
     font-family: Bahnschrift, "Segoe UI Variable Display", "Segoe UI", sans-serif;
-    font-size: 15px;
+    font-size: 16px;
     font-weight: 600;
     letter-spacing: 0.1em;
   }
@@ -161,7 +169,7 @@ input[type="number"],
     background: transparent;
     color: var(--muted);
     font: inherit;
-    font-size: 13px;
+    font-size: 14px;
     text-align: left;
     cursor: pointer;
     transition: background 120ms ease, color 120ms ease;
@@ -209,7 +217,7 @@ input[type="number"],
   .rail-note {
     margin: 4px 0 0;
     padding: 0 8px;
-    font-size: 11px;
+    font-size: 12px;
     color: var(--muted);
   }
 
@@ -230,14 +238,14 @@ input[type="number"],
 
   .content-title {
     margin: 0;
-    font-size: 20px;
+    font-size: 22px;
     font-weight: 600;
     letter-spacing: -0.01em;
   }
 
   .content-sub {
     margin: 4px 0 0;
-    font-size: 12.5px;
+    font-size: 14px;
     color: var(--muted);
   }
 
@@ -262,7 +270,7 @@ input[type="number"],
     gap: 12px;
     padding: 12px 26px 14px;
     border-top: 1px solid var(--line-soft);
-    font-size: 11.5px;
+    font-size: 12.5px;
     color: var(--muted);
   }
 
@@ -287,7 +295,7 @@ input[type="number"],
 
   .panel-title {
     margin: 0;
-    font-size: 12.5px;
+    font-size: 14px;
     font-weight: 600;
     letter-spacing: 0.02em;
   }
@@ -300,13 +308,13 @@ input[type="number"],
 
   .field-row-label {
     margin-bottom: 6px;
-    font-size: 12.5px;
+    font-size: 14px;
     color: var(--label);
   }
 
   .hint {
     margin: 6px 0 0;
-    font-size: 11.5px;
+    font-size: 13px;
     line-height: 1.55;
     color: var(--muted);
   }
@@ -315,12 +323,12 @@ input[type="number"],
     display: flex;
     align-items: center;
     gap: 8px;
-    font-size: 13px;
+    font-size: 14px;
   }
 
   .readout {
     font-family: var(--font-num);
-    font-size: 12px;
+    font-size: 13px;
     color: var(--label);
   }
 
@@ -329,7 +337,7 @@ input[type="number"],
     align-items: baseline;
     justify-content: space-between;
     margin-bottom: 6px;
-    font-size: 12.5px;
+    font-size: 14px;
   }
 
   /* —— 状态 —— */
@@ -343,7 +351,7 @@ input[type="number"],
     border: 1px solid var(--line-soft);
     border-radius: 999px;
     background: rgba(255, 255, 255, 0.03);
-    font-size: 11.5px;
+    font-size: 12.5px;
     color: var(--label);
     white-space: nowrap;
   }
@@ -374,14 +382,14 @@ input[type="number"],
   .field {
     display: block;
     width: 100%;
-    height: 34px;
+    height: 36px;
     padding: 0 10px;
     border: 1px solid var(--line);
     border-radius: 8px;
     background: var(--field);
     color: var(--text);
     font: inherit;
-    font-size: 13px;
+    font-size: 14px;
     outline: none;
     transition: border-color 120ms ease, box-shadow 120ms ease;
   }
@@ -407,7 +415,7 @@ input[type="number"],
     text-overflow: ellipsis;
     color: var(--label);
     font-family: var(--font-num);
-    font-size: 12.5px;
+    font-size: 13.5px;
     letter-spacing: 0.01em;
   }
 
@@ -416,7 +424,7 @@ input[type="number"],
     padding-right: 28px;
     background-image: linear-gradient(45deg, transparent 50%, var(--muted) 50%),
       linear-gradient(135deg, var(--muted) 50%, transparent 50%);
-    background-position: calc(100% - 15px) 14px, calc(100% - 10px) 14px;
+    background-position: calc(100% - 15px) 15px, calc(100% - 10px) 15px;
     background-size: 5px 5px, 5px 5px;
     background-repeat: no-repeat;
   }
@@ -427,14 +435,14 @@ input[type="number"],
   }
 
   .btn {
-    height: 34px;
+    height: 36px;
     padding: 0 12px;
     border: 1px solid var(--line);
     border-radius: 8px;
     background: rgba(255, 255, 255, 0.045);
     color: var(--text);
     font: inherit;
-    font-size: 12.5px;
+    font-size: 13.5px;
     white-space: nowrap;
     cursor: pointer;
     transition: background 120ms ease, border-color 120ms ease, transform 80ms ease;
@@ -458,8 +466,8 @@ input[type="number"],
     position: relative;
     display: grid;
     place-items: center;
-    width: 34px;
-    min-width: 34px;
+    width: 36px;
+    min-width: 36px;
     padding: 0;
     color: var(--label);
   }
@@ -507,9 +515,9 @@ input[type="number"],
   }
 
   .btn.sm {
-    height: 28px;
+    height: 30px;
     padding: 0 10px;
-    font-size: 12px;
+    font-size: 13px;
   }
 
   .btn:disabled {
@@ -528,13 +536,13 @@ input[type="number"],
 
   .seg-item {
     flex: 1;
-    height: 28px;
+    height: 30px;
     border: 0;
     border-radius: 6px;
     background: transparent;
     color: var(--muted);
     font: inherit;
-    font-size: 12.5px;
+    font-size: 14px;
     cursor: pointer;
     transition: background 120ms ease, color 120ms ease;
   }
@@ -645,7 +653,7 @@ input[type="number"],
     overflow-y: auto;
     list-style: none;
     font-family: var(--font-num);
-    font-size: 11.5px;
+    font-size: 12.5px;
     line-height: 1.7;
     color: var(--muted);
     user-select: text;

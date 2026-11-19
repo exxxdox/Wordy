@@ -715,7 +715,7 @@ export default function App() {
             }}
           >
             <h2 className="text-sm font-semibold">新增音色</h2>
-            <label className="mt-3 block text-[13px]">
+            <label className="mt-3 block text-sm">
               Speaker ID
               <input
                 autoFocus
@@ -724,7 +724,7 @@ export default function App() {
                 onChange={(event) => setVoiceDraft({ ...voiceDraft, id: event.target.value })}
               />
             </label>
-            <label className="mt-3 block text-[13px]">
+            <label className="mt-3 block text-sm">
               名称
               <input
                 className="field mt-1.5"

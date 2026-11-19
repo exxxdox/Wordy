@@ -208,7 +208,7 @@ export default function TrimDialog({ snapshot, run }: Props) {
       </div>
 
       <div className="mt-3 grid grid-cols-2 gap-3">
-        <label className="text-[13px]">
+        <label className="text-sm">
           开始（秒）
           <input
             className="field mt-1"
@@ -220,7 +220,7 @@ export default function TrimDialog({ snapshot, run }: Props) {
             onChange={(event) => setStart(clamp(Number(event.target.value), 0, end - MIN_RANGE))}
           />
         </label>
-        <label className="text-[13px]">
+        <label className="text-sm">
           结束（秒）
           <input
             className="field mt-1"
@@ -241,7 +241,7 @@ export default function TrimDialog({ snapshot, run }: Props) {
       </p>
 
       <div className="mt-2 flex flex-wrap items-end gap-3">
-        <label className="min-w-[9rem] flex-1 text-[13px]">
+        <label className="min-w-[9rem] flex-1 text-sm">
           名称
           <input
             className="field mt-1"
@@ -275,7 +275,7 @@ export default function TrimDialog({ snapshot, run }: Props) {
         <div className="min-w-0 flex-1">
           {trim.rolling ? (
             <>
-              <label className="block text-[13px]">
+              <label className="block text-sm">
                 保存到轮盘
                 <select
                   className="field mt-1"

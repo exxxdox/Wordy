@@ -121,7 +121,7 @@ export default function WheelEditor({ snapshot, run }: Props) {
               录制
             </button>
           </div>
-          <label className="block text-[13px]">
+          <label className="block text-sm">
             名称
             <input
               ref={name.ref}
@@ -133,7 +133,7 @@ export default function WheelEditor({ snapshot, run }: Props) {
             />
           </label>
           <div>
-            <div className="mb-1.5 text-[13px]">槽位</div>
+            <div className="mb-1.5 text-sm">槽位</div>
             <p className="text-xs text-[var(--muted)]">点击下方轮盘扇区选择槽位</p>
           </div>
           <div className="rounded-xl border border-[var(--line-soft)] bg-[var(--field)] p-2">
@@ -156,7 +156,7 @@ export default function WheelEditor({ snapshot, run }: Props) {
       <Panel title={`槽位内容 · 第 ${slot + 1} 槽`}>
         <div className="flex flex-col gap-3">
           <div>
-            <div className="mb-1.5 text-[13px]">内容类型</div>
+            <div className="mb-1.5 text-sm">内容类型</div>
             <div className="seg" role="group" aria-label="内容类型">
               <button
                 className="seg-item"
@@ -204,7 +204,7 @@ export default function WheelEditor({ snapshot, run }: Props) {
               }}
             />
           )}
-          <label className="block text-[13px]">
+          <label className="block text-sm">
             名称
             <input
               ref={label.ref}
@@ -216,7 +216,7 @@ export default function WheelEditor({ snapshot, run }: Props) {
             />
           </label>
           {textMode && (
-            <label className="block text-[13px]">
+            <label className="block text-sm">
               朗读文字
               <input
                 ref={text.ref}
