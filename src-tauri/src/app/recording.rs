@@ -105,13 +105,7 @@ impl App {
         std::thread::Builder::new()
             .name("WordyDecodeTrim".into())
             .spawn(move || {
-                let result = (|| {
-                    let decoded = audio::decode_clip(&path, &cancel)?;
-                    let mut source = std::fs::File::open(decoded.as_ref())?;
-                    let mut copy = tempfile::Builder::new().suffix(".wav").tempfile()?;
-                    io::copy(&mut source, copy.as_file_mut())?;
-                    Ok(copy)
-                })();
+                let result = audio::decode_clip(&path, &cancel).and_then(trim_input);
                 let _ = events.send(Background::Recording(RecordingResult::TrimInput {
                     target: (wheel, slot),
                     result,
@@ -202,6 +196,20 @@ impl App {
     }
 }
 
+fn trim_input(decoded: audio::DecodedClip<'_>) -> io::Result<tempfile::NamedTempFile> {
+    match decoded {
+        // The decoder's temporary WAV already belongs exclusively to this trim session.
+        audio::DecodedClip::Temporary(file) => Ok(file),
+        audio::DecodedClip::Original(path) => {
+            // The slot's source may be replaced or deleted while the trim session is open.
+            let mut source = std::fs::File::open(path)?;
+            let mut copy = tempfile::Builder::new().suffix(".wav").tempfile()?;
+            io::copy(&mut source, copy.as_file_mut())?;
+            Ok(copy)
+        }
+    }
+}
+
 fn preserve_rolling(file: tempfile::NamedTempFile) -> io::Result<PathBuf> {
     file.keep()
         .map(|(_, path)| path)
@@ -212,6 +220,34 @@ fn preserve_rolling(file: tempfile::NamedTempFile) -> io::Result<PathBuf> {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn trim_input_reuses_the_decoded_temporary_wave() {
+        let wave = audio::write_wave(&audio::Pcm {
+            sample_rate: 48_000,
+            channels: 2,
+            samples: vec![12, -34],
+        })
+        .unwrap();
+        let original_path = wave.path().to_path_buf();
+        let input = trim_input(audio::DecodedClip::Temporary(wave)).unwrap();
+        assert_eq!(input.path(), original_path);
+        assert_eq!(audio::read_wave(input.path()).unwrap().samples, [12, -34]);
+    }
+
+    #[test]
+    fn trim_input_copies_a_wave_owned_by_the_slot() {
+        let wave = audio::write_wave(&audio::Pcm {
+            sample_rate: 48_000,
+            channels: 2,
+            samples: vec![56, -78],
+        })
+        .unwrap();
+        let input = trim_input(audio::DecodedClip::Original(wave.path())).unwrap();
+        assert_ne!(input.path(), wave.path());
+        drop(wave);
+        assert_eq!(audio::read_wave(input.path()).unwrap().samples, [56, -78]);
+    }
 
     #[test]
     fn preserving_a_stopped_recording_keeps_the_file_on_disk() {
