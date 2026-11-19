@@ -94,7 +94,12 @@ impl App {
                 }
                 self.change_key(provider, Some(value))?;
             }
-            DeleteKey(provider) => self.change_key(provider, None)?,
+            // 密钥存在 Windows 凭据管理器，删除后只能重新输入。
+            DeleteKey(provider) => {
+                if self.confirm_dialog("删除密钥", "删除已保存的 API 密钥？删除后需要重新输入。") {
+                    self.change_key(provider, None)?;
+                }
+            }
             RefreshVoices => {
                 self.status("正在加载音色…".into());
                 self.refresh_voices();

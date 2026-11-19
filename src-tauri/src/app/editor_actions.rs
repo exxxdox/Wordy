@@ -12,6 +12,28 @@ impl App {
             .ok_or_else(|| io::Error::other("轮盘不存在"))
     }
 
+    /// 槽位是否已有音频、文字或标签；清空与覆盖前据此决定要不要确认。
+    pub(super) fn slot_has_content(&self, index: usize, slot: usize) -> bool {
+        self.config
+            .settings()
+            .wheel(index)
+            .filter(|_| slot < crate::config::SLOT_COUNT)
+            .is_some_and(|wheel| {
+                !wheel.slots[slot].is_empty()
+                    || !wheel.texts[slot].is_empty()
+                    || !wheel.labels[slot].is_empty()
+            })
+    }
+
+    /// 导入或保存录音会覆盖目标槽：先清文字、再删除旧音频，不可撤销。
+    pub(super) fn confirm_slot_replace(&mut self, index: usize, slot: usize) -> bool {
+        !self.slot_has_content(index, slot)
+            || self.confirm_dialog(
+                "替换槽位",
+                "该槽已有内容，继续会清空文字并删除旧音频。是否继续？",
+            )
+    }
+
     pub(super) fn wheel_select(&mut self, index: usize) -> io::Result<()> {
         self.wheel_at(index)?;
         self.config
@@ -151,6 +173,12 @@ impl App {
     }
 
     pub(super) fn slot_clear(&mut self, index: usize, slot: usize) -> io::Result<()> {
+        // 清空会删掉标签、文字和音频文件，先确认；空槽无需确认。
+        if self.slot_has_content(index, slot)
+            && !self.confirm_dialog("清空槽位", "清空该槽的文字、标签与音频？")
+        {
+            return Ok(());
+        }
         self.stop_editor_preview();
         let old = self.wheel_at(index)?.slots[slot].clone();
         self.config.update_wheel(index, |wheel| {

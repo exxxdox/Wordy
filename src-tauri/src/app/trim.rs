@@ -225,6 +225,10 @@ impl App {
             return Err(io::Error::other("轮盘不存在"));
         }
         let slot = slot.min(crate::config::SLOT_COUNT - 1);
+        // 保存到已占用槽位会清空文字并删除旧音频；取消时保持截取窗口打开。
+        if !self.confirm_slot_replace(wheel, slot) {
+            return Ok(());
+        }
         let (previewing, source) = {
             let session = self.active_trim(id)?;
             (session.preview.take().is_some(), session.source.clone())

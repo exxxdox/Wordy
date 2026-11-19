@@ -66,6 +66,10 @@ impl App {
         slot: usize,
         path: PathBuf,
     ) -> io::Result<()> {
+        // 覆盖已占用槽位会删除旧音频，先确认；空槽直接导入。
+        if !self.confirm_slot_replace(wheel, slot) {
+            return Ok(());
+        }
         self.playback.stop_clip();
         let label = path
             .file_stem()
