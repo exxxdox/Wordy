@@ -207,10 +207,11 @@ export default function App() {
             <button
               key={item.id}
               onClick={() => setTab(item.id)}
+              aria-pressed={tab === item.id}
               className={`rounded-lg px-4 py-1.5 text-sm transition ${
                 tab === item.id
                   ? "bg-[var(--accent)] text-white"
-                  : "text-[var(--muted)] hover:text-white"
+                  : "text-[var(--muted)] hover:bg-white/8 hover:text-white"
               }`}
             >
               {item.label}
@@ -640,14 +641,14 @@ export default function App() {
       </div>
 
       {logs && (
-        <section className="absolute inset-x-6 bottom-16 top-16 flex flex-col rounded-2xl border border-white/15 bg-[#17171a]/95 p-4 shadow-2xl backdrop-blur">
+        <section className="panel-in absolute inset-x-6 bottom-16 top-16 flex flex-col rounded-2xl border border-white/15 bg-[#17171a]/95 p-4 shadow-2xl backdrop-blur">
           <header className="mb-2 flex items-center justify-between">
             <h2 className="text-sm font-semibold">日志</h2>
             <button className="btn" onClick={() => setLogs(null)}>
               关闭
             </button>
           </header>
-          <ol className="flex-1 overflow-y-auto whitespace-pre-wrap break-all font-mono text-xs leading-relaxed text-[var(--muted)]">
+          <ol className="flex-1 select-text overflow-y-auto whitespace-pre-wrap break-all font-mono text-xs leading-relaxed text-[var(--muted)]">
             {logs.length === 0 && <li>暂无日志</li>}
             {logs.map((line, index) => (
               <li key={index}>{line}</li>
@@ -824,7 +825,7 @@ function Slider({
     <div>
       <div className="mb-1.5 flex items-center justify-between text-[13px]">
         <span>{label}</span>
-        <span className="text-[var(--muted)]">{display}</span>
+        <span className="tabular-nums text-[var(--muted)]">{display}</span>
       </div>
       <input
         type="range"

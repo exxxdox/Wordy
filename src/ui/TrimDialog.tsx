@@ -176,7 +176,7 @@ export default function TrimDialog({ snapshot, run }: Props) {
   };
 
   return (
-    <section className="absolute inset-x-6 bottom-16 top-16 z-20 flex flex-col rounded-2xl border border-white/15 bg-[#17171a]/97 p-4 shadow-2xl backdrop-blur">
+    <section className="panel-in absolute inset-x-6 bottom-16 top-16 z-20 flex flex-col rounded-2xl border border-white/15 bg-[#17171a]/97 p-4 shadow-2xl backdrop-blur">
       <header className="mb-2 flex items-center justify-between">
         <h2 className="text-sm font-semibold">{trim.rolling ? "保存后台录制" : "截取录音"}</h2>
         <button
@@ -250,7 +250,7 @@ export default function TrimDialog({ snapshot, run }: Props) {
         <div className="w-44">
           <div className="mb-1.5 flex items-center justify-between text-[13px]">
             <span>音量</span>
-            <span className="text-[var(--muted)]">{Math.round(gain)}%</span>
+            <span className="tabular-nums text-[var(--muted)]">{Math.round(gain)}%</span>
           </div>
           <input
             type="range"
@@ -320,7 +320,7 @@ export default function TrimDialog({ snapshot, run }: Props) {
       </div>
 
       <footer className="mt-auto flex items-center justify-between pt-3">
-        <span className="text-xs text-[var(--muted)]">
+        <span className="tabular-nums text-xs text-[var(--muted)]">
           已选 {round(end - start)} 秒 / 共 {round(duration)} 秒
         </span>
         <div className="flex gap-2">

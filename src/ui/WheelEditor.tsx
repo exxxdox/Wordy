@@ -192,6 +192,7 @@ export default function WheelEditor({ snapshot, run }: Props) {
                 className={`btn flex-1 ${!textMode ? "border-[var(--accent)] bg-[var(--accent)]/20" : ""}`}
                 title="音频槽"
                 aria-label="音频槽"
+                aria-pressed={!textMode}
                 disabled={locked}
                 onClick={() => {
                   setEmptyTextMode(false);
@@ -204,6 +205,7 @@ export default function WheelEditor({ snapshot, run }: Props) {
                 className={`btn flex-1 ${textMode ? "border-[var(--accent)] bg-[var(--accent)]/20" : ""}`}
                 title="文字槽"
                 aria-label="文字槽"
+                aria-pressed={textMode}
                 disabled={locked}
                 onClick={() => {
                   setEmptyTextMode(true);
@@ -225,7 +227,7 @@ export default function WheelEditor({ snapshot, run }: Props) {
             <div>
               <div className="mb-1.5 flex items-center justify-between text-[13px]">
                 <span>音量</span>
-                <span className="text-[var(--muted)]">{gain}%</span>
+                <span className="tabular-nums text-[var(--muted)]">{gain}%</span>
               </div>
               <input
                 type="range"

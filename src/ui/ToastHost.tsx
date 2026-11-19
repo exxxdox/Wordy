@@ -25,11 +25,14 @@ export default function ToastHost() {
   if (cards.length === 0) return null;
 
   return (
-    <div className="pointer-events-none absolute bottom-16 right-6 z-40 flex w-80 flex-col gap-2">
+    <div
+      aria-live="polite"
+      className="pointer-events-none absolute bottom-16 right-6 z-40 flex w-80 flex-col gap-2"
+    >
       {cards.map((card) => (
         <div
           key={card.id}
-          className={`rounded-xl border px-3 py-2 text-sm shadow-lg backdrop-blur ${
+          className={`toast rounded-xl border px-3 py-2 text-sm shadow-lg backdrop-blur ${
             card.tone === "error"
               ? "border-red-400/40 bg-red-950/85 text-red-100"
               : "border-white/15 bg-[#1d1d21]/95 text-[var(--text)]"
