@@ -558,14 +558,17 @@ export default function App() {
                         </option>
                       ))}
                     </select>
-                    <button
-                      className="btn icon-btn"
-                      title="刷新音色"
-                      aria-label="刷新音色"
-                      onClick={() => run({ type: "refresh_voices" })}
-                    >
-                      <Icon name="refresh" />
-                    </button>
+                    {/* Volcengine 音色来自本地列表，没有可刷新的远端数据。 */}
+                    {provider === "Cartesia" && (
+                      <button
+                        className="btn icon-btn"
+                        title="刷新音色"
+                        aria-label="刷新音色"
+                        onClick={() => run({ type: "refresh_voices" })}
+                      >
+                        <Icon name="refresh" />
+                      </button>
+                    )}
                   </div>
                   <Hint>
                     {provider === "Volcengine"
