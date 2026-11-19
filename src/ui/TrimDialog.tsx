@@ -263,7 +263,7 @@ export default function TrimDialog({ snapshot, run }: Props) {
       </div>
 
       <div className="mt-3 flex gap-3">
-        <div className="relative aspect-[634/540] w-28 shrink-0 overflow-hidden rounded-lg border border-[var(--line-soft)] bg-[var(--field)]">
+        <div className="relative aspect-[634/540] w-64 shrink-0 overflow-hidden rounded-lg border border-[var(--line-soft)] bg-[var(--field)]">
           <WheelCanvas
             labels={targetLabels}
             font={snapshot.settings.ui_font}
