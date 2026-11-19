@@ -2,33 +2,60 @@ use std::mem;
 use std::os::windows::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
 use std::ptr;
-use windows_sys::Win32::Foundation::{HWND, LPARAM, WPARAM};
-use windows_sys::Win32::Graphics::Gdi::{
-    CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, COLOR_WINDOW, CreateFontW, DEFAULT_CHARSET,
-    DEFAULT_PITCH, DeleteObject, FW_NORMAL, GetSysColor, HFONT, OUT_DEFAULT_PRECIS,
+use windows_sys::Win32::Foundation::{HWND, LPARAM, RECT, WPARAM};
+use windows_sys::Win32::Graphics::Dwm::{
+    DWMWA_BORDER_COLOR, DWMWA_CAPTION_COLOR, DWMWA_TEXT_COLOR, DWMWA_USE_IMMERSIVE_DARK_MODE,
+    DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
 };
+use windows_sys::Win32::Graphics::Gdi::{
+    CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, CreateFontW, DC_BRUSH, DEFAULT_CHARSET, DEFAULT_PITCH,
+    DT_CALCRECT, DT_CENTER, DT_LEFT, DT_NOPREFIX, DT_SINGLELINE, DT_VCENTER, DT_WORDBREAK,
+    DeleteObject, DrawTextW, FW_NORMAL, FW_SEMIBOLD, GetDC, GetStockObject, HDC, HFONT,
+    InvalidateRect, MapWindowPoints, OPAQUE, OUT_DEFAULT_PRECIS, ReleaseDC, SelectObject,
+    SetBkColor, SetBkMode, SetDCBrushColor, SetTextColor,
+};
+use windows_sys::Win32::System::SystemServices::{SS_CENTER, SS_LEFT, SS_NOPREFIX};
 use windows_sys::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
 use windows_sys::Win32::UI::Controls::Dialogs::*;
+use windows_sys::Win32::UI::Controls::{
+    DRAWITEMSTRUCT, EM_SETSEL, ODS_DISABLED, ODS_FOCUS, ODS_SELECTED, ODT_BUTTON, WM_MOUSELEAVE,
+};
 use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::SetFocus;
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+    SetFocus, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent,
+};
+use windows_sys::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
-use crate::desktop::{wide, window_text};
-use crate::hotkey::{is_modifier, key_name, windows::is_down};
+use crate::desktop::{set_dwm, wide, window_text};
+use crate::hotkey::{display_hotkey, is_modifier, key_name, windows::is_down};
+use crate::settings_backdrop::{fill, round};
 
 // Win32 defines DWLP_USER as two pointer-sized dialog slots after DWLP_MSGRESULT.
 const DWLP_USER: i32 = (2 * mem::size_of::<usize>()) as i32;
 
-fn dialog_font(hwnd: HWND, font_family: &str) -> HFONT {
+// Same dark palette as the settings window and the wheel editor panels.
+const SURFACE: u32 = 0x001e_1c1c;
+const FIELD: u32 = 0x002e_2c2c;
+const BUTTON: u32 = 0x003b_3737;
+const BUTTON_HOVER: u32 = 0x0042_423e;
+const BUTTON_PRESSED: u32 = 0x0030_2d2d;
+const BORDER: u32 = 0x003a_3838;
+const HOVER_BORDER: u32 = 0x005f_5b5b;
+const PRIMARY: u32 = 0x00f7_f5f5;
+const MUTED: u32 = 0x009d_9898;
+const ACCENT: u32 = 0x00ff_840a;
+
+fn dialog_font_sized(hwnd: HWND, font_family: &str, points: i32, weight: i32) -> HFONT {
     let dpi = unsafe { GetDpiForWindow(hwnd) }.max(96) as i32;
     let family = wide(crate::config::ui_font_family(font_family));
     unsafe {
         CreateFontW(
-            -((9 * dpi) / 72),
+            -((points * dpi) / 72),
             0,
             0,
             0,
-            FW_NORMAL as i32,
+            weight,
             0,
             0,
             0,
@@ -39,6 +66,188 @@ fn dialog_font(hwnd: HWND, font_family: &str) -> HFONT {
             DEFAULT_PITCH as u32,
             family.as_ptr(),
         )
+    }
+}
+
+fn dialog_font(hwnd: HWND, font_family: &str) -> HFONT {
+    dialog_font_sized(hwnd, font_family, 9, FW_NORMAL as i32)
+}
+
+fn set_text(hwnd: HWND, id: i32, text: &str) {
+    let text = wide(text);
+    unsafe { SetDlgItemTextW(hwnd, id, text.as_ptr()) };
+}
+
+fn solid(dc: HDC, color: u32) -> isize {
+    unsafe {
+        SetDCBrushColor(dc, color);
+        GetStockObject(DC_BRUSH) as isize
+    }
+}
+
+/// Shared dark surface, label colours and owner-drawn buttons for every modal
+/// dialog, so the popups match the settings window instead of the light system
+/// defaults. Returns `None` for messages the dialog procedure must handle.
+fn paint_dialog(hwnd: HWND, message: u32, wp: WPARAM, lp: LPARAM) -> Option<isize> {
+    match message {
+        WM_ERASEBKGND => {
+            let mut rect = RECT::default();
+            unsafe { GetClientRect(hwnd, &mut rect) };
+            fill(wp as HDC, &rect, SURFACE);
+            Some(1)
+        }
+        WM_CTLCOLORDLG => Some(solid(wp as HDC, SURFACE)),
+        WM_CTLCOLORSTATIC => {
+            let dc = wp as HDC;
+            let id = unsafe { GetDlgCtrlID(lp as HWND) };
+            unsafe {
+                SetTextColor(dc, if id == 102 { MUTED } else { PRIMARY });
+                SetBkColor(dc, SURFACE);
+                SetBkMode(dc, OPAQUE as i32);
+            }
+            Some(solid(dc, SURFACE))
+        }
+        WM_CTLCOLOREDIT => {
+            let dc = wp as HDC;
+            unsafe {
+                SetTextColor(dc, PRIMARY);
+                SetBkColor(dc, FIELD);
+                SetBkMode(dc, OPAQUE as i32);
+            }
+            Some(solid(dc, FIELD))
+        }
+        WM_DRAWITEM if lp != 0 => {
+            let item = unsafe { &*(lp as *const DRAWITEMSTRUCT) };
+            (item.CtlType == ODT_BUTTON).then(|| {
+                paint_button(item);
+                1
+            })
+        }
+        _ => None,
+    }
+}
+
+fn paint_button(item: &DRAWITEMSTRUCT) {
+    let disabled = item.itemState & ODS_DISABLED != 0;
+    let pressed = item.itemState & ODS_SELECTED != 0;
+    let focused = item.itemState & ODS_FOCUS != 0;
+    let (background, border) = if disabled {
+        (FIELD, BORDER)
+    } else if pressed {
+        (BUTTON_PRESSED, BORDER)
+    } else if hovering(item.hwndItem) {
+        (BUTTON_HOVER, HOVER_BORDER)
+    } else {
+        (BUTTON, if focused { ACCENT } else { BORDER })
+    };
+    // Buttons sit on the dialog surface; the fill under the arcs avoids dark squares.
+    fill(item.hDC, &item.rcItem, SURFACE);
+    round(item.hDC, &item.rcItem, 9, border, Some(background));
+    let text = wide(&window_text(item.hwndItem));
+    let mut area = item.rcItem;
+    let font = unsafe { SendMessageW(item.hwndItem, WM_GETFONT, 0, 0) } as HFONT;
+    unsafe {
+        let previous = if font.is_null() {
+            std::ptr::null_mut()
+        } else {
+            windows_sys::Win32::Graphics::Gdi::SelectObject(item.hDC, font)
+        };
+        SetBkMode(
+            item.hDC,
+            windows_sys::Win32::Graphics::Gdi::TRANSPARENT as i32,
+        );
+        SetTextColor(item.hDC, if disabled { MUTED } else { PRIMARY });
+        DrawTextW(
+            item.hDC,
+            text.as_ptr(),
+            (text.len() - 1) as i32,
+            &mut area,
+            DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX,
+        );
+        if !previous.is_null() {
+            windows_sys::Win32::Graphics::Gdi::SelectObject(item.hDC, previous);
+        }
+    }
+}
+
+fn hovering(hwnd: HWND) -> bool {
+    let mut rect = RECT::default();
+    let mut cursor = windows_sys::Win32::Foundation::POINT::default();
+    unsafe {
+        GetWindowRect(hwnd, &mut rect);
+        GetCursorPos(&mut cursor);
+    }
+    (rect.left..rect.right).contains(&cursor.x) && (rect.top..rect.bottom).contains(&cursor.y)
+}
+
+const HOVER: windows_sys::core::PCWSTR = windows_sys::core::w!("Wordy.Dialog.Hover");
+
+/// Owner-drawn buttons cover their whole face, so the class brush must not
+/// erase them first; hover and focus repaint once per transition to avoid flicker.
+unsafe extern "system" fn no_erase_proc(
+    hwnd: HWND,
+    message: u32,
+    wp: WPARAM,
+    lp: LPARAM,
+    _id: usize,
+    _data: usize,
+) -> isize {
+    unsafe {
+        match message {
+            WM_ERASEBKGND => 1,
+            WM_MOUSEMOVE => {
+                let mut tracking = TRACKMOUSEEVENT {
+                    cbSize: mem::size_of::<TRACKMOUSEEVENT>() as u32,
+                    dwFlags: TME_LEAVE,
+                    hwndTrack: hwnd,
+                    dwHoverTime: 0,
+                };
+                TrackMouseEvent(&mut tracking);
+                if GetPropW(hwnd, HOVER).is_null() {
+                    SetPropW(hwnd, HOVER, 1 as _);
+                    InvalidateRect(hwnd, ptr::null(), 0);
+                }
+                DefSubclassProc(hwnd, message, wp, lp)
+            }
+            WM_MOUSELEAVE => {
+                RemovePropW(hwnd, HOVER);
+                InvalidateRect(hwnd, ptr::null(), 0);
+                DefSubclassProc(hwnd, message, wp, lp)
+            }
+            WM_SETFOCUS | WM_KILLFOCUS | WM_ENABLE | WM_SETTEXT => {
+                let result = DefSubclassProc(hwnd, message, wp, lp);
+                InvalidateRect(hwnd, ptr::null(), 0);
+                result
+            }
+            _ => DefSubclassProc(hwnd, message, wp, lp),
+        }
+    }
+}
+
+fn style_dialog(hwnd: HWND, buttons: &[i32]) {
+    for (attribute, value) in [
+        (DWMWA_USE_IMMERSIVE_DARK_MODE, 1),
+        (DWMWA_CAPTION_COLOR, SURFACE as i32),
+        (DWMWA_TEXT_COLOR, PRIMARY as i32),
+        (DWMWA_BORDER_COLOR, BORDER as i32),
+        (DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND),
+    ] {
+        set_dwm(hwnd, attribute, value);
+    }
+    for &id in buttons {
+        let button = unsafe { GetDlgItem(hwnd, id) };
+        if button.is_null() {
+            continue;
+        }
+        unsafe {
+            let style = GetWindowLongPtrW(button, GWL_STYLE) as u32;
+            SetWindowLongPtrW(
+                button,
+                GWL_STYLE,
+                ((style & !(BS_TYPEMASK as u32)) | BS_OWNERDRAW as u32) as isize,
+            );
+            SetWindowSubclass(button, Some(no_erase_proc), 1, 0);
+        }
     }
 }
 
@@ -128,20 +337,179 @@ pub fn file(
     accepted.then(|| std::ffi::OsString::from_wide(&name[..end]).into())
 }
 
-pub fn confirm(owner: HWND, title: &str, message: &str) -> bool {
-    let (title, message) = (wide(title), wide(message));
+pub fn confirm(owner: HWND, title: &str, message: &str, font_family: &str) -> bool {
+    let mut template = Template::with_size(title, 300, 104);
+    template.control(
+        0x82,
+        100,
+        message,
+        WS_VISIBLE | WS_CHILD | SS_LEFT | SS_NOPREFIX,
+        [16, 16, 268, 44],
+    );
+    template.control(
+        0x80,
+        IDOK as u16,
+        "确定",
+        WS_VISIBLE | WS_CHILD | WS_TABSTOP | BS_DEFPUSHBUTTON as u32,
+        [150, 72, 64, 22],
+    );
+    template.control(
+        0x80,
+        IDCANCEL as u16,
+        "取消",
+        WS_VISIBLE | WS_CHILD | WS_TABSTOP,
+        [222, 72, 62, 22],
+    );
+    let mut data = Confirm {
+        accepted: false,
+        font_family: font_family.into(),
+        font: ptr::null_mut(),
+    };
+    // The modal function keeps both the template and its callback state borrowed until it returns.
     unsafe {
-        MessageBoxW(
+        DialogBoxIndirectParamW(
+            ptr::null_mut(),
+            template.words.as_ptr().cast(),
             owner,
-            message.as_ptr(),
-            title.as_ptr(),
-            MB_YESNO | MB_DEFBUTTON2 | MB_ICONQUESTION,
-        ) == IDYES
+            Some(confirm_proc),
+            ptr::from_mut(&mut data) as LPARAM,
+        )
+    };
+    if !data.font.is_null() {
+        unsafe { DeleteObject(data.font) };
+    }
+    data.accepted
+}
+
+struct Confirm {
+    accepted: bool,
+    font_family: String,
+    font: HFONT,
+}
+
+/// Grows the dialog when a confirmation message needs more than one screenful
+/// of its initial label box, keeping the buttons anchored below the text.
+fn fit_message(hwnd: HWND) {
+    let label = unsafe { GetDlgItem(hwnd, 100) };
+    if label.is_null() {
+        return;
+    }
+    let mut client = RECT::default();
+    unsafe { GetClientRect(label, &mut client) };
+    let text = wide(&window_text(label));
+    let dc = unsafe { GetDC(hwnd) };
+    if dc.is_null() {
+        return;
+    }
+    let font = unsafe { SendMessageW(label, WM_GETFONT, 0, 0) } as HFONT;
+    let previous = if font.is_null() {
+        ptr::null_mut()
+    } else {
+        unsafe { SelectObject(dc, font) }
+    };
+    let mut measured = RECT {
+        left: 0,
+        top: 0,
+        right: client.right,
+        bottom: 0,
+    };
+    unsafe {
+        DrawTextW(
+            dc,
+            text.as_ptr(),
+            (text.len() - 1) as i32,
+            &mut measured,
+            DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX | DT_LEFT,
+        );
+    }
+    if !previous.is_null() {
+        unsafe { SelectObject(dc, previous) };
+    }
+    unsafe { ReleaseDC(hwnd, dc) };
+    let delta = measured.bottom - (client.bottom - client.top);
+    if delta <= 0 {
+        return;
+    }
+    let mut window = RECT::default();
+    unsafe { GetWindowRect(hwnd, &mut window) };
+    let (width, height) = (window.right - window.left, window.bottom - window.top);
+    unsafe {
+        SetWindowPos(
+            hwnd,
+            ptr::null_mut(),
+            window.left,
+            window.top - delta / 2,
+            width,
+            height + delta,
+            SWP_NOZORDER | SWP_NOACTIVATE,
+        );
+        SetWindowPos(
+            label,
+            ptr::null_mut(),
+            0,
+            0,
+            client.right,
+            client.bottom + delta,
+            SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE,
+        );
+        for id in [IDOK, IDCANCEL] {
+            let button = GetDlgItem(hwnd, id);
+            let mut bounds = RECT::default();
+            GetWindowRect(button, &mut bounds);
+            MapWindowPoints(ptr::null_mut(), hwnd, ptr::from_mut(&mut bounds).cast(), 2);
+            SetWindowPos(
+                button,
+                ptr::null_mut(),
+                bounds.left,
+                bounds.top + delta,
+                bounds.right - bounds.left,
+                bounds.bottom - bounds.top,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+        }
+    }
+}
+
+unsafe extern "system" fn confirm_proc(hwnd: HWND, message: u32, wp: WPARAM, lp: LPARAM) -> isize {
+    if let Some(result) = paint_dialog(hwnd, message, wp, lp) {
+        return result;
+    }
+    unsafe {
+        match message {
+            WM_INITDIALOG => {
+                SetWindowLongPtrW(hwnd, DWLP_USER, lp);
+                let data = &mut *(lp as *mut Confirm);
+                style_dialog(hwnd, &[IDOK, IDCANCEL]);
+                data.font = dialog_font(hwnd, &data.font_family);
+                apply_dialog_font(hwnd, data.font, &[100, IDOK, IDCANCEL]);
+                fit_message(hwnd);
+                PostMessageW(hwnd, FORCE_FOREGROUND, 0, 0);
+                1
+            }
+            FORCE_FOREGROUND => {
+                force_foreground(hwnd);
+                // Like the old Yes/No box, the safe answer owns Enter and focus.
+                SetFocus(GetDlgItem(hwnd, IDCANCEL));
+                SendMessageW(hwnd, DM_SETDEFID, IDCANCEL as usize, 0);
+                1
+            }
+            WM_COMMAND if matches!(wp as u16 as i32, IDOK | IDCANCEL) => {
+                let data = &mut *(GetWindowLongPtrW(hwnd, DWLP_USER) as *mut Confirm);
+                data.accepted = wp as u16 as i32 == IDOK;
+                EndDialog(hwnd, 0);
+                1
+            }
+            WM_CLOSE => {
+                EndDialog(hwnd, 0);
+                1
+            }
+            _ => 0,
+        }
     }
 }
 
 pub fn record_key(owner: HWND, single: bool, font_family: &str) -> Option<String> {
-    let mut template = Template::with_size("录制快捷键", 244, 68);
+    let mut template = Template::with_size("录制快捷键", 300, 124);
     template.control(
         0x82,
         100,
@@ -150,15 +518,29 @@ pub fn record_key(owner: HWND, single: bool, font_family: &str) -> Option<String
         } else {
             "请按下要使用的快捷键组合"
         },
-        WS_VISIBLE | WS_CHILD,
-        [12, 12, 212, 16],
+        WS_VISIBLE | WS_CHILD | SS_CENTER,
+        [16, 14, 268, 18],
+    );
+    template.control(
+        0x82,
+        101,
+        "…",
+        WS_VISIBLE | WS_CHILD | SS_CENTER,
+        [16, 38, 268, 30],
+    );
+    template.control(
+        0x82,
+        102,
+        "松开即保存，按 Esc 取消",
+        WS_VISIBLE | WS_CHILD | SS_CENTER,
+        [16, 74, 268, 16],
     );
     template.control(
         0x80,
         IDCANCEL as u16,
         "取消",
         WS_VISIBLE | WS_CHILD | WS_TABSTOP,
-        [170, 36, 60, 18],
+        [208, 96, 76, 22],
     );
     let mut capture = Capture {
         previous: [false; 256],
@@ -167,6 +549,8 @@ pub fn record_key(owner: HWND, single: bool, font_family: &str) -> Option<String
         single,
         font_family: font_family.into(),
         font: ptr::null_mut(),
+        value_font: ptr::null_mut(),
+        shown: String::new(),
     };
     // The dialog procedure accesses this state only during the modal call.
     unsafe {
@@ -178,8 +562,10 @@ pub fn record_key(owner: HWND, single: bool, font_family: &str) -> Option<String
             ptr::from_mut(&mut capture) as isize,
         )
     };
-    if !capture.font.is_null() {
-        unsafe { DeleteObject(capture.font) };
+    for font in [capture.font, capture.value_font] {
+        if !font.is_null() {
+            unsafe { DeleteObject(font) };
+        }
     }
     capture.result
 }
@@ -191,16 +577,40 @@ struct Capture {
     single: bool,
     font_family: String,
     font: HFONT,
+    value_font: HFONT,
+    shown: String,
+}
+
+/// Preview of the modifiers held before the main key lands, mirroring the
+/// order the recorded binding uses.
+fn modifier_preview(down: &[bool; 256]) -> Option<String> {
+    let parts: Vec<_> = [
+        (down[0x11], "Ctrl"),
+        (down[0x10], "Shift"),
+        (down[0x12], "Alt"),
+        (down[0x5b] || down[0x5c], "Win"),
+    ]
+    .into_iter()
+    .filter_map(|(active, name)| active.then_some(name))
+    .collect();
+    (!parts.is_empty()).then(|| format!("{} + …", parts.join(" + ")))
 }
 
 unsafe extern "system" fn capture_proc(hwnd: HWND, message: u32, wp: WPARAM, lp: LPARAM) -> isize {
+    if let Some(result) = paint_dialog(hwnd, message, wp, lp) {
+        return result;
+    }
     unsafe {
         match message {
             WM_INITDIALOG => {
                 SetWindowLongPtrW(hwnd, DWLP_USER, lp);
                 let data = &mut *(lp as *mut Capture);
+                style_dialog(hwnd, &[IDCANCEL]);
                 data.font = dialog_font(hwnd, &data.font_family);
-                apply_dialog_font(hwnd, data.font, &[100, IDCANCEL]);
+                data.value_font =
+                    dialog_font_sized(hwnd, &data.font_family, 12, FW_SEMIBOLD as i32);
+                apply_dialog_font(hwnd, data.font, &[100, 102, IDCANCEL]);
+                apply_dialog_font(hwnd, data.value_font, &[101]);
                 // The dialog is still hidden here; activate it once shown.
                 PostMessageW(hwnd, FORCE_FOREGROUND, 0, 0);
                 data.previous = std::array::from_fn(|key| is_down(key as u16));
@@ -215,6 +625,11 @@ unsafe extern "system" fn capture_proc(hwnd: HWND, message: u32, wp: WPARAM, lp:
             WM_TIMER if GetForegroundWindow() == hwnd => {
                 let data = &mut *(GetWindowLongPtrW(hwnd, DWLP_USER) as *mut Capture);
                 let down: [bool; 256] = std::array::from_fn(|key| is_down(key as u16));
+                // Esc is the dialog's cancel affordance, never a recording.
+                if down[0x1b] {
+                    EndDialog(hwnd, 0);
+                    return 1;
+                }
                 if let Some((key, _)) = &data.pressed
                     && !down[usize::from(*key)]
                 {
@@ -250,9 +665,21 @@ unsafe extern "system" fn capture_proc(hwnd: HWND, message: u32, wp: WPARAM, lp:
                             parts.push(&key_name);
                             parts.join("+")
                         };
+                        let shown = display_hotkey(&binding);
+                        if shown != data.shown {
+                            set_text(hwnd, 101, &shown);
+                            data.shown = shown;
+                        }
                         data.pressed = Some((key as u16, binding));
                         break;
                     }
+                }
+                if data.pressed.is_none()
+                    && let Some(preview) = modifier_preview(&down)
+                    && preview != data.shown
+                {
+                    set_text(hwnd, 101, &preview);
+                    data.shown = preview;
                 }
                 data.previous = down;
                 1
@@ -289,7 +716,13 @@ pub fn prompt(
         font: ptr::null_mut(),
     };
     let mut template = Template::new(title);
-    template.control(0x0082, 100, label, WS_VISIBLE | WS_CHILD, [9, 9, 214, 16]);
+    template.control(
+        0x0082,
+        100,
+        label,
+        WS_VISIBLE | WS_CHILD | SS_LEFT | SS_NOPREFIX,
+        [9, 9, 214, 16],
+    );
     template.control(
         0x0081,
         101,
@@ -297,10 +730,9 @@ pub fn prompt(
         WS_VISIBLE
             | WS_CHILD
             | WS_TABSTOP
-            | WS_BORDER
             | ES_AUTOHSCROLL as u32
             | if password { ES_PASSWORD as u32 } else { 0 },
-        [9, 28, 214, 16],
+        [9, 28, 214, 20],
     );
     template.control(
         0x0080,
@@ -345,19 +777,26 @@ unsafe extern "system" fn prompt_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
             WM_INITDIALOG => {
                 let data = &mut *(lp as *mut Prompt);
                 SetWindowLongPtrW(hwnd, DWLP_USER, lp);
+                style_dialog(hwnd, &[IDOK, IDCANCEL]);
                 data.font = dialog_font(hwnd, &data.font_family);
                 apply_dialog_font(hwnd, data.font, &[100, 101, IDOK, IDCANCEL]);
+                // Enter submits the field instead of the owner-drawn button type losing the default.
+                SendMessageW(hwnd, DM_SETDEFID, IDOK as usize, 0);
+                // The prompt field matches the settings editors: rounded corners
+                // over the dialog surface and vertically centred text.
+                let field = GetDlgItem(hwnd, 101);
+                crate::panels::style_card_edit(field, FIELD, SURFACE);
                 PostMessageW(hwnd, FORCE_FOREGROUND, 0, 0);
                 let value = wide(data.value.as_deref().unwrap_or_default());
                 SetDlgItemTextW(hwnd, 101, value.as_ptr());
-                // Native single-line edits draw at the top; centre the text in
-                // the prompt field the same way the settings editors do.
-                crate::desktop::center_edit_text(GetDlgItem(hwnd, 101), GetSysColor(COLOR_WINDOW));
                 1
             }
             FORCE_FOREGROUND => {
                 force_foreground(hwnd);
-                SetFocus(GetDlgItem(hwnd, 101));
+                let field = GetDlgItem(hwnd, 101);
+                SetFocus(field);
+                // Replace the existing value directly so typing overwrites it.
+                SendMessageW(field, EM_SETSEL, 0, -1);
                 1
             }
             WM_COMMAND if matches!(wp as u16 as i32, IDOK | IDCANCEL) => {
@@ -554,5 +993,70 @@ mod tests {
         unsafe { DestroyWindow(owner) };
         assert!(binding.is_none(), "cancel must not record a binding");
         assert!(took_foreground, "the recorder must own the keyboard");
+    }
+
+    fn when_visible(title: &[u16]) -> HWND {
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        loop {
+            let dialog = unsafe { FindWindowW(ptr::null(), title.as_ptr()) };
+            if !dialog.is_null() && unsafe { IsWindowVisible(dialog) } != 0 {
+                return dialog;
+            }
+            if std::time::Instant::now() >= deadline {
+                return ptr::null_mut();
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn confirmation_reports_which_button_was_pressed() {
+        let instance = unsafe { GetModuleHandleW(ptr::null()) };
+        let owner = host_window(instance).unwrap();
+        for (title, command, expected) in [
+            ("确认框测试-确定", IDOK, true),
+            ("确认框测试-取消", IDCANCEL, false),
+        ] {
+            let title_wide = wide(title);
+            let probe = std::thread::spawn(move || {
+                let dialog = when_visible(&title_wide);
+                assert!(!dialog.is_null(), "the confirmation never appeared");
+                unsafe { PostMessageW(dialog, WM_COMMAND, command as usize, 0) };
+            });
+            let result = confirm(owner, title, "是否继续？", crate::config::DEFAULT_UI_FONT);
+            probe.join().unwrap();
+            assert_eq!(
+                result, expected,
+                "confirmation button {command} mapped wrong"
+            );
+        }
+        unsafe { DestroyWindow(owner) };
+    }
+
+    #[test]
+    fn prompt_returns_the_edited_value() {
+        let instance = unsafe { GetModuleHandleW(ptr::null()) };
+        let owner = host_window(instance).unwrap();
+        let title = wide("输入框测试");
+        let probe = std::thread::spawn(move || {
+            let dialog = when_visible(&title);
+            assert!(!dialog.is_null(), "the prompt never appeared");
+            let value = wide("新名称");
+            unsafe {
+                SetDlgItemTextW(dialog, 101, value.as_ptr());
+                PostMessageW(dialog, WM_COMMAND, IDOK as usize, 0);
+            }
+        });
+        let value = prompt(
+            owner,
+            "输入框测试",
+            "轮盘名称",
+            "旧名称",
+            false,
+            crate::config::DEFAULT_UI_FONT,
+        );
+        probe.join().unwrap();
+        unsafe { DestroyWindow(owner) };
+        assert_eq!(value.as_deref(), Some("新名称"));
     }
 }

@@ -59,24 +59,17 @@ impl App {
             ADD if notification == 0 => {
                 // Record the wheel's shortcut like every other hotkey field;
                 // typing it into a text box left function keys unrecorded.
-                let Some(value) = capture_binding(
+                let font = self.config.settings().ui_font.clone();
+                let Some(index) = record_new_wheel(
+                    &mut self.config,
                     &mut self.hotkeys,
                     self.settings_window.hwnd(),
-                    false,
-                    &self.config.settings().ui_font,
+                    &font,
                 )?
                 else {
                     return Ok(());
                 };
-                let hotkey = value.trim().to_owned();
-                parse_hotkey(&hotkey)
-                    .map_err(|error| io::Error::other(format!("快捷键无效：{error}")))?;
-                let mut next = self.config.settings().clone();
-                next.additional_chat_wheels
-                    .push(crate::config::Wheel::new(hotkey));
-                next.chat_wheel_last_index = next.wheel_count() - 1;
-                self.hotkeys.update(&mut self.config, next)?;
-                editor.wheel = self.config.settings().chat_wheel_last_index;
+                editor.wheel = index;
                 editor.slot = 0;
             }
             REMOVE if notification == 0 => {
@@ -84,7 +77,12 @@ impl App {
                 if next.wheel_count() == 1 {
                     return Err(io::Error::other("至少保留一个轮盘"));
                 }
-                if !dialog::confirm(hwnd, "删除轮盘", "删除此轮盘及其槽位？") {
+                if !dialog::confirm(
+                    hwnd,
+                    "删除轮盘",
+                    "删除此轮盘及其槽位？",
+                    &self.config.settings().ui_font,
+                ) {
                     return Ok(());
                 }
                 let removed = next.wheel(wheel).unwrap();
@@ -148,7 +146,12 @@ impl App {
                 let current = self.config.settings().wheel(wheel).unwrap();
                 if to_text
                     && !current.slots[slot].is_empty()
-                    && !dialog::confirm(hwnd, "切换为文字", "切换为文字会删除该槽音频，继续？")
+                    && !dialog::confirm(
+                        hwnd,
+                        "切换为文字",
+                        "切换为文字会删除该槽音频，继续？",
+                        &self.config.settings().ui_font,
+                    )
                 {
                     return Ok(());
                 }

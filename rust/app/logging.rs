@@ -83,6 +83,7 @@ impl App {
                 owner,
                 "缺少 FFmpeg",
                 "此音频需要 FFmpeg。系统未找到 WinGet，是否打开 FFmpeg 下载页面？安装后请将其目录加入 PATH。",
+                &self.config.settings().ui_font,
             ) {
                 self.open_url("https://ffmpeg.org/download.html")?;
             }
@@ -92,6 +93,7 @@ impl App {
             owner,
             "缺少 FFmpeg",
             "此音频需要 FFmpeg。是否通过 Windows 程序包管理器（WinGet）下载并安装？",
+            &self.config.settings().ui_font,
         ) {
             let events = self.jobs.clone();
             // Installation can take time. Let the user keep working and report completion on the UI thread.

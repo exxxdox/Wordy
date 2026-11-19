@@ -321,14 +321,7 @@ impl SettingsWindow {
     }
 
     pub(super) fn confirm(&self, message: &str) -> bool {
-        let message = wide(message);
-        unsafe {
-            MessageBoxW(
-                self.hwnd,
-                message.as_ptr(),
-                w!("Wordy"),
-                MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2,
-            ) == IDYES
-        }
+        // One confirmation surface for the whole app, styled like the settings window.
+        crate::dialog::confirm(self.hwnd, "Wordy", message, &self.settings.ui_font)
     }
 }

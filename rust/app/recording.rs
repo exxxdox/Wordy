@@ -10,10 +10,9 @@ use windows_sys::Win32::Foundation::HWND;
 use windows_sys::Win32::UI::WindowsAndMessaging::{CBN_SELCHANGE, EN_KILLFOCUS, IDCANCEL};
 
 use crate::audio::{self, Recording};
-use crate::hotkey::parse_hotkey;
 use crate::panels::{self, Trim};
 
-use super::{App, Background, capture_binding, gain, local_time};
+use super::{App, Background, gain, local_time, record_new_wheel};
 
 // Handle clip saves alongside recording because both can update or close the trim session.
 pub(super) enum RecordingResult {
@@ -189,24 +188,14 @@ impl App {
                 session.window.refresh(self.config.settings())?;
             }
             ADD if notification == 0 => {
-                // Same recorder as the wheel editor and the settings hotkeys.
-                let Some(value) = capture_binding(
-                    &mut self.hotkeys,
-                    hwnd,
-                    false,
-                    &self.config.settings().ui_font,
-                )?
+                // Same recorder and append path as the wheel editor.
+                let font = self.config.settings().ui_font.clone();
+                let Some(index) =
+                    record_new_wheel(&mut self.config, &mut self.hotkeys, hwnd, &font)?
                 else {
                     return Ok(());
                 };
-                let hotkey = value.trim().to_owned();
-                parse_hotkey(&hotkey)
-                    .map_err(|error| io::Error::other(format!("快捷键无效：{error}")))?;
-                let mut next = self.config.settings().clone();
-                next.additional_chat_wheels
-                    .push(crate::config::Wheel::new(hotkey));
-                self.hotkeys.update(&mut self.config, next)?;
-                session.window.wheel = self.config.settings().wheel_count() - 1;
+                session.window.wheel = index;
                 session.window.slot = 0;
                 session.window.refresh(self.config.settings())?;
             }

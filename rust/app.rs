@@ -515,6 +515,27 @@ fn capture_binding(
     }
 }
 
+/// Every "new wheel" entry point uses the same recorder popup and appends the
+/// wheel through the same validated, hotkey-registering path.
+fn record_new_wheel(
+    config: &mut ConfigStore,
+    hotkeys: &mut Hotkeys,
+    owner: HWND,
+    font_family: &str,
+) -> io::Result<Option<usize>> {
+    let Some(value) = capture_binding(hotkeys, owner, false, font_family)? else {
+        return Ok(None);
+    };
+    let hotkey = value.trim().to_owned();
+    parse_hotkey(&hotkey).map_err(|error| io::Error::other(format!("快捷键无效：{error}")))?;
+    let mut next = config.settings().clone();
+    next.additional_chat_wheels
+        .push(crate::config::Wheel::new(hotkey));
+    next.chat_wheel_last_index = next.wheel_count() - 1;
+    hotkeys.update(config, next)?;
+    Ok(Some(config.settings().chat_wheel_last_index))
+}
+
 fn local_time() -> windows_sys::Win32::Foundation::SYSTEMTIME {
     use windows_sys::Win32::Foundation::SYSTEMTIME;
     use windows_sys::Win32::System::SystemInformation::GetLocalTime;

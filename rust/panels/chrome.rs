@@ -181,7 +181,7 @@ const EDIT_SUBCLASS: usize = 12;
 
 /// Centres the single-line text and rounds the field: the corners outside the
 /// border show the card behind the edit instead of the edit's flat fill.
-fn style_card_edit(hwnd: HWND, fill_color: u32, corner: u32) {
+pub(crate) fn style_card_edit(hwnd: HWND, fill_color: u32, corner: u32) {
     unsafe {
         SetPropW(hwnd, EDIT_CORNER, corner as usize as _);
         SetWindowSubclass(hwnd, Some(card_edit_proc), EDIT_SUBCLASS, 0);

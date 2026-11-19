@@ -354,6 +354,7 @@ impl App {
                 owner,
                 title,
                 "将替换全部设置和 API 密钥。成功后 Wordy 会退出，请重新启动。是否继续？",
+                &self.config.settings().ui_font,
             )
         {
             return Ok(());

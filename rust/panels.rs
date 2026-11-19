@@ -43,6 +43,7 @@ mod preview;
 mod trim;
 
 mod chrome;
+pub(crate) use chrome::style_card_edit;
 pub(super) use chrome::{Chrome, ChromeState};
 pub use editor::Editor;
 pub use preview::wheel_labels;
