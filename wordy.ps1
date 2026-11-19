@@ -1,4 +1,4 @@
-# Wordy 统一入口：.\wordy.ps1 [init|dev|build] [-Clean] [-NoPause]
+﻿# Wordy 统一入口：.\wordy.ps1 [init|dev|build] [-Clean] [-NoPause]
 # 默认 dev；-Clean 仅用于 build，-NoPause 用于非交互执行。
 param(
     [Parameter(Position = 0)]
@@ -62,6 +62,12 @@ try {
         'dev' {
             if (-not (Test-Path -LiteralPath $frontend)) {
                 Invoke-Step $pnpm.Source @('install', '--allow-build=esbuild')
+            }
+            # 上次未退出的 Vite 会占住 1420，Tauri 随后报一个难读的 dev server 错误。
+            $busy = Get-NetTCPConnection -LocalPort 1420 -State Listen -ErrorAction SilentlyContinue
+            if ($busy) {
+                $owners = ($busy | Select-Object -ExpandProperty OwningProcess -Unique) -join ', '
+                throw "端口 1420 已被进程 $owners 占用。结束该进程后重试（通常是上次未退出的 Vite）。"
             }
             Write-Host '[dev] Starting Wordy...'
             Invoke-Step $cargoCommand.Source @('tauri', 'dev')
