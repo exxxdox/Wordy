@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 // 与 Windows 打包共用源文件，更新应用图标时会同步更新设置页。
 import appIcon from "../../src-tauri/icons/icon.ico?url";
 import WheelEditor from "./WheelEditor";
@@ -194,11 +195,20 @@ export default function App() {
     },
   );
 
+  // 无系统标题栏后，顶栏关闭与底部按钮共用同一动作：通知原生端再隐藏窗口。
+  const closeSettings = () => {
+    run({ type: "closed" });
+    invoke("wordy_hide").catch((error) => console.error(error));
+  };
+
   if (!snapshot) {
     return (
-      <main className="flex h-screen items-center justify-center text-sm text-[var(--muted)]">
-        正在加载设置…
-      </main>
+      <div className="app-frame">
+        <Titlebar onClose={closeSettings} />
+        <main className="flex flex-1 items-center justify-center text-sm text-[var(--muted)]">
+          正在加载设置…
+        </main>
+      </div>
     );
   }
 
@@ -233,7 +243,9 @@ export default function App() {
   };
 
   return (
-    <main className="app-shell">
+    <div className="app-frame">
+      <Titlebar onClose={closeSettings} />
+      <main className="app-shell">
       <aside className="rail">
         <div className="brand">
           <img className="brand-mark" src={appIcon} width={40} height={40} alt="" />
@@ -662,13 +674,7 @@ export default function App() {
 
         <footer className="content-foot">
           <span>关闭窗口后在托盘继续运行</span>
-          <button
-            className="btn"
-            onClick={() => {
-              run({ type: "closed" });
-              invoke("wordy_hide").catch((error) => console.error(error));
-            }}
-          >
+          <button className="btn" onClick={closeSettings}>
             关闭设置
           </button>
         </footer>
@@ -766,7 +772,30 @@ export default function App() {
       <TrimDialog snapshot={snapshot} run={run} />
       <DialogHost />
       <ToastHost />
-    </main>
+      </main>
+    </div>
+  );
+}
+
+function Titlebar({ onClose }: { onClose: () => void }) {
+  return (
+    <header className="titlebar" data-tauri-drag-region="deep">
+      <img className="titlebar-mark" src={appIcon} width={16} height={16} alt="" />
+      <span className="titlebar-title">Wordy 设置</span>
+      <div className="titlebar-actions">
+        <button
+          className="titlebar-btn"
+          title="最小化"
+          aria-label="最小化"
+          onClick={() => getCurrentWindow().minimize().catch((error) => console.error(error))}
+        >
+          <Icon name="minimize" />
+        </button>
+        <button className="titlebar-btn close" title="关闭设置" aria-label="关闭设置" onClick={onClose}>
+          <Icon name="close" />
+        </button>
+      </div>
+    </header>
   );
 }
 

@@ -123,6 +123,7 @@ const ICONS = {
   trash: <path d="M3.6 5h8.8M6.4 5V3.6h3.2V5M4.8 5l.5 7.4h5.4L11.2 5" />,
   refresh: <path d="M12.8 8A4.8 4.8 0 1 1 11 4.2M12.8 3.6v2.8h-2.8" />,
   close: <path d="m4.4 4.4 7.2 7.2M11.6 4.4l-7.2 7.2" />,
+  minimize: <path d="M3.5 8h9" />,
 } as const;
 
 export type IconName = keyof typeof ICONS;
