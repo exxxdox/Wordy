@@ -93,7 +93,7 @@ fn a_missing_decoder_is_distinguished_from_a_missing_audio_file() {
     std::fs::write(&source, []).unwrap();
     let cancel = AtomicBool::new(false);
     let error = decode_clip_with(&source, &cancel, || None).err().unwrap();
-    assert!(error.get_ref().unwrap().is::<MissingFfmpeg>());
+    assert_eq!(error.to_string(), "音频解码器不可用");
     let error = decode_clip_with(&directory.path().join("missing.mp3"), &cancel, || {
         panic!("the source should be checked first")
     })

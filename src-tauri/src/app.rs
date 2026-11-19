@@ -21,7 +21,6 @@ use crate::audio::{self, Recording};
 use crate::config::{AudioIdentity, ConfigStore, Settings, Voice, WindowPosition};
 use crate::credentials::{CredentialStore, Provider, WindowsCredentials, normalize_api_key_input};
 use crate::desktop::*;
-use crate::ffmpeg;
 use crate::file_log::FileLog;
 use crate::hotkey::{display_hotkey, parse_hotkey, windows::Registration};
 use crate::playback::{EngineSettings, Event, Playback};
@@ -136,7 +135,6 @@ struct App {
     exiting: bool,
     skip_config_flush: bool,
     voices_request: Option<u64>,
-    ffmpeg_installing: bool,
     next_job: u64,
     logs: VecDeque<String>,
     file_log: Option<FileLog>,
@@ -145,7 +143,6 @@ struct App {
 enum Background {
     Recording(RecordingResult),
     NotificationFailed(String),
-    FfmpegInstalled(io::Result<()>),
     Backup {
         import: bool,
         result: io::Result<()>,
@@ -218,7 +215,6 @@ impl App {
             exiting: false,
             skip_config_flush: false,
             voices_request: None,
-            ffmpeg_installing: false,
             next_job: 0,
             logs: VecDeque::new(),
             file_log: None,
@@ -563,22 +559,6 @@ impl App {
                 // Fall back to the tray when the notification-center sender is unavailable.
                 self.tray.notify(&message);
                 self.log_at("WARNING", "Windows 通知发送失败，已改用托盘提示".into());
-            }
-            Background::FfmpegInstalled(result) => {
-                self.ffmpeg_installing = false;
-                if !exiting {
-                    match result {
-                        Ok(()) => {
-                            let message = "FFmpeg 已安装，请重试刚才的音频操作".into();
-                            if self.settings_visible() {
-                                self.status(message);
-                            } else {
-                                self.notify(message);
-                            }
-                        }
-                        Err(error) => self.failure(format!("安装 FFmpeg 失败：{error}")),
-                    }
-                }
             }
             Background::Backup { import, result } => {
                 self.backup_running = false;

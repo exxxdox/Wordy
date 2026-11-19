@@ -1,4 +1,3 @@
-use std::fmt;
 use std::fs::File;
 use std::io::{self, Cursor, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -379,17 +378,6 @@ pub(crate) fn validate_clip(path: &Path, cancel: &AtomicBool) -> io::Result<()> 
     decode_with(path, cancel, crate::ffmpeg::find, Some(5)).map(drop)
 }
 
-#[derive(Debug)]
-pub(crate) struct MissingFfmpeg;
-
-impl fmt::Display for MissingFfmpeg {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("未找到系统 FFmpeg")
-    }
-}
-
-impl std::error::Error for MissingFfmpeg {}
-
 #[cfg(test)]
 fn decode_clip_with<'a>(
     path: &'a Path,
@@ -417,8 +405,8 @@ fn decode_with<'a>(
     {
         return Ok(DecodedClip::Original(path));
     }
-    let executable =
-        resolve_decoder().ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, MissingFfmpeg))?;
+    // 只用随 exe 打包的解码器；没有它就无法导入/播放这些格式。
+    let executable = resolve_decoder().ok_or_else(|| invalid_audio("音频解码器不可用"))?;
     let output = Builder::new()
         .prefix("wordy-clip-")
         .suffix(".wav")
@@ -470,27 +458,17 @@ fn decode_with<'a>(
         use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
         command.creation_flags(CREATE_NO_WINDOW);
     }
-    let mut child = command.spawn().map_err(|error| {
-        if error.kind() == io::ErrorKind::NotFound {
-            io::Error::new(error.kind(), MissingFfmpeg)
-        } else {
-            io::Error::new(error.kind(), format!("无法启动系统 FFmpeg：{error}"))
-        }
-    })?;
+    let mut child = command
+        .spawn()
+        .map_err(|error| io::Error::other(format!("无法启动音频解码器：{error}")))?;
     let status = wait_for_decoder(&mut child, output.as_file(), cancel);
     if status.is_err() {
         let _ = child.kill();
         let _ = child.wait();
     }
+    // 内嵌解码器不覆盖的编码/损坏文件统一按「不支持」处理，不引导安装其它 FFmpeg。
     if !status?.success() {
-        let mut detail = Vec::new();
-        let mut log = diagnostic.reopen()?;
-        log.seek(SeekFrom::Start(log.metadata()?.len().saturating_sub(4096)))?;
-        log.take(4096).read_to_end(&mut detail)?;
-        return Err(io::Error::other(format!(
-            "音频解码失败：{}",
-            String::from_utf8_lossy(&detail).trim()
-        )));
+        return Err(invalid_audio("不支持导入此音频格式"));
     }
     let wave = WaveFile::open(output.path())?;
     if wave.total_frames == 0

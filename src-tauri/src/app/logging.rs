@@ -46,52 +46,7 @@ impl App {
     }
 
     pub(super) fn report_error(&mut self, action: &str, error: io::Error) {
-        if error
-            .get_ref()
-            .is_some_and(|cause| cause.is::<audio::MissingFfmpeg>())
-        {
-            self.log_at("WARNING", format!("{action}：{error}"));
-            if let Err(error) = self.offer_ffmpeg_install() {
-                self.failure(format!("无法安装 FFmpeg：{error}"));
-            }
-        } else {
-            self.failure(format!("{action}：{error}"));
-        }
-    }
-
-    pub(super) fn offer_ffmpeg_install(&mut self) -> io::Result<()> {
-        if self.ffmpeg_installing {
-            return Ok(());
-        }
-        if ffmpeg::find().is_some() {
-            self.status("已检测到 FFmpeg，请重试刚才的音频操作".into());
-            return Ok(());
-        }
-        let Some(winget) = ffmpeg::winget() else {
-            if self.confirm_dialog(
-                "缺少 FFmpeg",
-                "此音频需要 FFmpeg。系统未找到 WinGet，是否打开 FFmpeg 下载页面？安装后请将其目录加入 PATH。",
-            ) {
-                self.open_url("https://ffmpeg.org/download.html")?;
-            }
-            return Ok(());
-        };
-        if self.confirm_dialog(
-            "缺少 FFmpeg",
-            "此音频需要 FFmpeg。是否通过 Windows 程序包管理器（WinGet）下载并安装？",
-        ) {
-            let events = self.jobs.clone();
-            // Installation can take time. Let the user keep working and report completion on the UI thread.
-            std::thread::Builder::new()
-                .name("WordyInstallFfmpeg".into())
-                .spawn(move || {
-                    let result = ffmpeg::install(&winget);
-                    let _ = events.send(Background::FfmpegInstalled(result));
-                })?;
-            self.ffmpeg_installing = true;
-            self.status("正在下载并安装 FFmpeg…".into());
-        }
-        Ok(())
+        self.failure(format!("{action}：{error}"));
     }
 
     pub(super) fn failure(&mut self, message: String) {

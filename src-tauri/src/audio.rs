@@ -27,7 +27,6 @@ pub(crate) fn audio_extension(path: &Path) -> Option<String> {
 mod wave;
 
 #[cfg(windows)]
-pub(crate) use wave::MissingFfmpeg;
 pub(crate) use wave::validate_clip;
 pub use wave::{
     DecodedClip, decode_clip, read_tts_wave, read_wave, recording_duration, trim_recording,
