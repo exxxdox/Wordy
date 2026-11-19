@@ -27,8 +27,11 @@
   --accent-soft: rgba(227, 169, 75, 0.14);
   --ok: #7cc98f;
   --danger: #e2776b;
-  --font-ui: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
-  --font-num: "Cascadia Mono", Consolas, "Segoe UI", monospace;
+  /* 设置里的「界面字体」写入 *-configured；未安装时回落到内置字体栈。 */
+  --font-ui-fallback: "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+  --font-num-fallback: "Cascadia Mono", Consolas, "Segoe UI", monospace;
+  --font-ui: var(--font-ui-configured, var(--font-ui-fallback));
+  --font-num: var(--font-num-configured, var(--font-num-fallback));
 }
 
 html,

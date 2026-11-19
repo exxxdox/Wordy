@@ -149,6 +149,21 @@ export default function App() {
     [apply],
   );
 
+  // 设置页、弹窗和截取窗都是 React 渲染，界面字体要同步到 CSS 变量才与原生窗口一致。
+  const uiFont = snapshot?.settings.ui_font;
+  useEffect(() => {
+    const style = document.documentElement.style;
+    const targets: Array<[string, string]> = [
+      ["--font-ui-configured", "--font-ui-fallback"],
+      ["--font-num-configured", "--font-num-fallback"],
+    ];
+    for (const [name, fallback] of targets) {
+      // 字体名缺失时保留 CSS 里的内置栈。
+      if (uiFont) style.setProperty(name, `"${uiFont}", var(${fallback})`);
+      else style.removeProperty(name);
+    }
+  }, [uiFont]);
+
   const audioRequested = useRef(false);
   useEffect(() => {
     // 设备列表由原生线程枚举；设置页第一次拿到快照后请求一次。
