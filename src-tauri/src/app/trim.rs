@@ -58,6 +58,10 @@ impl App {
             preview: None,
             busy: false,
         });
+        // 后台录制可能在设置窗口隐藏时结束；截取窗口在网页里，必须先把设置窗口唤出。
+        if !self.settings_visible() {
+            let _ = self.show_settings();
+        }
         let _ = self.handle.emit(
             ui::TRIM_OPEN_EVENT,
             TrimOpen {
