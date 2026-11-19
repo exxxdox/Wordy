@@ -12,7 +12,12 @@ export default defineConfig({
     host: "127.0.0.1",
     port: 1420,
     strictPort: true,
-    watch: { ignored: ["**/src-tauri/**"] },
+    // 根目录还留着迁移前的 target（数 GB）；不忽略会让 Vite 启动时递归扫描。
+    // 启动时预先转换设置页入口，避免第一次打开设置才现场编译模块图。
+    warmup: { clientFiles: ["./src/ui/main.tsx"] },
+    watch: {
+      ignored: ["**/src-tauri/**", "**/target/**", "**/dist/**", "**/dist-ui/**", "**/.codegraph/**", "**/tmp/**"],
+    },
   },
   build: {
     outDir: "dist-ui",
