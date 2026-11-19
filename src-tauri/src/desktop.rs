@@ -356,19 +356,42 @@ impl Tray {
             AppendMenuW(menu, MF_STRING, TRAY_LOGS, w!("打开日志窗口"));
             AppendMenuW(menu, MF_SEPARATOR, 0, ptr::null());
             AppendMenuW(menu, MF_STRING, TRAY_EXIT, w!("退出"));
-            let mut position = POINT::default();
-            GetCursorPos(&mut position);
+            // Anchor on the tray icon instead of the cursor: the click is
+            // posted to the message loop first, so the pointer may have moved.
+            let mut anchor = RECT::default();
+            let identifier = NOTIFYICONIDENTIFIER {
+                cbSize: mem::size_of::<NOTIFYICONIDENTIFIER>() as u32,
+                hWnd: self.host,
+                uID: 1,
+                guidItem: mem::zeroed(),
+            };
+            if Shell_NotifyIconGetRect(&identifier, &mut anchor) < 0 {
+                // Icon hidden in the overflow flyout: fall back to the cursor.
+                let mut position = POINT::default();
+                GetCursorPos(&mut position);
+                anchor = RECT {
+                    left: position.x,
+                    top: position.y,
+                    right: position.x,
+                    bottom: position.y,
+                };
+            }
+            // The exclude rect keeps the popup clear of the icon and lets the
+            // system flip it away from the taskbar edge.
+            let params = TPMPARAMS {
+                cbSize: mem::size_of::<TPMPARAMS>() as u32,
+                rcExclude: anchor,
+            };
             // The menu needs its owner in the foreground to dismiss when the
             // user clicks elsewhere, so try before showing it.
             SetForegroundWindow(self.host);
-            let command = TrackPopupMenu(
+            let command = TrackPopupMenuEx(
                 menu,
                 TPM_RIGHTBUTTON | TPM_RETURNCMD | TPM_NONOTIFY | TPM_WORKAREA,
-                position.x,
-                position.y,
-                0,
+                anchor.left,
+                anchor.top,
                 self.host,
-                ptr::null(),
+                &params,
             );
             // Documented workaround so the menu's owner can be activated again.
             PostMessageW(self.host, WM_NULL, 0, 0);
