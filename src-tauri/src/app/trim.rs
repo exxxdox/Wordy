@@ -227,6 +227,8 @@ impl App {
         let slot = slot.min(crate::config::SLOT_COUNT - 1);
         // 保存到已占用槽位会清空文字并删除旧音频；取消时保持截取窗口打开。
         if !self.confirm_slot_replace(wheel, slot) {
+            // 网页的保存按钮等结果才复位；这里不发事件会一直保持禁用。
+            self.trim_save_failed(id);
             return Ok(());
         }
         let (previewing, source) = {

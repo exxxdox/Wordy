@@ -145,11 +145,12 @@ export default function App() {
     };
   }, [apply]);
 
+  // 返回 Promise：需要按结果复位自身状态的按钮（如截取保存）才能等原生回复。
   const run = useCallback(
     (action: Record<string, unknown>) => {
-      invoke<Snapshot>("wordy_action", { action })
-        .then(apply)
-        .catch((error) => console.error(error));
+      const request = invoke<Snapshot>("wordy_action", { action }).then(apply);
+      request.catch((error) => console.error(error));
+      return request;
     },
     [apply],
   );

@@ -19,7 +19,7 @@ type TrimProgress = { playing: boolean; seconds: number | null };
 
 type Props = {
   snapshot: Snapshot;
-  run: (action: Record<string, unknown>) => void;
+  run: (action: Record<string, unknown>) => Promise<unknown>;
 };
 
 type Session = TrimOpen & { peaks: number[]; playing: boolean; seconds: number | null };
@@ -338,6 +338,7 @@ export default function TrimDialog({ snapshot, run }: Props) {
             disabled={saving}
             onClick={() => {
               setSaving(true);
+              // 原生拒绝（超时、无效槽位等）时不会发关闭事件，按回复复位按钮。
               run({
                 type: "trim_save",
                 id: trim.id,
@@ -347,7 +348,7 @@ export default function TrimDialog({ snapshot, run }: Props) {
                 gain,
                 wheel,
                 slot,
-              });
+              }).catch(() => setSaving(false));
             }}
           >
             保存片段
