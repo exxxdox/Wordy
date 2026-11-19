@@ -272,7 +272,7 @@ export default function WheelEditor({ snapshot, run }: Props) {
                   if (hasText) run({ type: "set_slot_mode", index, slot, text: false });
                 }}
               >
-                🎵
+                音频
               </button>
               <button
                 className={`btn flex-1 ${textMode ? "border-[var(--accent)] bg-[var(--accent)]/20" : ""}`}
@@ -284,7 +284,7 @@ export default function WheelEditor({ snapshot, run }: Props) {
                   if (hasAudio) run({ type: "set_slot_mode", index, slot, text: true });
                 }}
               >
-                💬
+                文字
               </button>
             </div>
             <p className="mt-1 text-xs text-[var(--muted)]">

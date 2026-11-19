@@ -672,22 +672,18 @@ export default function App() {
             📜
           </button>
           <button
-            className="btn icon-btn"
-            title="导出备份"
-            aria-label="导出备份"
+            className="btn"
             disabled={snapshot.busy}
             onClick={() => run({ type: "export_backup" })}
           >
-            📤
+            导出备份
           </button>
           <button
-            className="btn icon-btn"
-            title="导入备份"
-            aria-label="导入备份"
+            className="btn"
             disabled={snapshot.busy}
             onClick={() => run({ type: "import_backup" })}
           >
-            📥
+            导入备份
           </button>
           <button
             className="btn icon-btn"
