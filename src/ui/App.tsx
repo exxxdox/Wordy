@@ -195,7 +195,7 @@ export default function App() {
     },
   );
 
-  // 无系统标题栏后，顶栏关闭与底部按钮共用同一动作：通知原生端再隐藏窗口。
+  // 无系统标题栏后，底部按钮负责关闭：通知原生端再隐藏窗口。
   const closeSettings = () => {
     run({ type: "closed" });
     invoke("wordy_hide").catch((error) => console.error(error));
@@ -203,12 +203,9 @@ export default function App() {
 
   if (!snapshot) {
     return (
-      <div className="app-frame">
-        <Titlebar onClose={closeSettings} />
-        <main className="flex flex-1 items-center justify-center text-sm text-[var(--muted)]">
-          正在加载设置…
-        </main>
-      </div>
+      <main className="flex h-screen items-center justify-center text-sm text-[var(--muted)]">
+        正在加载设置…
+      </main>
     );
   }
 
@@ -243,11 +240,10 @@ export default function App() {
   };
 
   return (
-    <div className="app-frame">
-      <Titlebar onClose={closeSettings} />
-      <main className="app-shell">
+    <main className="app-shell">
+      <ResizeHandles />
       <aside className="rail">
-        <div className="brand">
+        <div className="brand" data-tauri-drag-region="deep">
           <img className="brand-mark" src={appIcon} width={40} height={40} alt="" />
           <div>
             <strong>Wordy</strong>
@@ -296,7 +292,7 @@ export default function App() {
       </aside>
 
       <div className="content">
-        <header className="content-head">
+        <header className="content-head" data-tauri-drag-region="deep">
           <div className="content-heading">
             <h1 className="content-title">{current.label}</h1>
             <p className="content-sub">{current.hint}</p>
@@ -772,30 +768,39 @@ export default function App() {
       <TrimDialog snapshot={snapshot} run={run} />
       <DialogHost />
       <ToastHost />
-      </main>
-    </div>
+    </main>
   );
 }
 
-function Titlebar({ onClose }: { onClose: () => void }) {
+// 无系统边框后窗口不能从边缘缩放：用 8 条透明把手调用原生缩放拖动。
+const RESIZE_EDGES = [
+  ["n", "North"],
+  ["s", "South"],
+  ["w", "West"],
+  ["e", "East"],
+  ["nw", "NorthWest"],
+  ["ne", "NorthEast"],
+  ["sw", "SouthWest"],
+  ["se", "SouthEast"],
+] as const;
+
+function ResizeHandles() {
   return (
-    <header className="titlebar" data-tauri-drag-region="deep">
-      <img className="titlebar-mark" src={appIcon} width={16} height={16} alt="" />
-      <span className="titlebar-title">Wordy 设置</span>
-      <div className="titlebar-actions">
-        <button
-          className="titlebar-btn"
-          title="最小化"
-          aria-label="最小化"
-          onClick={() => getCurrentWindow().minimize().catch((error) => console.error(error))}
-        >
-          <Icon name="minimize" />
-        </button>
-        <button className="titlebar-btn close" title="关闭设置" aria-label="关闭设置" onClick={onClose}>
-          <Icon name="close" />
-        </button>
-      </div>
-    </header>
+    <div className="resize-frame" aria-hidden="true">
+      {RESIZE_EDGES.map(([name, direction]) => (
+        <div
+          key={name}
+          className={`resize-edge ${name}`}
+          onMouseDown={(event) => {
+            if (event.button !== 0) return;
+            event.preventDefault();
+            getCurrentWindow()
+              .startResizeDragging(direction)
+              .catch((error) => console.error(error));
+          }}
+        />
+      ))}
+    </div>
   );
 }
 

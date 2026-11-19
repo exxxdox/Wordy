@@ -120,68 +120,87 @@ input[type="number"],
 @layer components {
   /* —— 外壳 —— */
 
-  .app-frame {
-    display: flex;
-    flex-direction: column;
-    height: 100vh;
-  }
-
-  /* 窗口已去掉系统标题栏：顶栏自绘，data-tauri-drag-region 负责拖动与双击最大化。 */
-  .titlebar {
-    display: flex;
-    flex: none;
-    align-items: center;
-    gap: 9px;
-    height: 34px;
-    padding-left: 12px;
-    background: var(--rail);
-    user-select: none;
-  }
-
-  .titlebar-title {
-    flex: 1;
-    color: var(--muted);
-    font-size: 12.5px;
-    letter-spacing: 0.02em;
-  }
-
-  .titlebar-actions {
-    display: flex;
-    align-self: stretch;
-  }
-
-  .titlebar-btn {
-    display: grid;
-    place-items: center;
-    width: 46px;
-    height: 100%;
-    border: 0;
-    background: transparent;
-    color: var(--label);
-    cursor: pointer;
-  }
-
-  .titlebar-btn:hover {
-    background: rgba(255, 255, 255, 0.08);
-    color: var(--text);
-  }
-
-  /* 关闭按钮沿用 Windows 的红色悬停反馈。 */
-  .titlebar-btn.close:hover {
-    background: #c42b1c;
-    color: #fff;
-  }
-
-  .titlebar-btn:focus-visible {
-    outline: 2px solid var(--accent);
-    outline-offset: -2px;
-  }
-
   .app-shell {
     position: relative;
     display: flex;
-    flex: 1;
-    min-height: 0;
+    height: 100vh;
+  }
+
+  /* 无系统边框：8 条透明把手负责拖边缩放，窗口本身仍可正常绘制。 */
+  .resize-frame {
+    position: absolute;
+    inset: 0;
+    z-index: 40;
+    pointer-events: none;
+  }
+
+  .resize-edge {
+    position: absolute;
+    pointer-events: auto;
+  }
+
+  .resize-edge.n,
+  .resize-edge.s {
+    right: 6px;
+    left: 6px;
+    height: 5px;
+    cursor: ns-resize;
+  }
+
+  .resize-edge.n {
+    top: 0;
+  }
+
+  .resize-edge.s {
+    bottom: 0;
+  }
+
+  .resize-edge.w,
+  .resize-edge.e {
+    top: 6px;
+    bottom: 6px;
+    width: 5px;
+    cursor: ew-resize;
+  }
+
+  .resize-edge.w {
+    left: 0;
+  }
+
+  .resize-edge.e {
+    right: 0;
+  }
+
+  .resize-edge.nw,
+  .resize-edge.ne,
+  .resize-edge.sw,
+  .resize-edge.se {
+    width: 12px;
+    height: 12px;
+  }
+
+  .resize-edge.nw {
+    top: 0;
+    left: 0;
+    cursor: nwse-resize;
+  }
+
+  .resize-edge.ne {
+    top: 0;
+    right: 0;
+    cursor: nesw-resize;
+  }
+
+  .resize-edge.sw {
+    bottom: 0;
+    left: 0;
+    cursor: nesw-resize;
+  }
+
+  .resize-edge.se {
+    right: 0;
+    bottom: 0;
+    cursor: nwse-resize;
   }
 
   .rail {
