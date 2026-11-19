@@ -65,7 +65,7 @@ cargo test --manifest-path src-tauri/Cargo.toml
 
 ## 轮盘
 
-轮盘导入、播放和截取原生以外的音频格式时需要 FFmpeg。只使用随 exe 打包的精简版：构建时从 `src-tauri/assets/ffmpeg.exe` 复制并由 `include_bytes!` 嵌入，首次使用时解包到配置目录 `bin/ffmpeg.exe`（大小一致即复用）。不查找系统 FFmpeg，也不在应用内联网安装；内嵌解码器不支持的编码或损坏文件按「不支持导入此音频格式」拒绝。有效的 PCM16 WAV 直接读取，不经过 FFmpeg。发布产物仍只有 `Wordy.exe`。
+轮盘导入、播放和截取原生以外的音频格式时需要 FFmpeg。只使用随 exe 打包的精简版：构建时从 `src-tauri/assets/ffmpeg.exe` 复制并由 `include_bytes!` 嵌入，首次使用时解包到配置目录 `bin/ffmpeg.exe`（SHA-256 一致即复用）。不查找系统 FFmpeg，也不在应用内联网安装；内嵌解码器不支持的编码或损坏文件按「不支持导入此音频格式」拒绝。有效的 PCM16 WAV 直接读取，不经过 FFmpeg。发布产物仍只有 `Wordy.exe`。
 
 设置中的轮盘 UI 与运行时轮盘必须保持一致。只保留竞技样式，由 `wheel_paint` 绘制；设置页预览调用同一渲染器（`wordy_wheel_preview`）。画布 634×540（盘体 540×540 居中），名称居中 hover 放大仍完整显示。动画仅影响显示：120ms 淡入、90ms 淡出、90ms 高亮；松键立即提交播放，淡出停止接收选择。
 

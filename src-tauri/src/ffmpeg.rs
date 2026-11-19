@@ -3,6 +3,8 @@ use std::path::PathBuf;
 #[cfg(windows)]
 use std::path::Path;
 
+use sha2::{Digest, Sha256};
+
 const FFMPEG: &str = if cfg!(windows) {
     "ffmpeg.exe"
 } else {
@@ -25,14 +27,14 @@ pub(crate) fn find() -> Option<PathBuf> {
     }
 }
 
-/// 大小一致即视为同一份文件，避免每次调用都重写。
+/// 已解包的文件按 SHA-256 判断是否仍是同一份，避免只看大小放过损坏文件。
 #[cfg(windows)]
 fn extract(directory: &Path, bytes: &[u8]) -> Option<PathBuf> {
     if bytes.is_empty() {
         return None;
     }
     let path = directory.join(FFMPEG);
-    if std::fs::metadata(&path).is_ok_and(|meta| meta.len() == bytes.len() as u64) {
+    if file_matches(&path, bytes) {
         return Some(path);
     }
     std::fs::create_dir_all(directory).ok()?;
@@ -45,6 +47,18 @@ fn extract(directory: &Path, bytes: &[u8]) -> Option<PathBuf> {
         return None;
     }
     Some(path)
+}
+
+#[cfg(windows)]
+fn file_matches(path: &Path, bytes: &[u8]) -> bool {
+    // 先比大小：不同就不用读整份文件。
+    if std::fs::metadata(path).map_or(true, |meta| meta.len() != bytes.len() as u64) {
+        return false;
+    }
+    let Ok(existing) = std::fs::read(path) else {
+        return false;
+    };
+    Sha256::digest(&existing)[..] == Sha256::digest(bytes)[..]
 }
 
 #[cfg(test)]
@@ -62,6 +76,17 @@ mod tests {
         // 大小不同说明换了构建，必须覆盖。
         let replaced = extract(&directory, b"next-build").unwrap();
         assert_eq!(std::fs::read(replaced).unwrap(), b"next-build");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn replaces_a_file_with_the_same_size_but_different_content() {
+        let folder = tempfile::tempdir().unwrap();
+        let directory = folder.path().join("bin");
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(directory.join(FFMPEG), b"aaaa").unwrap();
+        let path = extract(&directory, b"bbbb").unwrap();
+        assert_eq!(std::fs::read(path).unwrap(), b"bbbb");
     }
 
     #[cfg(windows)]
