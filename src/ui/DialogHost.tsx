@@ -65,6 +65,19 @@ export default function DialogHost() {
     };
   });
 
+  // 确认/输入弹窗的 Esc 在窗口层处理：焦点落在任一按钮上都只关掉这一层，不连带设置页。
+  useEffect(() => {
+    if (!dialog || dialog.kind === "record") return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      reply(false, null);
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [dialog]);
+
   if (!dialog) return null;
 
   function reply(ok: boolean, value: string | null) {
@@ -109,7 +122,7 @@ export default function DialogHost() {
               autoComplete="off"
               onChange={(event) => setText(event.target.value)}
               onKeyDown={(event) => {
-                if (event.key === "Escape") reply(false, null);
+                // Enter 提交；Esc 由窗口级监听处理，避免两层一起关闭。
                 if (event.key === "Enter") reply(true, text);
               }}
             />
@@ -126,14 +139,7 @@ export default function DialogHost() {
           <>
             <p className="mt-2 whitespace-pre-wrap text-sm text-[var(--text)]">{dialog.message}</p>
             <div className="mt-4 flex justify-end gap-2">
-              <button
-                className="btn"
-                autoFocus
-                onClick={() => reply(false, null)}
-                onKeyDown={(event) => {
-                  if (event.key === "Escape") reply(false, null);
-                }}
-              >
+              <button className="btn" autoFocus onClick={() => reply(false, null)}>
                 取消
               </button>
               <button className="btn primary" onClick={() => reply(true, null)}>

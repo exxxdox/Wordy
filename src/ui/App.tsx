@@ -202,14 +202,15 @@ export default function App() {
   }, [run]);
 
   // Esc 关闭设置页；弹窗、日志层自己处理 Esc，避免连设置页一起关掉。
+  // 用 capture 阶段：离散事件在 React 处理器里同步刷新，弹层已关闭时 DOM 里查不到。
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return;
       if (document.querySelector(".overlay")) return;
       closeSettings();
     };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
   }, [closeSettings]);
 
   if (!snapshot) {
