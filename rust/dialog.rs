@@ -8,11 +8,11 @@ use windows_sys::Win32::Graphics::Dwm::{
     DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
 };
 use windows_sys::Win32::Graphics::Gdi::{
-    CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, CreateFontW, DC_BRUSH, DEFAULT_CHARSET, DEFAULT_PITCH,
-    DT_CALCRECT, DT_CENTER, DT_LEFT, DT_NOPREFIX, DT_SINGLELINE, DT_VCENTER, DT_WORDBREAK,
-    DeleteObject, DrawTextW, FW_NORMAL, FW_SEMIBOLD, GetDC, GetStockObject, HDC, HFONT,
-    InvalidateRect, MapWindowPoints, OPAQUE, OUT_DEFAULT_PRECIS, ReleaseDC, SelectObject,
-    SetBkColor, SetBkMode, SetDCBrushColor, SetTextColor,
+    BeginPaint, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, CreateFontW, DC_BRUSH, DEFAULT_CHARSET,
+    DEFAULT_PITCH, DT_CALCRECT, DT_CENTER, DT_LEFT, DT_NOPREFIX, DT_SINGLELINE, DT_VCENTER,
+    DT_WORDBREAK, DeleteObject, DrawTextW, EndPaint, FW_NORMAL, FW_SEMIBOLD, GetDC, GetStockObject,
+    HDC, HFONT, InvalidateRect, MapWindowPoints, OPAQUE, OUT_DEFAULT_PRECIS, PAINTSTRUCT,
+    ReleaseDC, SelectObject, SetBkColor, SetBkMode, SetDCBrushColor, SetTextColor,
 };
 use windows_sys::Win32::System::SystemServices::{SS_CENTER, SS_LEFT, SS_NOPREFIX};
 use windows_sys::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
@@ -96,6 +96,19 @@ fn paint_dialog(hwnd: HWND, message: u32, wp: WPARAM, lp: LPARAM) -> Option<isiz
             unsafe { GetClientRect(hwnd, &mut rect) };
             fill(wp as HDC, &rect, SURFACE);
             Some(1)
+        }
+        // The dialog class paints its light system background after the erase;
+        // own the client paint so the theme is not covered again.
+        WM_PAINT => {
+            unsafe {
+                let mut paint = PAINTSTRUCT::default();
+                let dc = BeginPaint(hwnd, &mut paint);
+                let mut rect = RECT::default();
+                GetClientRect(hwnd, &mut rect);
+                fill(dc, &rect, SURFACE);
+                EndPaint(hwnd, &paint);
+            }
+            Some(0)
         }
         WM_CTLCOLORDLG => Some(solid(wp as HDC, SURFACE)),
         WM_CTLCOLORSTATIC => {
@@ -773,6 +786,9 @@ struct Prompt {
 }
 
 unsafe extern "system" fn prompt_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> isize {
+    if let Some(result) = paint_dialog(hwnd, msg, wp, lp) {
+        return result;
+    }
     unsafe {
         match msg {
             WM_INITDIALOG => {
@@ -840,7 +856,12 @@ impl Template {
             title,
             width,
             height,
-            WS_CAPTION | WS_SYSMENU | DS_MODALFRAME as u32 | DS_SETFONT as u32 | DS_CENTER as u32,
+            WS_CAPTION
+                | WS_SYSMENU
+                | WS_CLIPCHILDREN
+                | DS_MODALFRAME as u32
+                | DS_SETFONT as u32
+                | DS_CENTER as u32,
             0,
         )
     }
@@ -1040,6 +1061,66 @@ mod tests {
             );
         }
         unsafe { DestroyWindow(owner) };
+    }
+
+    #[test]
+    fn prompt_paints_the_dark_dialog_surface_and_field() {
+        let instance = unsafe { GetModuleHandleW(ptr::null()) };
+        let owner = host_window(instance).unwrap();
+        let title = wide("输入框配色测试");
+        let probe = std::thread::spawn(move || {
+            let dialog = when_visible(&title);
+            assert!(!dialog.is_null(), "the prompt never appeared");
+            unsafe {
+                windows_sys::Win32::Graphics::Gdi::RedrawWindow(
+                    dialog,
+                    ptr::null(),
+                    ptr::null_mut(),
+                    windows_sys::Win32::Graphics::Gdi::RDW_INVALIDATE
+                        | windows_sys::Win32::Graphics::Gdi::RDW_ERASE
+                        | windows_sys::Win32::Graphics::Gdi::RDW_UPDATENOW,
+                );
+                let dc = GetDC(dialog);
+                let surface = windows_sys::Win32::Graphics::Gdi::GetPixel(dc, 4, 4) & 0x00ff_ffff;
+                ReleaseDC(dialog, dc);
+                let field = GetDlgItem(dialog, 101);
+                let mut rect = RECT::default();
+                GetClientRect(field, &mut rect);
+                let dc = GetDC(field);
+                let fill = windows_sys::Win32::Graphics::Gdi::GetPixel(
+                    dc,
+                    rect.right - 12,
+                    rect.bottom / 2,
+                ) & 0x00ff_ffff;
+                ReleaseDC(field, dc);
+                let button = GetDlgItem(dialog, IDOK);
+                windows_sys::Win32::Graphics::Gdi::RedrawWindow(
+                    button,
+                    ptr::null(),
+                    ptr::null_mut(),
+                    windows_sys::Win32::Graphics::Gdi::RDW_INVALIDATE
+                        | windows_sys::Win32::Graphics::Gdi::RDW_UPDATENOW,
+                );
+                let dc = GetDC(button);
+                let face = windows_sys::Win32::Graphics::Gdi::GetPixel(dc, 8, 12) & 0x00ff_ffff;
+                ReleaseDC(button, dc);
+                PostMessageW(dialog, WM_COMMAND, IDOK as usize, 0);
+                (surface, fill, face)
+            }
+        });
+        let _ = prompt(
+            owner,
+            "输入框配色测试",
+            "轮盘名称",
+            "",
+            false,
+            crate::config::DEFAULT_UI_FONT,
+        );
+        let (surface, fill, face) = probe.join().unwrap();
+        unsafe { DestroyWindow(owner) };
+        assert_eq!(surface, SURFACE & 0x00ff_ffff, "dialog surface is not dark");
+        assert_eq!(fill, FIELD & 0x00ff_ffff, "prompt field is not dark");
+        assert_eq!(face, BUTTON & 0x00ff_ffff, "prompt button was not drawn");
     }
 
     #[test]
