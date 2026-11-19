@@ -107,12 +107,17 @@ impl App {
             SelectVoice(Provider::Volcengine, voice) | SaveVolcengineVoice(voice) => {
                 self.edit(|s| set_volc_voice(&mut s.tts_providers.volcengine.voice_list, voice))?;
             }
-            DeleteVolcengineVoice(id) => self.edit(|s| {
-                s.tts_providers
-                    .volcengine
-                    .voice_list
-                    .retain(|voice| voice.id != id)
-            })?,
+            // 删除音色不可撤销，先确认；确认框由 React 渲染。
+            DeleteVolcengineVoice(id) => {
+                if self.confirm_dialog("删除音色", "删除当前音色？") {
+                    self.edit(|s| {
+                        s.tts_providers
+                            .volcengine
+                            .voice_list
+                            .retain(|voice| voice.id != id)
+                    })?;
+                }
+            }
             ExportBackup => self.backup(true)?,
             ImportBackup => self.backup(false)?,
             DownloadVbCable => self.open_url("https://vb-audio.com/Cable/")?,
