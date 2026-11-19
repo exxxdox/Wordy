@@ -70,7 +70,7 @@ impl App {
         let owner = if let Some(trim) = &self.trim {
             trim.window.panel.0
         } else if self.settings_visible() {
-            self.ui_hwnd()
+            self.host
         } else {
             ptr::null_mut()
         };

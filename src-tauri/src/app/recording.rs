@@ -120,7 +120,7 @@ impl App {
             .unwrap_or(1.0);
         let window = Trim::new(
             self.host,
-            self.ui_hwnd(),
+            self.host,
             self.config.settings(),
             target,
             duration,

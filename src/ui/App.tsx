@@ -226,8 +226,13 @@ export default function App() {
                     <output className="field min-w-0 flex-1 truncate">
                       {displayHotkey(settings.hotkey) || "未设置"}
                     </output>
-                    <button className="btn" onClick={() => run({ type: "record_hotkey" })}>
-                      录制快捷键
+                    <button
+                      className="btn icon-btn"
+                      title="录制快捷键"
+                      aria-label="录制快捷键"
+                      onClick={() => run({ type: "record_hotkey" })}
+                    >
+                      ⌨️
                     </button>
                   </div>
                   <Hint>点击录制后按下新的快捷键组合</Hint>
@@ -241,8 +246,13 @@ export default function App() {
                     <output className="field min-w-0 flex-1 truncate">
                       {displayHotkey(settings.hold_key) || "未设置"}
                     </output>
-                    <button className="btn" onClick={() => run({ type: "record_hold_key" })}>
-                      录制按键
+                    <button
+                      className="btn icon-btn"
+                      title="录制按住键"
+                      aria-label="录制按住键"
+                      onClick={() => run({ type: "record_hold_key" })}
+                    >
+                      ⌨️
                     </button>
                   </div>
                   <Hint>开启后，播放语音前自动按下该键，结束后松开。</Hint>
@@ -340,7 +350,7 @@ export default function App() {
                   </Hint>
                   {!snapshot.cable_available && (
                     <button className="btn mt-2" onClick={() => run({ type: "download_vb_cable" })}>
-                      下载并安装 VB-CABLE
+                      ⬇️ VB-CABLE
                     </button>
                   )}
                 </Row>
@@ -466,20 +476,24 @@ export default function App() {
                       onChange={(event) => setKeyInput(event.target.value)}
                     />
                     <button
-                      className="btn"
+                      className="btn icon-btn"
+                      title="保存 API Key"
+                      aria-label="保存 API Key"
                       onClick={() => {
                         run({ type: "save_key", provider: provider.toLowerCase(), text: keyInput });
                         setKeyInput("");
                       }}
                     >
-                      保存
+                      💾
                     </button>
                     <button
-                      className="btn"
+                      className="btn icon-btn"
+                      title="删除 API Key"
+                      aria-label="删除 API Key"
                       disabled={!info.api_key_set}
                       onClick={() => run({ type: "delete_key", provider: provider.toLowerCase() })}
                     >
-                      删除
+                      🗑️
                     </button>
                   </div>
                   <Hint>密钥保存在 Windows 凭据管理器中。</Hint>
@@ -506,8 +520,13 @@ export default function App() {
                         </option>
                       ))}
                     </select>
-                    <button className="btn" onClick={() => run({ type: "refresh_voices" })}>
-                      刷新音色
+                    <button
+                      className="btn icon-btn"
+                      title="刷新音色"
+                      aria-label="刷新音色"
+                      onClick={() => run({ type: "refresh_voices" })}
+                    >
+                      🔄
                     </button>
                   </div>
                   <Hint>
@@ -534,7 +553,9 @@ export default function App() {
                     </Row>
                     <div className="mt-2 flex gap-2">
                       <button
-                        className="btn"
+                        className="btn icon-btn"
+                        title="添加 / 保存音色"
+                        aria-label="添加 / 保存音色"
                         onClick={() =>
                           run({
                             type: "save_volcengine_voice",
@@ -542,10 +563,12 @@ export default function App() {
                           })
                         }
                       >
-                        添加 / 保存音色
+                        💾
                       </button>
                       <button
-                        className="btn"
+                        className="btn icon-btn"
+                        title="删除音色"
+                        aria-label="删除音色"
                         disabled={
                           !(voiceId || selectedVoice) ||
                           !settings.tts_providers.Volcengine.voice_list.some(
@@ -556,7 +579,7 @@ export default function App() {
                           run({ type: "delete_volcengine_voice", id: voiceId || selectedVoice || "" })
                         }
                       >
-                        删除音色
+                        🗑️
                       </button>
                     </div>
                   </>
@@ -634,37 +657,45 @@ export default function App() {
         <span>设置自动保存</span>
         <div className="flex gap-2">
           <button
-            className="btn"
+            className="btn icon-btn"
+            title="查看日志"
+            aria-label="查看日志"
             onClick={() =>
               invoke<string[]>("wordy_logs")
                 .then(setLogs)
                 .catch((error) => console.error(error))
             }
           >
-            查看日志
+            📜
           </button>
           <button
-            className="btn"
+            className="btn icon-btn"
+            title="导出备份"
+            aria-label="导出备份"
             disabled={snapshot.busy}
             onClick={() => run({ type: "export_backup" })}
           >
-            导出备份
+            📤
           </button>
           <button
-            className="btn"
+            className="btn icon-btn"
+            title="导入备份"
+            aria-label="导入备份"
             disabled={snapshot.busy}
             onClick={() => run({ type: "import_backup" })}
           >
-            导入备份
+            📥
           </button>
           <button
-            className="btn"
+            className="btn icon-btn"
+            title="关闭设置"
+            aria-label="关闭设置"
             onClick={() => {
               run({ type: "closed" });
               invoke("wordy_hide").catch((error) => console.error(error));
             }}
           >
-            关闭
+            ✕
           </button>
         </div>
       </footer>

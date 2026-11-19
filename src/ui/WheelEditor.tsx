@@ -10,7 +10,8 @@ const STYLE_OPTIONS = [
   { value: "game", label: "竞技轮盘" },
 ];
 
-const SLOT_COUNT = 8;
+const CANVAS_WIDTH = 634;
+const CANVAS_HEIGHT = 540;
 
 type Props = {
   snapshot: Snapshot;
@@ -110,27 +111,37 @@ export default function WheelEditor({ snapshot, run }: Props) {
                 </option>
               ))}
             </select>
-            <button className="btn" disabled={locked} onClick={() => run({ type: "add_wheel" })}>
-              新增
+            <button
+              className="btn icon-btn"
+              title="新增轮盘"
+              aria-label="新增轮盘"
+              disabled={locked}
+              onClick={() => run({ type: "add_wheel" })}
+            >
+              ➕
             </button>
             <button
-              className="btn"
+              className="btn icon-btn"
+              title="删除轮盘"
+              aria-label="删除轮盘"
               disabled={locked || wheels.length <= 1}
               onClick={() => run({ type: "remove_wheel", index })}
             >
-              删除
+              🗑️
             </button>
           </div>
           <div className="flex gap-2">
-            <output className="field min-w-0 flex-1 truncate">
+            <output className="field min-w-0 flex-1 truncate" title="当前快捷键">
               {displayHotkey(wheel.hotkey) || "未绑定快捷键"}
             </output>
             <button
-              className="btn"
+              className="btn icon-btn"
+              title="录制快捷键"
+              aria-label="录制快捷键"
               disabled={locked}
               onClick={() => run({ type: "record_wheel_hotkey", index })}
             >
-              录制快捷键
+              ⌨️
             </button>
           </div>
           <label className="block text-[13px]">
@@ -146,37 +157,42 @@ export default function WheelEditor({ snapshot, run }: Props) {
           </label>
           <div>
             <div className="mb-1.5 text-[13px]">槽位</div>
-            <div className="grid grid-cols-4 gap-1.5">
-              {Array.from({ length: SLOT_COUNT }, (_, order) => (
-                <button
-                  key={order}
-                  onClick={() => setSlot(order)}
-                  className={`truncate rounded-lg border px-2 py-1.5 text-xs ${
-                    order === slot
-                      ? "border-[var(--accent)] bg-[var(--accent)]/20 text-white"
-                      : "border-white/10 bg-white/5 text-[var(--muted)] hover:text-white"
-                  }`}
-                >
-                  {slotTitle(wheel, order)}
-                </button>
-              ))}
-            </div>
+            <p className="text-xs text-[var(--muted)]">点击下方轮盘扇区选择槽位</p>
           </div>
           <div className="rounded-xl border border-white/10 bg-black/20 p-2">
             {preview ? (
-              <img src={preview} alt="轮盘预览" className="mx-auto h-auto w-full max-w-[420px]" />
+              <img
+                src={preview}
+                alt="轮盘预览"
+                title="点击扇区选择槽位"
+                className="mx-auto h-auto w-full max-w-[420px] cursor-pointer"
+                onClick={(event) => {
+                  const rect = event.currentTarget.getBoundingClientRect();
+                  const x = ((event.clientX - rect.left) / rect.width) * CANVAS_WIDTH;
+                  const y = ((event.clientY - rect.top) / rect.height) * CANVAS_HEIGHT;
+                  const dx = x - CANVAS_WIDTH / 2;
+                  const dy = y - CANVAS_HEIGHT / 2;
+                  const radius = Math.hypot(dx, dy);
+                  if (radius < 80 || radius > 232) return;
+                  const angle = ((Math.atan2(dx, -dy) * 180) / Math.PI + 360) % 360;
+                  setSlot(Math.floor(((angle + 22.5) % 360) / 45) % 8);
+                }}
+              />
             ) : (
               <div className="flex h-40 items-center justify-center text-xs text-[var(--muted)]">
                 正在生成预览…
               </div>
             )}
           </div>
+          <p className="text-xs text-[var(--muted)]">
+            点击扇区选择槽位 · 当前：{slotTitle(wheel, slot)}
+          </p>
         </div>
       </section>
 
       <section className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
         <h2 className="mb-3 text-[13px] font-semibold uppercase tracking-wider text-[var(--muted)]">
-          槽位内容
+          槽位内容 · 第 {slot + 1} 槽
         </h2>
         <div className="space-y-3">
           <label className="block text-[13px]">
@@ -199,23 +215,27 @@ export default function WheelEditor({ snapshot, run }: Props) {
             <div className="flex gap-2">
               <button
                 className={`btn flex-1 ${!textMode ? "border-[var(--accent)] bg-[var(--accent)]/20" : ""}`}
+                title="音频槽"
+                aria-label="音频槽"
                 disabled={locked}
                 onClick={() => {
                   setEmptyTextMode(false);
                   if (hasText) run({ type: "set_slot_mode", index, slot, text: false });
                 }}
               >
-                音频
+                🎵
               </button>
               <button
                 className={`btn flex-1 ${textMode ? "border-[var(--accent)] bg-[var(--accent)]/20" : ""}`}
+                title="文字槽"
+                aria-label="文字槽"
                 disabled={locked}
                 onClick={() => {
                   setEmptyTextMode(true);
                   if (hasAudio) run({ type: "set_slot_mode", index, slot, text: true });
                 }}
               >
-                文字
+                💬
               </button>
             </div>
             <p className="mt-1 text-xs text-[var(--muted)]">
@@ -275,35 +295,43 @@ export default function WheelEditor({ snapshot, run }: Props) {
           <div className="flex flex-wrap gap-2">
             {!textMode && (
               <button
-                className="btn"
+                className="btn icon-btn"
+                title="导入音频"
+                aria-label="导入音频"
                 disabled={locked}
                 onClick={() => run({ type: "import_slot_audio", index, slot })}
               >
-                导入
+                📥
               </button>
             )}
             <button
-              className="btn"
+              className="btn icon-btn"
+              title={playing ? "停止试听" : "试听"}
+              aria-label={playing ? "停止试听" : "试听"}
               disabled={!hasAudio && !hasText}
               onClick={() => run({ type: "preview_slot", index, slot })}
             >
-              {playing ? "停止" : "试听"}
+              {playing ? "⏹️" : "▶️"}
             </button>
             {!textMode && (
               <button
-                className="btn"
+                className="btn icon-btn"
+                title="截取片段"
+                aria-label="截取片段"
                 disabled={locked || !hasAudio}
                 onClick={() => run({ type: "crop_slot_audio", index, slot })}
               >
-                截取
+                ✂️
               </button>
             )}
             <button
-              className="btn"
+              className="btn icon-btn"
+              title="清空槽位"
+              aria-label="清空槽位"
               disabled={locked}
               onClick={() => run({ type: "clear_slot", index, slot })}
             >
-              清空
+              🧹
             </button>
           </div>
           {snapshot.locked && (

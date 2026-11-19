@@ -15,7 +15,6 @@ use windows_sys::Win32::Graphics::Gdi::{
     ReleaseDC, SelectObject, SetBkColor, SetBkMode, SetDCBrushColor, SetTextColor,
 };
 use windows_sys::Win32::System::SystemServices::{SS_CENTER, SS_LEFT, SS_NOPREFIX};
-use windows_sys::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
 use windows_sys::Win32::UI::Controls::Dialogs::*;
 use windows_sys::Win32::UI::Controls::{
     DRAWITEMSTRUCT, EM_SETMARGINS, EM_SETSEL, ODS_DISABLED, ODS_FOCUS, ODS_SELECTED, ODT_BUTTON,
@@ -268,27 +267,30 @@ fn style_dialog(hwnd: HWND, buttons: &[i32]) {
 /// Posted after WM_INITDIALOG, when the dialog is visible and can be activated.
 const FORCE_FOREGROUND: u32 = WM_APP + 17;
 
-/// Modal dialogs are owned by the settings window, which the app may have
-/// opened while another process still holds the foreground. Windows then
-/// refuses to activate the dialog, keystrokes keep going to the other app, and
-/// the hotkey recorder hears nothing. Attach to the foreground thread once to
-/// hand the dialog the foreground explicitly.
+/// Modal dialogs run on the native worker thread while the WebView owns the
+/// foreground. AttachThreadInput to the foreground thread deadlocks against
+/// Tauri's main thread, so only ask for activation and briefly raise the dialog.
 fn force_foreground(hwnd: HWND) {
     unsafe {
-        let foreground = GetForegroundWindow();
-        let foreground_thread = if foreground.is_null() {
-            0
-        } else {
-            GetWindowThreadProcessId(foreground, ptr::null_mut())
-        };
-        let current = GetCurrentThreadId();
-        let attached = foreground_thread != 0
-            && foreground_thread != current
-            && AttachThreadInput(current, foreground_thread, 1) != 0;
         SetForegroundWindow(hwnd);
-        if attached {
-            AttachThreadInput(current, foreground_thread, 0);
-        }
+        SetWindowPos(
+            hwnd,
+            HWND_TOPMOST,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
+        SetWindowPos(
+            hwnd,
+            HWND_NOTOPMOST,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
     }
 }
 

@@ -34,7 +34,7 @@ impl App {
             return Err(io::Error::other("至少保留一个轮盘"));
         }
         if !dialog::confirm(
-            self.ui_hwnd(),
+            self.host,
             "删除轮盘",
             "删除此轮盘及其槽位？",
             &self.config.settings().ui_font,
@@ -73,7 +73,7 @@ impl App {
     }
 
     pub(super) fn wheel_record_hotkey(&mut self, index: usize) -> io::Result<()> {
-        let owner = self.ui_hwnd();
+        let owner = self.host;
         let Some(hotkey) = capture_binding(
             &mut self.hotkeys,
             owner,
@@ -155,7 +155,7 @@ impl App {
         if to_text
             && !current.slots[slot].is_empty()
             && !dialog::confirm(
-                self.ui_hwnd(),
+                self.host,
                 "切换为文字",
                 "切换为文字会删除该槽音频，继续？",
                 &self.config.settings().ui_font,
@@ -197,7 +197,7 @@ impl App {
     pub(super) fn slot_import(&mut self, index: usize, slot: usize) -> io::Result<()> {
         let filter = "音频文件\0*.wav;*.mp3;*.ogg;*.flac;*.m4a;*.aac;*.wma;*.aiff;*.aif;*.opus\0";
         let directory = std::env::current_dir()?;
-        let Some(path) = dialog::file(self.ui_hwnd(), "导入音频", filter, &directory, None, false)
+        let Some(path) = dialog::file(self.host, "导入音频", filter, &directory, None, false)
         else {
             return Ok(());
         };

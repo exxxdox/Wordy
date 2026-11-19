@@ -60,7 +60,7 @@ impl App {
             SetLogLevel(level) => self.edit(|s| s.log_level = level)?,
             SetHoldKeyEnabled(enabled) => self.edit(|s| s.hold_key_enabled = enabled)?,
             RecordHoldKey | RecordHotkey | RecordRollingHotkey => {
-                let owner = self.ui_hwnd();
+                let owner = self.host;
                 let Some(value) = capture_binding(
                     &mut self.hotkeys,
                     owner,
@@ -325,7 +325,7 @@ impl App {
         if self.backup_running {
             return Err(io::Error::other("正在处理备份，请稍候"));
         }
-        let owner = self.ui_hwnd();
+        let owner = self.host;
         if !export && (self.recording.is_some() || self.pending_saves > 0 || self.trim.is_some()) {
             return Err(io::Error::other("请先结束录制或音频导入，再导入备份"));
         }
@@ -435,7 +435,7 @@ impl App {
         let url = wide(url);
         let result = unsafe {
             ShellExecuteW(
-                self.ui_hwnd(),
+                self.host,
                 w!("open"),
                 url.as_ptr(),
                 ptr::null(),

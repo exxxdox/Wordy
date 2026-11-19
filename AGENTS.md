@@ -101,6 +101,7 @@ cargo test --manifest-path src-tauri/Cargo.toml
 - 分层窗口在首次显示前设好背景和透明色，首帧及子控件绘制完成后再揭开窗口。原生子控件的背景画刷应匹配应用表面或透明色，父窗口重画时裁剪子控件区域。
 - 修改绘制顺序、控件显隐或高频刷新时，补对应回归测试，并检查首次唤出、反复打开、焦点与悬停切换及试听进度。
 - 需要接收鼠标的自绘静态控件（STATIC）必须带 `SS_NOTIFY`：没有它时静态窗口对 `WM_NCHITTEST` 返回 `HTTRANSPARENT`，点击会落到父对话框，子类过程收不到 `WM_LBUTTONDOWN`/`WM_MOUSEMOVE`。只发送消息的测试绕过了命中测试，需用 `WM_NCHITTEST` 回归验证。
+- 后台原生线程不要 `AttachThreadInput` 到前台线程：前台常是 Tauri WebView 线程，会与主线程互锁，对话框可见但不再处理消息。原生弹窗改用 `SetForegroundWindow` + 临时置顶，不阻塞消息循环。
 - 从后台进程弹出的模态对话框（快捷键录制、文本输入）在 `WM_INITDIALOG` 时还不可见，先 `PostMessage`，显示后再 `AttachThreadInput` 到前台线程并 `SetForegroundWindow`；否则对话框拿不到前台，按键留在别的应用里，录制器收不到任何按键。
 
 ## 注意事项
