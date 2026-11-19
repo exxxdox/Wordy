@@ -19,7 +19,7 @@ Rust（edition 2024）+ Tauri 2 桌面应用。设置界面是 React（Vite + Ta
 | `src-tauri/src/tts.rs` + `src-tauri/src/tts/realtime.rs` | TTS 引擎、Cartesia HTTP/WebSocket、Volcengine SSE、音色标签 |
 | `src-tauri/src/config.rs` | `Settings` 单一数据源、钳位、原子写入、150ms 防抖写盘 |
 | `src-tauri/src/backup.rs` / `backup_crypto.rs` / `credentials.rs` | 加密备份、AES-256-GCM/PBKDF2、Windows 凭据管理器 |
-| `src-tauri/src/hotkey.rs` / `instance.rs` / `file_log.rs` / `log_window.rs` | 快捷键解析与注册、单实例互斥体、日志轮转与日志窗口 |
+| `src-tauri/src/hotkey.rs` / `instance.rs` / `file_log.rs` | 快捷键解析与注册、单实例互斥体、日志轮转 |
 | `src/` | React 设置界面（Vite + Tailwind），构建产物 `dist-ui/` 内嵌进 exe |
 | `src-tauri/tauri.conf.json` | 窗口、构建命令、CSP 与图标配置 |
 
@@ -31,6 +31,7 @@ Rust（edition 2024）+ Tauri 2 桌面应用。设置界面是 React（Vite + Ta
 - 原生对话框（录制快捷键、确认、备份密码）的 owner 使用 WebView 窗口句柄。
 - 反馈提示仍由原生 `status_toast` 绘制在设置窗口底部；设置页隐藏时错误改走托盘通知。
 - 轮盘编辑器改为独立原生窗口，由「编辑聊天轮盘」动作打开；关闭只隐藏。
+- 日志面板由 React 渲染：`wordy_logs` 取历史，`wordy://log` 逐行推送，托盘动作会打开设置窗口并发出 `wordy://open-logs`。
 - 设置页文案保持中文，不写内部实现说明。
 
 持久化目录：`config_directory()`（`XDG_CONFIG_HOME/wordy`，未设置时 `%USERPROFILE%\.config\wordy`），含 `config.toml` 与 `audio_clips/`；托管音频从配置文件父目录推导。日志仅 `packaged` 构建在 exe 同目录写 `wordy.log`（5 MiB × 5）。图标资源在 `src-tauri/src/assets/wordy.ico`，运行时经 `include_bytes!` 使用；exe 图标由 `src-tauri/icons/icon.ico` 经 tauri-build 嵌入。
@@ -80,7 +81,7 @@ cargo test --manifest-path src-tauri/Cargo.toml
 
 ## 日志与通知
 
-`log_level` 过滤 INFO/WARNING/ERROR/DEBUG；格式 `YYYY-MM-DD HH:MM:SS [LEVEL] target: message`。内存保留 5000 行，托盘「打开日志窗口」与设置页「查看日志」打开实时窗口。packaged 构建同步写 exe 旁 `wordy.log`，UTF-8、5 MiB 轮转、共 5 个文件。
+`log_level` 过滤 INFO/WARNING/ERROR/DEBUG；格式 `YYYY-MM-DD HH:MM:SS [LEVEL] target: message`。内存保留 5000 行，托盘「打开日志窗口」与设置页「查看日志」打开设置窗口内的 React 日志面板，新行通过 `wordy://log` 实时推送。packaged 构建同步写 exe 旁 `wordy.log`，UTF-8、5 MiB 轮转、共 5 个文件。
 
 通知通过 `AppUserModelId = Wordy.Desktop` 注册发送者并调用 Windows 通知中心；发送失败回退托盘气泡。图标写入配置目录 `notification-icon.ico`。
 

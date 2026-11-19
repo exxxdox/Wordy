@@ -83,7 +83,8 @@ fn main() -> std::process::ExitCode {
         .invoke_handler(tauri::generate_handler![
             wordy::ui::wordy_snapshot,
             wordy::ui::wordy_action,
-            wordy::ui::wordy_hide
+            wordy::ui::wordy_hide,
+            wordy::ui::wordy_logs
         ])
         .run(tauri::generate_context!());
 

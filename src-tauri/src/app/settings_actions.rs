@@ -57,9 +57,6 @@ impl App {
                     trim.window.refresh(self.config.settings())?;
                 }
                 self.overlay.apply_visual_settings(self.config.settings())?;
-                if let Some(window) = &self.log_window {
-                    window.set_font(&self.config.settings().ui_font);
-                }
             }
             SetFixedCenter(fixed) => self.edit(|s| s.fixed_center = fixed)?,
             SetLogLevel(level) => self.edit(|s| s.log_level = level)?,

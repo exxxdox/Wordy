@@ -35,13 +35,9 @@ impl App {
         {
             eprintln!("写入日志失败：{error}");
         }
-        if let Some(window) = &self.log_window {
-            if trim {
-                window.trim_front();
-            }
-            window.append(&message);
-        }
-        self.logs.push_back(message);
+        self.logs.push_back(message.clone());
+        // 设置页打开日志面板时依赖逐行事件，而不是整份历史。
+        let _ = self.handle.emit(crate::ui::LOG_EVENT, message);
     }
 
     pub(super) fn status(&mut self, message: String) {

@@ -24,7 +24,6 @@ use crate::desktop::*;
 use crate::ffmpeg;
 use crate::file_log::FileLog;
 use crate::hotkey::{display_hotkey, parse_hotkey, windows::Registration};
-use crate::log_window::LogWindow;
 use crate::panels::{self, Editor, Trim};
 use crate::playback::{EngineSettings, Event, Playback};
 use crate::settings_action::SettingsAction;
@@ -138,7 +137,6 @@ struct App {
     next_job: u64,
     logs: VecDeque<String>,
     file_log: Option<FileLog>,
-    log_window: Option<LogWindow>,
 }
 
 enum Background {
@@ -220,7 +218,6 @@ impl App {
             next_job: 0,
             logs: VecDeque::new(),
             file_log: None,
-            log_window: None,
         };
         if cfg!(feature = "packaged") {
             match FileLog::beside_executable() {
@@ -496,6 +493,9 @@ impl App {
     fn dispatch_ui(&mut self) {
         while let Ok(request) = self.requests.try_recv() {
             match request {
+                UiRequest::Logs(reply) => {
+                    let _ = reply.send(self.logs.iter().cloned().collect());
+                }
                 UiRequest::Snapshot(reply) => {
                     if !self.ui_connected {
                         // 首次快照说明 WebView 已加载并完成挂载。

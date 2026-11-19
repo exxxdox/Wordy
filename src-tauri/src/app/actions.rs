@@ -104,15 +104,8 @@ impl App {
     }
 
     pub(super) fn show_logs(&mut self) -> io::Result<()> {
-        match &self.log_window {
-            Some(window) => window.show_existing(),
-            None => {
-                let window = LogWindow::open(self.host, &self.config.settings().ui_font)?;
-                let lines = self.logs.iter().cloned().collect::<Vec<_>>();
-                window.set_lines(&lines);
-                self.log_window = Some(window);
-            }
-        }
+        self.show_settings()?;
+        let _ = self.handle.emit(crate::ui::OPEN_LOGS_EVENT, ());
         Ok(())
     }
 }

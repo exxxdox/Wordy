@@ -118,7 +118,7 @@ cargo add <crate>
 | `src-tauri/src/playback.rs` / `ffmpeg.rs` | 播放调度、FFmpeg 查找与 WinGet 安装 |
 | `src-tauri/src/config.rs` / `backup*.rs` / `credentials.rs` | 配置持久化、加密备份、凭据库 |
 | `src-tauri/src/hotkey.rs` / `instance.rs` / `file_log.rs` | 快捷键解析与注册、单实例、日志轮转 |
-| `src-tauri/src/log_window.rs` / `status_toast.rs` / `dialog.rs` | 日志窗口、反馈提示、原生对话框 |
+| `src-tauri/src/status_toast.rs` / `dialog.rs` | 反馈提示、原生对话框 |
 | `src/` | React 设置界面（Vite + Tailwind），由 `src-tauri` 内嵌构建 |
 | `src-tauri/tauri.conf.json` | 窗口、构建命令、CSP 与图标配置 |
 

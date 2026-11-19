@@ -19,6 +19,10 @@ const ACTION_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// 原生线程主动推送完整设置快照。
 pub const SNAPSHOT_EVENT: &str = "wordy://snapshot";
+/// 原生线程逐行推送日志。
+pub const LOG_EVENT: &str = "wordy://log";
+/// 托盘请求打开日志面板。
+pub const OPEN_LOGS_EVENT: &str = "wordy://open-logs";
 
 #[derive(Clone, Debug, Serialize)]
 pub struct ListenStatus {
@@ -41,6 +45,7 @@ pub struct Snapshot {
 
 pub enum UiRequest {
     Snapshot(SyncSender<Snapshot>),
+    Logs(SyncSender<Vec<String>>),
     Action(SettingsAction, SyncSender<Result<Snapshot, String>>),
 }
 
@@ -76,6 +81,14 @@ impl NativeHandle {
         receiver
             .recv_timeout(SNAPSHOT_TIMEOUT)
             .map_err(|_| "读取设置超时".to_string())
+    }
+
+    pub fn logs(&self) -> Result<Vec<String>, String> {
+        let (reply, receiver) = mpsc::sync_channel(1);
+        self.send(UiRequest::Logs(reply))?;
+        receiver
+            .recv_timeout(SNAPSHOT_TIMEOUT)
+            .map_err(|_| "读取日志超时".to_string())
     }
 
     pub fn action(&self, action: SettingsAction) -> Result<Snapshot, String> {
@@ -236,4 +249,9 @@ mod tests {
             SettingsAction::SetOutputDevice(Some(device)) if device.name == "Speakers"
         ));
     }
+}
+
+#[tauri::command]
+pub fn wordy_logs(state: tauri::State<'_, NativeHandle>) -> Result<Vec<String>, String> {
+    state.logs()
 }

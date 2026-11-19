@@ -104,6 +104,7 @@ export default function App() {
   const [voiceId, setVoiceId] = useState("");
   const [voiceName, setVoiceName] = useState("");
   const [placeholder, setPlaceholder] = useState("");
+  const [logs, setLogs] = useState<string[] | null>(null);
   const pending = useRef<Record<string, number>>({});
 
   const apply = useCallback((next: Snapshot) => {
@@ -119,9 +120,19 @@ export default function App() {
       .then((next) => !disposed && apply(next))
       .catch((error) => console.error(error));
     const unlisten = listen<Snapshot>("wordy://snapshot", (event) => apply(event.payload));
+    const unlistenLog = listen<string>("wordy://log", (event) =>
+      setLogs((current) => (current ? [...current.slice(-4999), event.payload] : current)),
+    );
+    const unlistenOpen = listen("wordy://open-logs", () => {
+      invoke<string[]>("wordy_logs")
+        .then(setLogs)
+        .catch((error) => console.error(error));
+    });
     return () => {
       disposed = true;
       unlisten.then((stop) => stop());
+      unlistenLog.then((stop) => stop());
+      unlistenOpen.then((stop) => stop());
     };
   }, [apply]);
 
@@ -173,7 +184,7 @@ export default function App() {
       : `未安装「${settings.ui_font}」，已回退到内置字体。`;
 
   return (
-    <main className="mx-auto flex h-screen max-w-[1180px] flex-col px-6 pb-4 pt-5">
+    <main className="relative mx-auto flex h-screen max-w-[1180px] flex-col px-6 pb-4 pt-5">
       <header className="flex items-end justify-between gap-6">
         <h1 className="pb-2 text-2xl font-semibold tracking-tight">设置</h1>
         <nav className="flex gap-1 rounded-xl bg-white/5 p-1">
@@ -598,10 +609,34 @@ export default function App() {
         </div>
       </div>
 
+      {logs && (
+        <section className="absolute inset-x-6 bottom-16 top-16 flex flex-col rounded-2xl border border-white/15 bg-[#17171a]/95 p-4 shadow-2xl backdrop-blur">
+          <header className="mb-2 flex items-center justify-between">
+            <h2 className="text-sm font-semibold">日志</h2>
+            <button className="btn" onClick={() => setLogs(null)}>
+              关闭
+            </button>
+          </header>
+          <ol className="flex-1 overflow-y-auto whitespace-pre-wrap break-all font-mono text-xs leading-relaxed text-[var(--muted)]">
+            {logs.length === 0 && <li>暂无日志</li>}
+            {logs.map((line, index) => (
+              <li key={index}>{line}</li>
+            ))}
+          </ol>
+        </section>
+      )}
+
       <footer className="mt-3 flex items-center justify-between gap-3 border-t border-white/10 pt-3 text-xs text-[var(--muted)]">
         <span>设置自动保存</span>
         <div className="flex gap-2">
-          <button className="btn" onClick={() => run({ type: "open_logs" })}>
+          <button
+            className="btn"
+            onClick={() =>
+              invoke<string[]>("wordy_logs")
+                .then(setLogs)
+                .catch((error) => console.error(error))
+            }
+          >
             查看日志
           </button>
           <button
