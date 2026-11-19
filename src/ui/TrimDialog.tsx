@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import type { Snapshot } from "./App";
 import { Icon, Slider } from "./Controls";
@@ -95,24 +95,32 @@ export default function TrimDialog({ snapshot, run }: Props) {
     return () => window.removeEventListener("keydown", onKey);
   }, [trim, start, end, gain, run]);
 
-  useEffect(() => {
-    if (!trim) return;
+  const redrawWave = useEffectEvent(() => {
     const element = canvas.current;
-    if (!element) return;
-    const draw = () =>
-      drawWave(
-        element,
-        trim.peaks,
-        durationOf(trim),
-        start,
-        end,
-        trim.seconds === null ? null : start + trim.seconds,
-      );
-    draw();
-    const observer = new ResizeObserver(draw);
-    observer.observe(element);
+    if (!element || !trim) return;
+    drawWave(
+      element,
+      trim.peaks,
+      trim.duration,
+      start,
+      end,
+      trim.seconds === null ? null : start + trim.seconds,
+    );
+  });
+
+  useEffect(() => {
+    redrawWave();
+  }, [trim?.id, trim?.peaks, trim?.duration, trim?.seconds, start, end]);
+
+  const trimOpen = trim !== null;
+  useEffect(() => {
+    const element = canvas.current;
+    if (!trimOpen || !element) return;
+    // 拖选和试听进度只重绘，画布大小则按设备像素观察。
+    const observer = new ResizeObserver(() => redrawWave());
+    observer.observe(element, { box: "device-pixel-content-box" });
     return () => observer.disconnect();
-  }, [trim, start, end]);
+  }, [trimOpen]);
 
   if (!trim) return null;
 
@@ -362,8 +370,6 @@ const clamp = (value: number, min: number, max: number) =>
 
 const round = (value: number) => Math.round(value * 1000) / 1000;
 
-const durationOf = (trim: Session) => trim.duration;
-
 function slotName(
   wheel: { labels: string[]; texts: string[]; slots: string[] },
   index: number,
@@ -396,12 +402,16 @@ function drawWave(
   const width = canvas.clientWidth;
   const height = WAVE_HEIGHT;
   const ratio = window.devicePixelRatio || 1;
-  canvas.width = Math.max(1, Math.round(width * ratio));
-  canvas.height = Math.round(height * ratio);
+  const pixelWidth = Math.max(1, Math.round(width * ratio));
+  const pixelHeight = Math.round(height * ratio);
+  // 给 Canvas 宽高赋相同的值也会重置位图和绘图状态。
+  if (canvas.width !== pixelWidth) canvas.width = pixelWidth;
+  if (canvas.height !== pixelHeight) canvas.height = pixelHeight;
   const context = canvas.getContext("2d");
   if (!context) return;
+  context.resetTransform();
+  context.clearRect(0, 0, pixelWidth, pixelHeight);
   context.setTransform(ratio, 0, 0, ratio, 0, 0);
-  context.clearRect(0, 0, width, height);
   context.fillStyle = "#0f1211";
   context.fillRect(0, 0, width, height);
   if (peaks.length === 0) return;
