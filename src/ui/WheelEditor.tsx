@@ -3,14 +3,6 @@ import type { Snapshot, Wheel } from "./App";
 import { displayHotkey } from "./App";
 import WheelCanvas from "./WheelCanvas";
 
-const STYLE_OPTIONS = [
-  { value: "classic", label: "经典玻璃" },
-  { value: "glass", label: "轻薄玻璃" },
-  { value: "petals", label: "悬浮花瓣" },
-  { value: "game", label: "竞技轮盘" },
-];
-
-
 type Props = {
   snapshot: Snapshot;
   run: (action: Record<string, unknown>) => void;
@@ -152,7 +144,7 @@ export default function WheelEditor({ snapshot, run }: Props) {
             <div className="relative mx-auto aspect-[634/540] w-full max-w-[420px]">
               <WheelCanvas
                 labels={wheelLabels(wheel)}
-                style={settings.chat_wheel_style}
+                font={settings.ui_font}
                 selected={slot}
                 onSelectSlot={setSlot}
                 className="absolute inset-0 h-full w-full cursor-pointer"
@@ -170,21 +162,6 @@ export default function WheelEditor({ snapshot, run }: Props) {
           槽位内容 · 第 {slot + 1} 槽
         </h2>
         <div className="space-y-3">
-          <label className="block text-[13px]">
-            样式
-            <select
-              className="field mt-1.5"
-              value={settings.chat_wheel_style}
-              disabled={locked}
-              onChange={(event) => run({ type: "set_wheel_style", style: event.target.value })}
-            >
-              {STYLE_OPTIONS.map((style) => (
-                <option key={style.value} value={style.value}>
-                  {style.label}
-                </option>
-              ))}
-            </select>
-          </label>
           <div>
             <div className="mb-1.5 text-[13px]">内容类型</div>
             <div className="flex gap-2">

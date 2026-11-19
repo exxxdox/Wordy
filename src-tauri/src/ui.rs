@@ -15,6 +15,8 @@ use windows_sys::Win32::System::Threading::SetEvent;
 use crate::config::{AudioIdentity, Settings, Voice};
 use crate::credentials::Provider;
 use crate::settings_action::SettingsAction;
+use crate::wheel::SLOT_COUNT;
+use crate::wheel_paint::WheelRenderer;
 
 /// 原生快照超过这个时间没有回应，说明后台线程已阻塞在对话框里。
 const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -322,9 +324,6 @@ pub enum UiAction {
         index: usize,
         name: String,
     },
-    SetWheelStyle {
-        style: String,
-    },
     RecordWheelHotkey {
         index: usize,
     },
@@ -430,7 +429,6 @@ impl UiAction {
             Self::AddWheel => SettingsAction::AddWheel,
             Self::RemoveWheel { index } => SettingsAction::RemoveWheel(index),
             Self::SetWheelName { index, name } => SettingsAction::SetWheelName(index, name),
-            Self::SetWheelStyle { style } => SettingsAction::SetWheelStyle(style),
             Self::RecordWheelHotkey { index } => SettingsAction::RecordWheelHotkey(index),
             Self::SetSlotLabel { index, slot, value } => {
                 SettingsAction::SetSlotLabel(index, slot, value)
@@ -491,6 +489,37 @@ pub async fn wordy_action(
     state.action(action.into_action()?)
 }
 
+/// 设置页轮盘预览：运行时同一渲染器输出 [宽 LE][高 LE][BGRA] 原始像素。
+#[tauri::command]
+pub async fn wordy_wheel_preview(
+    labels: Vec<String>,
+    selected: Option<usize>,
+    font: String,
+    scale: f64,
+) -> Result<tauri::ipc::Response, String> {
+    wheel_preview_bytes(&labels, selected, &font, scale).map(tauri::ipc::Response::new)
+}
+
+pub(crate) fn wheel_preview_bytes(
+    labels: &[String],
+    selected: Option<usize>,
+    font: &str,
+    scale: f64,
+) -> Result<Vec<u8>, String> {
+    let labels: [String; SLOT_COUNT] =
+        std::array::from_fn(|index| labels.get(index).cloned().unwrap_or_default());
+    let selected = selected.filter(|&index| index < SLOT_COUNT);
+    let renderer = WheelRenderer::new().map_err(|error| error.to_string())?;
+    renderer
+        .render_preview(
+            &labels,
+            selected,
+            crate::config::ui_font_family(font),
+            scale.clamp(0.1, 4.0),
+        )
+        .map_err(|error| error.to_string())
+}
+
 /// 网页里的「关闭」按钮只隐藏设置窗口，托盘应用继续运行。
 #[tauri::command]
 pub fn wordy_hide(app: tauri::AppHandle) -> Result<(), String> {
@@ -522,6 +551,15 @@ mod tests {
         let action: UiAction =
             serde_json::from_str(r#"{"type":"set_provider","provider":"other"}"#).unwrap();
         assert!(action.into_action().is_err());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn wheel_preview_pads_labels_and_reports_dimensions() {
+        let bytes = wheel_preview_bytes(&["北".into()], Some(0), "", 0.5).unwrap();
+        assert_eq!(u32::from_le_bytes(bytes[..4].try_into().unwrap()), 317);
+        assert_eq!(u32::from_le_bytes(bytes[4..8].try_into().unwrap()), 270);
+        assert_eq!(bytes.len(), 8 + 317 * 270 * 4);
     }
 
     #[test]

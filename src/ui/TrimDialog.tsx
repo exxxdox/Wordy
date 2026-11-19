@@ -268,7 +268,7 @@ export default function TrimDialog({ snapshot, run }: Props) {
         <div className="relative aspect-[634/540] w-28 shrink-0 overflow-hidden rounded-lg border border-white/10 bg-black/30">
           <WheelCanvas
             labels={targetLabels}
-            style={snapshot.settings.chat_wheel_style}
+            font={snapshot.settings.ui_font}
             selected={slot}
             onSelectSlot={trim.rolling ? setSlot : undefined}
             className="h-full w-full"

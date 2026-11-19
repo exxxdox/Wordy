@@ -1,6 +1,5 @@
 #![cfg(windows)]
 
-use wordy::wheel::WheelStyle;
 use wordy::wheel_paint::{WheelBitmap, WheelFrame, WheelRenderer};
 
 fn pixel(bitmap: &WheelBitmap, x: usize, y: usize) -> [u8; 4] {
@@ -9,34 +8,42 @@ fn pixel(bitmap: &WheelBitmap, x: usize, y: usize) -> [u8; 4] {
 }
 
 #[test]
-fn paints_four_distinct_styles_on_the_same_transparent_canvas() {
+fn paints_the_game_wheel_on_a_transparent_canvas() {
     let renderer = WheelRenderer::new().unwrap();
     let labels = std::array::from_fn(|_| String::from("一二三四五六七八九十"));
-    let styles = [
-        WheelStyle::Classic,
-        WheelStyle::Glass,
-        WheelStyle::Petals,
-        WheelStyle::Game,
-    ];
-    let mut textures = Vec::new();
-    for style in styles {
-        let bitmap = renderer
-            .render(WheelFrame::new(&labels, style), 0.5)
-            .unwrap();
-        assert_eq!((bitmap.width, bitmap.height), (317, 270));
-        assert_eq!(pixel(&bitmap, 0, 0), [0; 4]);
-        assert!(
-            bitmap
-                .pixels
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .all(|p| p[..3].iter().all(|c| *c <= p[3]))
-        );
-        assert!(bitmap.pixels.as_chunks::<4>().0.iter().any(|p| p[3] > 200));
-        assert!(!textures.contains(&bitmap.pixels));
-        textures.push(bitmap.pixels);
-    }
+    let bitmap = renderer.render(WheelFrame::new(&labels), 0.5).unwrap();
+    assert_eq!((bitmap.width, bitmap.height), (317, 270));
+    assert_eq!(pixel(&bitmap, 0, 0), [0; 4]);
+    assert!(
+        bitmap
+            .pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|p| p[..3].iter().all(|c| *c <= p[3]))
+    );
+    assert!(bitmap.pixels.as_chunks::<4>().0.iter().any(|p| p[3] > 200));
+}
+
+#[test]
+fn preview_bytes_carry_dimensions_and_the_native_frame() {
+    let renderer = WheelRenderer::new().unwrap();
+    let labels = std::array::from_fn(|_| String::new());
+    let bytes = renderer
+        .render_preview(&labels, Some(0), "Segoe UI Variable", 0.5)
+        .unwrap();
+    let width = u32::from_le_bytes(bytes[..4].try_into().unwrap());
+    let height = u32::from_le_bytes(bytes[4..8].try_into().unwrap());
+    assert_eq!((width, height), (317, 270));
+    assert_eq!(bytes.len(), 8 + 317 * 270 * 4);
+    // 预览与运行时共用同一绘制路径：选中非空槽时指针出现在东侧。
+    let mut labels = std::array::from_fn(|_| String::new());
+    labels[2] = "下一项".to_owned();
+    let bytes = renderer
+        .render_preview(&labels, Some(2), "Segoe UI Variable", 1.0)
+        .unwrap();
+    let alpha = |x: usize, y: usize| bytes[8 + (y * 634 + x) * 4 + 3];
+    assert!(alpha(405, 270) > 170);
 }
 
 #[test]
@@ -45,7 +52,7 @@ fn game_pointer_belongs_only_to_the_current_playable_sector() {
     let mut labels = std::array::from_fn(|_| String::new());
     labels[0] = "上一项".to_owned();
     labels[2] = "下一项".to_owned();
-    let mut frame = WheelFrame::new(&labels, WheelStyle::Game);
+    let mut frame = WheelFrame::new(&labels);
     frame.selected = Some(2);
     frame.highlights = Some([0.70, 0.0, 0.90, 0.0, 0.0, 0.0, 0.0, 0.0]);
     let east = renderer.render(frame, 1.0).unwrap();
@@ -60,7 +67,7 @@ fn game_pointer_belongs_only_to_the_current_playable_sector() {
 fn game_picker_knob_stays_with_selected_slot_while_hovering_elsewhere() {
     let renderer = WheelRenderer::new().unwrap();
     let labels = std::array::from_fn(|_| String::new());
-    let mut frame = WheelFrame::new(&labels, WheelStyle::Game);
+    let mut frame = WheelFrame::new(&labels);
     frame.editing = true;
     frame.selected = Some(0);
     frame.highlights = Some([1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]);
@@ -81,7 +88,7 @@ fn game_picker_knob_stays_with_selected_slot_while_hovering_elsewhere() {
 fn configured_font_changes_the_rendered_labels() {
     let renderer = WheelRenderer::new().unwrap();
     let labels = std::array::from_fn(|_| String::from("MMMM"));
-    let mut first = WheelFrame::new(&labels, WheelStyle::Classic);
+    let mut first = WheelFrame::new(&labels);
     first.font = "Segoe UI Variable";
     let mut second = first;
     second.font = "Consolas";
@@ -89,18 +96,4 @@ fn configured_font_changes_the_rendered_labels() {
         renderer.render(first, 1.0).unwrap().pixels,
         renderer.render(second, 1.0).unwrap().pixels
     );
-}
-
-#[test]
-fn classic_shadow_fades_outside_the_disc() {
-    let renderer = WheelRenderer::new().unwrap();
-    let labels = std::array::from_fn(|_| String::new());
-    let bitmap = renderer
-        .render(WheelFrame::new(&labels, WheelStyle::Classic), 1.0)
-        .unwrap();
-    let outer = pixel(&bitmap, 317, 8)[3];
-    let middle = pixel(&bitmap, 317, 15)[3];
-    let inner = pixel(&bitmap, 317, 22)[3];
-    assert_eq!(outer, 0);
-    assert!(inner > middle && middle > outer);
 }

@@ -17,7 +17,7 @@ use windows_sys::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_ESCAPE, VK_RBUTTON};
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
-use crate::wheel::{Point, Rect, SLOT_COUNT, WheelState, WheelStyle};
+use crate::wheel::{Point, Rect, SLOT_COUNT, WheelState};
 use crate::wheel_paint::{WheelBitmap, WheelFrame, WheelRenderer};
 
 const EX_STYLE: u32 = WS_EX_LAYERED | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW | WS_EX_TOPMOST;
@@ -109,13 +109,7 @@ impl WheelWindow {
         self.visible
     }
 
-    pub fn open(
-        &mut self,
-        labels: &[String],
-        style: WheelStyle,
-        key: u16,
-        font: &str,
-    ) -> Result<bool> {
+    pub fn open(&mut self, labels: &[String], key: u16, font: &str) -> Result<bool> {
         if self.state.is_active() {
             return Ok(false);
         }
@@ -151,7 +145,7 @@ impl WheelWindow {
         let origin = screen_point(cursor).to_logical(self.monitor_origin, self.scale);
         self.event.set(None);
         self.state
-            .open(self.now(), origin, bounds, labels, style, Some(key));
+            .open(self.now(), origin, bounds, labels, Some(key));
         self.visuals = None;
         if let Err(error) = self.present() {
             self.cancel();
@@ -218,7 +212,7 @@ impl WheelWindow {
                 return Err(Error::from_thread());
             }
         }
-        let mut frame = WheelFrame::new(self.state.labels(), self.state.style());
+        let mut frame = WheelFrame::new(self.state.labels());
         frame.font = &self.font;
         frame.opacity = visuals.opacity;
         frame.selected = visuals.selected;
@@ -480,7 +474,7 @@ mod tests {
         let labels = std::array::from_fn(|_| String::new());
         let bitmap = wheel
             .renderer
-            .render(WheelFrame::new(&labels, WheelStyle::Classic), 0.5)
+            .render(WheelFrame::new(&labels), 0.5)
             .unwrap();
         let mut surface = LayeredSurface::new(bitmap.width, bitmap.height).unwrap();
         surface

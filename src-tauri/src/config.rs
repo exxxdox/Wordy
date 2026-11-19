@@ -18,7 +18,6 @@ pub const SLOT_COUNT: usize = 8;
 pub const WHEEL_NAME_MAX_LENGTH: usize = 20;
 pub const SAVE_DEBOUNCE: Duration = Duration::from_millis(150);
 const SAVE_RETRY: Duration = Duration::from_secs(1);
-pub const CHAT_WHEEL_STYLES: [&str; 4] = ["classic", "glass", "petals", "game"];
 pub const LOG_LEVELS: [&str; 5] = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"];
 pub const DEFAULT_UI_FONT: &str = "Segoe UI Variable";
 
@@ -167,7 +166,6 @@ pub struct Settings {
     pub name: String,
     pub chat_wheel_name: String,
     pub chat_wheel_hotkey: String,
-    pub chat_wheel_style: String,
     pub chat_wheel_slots: [String; SLOT_COUNT],
     pub chat_wheel_labels: [String; SLOT_COUNT],
     pub chat_wheel_texts: [String; SLOT_COUNT],
@@ -204,7 +202,6 @@ impl Default for Settings {
             name: "F6".into(),
             chat_wheel_name: String::new(),
             chat_wheel_hotkey: "f8".into(),
-            chat_wheel_style: "classic".into(),
             chat_wheel_slots: Default::default(),
             chat_wheel_labels: Default::default(),
             chat_wheel_texts: Default::default(),
@@ -266,7 +263,6 @@ impl Settings {
                 .unwrap_or_default(),
             chat_wheel_hotkey: valid_hotkey(raw, "chat_wheel_hotkey")
                 .unwrap_or(defaults.chat_wheel_hotkey),
-            chat_wheel_style: string_or(raw, "chat_wheel_style", defaults.chat_wheel_style),
             chat_wheel_slots: read_slot_texts(raw, "chat_wheel_slots", true),
             chat_wheel_labels: read_slot_texts(raw, "chat_wheel_labels", false),
             chat_wheel_texts: read_slot_texts(raw, "chat_wheel_texts", false),
@@ -438,9 +434,6 @@ impl Settings {
     }
 
     fn normalize(&mut self) {
-        if !CHAT_WHEEL_STYLES.contains(&self.chat_wheel_style.as_str()) {
-            self.chat_wheel_style = "classic".into();
-        }
         if !LOG_LEVELS.contains(&self.log_level.as_str()) {
             self.log_level = "INFO".into();
         }
@@ -849,7 +842,6 @@ mod tests {
             overlay_placeholder = ""
             volume = inf
             overlay_opacity = 0
-            chat_wheel_style = "bogus"
             chat_wheel_slots = ["a.wav", "../x.wav", 17]
             chat_wheel_labels = ["你好"]
             chat_wheel_volumes = [-1, 5, nan]
@@ -876,7 +868,6 @@ mod tests {
         assert!(settings.overlay_placeholder.is_empty());
         assert_eq!(settings.volume, 1.0);
         assert_eq!(settings.overlay_opacity, 0.30);
-        assert_eq!(settings.chat_wheel_style, "classic");
         assert_eq!(&settings.chat_wheel_slots[..3], ["a.wav", "", ""]);
         assert_eq!(&settings.chat_wheel_volumes[..4], [0.0, 3.0, 1.0, 1.0]);
         assert_eq!(settings.wheel_count(), 2);

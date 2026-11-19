@@ -28,7 +28,7 @@
 - 每槽可为音频（导入、录制电脑声音、截取片段）或文字（以当前音色朗读，可打断）
 - 每槽独立音量，范围 0–300%
 - 可新增多个轮盘，各自绑定快捷键
-- 四种样式：经典玻璃、轻薄玻璃、悬浮花瓣、竞技轮盘
+- 竞技轮盘样式，设置页预览与运行时一致
 
 ### TTS 服务商
 
@@ -116,7 +116,7 @@ cargo add <crate>
 | `src-tauri/src/desktop/overlay.rs` | 悬浮输入框和绘制 |
 | `src-tauri/src/fonts.rs` | 系统字体枚举与回退 |
 | `src-tauri/src/app/trim.rs` | React 截取窗口的原生会话：临时 WAV、波形、试听与保存 |
-| `src-tauri/src/wheel*.rs` | 轮盘运行窗口、四种样式绘制与设置预览 |
+| `src-tauri/src/wheel*.rs` | 轮盘运行窗口、竞技轮盘绘制与设置预览 |
 | `src-tauri/src/playback.rs` / `ffmpeg.rs` | 播放调度、FFmpeg 查找与 WinGet 安装 |
 | `src-tauri/src/config.rs` / `backup*.rs` / `credentials.rs` | 配置持久化、加密备份、凭据库 |
 | `src-tauri/src/hotkey.rs` / `instance.rs` / `file_log.rs` | 快捷键解析与注册、单实例、日志轮转 |

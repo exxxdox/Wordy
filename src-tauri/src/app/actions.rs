@@ -13,12 +13,7 @@ impl App {
                     let labels = crate::wheel::labels(&wheel);
                     if self
                         .wheel
-                        .open(
-                            &labels,
-                            WheelStyle::from_config(&self.config.settings().chat_wheel_style),
-                            key,
-                            &self.config.settings().ui_font,
-                        )
+                        .open(&labels, key, &self.config.settings().ui_font)
                         .map_err(io::Error::other)?
                     {
                         self.active_wheel = Some(index);

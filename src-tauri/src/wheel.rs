@@ -72,26 +72,6 @@ impl Rect {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum WheelStyle {
-    #[default]
-    Classic,
-    Glass,
-    Petals,
-    Game,
-}
-
-impl WheelStyle {
-    pub fn from_config(value: &str) -> Self {
-        match value {
-            "glass" => Self::Glass,
-            "petals" => Self::Petals,
-            "game" => Self::Game,
-            _ => Self::Classic,
-        }
-    }
-}
-
 pub fn wheel_label_text(label: &str) -> Cow<'_, str> {
     match label.char_indices().nth(MAX_LABEL_CHARS) {
         Some((end, _)) => Cow::Owned(format!("{}...", &label[..end])),
@@ -169,7 +149,6 @@ enum Phase {
 #[derive(Default)]
 pub struct WheelState {
     phase: Phase,
-    style: WheelStyle,
     labels: [String; SLOT_COUNT],
     selected: Option<usize>,
     position: Point,
@@ -183,7 +162,6 @@ impl WheelState {
         origin: Point,
         work_area: Rect,
         labels: &[impl AsRef<str>],
-        style: WheelStyle,
         key: Option<u16>,
     ) -> bool {
         if self.is_active() {
@@ -196,7 +174,6 @@ impl WheelState {
             started: now,
             opacity: self.opacity(now),
         };
-        self.style = style;
         self.labels = std::array::from_fn(|index| {
             labels
                 .get(index)
@@ -227,10 +204,6 @@ impl WheelState {
                 opacity * (1.0 - eased(now, started, FADE_OUT_MS))
             }
         }
-    }
-
-    pub fn style(&self) -> WheelStyle {
-        self.style
     }
 
     pub fn labels(&self) -> &[String; SLOT_COUNT] {

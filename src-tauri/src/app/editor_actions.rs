@@ -1,5 +1,5 @@
 use super::*;
-use crate::config::{CHAT_WHEEL_STYLES, WHEEL_NAME_MAX_LENGTH, Wheel};
+use crate::config::{WHEEL_NAME_MAX_LENGTH, Wheel};
 
 const SLOT_LABEL_LIMIT: usize = 40;
 const SLOT_TEXT_LIMIT: usize = 200;
@@ -51,16 +51,6 @@ impl App {
         let name: String = value.trim().chars().take(WHEEL_NAME_MAX_LENGTH).collect();
         self.config
             .update_wheel(index, |wheel| wheel.name.clone_from(&name))?;
-        self.ui_dirty = true;
-        Ok(())
-    }
-
-    pub(super) fn wheel_set_style(&mut self, style: &str) -> io::Result<()> {
-        if !CHAT_WHEEL_STYLES.contains(&style) {
-            return Err(io::Error::other("未知轮盘样式"));
-        }
-        self.config
-            .update(|settings| settings.chat_wheel_style = style.into())?;
         self.ui_dirty = true;
         Ok(())
     }

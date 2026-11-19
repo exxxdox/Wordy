@@ -14,7 +14,7 @@ Rust（edition 2024）+ Tauri 2 桌面应用。设置界面是 React（Vite + Ta
 | `src-tauri/src/desktop/overlay.rs` | 悬浮输入框、输入事件、背景和按钮绘制 |
 
 | `src-tauri/src/app/trim.rs` | React 截取窗口的原生会话：临时 WAV、波形、试听与保存 |
-| `src-tauri/src/wheel.rs` / `wheel_paint.rs` / `wheel_window.rs` | 轮盘状态、四种样式绘制、运行时窗口 |
+| `src-tauri/src/wheel.rs` / `wheel_paint.rs` / `wheel_window.rs` | 轮盘状态、竞技轮盘绘制、运行时窗口 |
 | `src-tauri/src/audio.rs` + `src-tauri/src/audio/` | WASAPI 设备枚举、播放/返听、VB-CABLE 路由、Windows 侦听、回环录制、裁剪/波形、托管音频 |
 | `src-tauri/src/tts.rs` + `src-tauri/src/tts/realtime.rs` | TTS 引擎、Cartesia HTTP/WebSocket、Volcengine SSE、音色标签 |
 | `src-tauri/src/config.rs` | `Settings` 单一数据源、钳位、原子写入、150ms 防抖写盘 |
@@ -31,7 +31,7 @@ Rust（edition 2024）+ Tauri 2 桌面应用。设置界面是 React（Vite + Ta
 - 确认、密码、快捷键录制弹窗与状态 Toast 都由 React 渲染；原生线程通过 `wordy://dialog` 请求并等待 `wordy_dialog_reply`。文件选择仍是系统对话框。
 - 桥命令 `wordy_action`/`wordy_snapshot`/`wordy_wheel_preview` 必须是 async：同步命令会占住 Tauri 主线程，弹窗事件无法送达，表现为“弹窗弹不出来”。
 - 状态提示由 React `wordy://feedback` 渲染；设置页隐藏时错误仍走托盘通知。
-- 轮盘编辑器由 React「轮盘」页签提供；设置里的轮盘预览由 `src/ui/WheelCanvas.tsx` 用 Canvas 绘制（四种样式），运行时轮盘仍用 `wheel_paint`。
+- 轮盘编辑器由 React「轮盘」页签提供；设置里的轮盘预览通过 `wordy_wheel_preview` 调用原生 `wheel_paint` 渲染，与运行时轮盘使用同一套绘制。
 - 截取窗口由 React 渲染波形（Canvas）、拖选、试听与保存；原生只保留临时 WAV、裁剪与托管音频。
 - 日志面板由 React 渲染：`wordy_logs` 取历史，`wordy://log` 逐行推送，托盘动作会打开设置窗口并发出 `wordy://open-logs`。
 - 设置页文案保持中文，不写内部实现说明。
@@ -65,7 +65,7 @@ cargo test --manifest-path src-tauri/Cargo.toml
 
 轮盘导入、播放和截取原生以外的音频格式时使用系统安装的 FFmpeg，从系统 `PATH` 和 WinGet 命令目录查找。有效的 PCM16 WAV 直接读取。缺少解码器时提示通过 WinGet 安装，发布产物只包含 `Wordy.exe`。
 
-设置中的轮盘 UI 与运行时轮盘必须保持一致。样式由 `chat_wheel_style` 保存：`classic`/`glass`/`petals`/`game`，无效值回退经典；两处共用 `wheel_paint`。画布 634×540（盘体 540×540 居中），名称居中 hover 放大仍完整显示。动画仅影响显示：120ms 淡入、90ms 淡出、90ms 高亮；松键立即提交播放，淡出停止接收选择。
+设置中的轮盘 UI 与运行时轮盘必须保持一致。只保留竞技样式，由 `wheel_paint` 绘制；设置页预览调用同一渲染器（`wordy_wheel_preview`）。画布 634×540（盘体 540×540 居中），名称居中 hover 放大仍完整显示。动画仅影响显示：120ms 淡入、90ms 淡出、90ms 高亮；松键立即提交播放，淡出停止接收选择。
 
 每盘八槽、独立快捷键、任意数量、至少一个。第一盘存 `chat_wheel_name/hotkey/slots/labels/texts`，后续在 `additional_chat_wheels`。快捷键不得与输入框/其他轮盘/后台录制重复。槽内容互斥：有文字则朗读，否则播放音频；切换会清空另一类。音频槽 `volumes` 0–300%，播放时快照传主输出与返听。托管音频在 `audio_clips`，导入时复制为独立文件。清空槽保留音量。删除/清空后仅删除无任何轮盘引用的文件。新增轮盘直接在编辑器或截取窗口追加（默认名「轮盘 N」），创建时不要求录制快捷键；之后用「录制快捷键」按钮补录（与设置页热键同一录制器，录制期间临时注销现有全局热键），校验通过再注册。未绑定快捷键的轮盘不产生启动警告。所有快捷键（全局、按住键、轮盘）只通过录制弹窗设置，不接受文本输入；弹窗、确认框和文本输入共用 `rust/dialog.rs` 的深色外观，Esc 取消且不记录为快捷键。
 

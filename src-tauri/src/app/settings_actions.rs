@@ -123,7 +123,6 @@ impl App {
             AddWheel => self.wheel_add()?,
             RemoveWheel(index) => self.wheel_remove(index)?,
             SetWheelName(index, value) => self.wheel_set_name(index, &value)?,
-            SetWheelStyle(style) => self.wheel_set_style(&style)?,
             RecordWheelHotkey(index) => self.wheel_record_hotkey(index)?,
             SetSlotLabel(index, slot, value) => self.slot_set_label(index, slot, &value)?,
             SetSlotText(index, slot, value) => self.slot_set_text(index, slot, &value)?,

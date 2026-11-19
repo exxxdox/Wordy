@@ -1,5 +1,5 @@
 use wordy::wheel::{
-    POLL_MS, Point, Rect, WheelHover, WheelState, WheelStyle, picker_slot_at, wheel_label_text,
+    POLL_MS, Point, Rect, WheelHover, WheelState, picker_slot_at, wheel_label_text,
 };
 
 const SCREEN: Rect = Rect::new(0.0, 0.0, 1_000.0, 800.0);
@@ -7,7 +7,7 @@ const ORIGIN: Point = Point::new(500.0, 400.0);
 const LABELS: [&str; 8] = ["北", "东北", "东", "东南", "南", "西南", "西", "西北"];
 
 fn open(wheel: &mut WheelState, origin: Point, screen: Rect) {
-    assert!(wheel.open(0, origin, screen, &LABELS, WheelStyle::Classic, Some(0x77)));
+    assert!(wheel.open(0, origin, screen, &LABELS, Some(0x77)));
 }
 
 #[test]
@@ -98,16 +98,8 @@ fn release_dispatches_once_even_while_fading_and_second_open_waits_for_release()
     open(&mut wheel, ORIGIN, SCREEN);
     assert_eq!(wheel.opacity(0), 0.0);
     assert!(wheel.is_visible(0));
-    assert!(!wheel.open(
-        20,
-        ORIGIN,
-        SCREEN,
-        &["别的轮盘"],
-        WheelStyle::Game,
-        Some(0x78)
-    ));
+    assert!(!wheel.open(20, ORIGIN, SCREEN, &["别的轮盘"], Some(0x78)));
     assert_eq!(wheel.key(), Some(0x77));
-    assert_eq!(wheel.style(), WheelStyle::Classic);
     assert_eq!(wheel.opacity(60), 0.875);
     assert_eq!(wheel.opacity(120), 1.0);
     let east = Point::new(660.0, 400.0);
@@ -124,10 +116,9 @@ fn reopen_retargets_from_the_current_opacity_and_cancel_ends_the_animation() {
     open(&mut wheel, ORIGIN, SCREEN);
     wheel.dismiss(120);
     let fading = wheel.opacity(165);
-    assert!(wheel.open(165, ORIGIN, SCREEN, &["新轮盘"], WheelStyle::Petals, None));
+    assert!(wheel.open(165, ORIGIN, SCREEN, &["新轮盘"], None));
     assert_eq!(wheel.opacity(165), fading);
     assert_eq!(wheel.labels()[0], "新轮盘");
-    assert_eq!(wheel.style(), WheelStyle::Petals);
     assert!(wheel.is_visible(210));
     assert!(wheel.is_active());
     assert_eq!(wheel.opacity(285), 1.0);
@@ -151,7 +142,7 @@ fn escape_and_right_click_take_precedence_over_release() {
 #[test]
 fn empty_slots_have_no_highlight_or_playback_and_no_bound_key_means_no_release() {
     let mut wheel = WheelState::default();
-    assert!(wheel.open(0, ORIGIN, SCREEN, &["  北  ", "  "], WheelStyle::Game, None));
+    assert!(wheel.open(0, ORIGIN, SCREEN, &["  北  ", "  "], None));
     assert_eq!(wheel.labels()[0], "北");
     assert_eq!(wheel.labels()[1], "");
     assert_eq!(wheel.labels().len(), 8);
@@ -198,11 +189,7 @@ fn retargeted_hover_uses_the_current_frame() {
 }
 
 #[test]
-fn style_fallback_and_label_truncation_match_saved_behavior() {
-    assert_eq!(WheelStyle::from_config("game"), WheelStyle::Game);
-    assert_eq!(WheelStyle::from_config("glass"), WheelStyle::Glass);
-    assert_eq!(WheelStyle::from_config("petals"), WheelStyle::Petals);
-    assert_eq!(WheelStyle::from_config("unknown"), WheelStyle::Classic);
+fn label_truncation_matches_saved_behavior() {
     assert_eq!(
         wheel_label_text("一二三四五六七八九十"),
         "一二三四五六七八九十"

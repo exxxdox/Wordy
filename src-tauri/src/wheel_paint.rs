@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::ptr;
 
 use windows::Win32::Foundation::{E_INVALIDARG, RPC_E_CHANGED_MODE};
@@ -17,7 +16,7 @@ use windows::Win32::System::Com::{
 use windows::core::{Error, Result};
 use windows_numerics::Vector2;
 
-use crate::wheel::{CANVAS_HEIGHT, CANVAS_WIDTH, Point, SLOT_COUNT, WheelStyle, wheel_label_text};
+use crate::wheel::{CANVAS_HEIGHT, CANVAS_WIDTH, Point, SLOT_COUNT, wheel_label_text};
 
 mod draw;
 mod styles;
@@ -25,7 +24,6 @@ mod styles;
 use draw::Drawing;
 
 const CENTER: Vector2 = point(317.0, 270.0);
-const SOFT_SHADOW_CENTER: Vector2 = point(317.0, 273.0);
 const PAD: f32 = 47.0;
 const TEXT_WIDTH: f32 = 2048.0;
 const TEXT_HEIGHT: f32 = 56.0;
@@ -34,9 +32,7 @@ const WHITE: Color = rgb(255, 255, 255);
 const BLACK: Color = rgb(0, 0, 0);
 const ACCENT: Color = rgb(10, 132, 255);
 const PRIMARY: Color = rgb(245, 245, 247);
-const MUTED: Color = rgb(152, 152, 157);
 const WINDOW: Color = rgb(19, 19, 22);
-const ELEVATED: Color = rgb(44, 44, 46);
 const COLOR_FORMAT: D2D1_PIXEL_FORMAT = D2D1_PIXEL_FORMAT {
     format: DXGI_FORMAT_B8G8R8A8_UNORM,
     alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
@@ -52,7 +48,6 @@ pub struct WheelBitmap {
 #[derive(Clone, Copy)]
 pub struct WheelFrame<'a> {
     pub labels: &'a [String; SLOT_COUNT],
-    pub style: WheelStyle,
     pub selected: Option<usize>,
     pub highlights: Option<[f64; SLOT_COUNT]>,
     pub editing: bool,
@@ -62,10 +57,9 @@ pub struct WheelFrame<'a> {
 }
 
 impl<'a> WheelFrame<'a> {
-    pub fn new(labels: &'a [String; SLOT_COUNT], style: WheelStyle) -> Self {
+    pub fn new(labels: &'a [String; SLOT_COUNT]) -> Self {
         Self {
             labels,
-            style,
             selected: None,
             highlights: None,
             editing: false,
@@ -86,14 +80,6 @@ impl<'a> WheelFrame<'a> {
             })
             .clamp(0.0, 1.0)
     }
-
-    fn title(&self) -> Cow<'_, str> {
-        wheel_label_text(
-            self.selected
-                .and_then(|i| self.labels.get(i))
-                .map_or("", String::as_str),
-        )
-    }
 }
 
 // When the host already initialized COM with another apartment model, use it without releasing it.
@@ -111,7 +97,6 @@ pub struct WheelRenderer {
     factory: ID2D1Factory,
     text: IDWriteFactory,
     imaging: IWICImagingFactory,
-    round_stroke: ID2D1StrokeStyle,
     dash_stroke: ID2D1StrokeStyle,
     _apartment: Apartment,
 }
@@ -128,18 +113,6 @@ impl WheelRenderer {
         let text = unsafe { DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)? };
         let imaging =
             unsafe { CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)? };
-        let round_stroke = unsafe {
-            factory.CreateStrokeStyle(
-                &D2D1_STROKE_STYLE_PROPERTIES {
-                    startCap: D2D1_CAP_STYLE_ROUND,
-                    endCap: D2D1_CAP_STYLE_ROUND,
-                    lineJoin: D2D1_LINE_JOIN_ROUND,
-                    miterLimit: 10.0,
-                    ..Default::default()
-                },
-                None,
-            )?
-        };
         let dash_stroke = unsafe {
             factory.CreateStrokeStyle(
                 &D2D1_STROKE_STYLE_PROPERTIES {
@@ -154,7 +127,6 @@ impl WheelRenderer {
             factory,
             text,
             imaging,
-            round_stroke,
             dash_stroke,
             _apartment: apartment,
         })
@@ -213,6 +185,25 @@ impl WheelRenderer {
             pixels,
         })
     }
+
+    /// 设置页预览：走与运行时相同的绘制，输出 [宽 LE][高 LE][BGRA]。
+    pub fn render_preview(
+        &self,
+        labels: &[String; SLOT_COUNT],
+        selected: Option<usize>,
+        font: &str,
+        scale: f64,
+    ) -> Result<Vec<u8>> {
+        let mut frame = WheelFrame::new(labels);
+        frame.selected = selected;
+        frame.font = font;
+        let bitmap = self.render(frame, scale)?;
+        let mut bytes = Vec::with_capacity(8 + bitmap.pixels.len());
+        bytes.extend_from_slice(&bitmap.width.to_le_bytes());
+        bytes.extend_from_slice(&bitmap.height.to_le_bytes());
+        bytes.extend_from_slice(&bitmap.pixels);
+        Ok(bytes)
+    }
 }
 
 const fn point(x: f32, y: f32) -> Vector2 {
@@ -230,10 +221,6 @@ const fn alpha([r, g, b, _]: Color, a: u8) -> Color {
 fn byte(value: f32) -> u8 {
     value.round_ties_even() as u8
 }
-fn pt(size: f32) -> f32 {
-    (size * (96.0 / 72.0)).round_ties_even()
-}
-
 fn native_color([r, g, b, a]: Color, opacity: f32) -> D2D1_COLOR_F {
     D2D1_COLOR_F {
         r: f32::from(r) / 255.0,
@@ -245,22 +232,6 @@ fn native_color([r, g, b, a]: Color, opacity: f32) -> D2D1_COLOR_F {
 
 fn mix(start: f32, end: f32, factor: f32) -> f32 {
     start + (end - start) * factor
-}
-
-fn mix_color(start: Color, end: Color, factor: f32) -> Color {
-    std::array::from_fn(|i| byte(mix(f32::from(start[i]), f32::from(end[i]), factor)))
-}
-
-fn light([r, g, b, a]: Color, factor: f32) -> Color {
-    let peak = f32::from(r.max(g).max(b));
-    let spread = peak - f32::from(r.min(g).min(b));
-    let lifted = peak * factor;
-    let max = lifted.min(255.0);
-    // Glass highlights increase the HSV value and reduce saturation when it clips.
-    let saturation = (spread / peak.max(1.0) - (lifted - max) / 255.0).max(0.0);
-    let channel =
-        |value| byte(max - (peak - f32::from(value)) * max * saturation / spread.max(1.0));
-    [channel(r), channel(g), channel(b), a]
 }
 
 fn ellipse(center: Vector2, radius: f32) -> D2D1_ELLIPSE {
@@ -284,20 +255,6 @@ fn heading(index: usize) -> f32 {
     90.0 - index as f32 * 45.0
 }
 
-fn add_corner(
-    sink: &ID2D1GeometrySink,
-    control_radius: f32,
-    control_angle: f32,
-    radius: f32,
-    angle: f32,
-) {
-    let corner = D2D1_QUADRATIC_BEZIER_SEGMENT {
-        point1: polar(control_radius, control_angle),
-        point2: polar(radius, angle),
-    };
-    unsafe { sink.AddQuadraticBezier(&corner) };
-}
-
 fn add_arc(sink: &ID2D1GeometrySink, center: Vector2, radius: f32, start: f32, span: f32) {
     let arc = D2D1_ARC_SEGMENT {
         point: polar_from(center, radius, start + span),
@@ -314,13 +271,4 @@ fn add_arc(sink: &ID2D1GeometrySink, center: Vector2, radius: f32, start: f32, s
         arcSize: D2D1_ARC_SIZE_SMALL,
     };
     unsafe { sink.AddArc(&arc) };
-}
-
-fn add_circle(sink: &ID2D1GeometrySink, center: Vector2, radius: f32) {
-    unsafe {
-        sink.BeginFigure(polar_from(center, radius, 0.0), D2D1_FIGURE_BEGIN_FILLED);
-        add_arc(sink, center, radius, 0.0, 180.0);
-        add_arc(sink, center, radius, 180.0, 180.0);
-        sink.EndFigure(D2D1_FIGURE_END_CLOSED);
-    }
 }

@@ -36,7 +36,6 @@ pub enum SettingsAction {
     AddWheel,
     RemoveWheel(usize),
     SetWheelName(usize, String),
-    SetWheelStyle(String),
     RecordWheelHotkey(usize),
     SetSlotLabel(usize, usize, String),
     SetSlotText(usize, usize, String),

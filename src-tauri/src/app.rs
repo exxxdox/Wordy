@@ -27,7 +27,6 @@ use crate::hotkey::{display_hotkey, parse_hotkey, windows::Registration};
 use crate::playback::{EngineSettings, Event, Playback};
 use crate::settings_action::SettingsAction;
 use crate::ui::{self, ListenStatus, Snapshot, UiRequest};
-use crate::wheel::WheelStyle;
 use crate::wheel_window::WheelWindow;
 use crate::{backup, dialog};
 

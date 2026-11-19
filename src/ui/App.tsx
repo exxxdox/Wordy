@@ -29,7 +29,6 @@ export type Settings = {
   hotkey: string;
   chat_wheel_hotkey: string;
   chat_wheel_name: string;
-  chat_wheel_style: string;
   chat_wheel_slots: string[];
   chat_wheel_labels: string[];
   chat_wheel_texts: string[];

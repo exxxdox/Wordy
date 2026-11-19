@@ -90,6 +90,7 @@ fn main() -> std::process::ExitCode {
             wordy::ui::wordy_action,
             wordy::ui::wordy_hide,
             wordy::ui::wordy_logs,
+            wordy::ui::wordy_wheel_preview,
             wordy::ui::wordy_dialog_reply
         ])
         .run(tauri::generate_context!());
