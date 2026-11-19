@@ -1,5 +1,6 @@
 use std::io;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use crate::audio::{self, Recording};
@@ -37,6 +38,7 @@ impl App {
         }
         if let Some(recording) = self.recording.take() {
             self.tray.set_recording(false);
+            self.play_cue(false);
             let events = self.jobs.clone();
             std::thread::Builder::new()
                 .name("WordyRollingCapture".into())
@@ -45,19 +47,45 @@ impl App {
                     let _ = events.send(Background::Recording(RecordingResult::Rolling(result)));
                 })?;
             self.pending_saves += 1;
-            // The save window is the next step; a late system notification would cover it.
+            // The save window is the next step; keep the log short like the old toast.
             self.log("后台录制已结束，正在准备保存窗口".into());
         } else if self.pending_saves == 0 && self.trim.is_none() {
             let seconds = self.config.settings().rolling_buffer_seconds;
             self.recording = Some(Recording::start(Duration::from_secs_f64(seconds))?);
             self.tray.set_recording(true);
-            self.notify(format!(
+            // 提示音代替系统通知：开始和停止各用一段不同的短音。
+            self.play_cue(true);
+            self.log(format!(
                 "后台录制已开始（保留最近 {seconds:.0} 秒；再按一次结束并截取）"
             ));
         } else {
             return Err(io::Error::other("请先结束当前保存或音频截取"));
         }
         Ok(())
+    }
+
+    /// 提示音只走本地播放设备（与返听同一套解析），不占虚拟声卡、也不弹系统通知。
+    fn play_cue(&mut self, start: bool) {
+        let settings = self.config.settings().clone();
+        let spawned = std::thread::Builder::new()
+            .name("WordyCue".into())
+            .spawn(move || {
+                let Ok(outputs) = audio::list_outputs() else {
+                    return;
+                };
+                let selected = settings
+                    .audio_output_device
+                    .as_ref()
+                    .map(|device| device.name.as_str())
+                    .or(settings.audio_output_device_name.as_deref());
+                // preview_local 让 route 只解析本地设备，不会送到 VB-CABLE。
+                let route = audio::route(false, false, true, selected, &outputs, None);
+                let cancel = AtomicBool::new(false);
+                let _ = audio::play_routed_pcm(&route, &cue_tone(start), &cancel);
+            });
+        if let Err(error) = spawned {
+            self.log(format!("无法播放录制提示音：{error}"));
+        }
     }
 
     pub(super) fn import_slot_clip(
@@ -200,6 +228,31 @@ impl App {
     }
 }
 
+/// 录制开始/结束提示音：频率和时长都不同，5 ms 淡入淡出避免爆音。
+fn cue_tone(start: bool) -> audio::Pcm {
+    const RATE: u32 = 44_100;
+    let (frequency, millis) = if start {
+        (880.0_f32, 120)
+    } else {
+        (560.0_f32, 160)
+    };
+    let total = RATE as usize * millis / 1000;
+    let fade = (RATE / 200) as f32;
+    let samples = (0..total)
+        .map(|index| {
+            let edge = index.min(total - 1 - index) as f32;
+            let envelope = (edge / fade).min(1.0);
+            let wave = (std::f32::consts::TAU * frequency * index as f32 / RATE as f32).sin();
+            (wave * envelope * 0.22 * f32::from(i16::MAX)) as i16
+        })
+        .collect();
+    audio::Pcm {
+        sample_rate: RATE,
+        channels: 1,
+        samples,
+    }
+}
+
 fn trim_input(decoded: audio::DecodedClip<'_>) -> io::Result<tempfile::NamedTempFile> {
     match decoded {
         // The decoder's temporary WAV already belongs exclusively to this trim session.
@@ -224,6 +277,19 @@ fn preserve_rolling(file: tempfile::NamedTempFile) -> io::Result<PathBuf> {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn recording_cues_differ_and_fade_to_silence() {
+        let start = cue_tone(true);
+        let stop = cue_tone(false);
+        assert_ne!(start.samples.len(), stop.samples.len());
+        for cue in [&start, &stop] {
+            assert_eq!(cue.channels, 1);
+            assert_eq!(cue.samples.first(), Some(&0));
+            assert_eq!(cue.samples.last(), Some(&0));
+            assert!(cue.samples.iter().any(|&sample| sample != 0));
+        }
+    }
 
     #[test]
     fn trim_input_reuses_the_decoded_temporary_wave() {
