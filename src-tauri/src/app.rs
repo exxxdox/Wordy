@@ -129,7 +129,6 @@ struct App {
     trim: Option<trim::TrimSession>,
     previews: HashMap<u64, tempfile::NamedTempFile>,
     editor_preview: Option<EditorPreview>,
-    wheel_renderer: Option<crate::wheel_paint::WheelRenderer>,
     jobs: mpsc::Sender<Background>,
     results: mpsc::Receiver<Background>,
     pending_saves: usize,
@@ -211,7 +210,6 @@ impl App {
             trim: None,
             previews: HashMap::new(),
             editor_preview: None,
-            wheel_renderer: None,
             jobs,
             results,
             pending_saves: 0,
@@ -516,14 +514,6 @@ impl App {
                         self.log("设置界面已连接".into());
                     }
                     let _ = reply.send(self.snapshot());
-                }
-                UiRequest::Preview {
-                    wheel,
-                    slot,
-                    width,
-                    reply,
-                } => {
-                    let _ = reply.send(self.render_wheel_preview(wheel, slot, width));
                 }
                 UiRequest::Action(action, reply) => {
                     let result = self.settings_action(action);

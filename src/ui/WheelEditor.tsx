@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import type { Snapshot, Wheel } from "./App";
 import { displayHotkey } from "./App";
+import WheelCanvas from "./WheelCanvas";
 
 const STYLE_OPTIONS = [
   { value: "classic", label: "经典玻璃" },
@@ -10,11 +10,6 @@ const STYLE_OPTIONS = [
   { value: "game", label: "竞技轮盘" },
 ];
 
-const CANVAS_WIDTH = 634;
-const CANVAS_HEIGHT = 540;
-
-// 模块级缓存：切换页签会卸载组件，图片不应重新等待原生绘制。
-const PREVIEW_CACHE = new Map<string, string>();
 
 type Props = {
   snapshot: Snapshot;
@@ -43,21 +38,11 @@ function slotTitle(wheel: Wheel, slot: number) {
   return `槽 ${slot + 1}`;
 }
 
-function previewCacheKey(
-  index: number,
-  slot: number,
-  settings: Snapshot["settings"],
-  wheel: Wheel,
-) {
-  const width = Math.round(420 * (window.devicePixelRatio || 1));
-  return [
-    index,
-    slot,
-    width,
-    settings.chat_wheel_style,
-    settings.ui_font,
-    JSON.stringify([wheel.labels, wheel.texts, wheel.slots]),
-  ].join("|");
+function wheelLabels(wheel: Wheel) {
+  return Array.from({ length: 8 }, (_, index) => {
+    if (!wheel.slots[index] && !wheel.texts[index]) return "";
+    return wheel.labels[index] || wheel.texts[index] || wheel.slots[index];
+  });
 }
 
 export default function WheelEditor({ snapshot, run }: Props) {
@@ -67,7 +52,6 @@ export default function WheelEditor({ snapshot, run }: Props) {
   const wheel = wheels[index] ?? wheels[0];
   const [slot, setSlot] = useState(0);
   const [emptyTextMode, setEmptyTextMode] = useState(false);
-  const [preview, setPreview] = useState<string | null>(null);
   const [gain, setGain] = useState(Math.round((wheel?.volumes[slot] ?? 1) * 100));
 
   const hasAudio = Boolean(wheel?.slots[slot]);
@@ -93,60 +77,6 @@ export default function WheelEditor({ snapshot, run }: Props) {
   useEffect(() => {
     setGain(Math.round((wheel?.volumes[slot] ?? 1) * 100));
   }, [wheel?.volumes[slot]]);
-
-  const previewKey = (targetSlot: number) =>
-    previewCacheKey(index, targetSlot, settings, wheel);
-
-  useEffect(() => {
-    // 同一轮盘/样式/槽位的图像缓存复用，切槽不再等原生重绘。
-    const width = Math.round(420 * (window.devicePixelRatio || 1));
-    const key = previewKey(slot);
-    const cached = PREVIEW_CACHE.get(key);
-    if (cached) {
-      setPreview(cached);
-      return;
-    }
-    let cancelled = false;
-    const timer = window.setTimeout(() => {
-      invoke<string>("wordy_wheel_preview", { wheel: index, slot, width })
-        .then((source) => {
-          if (PREVIEW_CACHE.size > 64) PREVIEW_CACHE.clear();
-          PREVIEW_CACHE.set(key, source);
-          if (!cancelled) setPreview(source);
-        })
-        .catch(() => undefined);
-    }, 60);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
-  }, [index, slot, settings, wheel]);
-
-  useEffect(() => {
-    // 后台预热八张图；首次打开或改标签后切换槽位也能立即显示。
-    let cancelled = false;
-    const timer = window.setTimeout(async () => {
-      const width = Math.round(420 * (window.devicePixelRatio || 1));
-      for (let target = 0; target < 8 && !cancelled; target++) {
-        const key = previewKey(target);
-        if (PREVIEW_CACHE.has(key)) continue;
-        try {
-          const source = await invoke<string>("wordy_wheel_preview", {
-            wheel: index,
-            slot: target,
-            width,
-          });
-          PREVIEW_CACHE.set(key, source);
-        } catch {
-          return;
-        }
-      }
-    }, 400);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(timer);
-    };
-  }, [index, settings, wheel]);
 
   if (!wheel) return null;
 
@@ -219,31 +149,14 @@ export default function WheelEditor({ snapshot, run }: Props) {
             <p className="text-xs text-[var(--muted)]">点击下方轮盘扇区选择槽位</p>
           </div>
           <div className="rounded-xl border border-white/10 bg-black/20 p-2">
-            {/* 固定宽高比：占位与图片同尺寸，进入页面不再跳动。 */}
             <div className="relative mx-auto aspect-[634/540] w-full max-w-[420px]">
-              {preview ? (
-                <img
-                  src={preview}
-                  alt="轮盘预览"
-                  title="点击扇区选择槽位"
-                  className="absolute inset-0 h-full w-full cursor-pointer object-contain"
-                  onClick={(event) => {
-                    const rect = event.currentTarget.getBoundingClientRect();
-                    const x = ((event.clientX - rect.left) / rect.width) * CANVAS_WIDTH;
-                    const y = ((event.clientY - rect.top) / rect.height) * CANVAS_HEIGHT;
-                    const dx = x - CANVAS_WIDTH / 2;
-                    const dy = y - CANVAS_HEIGHT / 2;
-                    const radius = Math.hypot(dx, dy);
-                    if (radius < 80 || radius > 232) return;
-                    const angle = ((Math.atan2(dx, -dy) * 180) / Math.PI + 360) % 360;
-                    setSlot(Math.floor(((angle + 22.5) % 360) / 45) % 8);
-                  }}
-                />
-              ) : (
-                <div className="absolute inset-0 flex items-center justify-center text-xs text-[var(--muted)]">
-                  正在生成预览…
-                </div>
-              )}
+              <WheelCanvas
+                labels={wheelLabels(wheel)}
+                style={settings.chat_wheel_style}
+                selected={slot}
+                onSelectSlot={setSlot}
+                className="absolute inset-0 h-full w-full cursor-pointer"
+              />
             </div>
           </div>
           <p className="text-sm text-[var(--muted)]">

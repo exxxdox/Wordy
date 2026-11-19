@@ -31,7 +31,7 @@ Rust（edition 2024）+ Tauri 2 桌面应用。设置界面是 React（Vite + Ta
 - 确认、密码、快捷键录制弹窗与状态 Toast 都由 React 渲染；原生线程通过 `wordy://dialog` 请求并等待 `wordy_dialog_reply`。文件选择仍是系统对话框。
 - 桥命令 `wordy_action`/`wordy_snapshot`/`wordy_wheel_preview` 必须是 async：同步命令会占住 Tauri 主线程，弹窗事件无法送达，表现为“弹窗弹不出来”。
 - 状态提示由 React `wordy://feedback` 渲染；设置页隐藏时错误仍走托盘通知。
-- 轮盘编辑器由 React「轮盘」页签提供；预览通过 `wordy_wheel_preview` 返回与运行时轮盘同款绘制的 PNG。
+- 轮盘编辑器由 React「轮盘」页签提供；设置里的轮盘预览由 `src/ui/WheelCanvas.tsx` 用 Canvas 绘制（四种样式），运行时轮盘仍用 `wheel_paint`。
 - 截取窗口由 React 渲染波形（Canvas）、拖选、试听与保存；原生只保留临时 WAV、裁剪与托管音频。
 - 日志面板由 React 渲染：`wordy_logs` 取历史，`wordy://log` 逐行推送，托盘动作会打开设置窗口并发出 `wordy://open-logs`。
 - 设置页文案保持中文，不写内部实现说明。

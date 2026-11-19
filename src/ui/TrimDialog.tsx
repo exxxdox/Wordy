@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type { Snapshot } from "./App";
+import WheelCanvas from "./WheelCanvas";
 
 type TrimOpen = {
   id: number;
@@ -35,7 +35,6 @@ export default function TrimDialog({ snapshot, run }: Props) {
   const [wheel, setWheel] = useState(0);
   const [slot, setSlot] = useState(0);
   const [saving, setSaving] = useState(false);
-  const [targetPreview, setTargetPreview] = useState<string | null>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const drag = useRef<Drag | null>(null);
 
@@ -97,20 +96,6 @@ export default function TrimDialog({ snapshot, run }: Props) {
 
   useEffect(() => {
     if (!trim) return;
-    let cancelled = false;
-    const width = Math.round(200 * (window.devicePixelRatio || 1));
-    invoke<string>("wordy_wheel_preview", { wheel, slot, width })
-      .then((source) => {
-        if (!cancelled) setTargetPreview(source);
-      })
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
-  }, [trim, wheel, slot, snapshot.settings]);
-
-  useEffect(() => {
-    if (!trim) return;
     const element = canvas.current;
     if (!element) return;
     const draw = () =>
@@ -141,6 +126,11 @@ export default function TrimDialog({ snapshot, run }: Props) {
     ...snapshot.settings.additional_chat_wheels,
   ];
   const targetWheel = wheelItems[Math.min(wheel, wheelItems.length - 1)];
+  const targetLabels = targetWheel
+    ? Array.from({ length: 8 }, (_, index) =>
+        targetWheel.labels[index] || targetWheel.texts[index] || (targetWheel.slots[index] ? "音频" : ""),
+      )
+    : [];
   const wheels = wheelItems.map((item, order) => item.name || `轮盘 ${order + 1}`);
   const timeAt = (clientX: number) => {
     const element = canvas.current;
@@ -159,15 +149,9 @@ export default function TrimDialog({ snapshot, run }: Props) {
       drag.current = { mode: "start" };
     } else if (Math.abs(time - end) <= threshold) {
       drag.current = { mode: "end" };
-    } else if (time > start && time < end && end - start < duration - MIN_RANGE) {
-      drag.current = { mode: "range", anchor: time, span: end - start };
-    } else if (time > start && time < end) {
-      // 整段选中时无法“移动”，改为从按下的位置重新拉出子区间。
-      drag.current = { mode: "new", anchor: time };
-      setStart(time);
-      setEnd(Math.min(duration, time + MIN_RANGE));
     } else {
-      drag.current = { mode: "end" };
+      // 任意方向拖选：从按下的位置向左右都可以拉出新区间。
+      drag.current = { mode: "new", anchor: time };
       setStart(time);
       setEnd(Math.min(duration, time + MIN_RANGE));
     }
@@ -180,11 +164,6 @@ export default function TrimDialog({ snapshot, run }: Props) {
       setStart(Math.min(time, end - MIN_RANGE));
     } else if (active.mode === "end") {
       setEnd(Math.max(time, start + MIN_RANGE));
-    } else if (active.mode === "range") {
-      const span = active.span;
-      const next = clamp(time - (active.anchor - start), 0, duration - span);
-      setStart(next);
-      setEnd(next + span);
     } else {
       const from = Math.min(active.anchor, time);
       const to = Math.max(active.anchor, time);
@@ -287,13 +266,13 @@ export default function TrimDialog({ snapshot, run }: Props) {
 
       <div className="mt-3 flex gap-3">
         <div className="relative aspect-[634/540] w-28 shrink-0 overflow-hidden rounded-lg border border-white/10 bg-black/30">
-          {targetPreview ? (
-            <img src={targetPreview} alt="目标槽位" className="h-full w-full object-contain" />
-          ) : (
-            <div className="flex h-full items-center justify-center text-[10px] text-[var(--muted)]">
-              预览
-            </div>
-          )}
+          <WheelCanvas
+            labels={targetLabels}
+            style={snapshot.settings.chat_wheel_style}
+            selected={slot}
+            onSelectSlot={trim.rolling ? setSlot : undefined}
+            className="h-full w-full"
+          />
         </div>
         <div className="min-w-0 flex-1">
           {trim.rolling ? (
@@ -312,24 +291,10 @@ export default function TrimDialog({ snapshot, run }: Props) {
                   ))}
                 </select>
               </label>
-              <div className="mt-2">
-                <div className="mb-1 text-[13px]">槽位 {slot + 1}</div>
-                <div className="grid grid-cols-4 gap-1">
-                  {Array.from({ length: 8 }, (_, order) => (
-                    <button
-                      key={order}
-                      onClick={() => setSlot(order)}
-                      className={`truncate rounded-md border px-1.5 py-1 text-xs ${
-                        order === slot
-                          ? "border-[var(--accent)] bg-[var(--accent)]/20 text-white"
-                          : "border-white/10 bg-white/5 text-[var(--muted)] hover:text-white"
-                      }`}
-                    >
-                      {slotName(targetWheel, order)}
-                    </button>
-                  ))}
-                </div>
-              </div>
+              <p className="mt-2 text-xs text-[var(--muted)]">
+                点击左侧轮盘扇区选择槽位 · 当前：第 {slot + 1} 槽
+                {targetWheel ? `（${slotName(targetWheel, slot)}）` : ""}
+              </p>
               <button
                 className="btn icon-btn mt-2"
                 title="新增轮盘"
@@ -398,7 +363,7 @@ type Drag =
   | { mode: "start" }
   | { mode: "end" }
   | { mode: "new"; anchor: number }
-  | { mode: "range"; anchor: number; span: number };
+;
 
 const clamp = (value: number, min: number, max: number) =>
   Number.isFinite(value) ? Math.min(Math.max(value, min), max) : min;

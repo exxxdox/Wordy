@@ -180,12 +180,6 @@ pub enum UiRequest {
     Snapshot(SyncSender<Snapshot>),
     Logs(SyncSender<Vec<String>>),
     Action(SettingsAction, SyncSender<Result<Snapshot, String>>),
-    Preview {
-        wheel: usize,
-        slot: usize,
-        width: u32,
-        reply: SyncSender<Result<String, String>>,
-    },
 }
 
 /// 网页侧持有的原生线程句柄。事件句柄跨线程仅用于 SetEvent，语义安全。
@@ -228,19 +222,6 @@ impl NativeHandle {
         receiver
             .recv_timeout(SNAPSHOT_TIMEOUT)
             .map_err(|_| "读取日志超时".to_string())
-    }
-
-    pub fn preview(&self, wheel: usize, slot: usize, width: u32) -> Result<String, String> {
-        let (reply, receiver) = mpsc::sync_channel(1);
-        self.send(UiRequest::Preview {
-            wheel,
-            slot,
-            width,
-            reply,
-        })?;
-        receiver
-            .recv_timeout(SNAPSHOT_TIMEOUT)
-            .map_err(|_| "生成轮盘预览超时".to_string())?
     }
 
     pub fn action(&self, action: SettingsAction) -> Result<Snapshot, String> {
@@ -559,16 +540,6 @@ mod tests {
 #[tauri::command]
 pub async fn wordy_logs(state: tauri::State<'_, NativeHandle>) -> Result<Vec<String>, String> {
     state.logs()
-}
-
-#[tauri::command]
-pub async fn wordy_wheel_preview(
-    wheel: usize,
-    slot: usize,
-    width: Option<u32>,
-    state: tauri::State<'_, NativeHandle>,
-) -> Result<String, String> {
-    state.preview(wheel, slot, width.unwrap_or(420))
 }
 
 #[tauri::command]

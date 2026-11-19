@@ -1,7 +1,5 @@
 use super::*;
-use crate::config::{CHAT_WHEEL_STYLES, SLOT_COUNT, WHEEL_NAME_MAX_LENGTH, Wheel};
-use crate::wheel::WheelStyle;
-use crate::wheel_paint::{WheelFrame, WheelRenderer};
+use crate::config::{CHAT_WHEEL_STYLES, WHEEL_NAME_MAX_LENGTH, Wheel};
 
 const SLOT_LABEL_LIMIT: usize = 40;
 const SLOT_TEXT_LIMIT: usize = 200;
@@ -233,65 +231,5 @@ impl App {
             }
             self.ui_dirty = true;
         }
-    }
-
-    /// 网页预览：用与运行时轮盘相同的绘制器生成 PNG（data URI）。
-    pub(super) fn render_wheel_preview(
-        &mut self,
-        index: usize,
-        slot: usize,
-        width: u32,
-    ) -> Result<String, String> {
-        use base64::Engine;
-        let settings = self.config.settings();
-        let wheel = settings
-            .wheel(index)
-            .ok_or_else(|| "轮盘不存在".to_string())?;
-        let labels = crate::wheel::labels(&wheel);
-        let mut frame =
-            WheelFrame::new(&labels, WheelStyle::from_config(&settings.chat_wheel_style));
-        frame.font = crate::config::ui_font_family(&settings.ui_font);
-        frame.editing = true;
-        let slot = slot.min(SLOT_COUNT - 1);
-        frame.selected = Some(slot);
-        let mut highlights = [0.0; SLOT_COUNT];
-        highlights[slot] = 1.0;
-        frame.highlights = Some(highlights);
-        if self.wheel_renderer.is_none() {
-            self.wheel_renderer = Some(WheelRenderer::new().map_err(|error| error.to_string())?);
-        }
-        let renderer = self.wheel_renderer.as_ref().expect("renderer initialized");
-        let width = f64::from(width.clamp(200, 1200));
-        let bitmap = renderer
-            .render(frame, width / crate::wheel::CANVAS_WIDTH)
-            .map_err(|error| error.to_string())?;
-        let mut rgba = Vec::with_capacity(bitmap.pixels.len());
-        for pixel in bitmap.pixels.as_chunks::<4>().0 {
-            let [b, g, r, a] = *pixel;
-            if a == 0 {
-                rgba.extend_from_slice(&[0, 0, 0, 0]);
-            } else {
-                let scale = 255.0 / f32::from(a);
-                rgba.extend_from_slice(&[
-                    (f32::from(r) * scale).min(255.0) as u8,
-                    (f32::from(g) * scale).min(255.0) as u8,
-                    (f32::from(b) * scale).min(255.0) as u8,
-                    a,
-                ]);
-            }
-        }
-        let mut encoded = Vec::new();
-        let mut encoder = png::Encoder::new(&mut encoded, bitmap.width, bitmap.height);
-        encoder.set_color(png::ColorType::Rgba);
-        encoder.set_depth(png::BitDepth::Eight);
-        let mut writer = encoder.write_header().map_err(|error| error.to_string())?;
-        writer
-            .write_image_data(&rgba)
-            .map_err(|error| error.to_string())?;
-        writer.finish().map_err(|error| error.to_string())?;
-        Ok(format!(
-            "data:image/png;base64,{}",
-            base64::engine::general_purpose::STANDARD.encode(encoded)
-        ))
     }
 }
