@@ -21,7 +21,6 @@ pub(super) enum RecordingResult {
         result: io::Result<audio::StagedClip>,
         source: Option<tempfile::NamedTempFile>,
         trim: Option<u64>,
-        rolling: bool,
     },
     TrimInput {
         target: (usize, usize),
@@ -88,7 +87,6 @@ impl App {
                     result,
                     source: None,
                     trim: None,
-                    rolling: false,
                 }));
             })?;
         self.pending_saves += 1;
@@ -164,7 +162,6 @@ impl App {
                 result,
                 source,
                 trim,
-                rolling,
             } => {
                 self.pending_saves -= 1;
                 let result = result.and_then(|staged| {
@@ -190,10 +187,6 @@ impl App {
                 }
                 if let Some(trim) = trim {
                     self.trim_save_done(trim);
-                }
-                if rolling {
-                    self.config
-                        .update(|settings| settings.rolling_buffer_target = [wheel, slot])?;
                 }
                 if !exiting {
                     // In-settings operations report where the user is looking.

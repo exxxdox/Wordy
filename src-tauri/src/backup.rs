@@ -419,6 +419,10 @@ fn validate_value(value: &Value, template: &Value) -> io::Result<()> {
         }
         (Value::Table(items), Value::Table(template)) => {
             items.iter().try_for_each(|(key, item)| {
+                // 旧备份仍带已移除的默认保存位置；导入时忽略，避免整份备份被拒绝。
+                if key == "rolling_buffer_target" {
+                    return Ok(());
+                }
                 let expected = template
                     .get(key)
                     .ok_or_else(|| invalid("备份包含未知配置字段"))?;

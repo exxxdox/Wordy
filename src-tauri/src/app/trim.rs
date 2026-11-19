@@ -32,10 +32,7 @@ impl App {
         let duration = audio::recording_duration(source.path())?;
         let id = self.id();
         let rolling = target.is_none();
-        let (wheel, slot) = target.unwrap_or((
-            self.config.settings().rolling_buffer_target[0],
-            self.config.settings().rolling_buffer_target[1],
-        ));
+        let (wheel, slot) = target.unwrap_or_else(|| self.config.settings().empty_slot_target());
         let wheel = wheel.min(self.config.settings().wheel_count() - 1);
         let slot = slot.min(crate::config::SLOT_COUNT - 1);
         let item = self.config.settings().wheel(wheel);
@@ -45,7 +42,12 @@ impl App {
             item.as_ref()
                 .map_or(String::new(), |wheel| wheel.labels[slot].clone())
         };
-        let gain = item.map_or(1.0, |wheel| wheel.volumes[slot]) * 100.0;
+        // 后台录制默认 100%；指定槽位的流程沿用该槽已有音量。
+        let gain = if rolling {
+            100.0
+        } else {
+            item.map_or(1.0, |wheel| wheel.volumes[slot]) * 100.0
+        };
         let cancel = Arc::new(AtomicBool::new(false));
         let source = Arc::new(source);
         let path = source.path().to_path_buf();
@@ -223,13 +225,9 @@ impl App {
             return Err(io::Error::other("轮盘不存在"));
         }
         let slot = slot.min(crate::config::SLOT_COUNT - 1);
-        let (rolling, previewing, source) = {
+        let (previewing, source) = {
             let session = self.active_trim(id)?;
-            (
-                session.rolling,
-                session.preview.take().is_some(),
-                session.source.clone(),
-            )
+            (session.preview.take().is_some(), session.source.clone())
         };
         if previewing {
             self.playback.stop_clip();
@@ -259,7 +257,6 @@ impl App {
                     result,
                     source,
                     trim: Some(id),
-                    rolling,
                 }));
             })?;
         self.pending_saves += 1;

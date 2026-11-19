@@ -190,6 +190,18 @@ fn accepts_a_backup_that_remembers_the_settings_window_position() {
 }
 
 #[test]
+fn accepts_a_backup_with_the_retired_rolling_target() {
+    let config = Settings::default().to_toml().unwrap();
+    let legacy = format!("rolling_buffer_target = [1, 2]\n{config}");
+    let result = import_entries(&[
+        ("manifest.json", MANIFEST),
+        ("config.toml", legacy.as_bytes()),
+        ("secrets.json", SECRETS),
+    ]);
+    assert!(result.is_ok());
+}
+
+#[test]
 fn rejects_duplicate_audio_names_and_unknown_config_fields() {
     let config = Settings::default().to_toml().unwrap();
     let duplicate = import_entries(&[

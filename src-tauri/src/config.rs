@@ -174,7 +174,6 @@ pub struct Settings {
     pub chat_wheel_last_index: usize,
     pub rolling_buffer_hotkey: String,
     pub rolling_buffer_seconds: f64,
-    pub rolling_buffer_target: [usize; 2],
     pub hold_key_enabled: bool,
     pub hold_key: String,
     pub volume: f64,
@@ -212,7 +211,6 @@ impl Default for Settings {
             chat_wheel_last_index: 0,
             rolling_buffer_hotkey: "f10".into(),
             rolling_buffer_seconds: 30.0,
-            rolling_buffer_target: [0, 0],
             hold_key_enabled: false,
             hold_key: "g".into(),
             volume: 1.0,
@@ -284,7 +282,6 @@ impl Settings {
                 300.0,
                 defaults.rolling_buffer_seconds,
             ),
-            rolling_buffer_target: read_target(raw, last_wheel),
             hold_key_enabled: read_bool(raw, "hold_key_enabled", defaults.hold_key_enabled),
             hold_key: string_or(raw, "hold_key", defaults.hold_key),
             volume: read_float(raw, "volume", 0.5, 2.0, defaults.volume),
@@ -372,6 +369,18 @@ impl Settings {
         }
     }
 
+    /// 后台录制保存的默认落点：按轮盘顺序找第一个空槽，全满时回到第一盘槽 1。
+    pub fn empty_slot_target(&self) -> (usize, usize) {
+        (0..self.wheel_count())
+            .find_map(|index| {
+                let wheel = self.wheel(index)?;
+                (0..SLOT_COUNT)
+                    .find(|&slot| wheel.slots[slot].is_empty() && wheel.texts[slot].is_empty())
+                    .map(|slot| (index, slot))
+            })
+            .unwrap_or((0, 0))
+    }
+
     pub fn referenced_audio(&self) -> impl Iterator<Item = &str> {
         self.chat_wheel_slots
             .iter()
@@ -451,8 +460,6 @@ impl Settings {
         };
         let last_wheel = self.additional_chat_wheels.len();
         self.chat_wheel_last_index = self.chat_wheel_last_index.min(last_wheel);
-        self.rolling_buffer_target[0] = self.rolling_buffer_target[0].min(last_wheel);
-        self.rolling_buffer_target[1] = self.rolling_buffer_target[1].min(SLOT_COUNT - 1);
         let mut first = self.wheel(0).expect("the first wheel always exists");
         first.normalize();
         // 未命名的轮盘统一显示默认名，设置页与选择器保持一致。
@@ -769,19 +776,6 @@ fn clamp_index(index: i64, max: usize) -> usize {
     index.clamp(0, max as i64) as usize
 }
 
-fn read_target(table: &Table, last_wheel: usize) -> [usize; 2] {
-    let target = table.get("rolling_buffer_target").and_then(Value::as_array);
-    if let Some([wheel, slot]) = target.map(Vec::as_slice)
-        && let (Some(wheel), Some(slot)) = (wheel.as_integer(), slot.as_integer())
-    {
-        return [
-            clamp_index(wheel, last_wheel),
-            clamp_index(slot, SLOT_COUNT - 1),
-        ];
-    }
-    [0, 0]
-}
-
 fn read_position(table: &Table) -> Option<WindowPosition> {
     let x = i32::try_from(table.get("x")?.as_integer()?).ok()?;
     let y = i32::try_from(table.get("y")?.as_integer()?).ok()?;
@@ -873,7 +867,6 @@ mod tests {
               { hotkey = "ctrl+f9", name = "第二个" },
               { hotkey = "bogus" },
             ]
-            rolling_buffer_target = [99, -9]
             chat_wheel_last_index = 99
             hold_key = " LEFT CTRL "
             audio_output_device_name = "  speakers  "
@@ -896,7 +889,6 @@ mod tests {
         assert_eq!(&settings.chat_wheel_volumes[..4], [0.0, 3.0, 1.0, 1.0]);
         assert_eq!(settings.wheel_count(), 2);
         assert_eq!(settings.wheel(1).unwrap().name, "第二个");
-        assert_eq!(settings.rolling_buffer_target, [1, 0]);
         assert_eq!(settings.chat_wheel_last_index, 1);
         assert_eq!(settings.hold_key, "left ctrl");
         assert_eq!(
@@ -975,12 +967,8 @@ mod tests {
                 wheel.volumes[7] = 2.5;
             })
             .unwrap();
-        config
-            .update(|settings| settings.rolling_buffer_target = [1, 7])
-            .unwrap();
         config.update(|settings| settings.discard_wheel(0)).unwrap();
         let loaded = ConfigStore::load(&path).unwrap();
-        assert_eq!(loaded.settings().rolling_buffer_target, [0, 7]);
         assert_eq!(loaded.settings().wheel_count(), 1);
         let wheel = loaded.settings().wheel(0).unwrap();
         assert_eq!(wheel.hotkey, "ctrl+f9");
@@ -1104,6 +1092,28 @@ mod tests {
             loaded.settings().settings_window_position,
             Some(WindowPosition { x: 240, y: 160 })
         );
+    }
+
+    #[test]
+    fn empty_slot_target_prefers_the_first_empty_slot() {
+        let mut settings = Settings::default();
+        settings.chat_wheel_slots[0] = "a.wav".into();
+        settings.chat_wheel_texts[1] = "你好".into();
+        assert_eq!(settings.empty_slot_target(), (0, 2));
+
+        // 第一盘满了才轮到后续轮盘。
+        settings.chat_wheel_slots = std::array::from_fn(|_| "a.wav".into());
+        settings.chat_wheel_texts = Default::default();
+        settings.additional_chat_wheels.push(Wheel::new("ctrl+f9"));
+        assert_eq!(settings.empty_slot_target(), (1, 0));
+    }
+
+    #[test]
+    fn empty_slot_target_falls_back_to_the_first_slot_when_every_wheel_is_full() {
+        let mut settings = Settings::default();
+        settings.chat_wheel_slots = std::array::from_fn(|_| "a.wav".into());
+        settings.chat_wheel_texts = std::array::from_fn(|_| "文字".into());
+        assert_eq!(settings.empty_slot_target(), (0, 0));
     }
 
     #[test]
