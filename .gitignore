@@ -21,3 +21,8 @@ __pycache__
 /.tmp
 /tmp/
 /target/
+
+# Tauri
+/src-tauri/target/
+/node_modules/
+/dist-ui/

@@ -5,11 +5,11 @@ edition = "2024"
 publish = false
 
 [lib]
-path = "rust/lib.rs"
+path = "src/lib.rs"
 
 [[bin]]
 name = "wordy"
-path = "rust/main.rs"
+path = "src/main.rs"
 
 [features]
 packaged = []
