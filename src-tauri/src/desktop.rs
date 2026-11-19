@@ -38,49 +38,6 @@ pub(crate) fn set_dwm(hwnd: HWND, attribute: i32, value: i32) {
     };
 }
 
-pub(crate) fn paint_buffered(hwnd: HWND, draw: impl FnOnce(HDC, RECT)) {
-    unsafe {
-        let mut paint = PAINTSTRUCT::default();
-        let target = BeginPaint(hwnd, &mut paint);
-        let mut rect = RECT::default();
-        GetClientRect(hwnd, &mut rect);
-        paint_buffered_rect(target, rect, draw);
-        EndPaint(hwnd, &paint);
-    }
-}
-
-pub(crate) fn paint_buffered_rect(target: HDC, rect: RECT, draw: impl FnOnce(HDC, RECT)) {
-    let (width, height) = (rect.right - rect.left, rect.bottom - rect.top);
-    if target.is_null() || width <= 0 || height <= 0 {
-        return;
-    }
-    unsafe {
-        let buffer = CreateCompatibleDC(target);
-        let bitmap = CreateCompatibleBitmap(target, width, height);
-        let mut original = ptr::null_mut();
-        if !buffer.is_null() && !bitmap.is_null() {
-            original = SelectObject(buffer, bitmap);
-        }
-        if original.is_null() {
-            draw(target, rect);
-        } else {
-            SetViewportOrgEx(buffer, -rect.left, -rect.top, ptr::null_mut());
-            // Publish one complete frame without exposing the background between draw calls.
-            draw(buffer, rect);
-            BitBlt(
-                target, rect.left, rect.top, width, height, buffer, rect.left, rect.top, SRCCOPY,
-            );
-            SelectObject(buffer, original);
-        }
-        if !bitmap.is_null() {
-            DeleteObject(bitmap);
-        }
-        if !buffer.is_null() {
-            DeleteDC(buffer);
-        }
-    }
-}
-
 /// Fraction of the pixel covered by the field (inside the rounded boundary) and
 /// by its one-pixel border, given the signed distance inside the boundary.
 fn corner_coverage(distance: f32) -> (f32, f32) {

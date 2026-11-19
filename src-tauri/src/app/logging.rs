@@ -67,9 +67,8 @@ impl App {
             self.status("已检测到 FFmpeg，请重试刚才的音频操作".into());
             return Ok(());
         }
-        let owner = if let Some(trim) = &self.trim {
-            trim.window.panel.0
-        } else if self.settings_visible() {
+        // 截取窗口现在由网页渲染，原生对话框一律挂在本线程的宿主窗口上。
+        let owner = if self.settings_visible() {
             self.host
         } else {
             ptr::null_mut()

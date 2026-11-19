@@ -51,9 +51,6 @@ impl App {
             }
             SetUiFont(value) => {
                 self.edit(|s| s.ui_font = value)?;
-                if let Some(trim) = &mut self.trim {
-                    trim.window.refresh(self.config.settings())?;
-                }
                 self.overlay.apply_visual_settings(self.config.settings())?;
             }
             SetFixedCenter(fixed) => self.edit(|s| s.fixed_center = fixed)?,
@@ -143,6 +140,12 @@ impl App {
             ImportSlotAudio(index, slot) => self.slot_import(index, slot)?,
             CropSlotAudio(index, slot) => self.slot_crop(index, slot)?,
             PreviewSlot(index, slot) => self.slot_preview(index, slot)?,
+            TrimPreview(id, start, end, gain) => self.trim_preview(id, start, end, gain)?,
+            TrimStop(id) => self.trim_stop(id),
+            TrimSave(id, start, end, label, gain, wheel, slot) => {
+                self.trim_save(id, start, end, &label, gain, wheel, slot)?
+            }
+            TrimCancel(id) => self.trim_cancel(id),
             Closed => self.toasts.clear(),
         }
         Ok(())

@@ -24,7 +24,6 @@ use crate::desktop::*;
 use crate::ffmpeg;
 use crate::file_log::FileLog;
 use crate::hotkey::{display_hotkey, parse_hotkey, windows::Registration};
-use crate::panels::{self, Trim};
 use crate::playback::{EngineSettings, Event, Playback};
 use crate::settings_action::SettingsAction;
 use crate::status_toast::{Toasts, Tone};
@@ -39,10 +38,11 @@ mod hotkeys;
 mod logging;
 mod recording;
 mod settings_actions;
+mod trim;
 
 use hotkeys::*;
 
-use self::recording::{RecordingResult, TrimSession};
+use self::recording::RecordingResult;
 
 const CONTROLS_TIMER: usize = 1;
 const LOG_LIMIT: usize = 5000;
@@ -76,13 +76,8 @@ pub fn run_native(ui: UiContext) -> io::Result<()> {
 pub fn smoke_test() -> io::Result<()> {
     let instance = unsafe { GetModuleHandleW(ptr::null()) };
     let host = Host(host_window(instance)?);
-    let settings = Settings::default();
     let _input = Overlay::new(instance, host.0)?;
     let _wheel = WheelWindow::new(instance).map_err(io::Error::other)?;
-    let trim = Trim::new(host.0, host.0, &settings, None, 1.0, 1.0)?;
-    if trim.panel.text(panels::END) != "1.000" {
-        return Err(io::Error::other("截取窗口未正确初始化"));
-    }
     Ok(())
 }
 
@@ -131,7 +126,7 @@ struct App {
     ui_connected: bool,
     toasts: Toasts,
     recording: Option<Recording>,
-    trim: Option<TrimSession>,
+    trim: Option<trim::TrimSession>,
     previews: HashMap<u64, tempfile::NamedTempFile>,
     editor_preview: Option<EditorPreview>,
     wheel_renderer: Option<crate::wheel_paint::WheelRenderer>,
@@ -319,20 +314,11 @@ impl App {
                     _ => Ok(()),
                 },
                 OVERLAY_MESSAGE if message.hwnd == self.host => self.overlay_action(message.wParam),
-                panels::TRIM_MESSAGE if message.hwnd == self.host => {
-                    self.trim_action(message.wParam, message.lParam as HWND)
-                }
                 msg if msg != 0 && msg == explorer_restart => self.tray.add(),
                 _ => {
-                    let handled = self
-                        .trim
-                        .as_ref()
-                        .is_some_and(|trim| trim.window.accepts(&message));
-                    if !handled {
-                        unsafe {
-                            TranslateMessage(&message);
-                            DispatchMessageW(&message);
-                        }
+                    unsafe {
+                        TranslateMessage(&message);
+                        DispatchMessageW(&message);
                     }
                     Ok(())
                 }
@@ -420,9 +406,7 @@ impl App {
             match event {
                 Event::Finished { id, result } => {
                     self.previews.remove(&id);
-                    if let Some(trim) = &mut self.trim {
-                        trim.playback_progress(id, None);
-                    }
+                    self.trim_progress(id, None);
                     if self
                         .editor_preview
                         .as_ref()
@@ -436,9 +420,7 @@ impl App {
                     }
                 }
                 Event::Progress { id, seconds } => {
-                    if let Some(trim) = &mut self.trim {
-                        trim.playback_progress(id, Some(seconds));
-                    }
+                    self.trim_progress(id, Some(seconds));
                 }
                 Event::Voices { id, result } if Some(id) == self.voices_request => {
                     self.voices_request = None;
@@ -646,16 +628,6 @@ impl App {
         Ok(())
     }
 }
-fn gain(value: &str) -> io::Result<f64> {
-    value
-        .trim()
-        .parse::<f64>()
-        .ok()
-        .filter(|value| value.is_finite())
-        .map(|value| value.clamp(0.0, 300.0) / 100.0)
-        .ok_or_else(|| io::Error::other("请输入有效音量"))
-}
-
 fn capture_binding(
     hotkeys: &mut Hotkeys,
     owner: HWND,

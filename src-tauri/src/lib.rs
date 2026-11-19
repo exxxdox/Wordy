@@ -18,16 +18,10 @@ pub mod hotkey;
 #[cfg(windows)]
 pub mod instance;
 #[cfg(windows)]
-mod panels;
-#[cfg(windows)]
 pub mod playback;
-#[cfg(windows)]
-mod selector;
 pub mod settings_action;
 #[cfg(windows)]
 mod settings_backdrop;
-#[cfg(windows)]
-mod slider;
 #[cfg(windows)]
 mod status_toast;
 #[cfg(windows)]

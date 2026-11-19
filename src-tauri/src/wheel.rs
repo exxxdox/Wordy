@@ -340,3 +340,18 @@ impl WheelState {
         slot
     }
 }
+
+/// 轮盘槽位在绘制与编辑器里显示的文字：标签优先，其次朗读文字、音频文件名。
+pub fn labels(wheel: &crate::config::Wheel) -> [String; crate::config::SLOT_COUNT] {
+    std::array::from_fn(|index| {
+        if wheel.slots[index].is_empty() && wheel.texts[index].is_empty() {
+            String::new()
+        } else if !wheel.labels[index].is_empty() {
+            wheel.labels[index].clone()
+        } else if !wheel.texts[index].is_empty() {
+            wheel.texts[index].clone()
+        } else {
+            wheel.slots[index].clone()
+        }
+    })
+}

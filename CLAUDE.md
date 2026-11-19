@@ -13,7 +13,7 @@ Rust（edition 2024）+ Tauri 2 桌面应用。设置界面是 React（Vite + Ta
 | `src-tauri/src/desktop.rs` | Win32 宿主窗口、托盘、通知和共用控件辅助函数 |
 | `src-tauri/src/desktop/overlay.rs` | 悬浮输入框、输入事件、背景和按钮绘制 |
 | `src-tauri/src/settings_backdrop.rs` | 原生面板共用的玻璃背景及绘制缓存 |
-| `src-tauri/src/panels.rs` / `src-tauri/src/panels/` | 共用面板控件、截取对话框和轮盘预览 |
+| `src-tauri/src/app/trim.rs` | React 截取窗口的原生会话：临时 WAV、波形、试听与保存 |
 | `src-tauri/src/wheel.rs` / `wheel_paint.rs` / `wheel_window.rs` | 轮盘状态、四种样式绘制、运行时窗口 |
 | `src-tauri/src/audio.rs` + `src-tauri/src/audio/` | WASAPI 设备枚举、播放/返听、VB-CABLE 路由、Windows 侦听、回环录制、裁剪/波形、托管音频 |
 | `src-tauri/src/tts.rs` + `src-tauri/src/tts/realtime.rs` | TTS 引擎、Cartesia HTTP/WebSocket、Volcengine SSE、音色标签 |
@@ -30,7 +30,8 @@ Rust（edition 2024）+ Tauri 2 桌面应用。设置界面是 React（Vite + Ta
 - 关闭设置窗口只隐藏，托盘应用继续运行；`wordy_hide` 与窗口关闭事件都只隐藏。
 - 原生对话框（录制快捷键、确认、备份密码）的 owner 使用 WebView 窗口句柄。
 - 反馈提示仍由原生 `status_toast` 绘制在设置窗口底部；设置页隐藏时错误改走托盘通知。
-- 轮盘编辑器由 React「轮盘」页签提供；预览通过 `wordy_wheel_preview` 返回与运行时轮盘同款绘制的 PNG，截取窗口仍为原生。
+- 轮盘编辑器由 React「轮盘」页签提供；预览通过 `wordy_wheel_preview` 返回与运行时轮盘同款绘制的 PNG。
+- 截取窗口由 React 渲染波形（Canvas）、拖选、试听与保存；原生只保留临时 WAV、裁剪与托管音频。
 - 日志面板由 React 渲染：`wordy_logs` 取历史，`wordy://log` 逐行推送，托盘动作会打开设置窗口并发出 `wordy://open-logs`。
 - 设置页文案保持中文，不写内部实现说明。
 
@@ -91,18 +92,12 @@ cargo test --manifest-path src-tauri/Cargo.toml
 
 ## Win32 界面防闪烁
 
-- 高频更新的自绘控件先在离屏合成背景和内容，再一次提交到窗口。波形进度只使旧、新游标区域失效，同一像素无需重画。自绘控件完整覆盖失效区域时，抑制默认背景擦除。
-- 自绘滑块改变数值后由应用标记整个控件待重画，覆盖旧滑块和进度填充，避免依赖原生控件局部重画。
-- 滑块连续变化时只同步对应的数值和关联预览。配置防抖写盘时不重建页面、下拉列表或无关控件。
-- 圆角文本框/下拉框的窗口本身是矩形：边框外的四个角要填页面玻璃（paint_embedded_backdrop_in），圆角弧和 1px 边框用逐像素覆盖混合（`desktop::paint_round_field`），不要用 `RoundRect` 或窗口区域——GDI 圆角没有抗锯齿，在玻璃上会露出台阶和黑角。
-- 圆角输入框的 1px 边框属于非客户区：`center_edit_text` 把客户区左右各内缩 1px，边框在 `WM_NCPAINT` 和 `WM_PAINT` 各画一遍（两个 DC 都被各自的更新区裁剪）；焦点、悬停和文字变化时同时失效客户区与框架，否则点击后左/右或上/下边框会被裁掉。设置页、轮盘编辑器、截取窗口和弹窗输入框共用 9px 圆角、蓝色焦点边框与 10px 文字边距。
-- 自绘下拉框（CBS_OWNERDRAWFIXED）的关闭态由 WM_DRAWITEM（ODS_COMBOBOXEDIT）请求父窗口绘制，但该 DC 的裁剪区比字段小。父窗口拿到该绘制请求时用下拉框自己的客户区 DC（GetDC）立即画完整字段，不要用请求里的裁剪 DC（只会留下四角片段），也不要只发 InvalidateRect（延迟期间字段会空白闪一下）。每个下拉框只能有一个绘制器（selector），再叠加 style_control 会让两套圆角半径在四角露出对方边框。展开/收起由父窗口的 CBN_DROPDOWN/CBN_CLOSEUP（下拉列表的 WM_SHOWWINDOW 覆盖程序化关闭）触发重画。刷新时不得重建正在展开的下拉框，也不得重建内容未变的列表；否则用户会看到别的下拉框闪一下。
-- 悬停样式只在指针进入/离开（WM_MOUSELEAVE）时重画一次；逐次 WM_MOUSEMOVE 重画会闪烁。下拉框的强调边框只在列表展开时显示，由下拉列表的 WM_SHOWWINDOW 触发重画。
-- 分层窗口在首次显示前设好背景和透明色，首帧及子控件绘制完成后再揭开窗口。原生子控件的背景画刷应匹配应用表面或透明色，父窗口重画时裁剪子控件区域。
-- 修改绘制顺序、控件显隐或高频刷新时，补对应回归测试，并检查首次唤出、反复打开、焦点与悬停切换及试听进度。
-- 需要接收鼠标的自绘静态控件（STATIC）必须带 `SS_NOTIFY`：没有它时静态窗口对 `WM_NCHITTEST` 返回 `HTTRANSPARENT`，点击会落到父对话框，子类过程收不到 `WM_LBUTTONDOWN`/`WM_MOUSEMOVE`。只发送消息的测试绕过了命中测试，需用 `WM_NCHITTEST` 回归验证。
-- 后台原生线程不要 `AttachThreadInput` 到前台线程：前台常是 Tauri WebView 线程，会与主线程互锁，对话框可见但不再处理消息。原生弹窗改用 `SetForegroundWindow` + 临时置顶，不阻塞消息循环。
-- 从后台进程弹出的模态对话框（快捷键录制、文本输入）在 `WM_INITDIALOG` 时还不可见，先 `PostMessage`，显示后再 `AttachThreadInput` 到前台线程并 `SetForegroundWindow`；否则对话框拿不到前台，按键留在别的应用里，录制器收不到任何按键。
+- 高频更新的自绘控件先在离屏合成背景和内容，再一次提交到窗口；完整覆盖失效区域时抑制默认背景擦除。
+- 圆角文本框属于原生弹窗：外部四角填页面背景，圆角弧与 1px 边框用逐像素混合（`desktop::paint_round_field`），不要用 `RoundRect` 或窗口区域。
+- 悬停样式只在 `WM_MOUSELEAVE`/进入时重画一次，逐次 `WM_MOUSEMOVE` 重画会闪烁。
+- 分层窗口在首次显示前设好背景和透明色，首帧及子控件绘制完成后再揭开。
+- 后台原生线程不要 `AttachThreadInput` 到前台线程：前台常是 Tauri WebView 线程，会与主线程互锁，对话框可见但不再处理消息。原生弹窗先 `SetForegroundWindow`（短暂重试）并临时置顶；必要时 `SwitchToThisWindow`。
+- 从后台弹出的模态对话框在 `WM_INITDIALOG` 时先 `PostMessage`，显示后再请求前台；否则按键留在别的应用里，录制器收不到按键。
 
 ## 注意事项
 

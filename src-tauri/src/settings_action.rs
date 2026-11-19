@@ -46,6 +46,10 @@ pub enum SettingsAction {
     ImportSlotAudio(usize, usize),
     CropSlotAudio(usize, usize),
     PreviewSlot(usize, usize),
+    TrimPreview(u64, f64, f64, f64),
+    TrimStop(u64),
+    TrimSave(u64, f64, f64, String, f64, usize, usize),
+    TrimCancel(u64),
     Closed,
     Feedback(String),
 }

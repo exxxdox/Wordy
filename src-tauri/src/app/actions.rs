@@ -10,7 +10,7 @@ impl App {
             Action::Rolling => self.toggle_recording(),
             Action::Wheel(index) => {
                 if let Some(wheel) = self.config.settings().wheel(index) {
-                    let labels = panels::wheel_labels(&wheel);
+                    let labels = crate::wheel::labels(&wheel);
                     if self
                         .wheel
                         .open(

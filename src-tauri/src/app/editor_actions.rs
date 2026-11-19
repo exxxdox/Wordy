@@ -264,7 +264,7 @@ impl App {
         let wheel = settings
             .wheel(index)
             .ok_or_else(|| "轮盘不存在".to_string())?;
-        let labels = panels::wheel_labels(&wheel);
+        let labels = crate::wheel::labels(&wheel);
         let mut frame =
             WheelFrame::new(&labels, WheelStyle::from_config(&settings.chat_wheel_style));
         frame.font = crate::config::ui_font_family(&settings.ui_font);

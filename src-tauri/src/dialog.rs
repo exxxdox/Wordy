@@ -2,7 +2,7 @@ use std::mem;
 use std::os::windows::ffi::OsStringExt;
 use std::path::{Path, PathBuf};
 use std::ptr;
-use windows_sys::Win32::Foundation::{HWND, LPARAM, RECT, WPARAM};
+use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Dwm::{
     DWMWA_BORDER_COLOR, DWMWA_CAPTION_COLOR, DWMWA_TEXT_COLOR, DWMWA_USE_IMMERSIVE_DARK_MODE,
     DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
@@ -11,10 +11,14 @@ use windows_sys::Win32::Graphics::Gdi::{
     BeginPaint, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, CreateFontW, DC_BRUSH, DEFAULT_CHARSET,
     DEFAULT_PITCH, DT_CALCRECT, DT_CENTER, DT_LEFT, DT_NOPREFIX, DT_SINGLELINE, DT_VCENTER,
     DT_WORDBREAK, DeleteObject, DrawTextW, EndPaint, FW_NORMAL, FW_SEMIBOLD, GetDC, GetStockObject,
-    HDC, HFONT, InvalidateRect, MapWindowPoints, OPAQUE, OUT_DEFAULT_PRECIS, PAINTSTRUCT,
-    ReleaseDC, SelectObject, SetBkColor, SetBkMode, SetDCBrushColor, SetTextColor,
+    GetWindowDC, HDC, HFONT, InvalidateRect, MapWindowPoints, OPAQUE, OUT_DEFAULT_PRECIS,
+    PAINTSTRUCT, RDW_FRAME, RDW_INVALIDATE, RedrawWindow, ReleaseDC, SelectObject, SetBkColor,
+    SetBkMode, SetDCBrushColor, SetTextColor,
 };
 use windows_sys::Win32::System::SystemServices::{SS_CENTER, SS_LEFT, SS_NOPREFIX};
+use windows_sys::Win32::System::Threading::{
+    AttachThreadInput, GetCurrentProcessId, GetCurrentThreadId,
+};
 use windows_sys::Win32::UI::Controls::Dialogs::*;
 use windows_sys::Win32::UI::Controls::{
     DRAWITEMSTRUCT, EM_SETMARGINS, EM_SETSEL, ODS_DISABLED, ODS_FOCUS, ODS_SELECTED, ODT_BUTTON,
@@ -22,12 +26,13 @@ use windows_sys::Win32::UI::Controls::{
 };
 use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    SetFocus, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent,
+    GetFocus, KEYEVENTF_KEYUP, SetFocus, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, VK_MENU,
+    keybd_event,
 };
 use windows_sys::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
-use crate::desktop::{set_dwm, wide, window_text};
+use crate::desktop::{center_edit_text, paint_round_field, set_dwm, wide, window_text};
 use crate::hotkey::{display_hotkey, is_modifier, key_name, windows::is_down};
 use crate::settings_backdrop::{fill, round};
 
@@ -272,7 +277,32 @@ const FORCE_FOREGROUND: u32 = WM_APP + 17;
 /// Tauri's main thread, so only ask for activation and briefly raise the dialog.
 fn force_foreground(hwnd: HWND) {
     unsafe {
+        let foreground = GetForegroundWindow();
+        let mut foreground_pid = 0;
+        let current = GetCurrentThreadId();
+        let foreground_thread = if foreground.is_null() {
+            0
+        } else {
+            GetWindowThreadProcessId(foreground, &mut foreground_pid)
+        };
+        // 本进程的前台是 Tauri 主线程：attach 会互锁，且同进程激活本来就被允许。
+        let attach = foreground_thread != 0
+            && foreground_thread != current
+            && foreground_pid != GetCurrentProcessId();
+        let attached = attach && AttachThreadInput(current, foreground_thread, 1) != 0;
         SetForegroundWindow(hwnd);
+        if GetForegroundWindow() != hwnd {
+            // 前台锁定时模拟一次 Alt 按键可放行，不 attach 线程。
+            keybd_event(VK_MENU as u8, 0, 0, 0);
+            SetForegroundWindow(hwnd);
+            keybd_event(VK_MENU as u8, 0, KEYEVENTF_KEYUP, 0);
+        }
+        if GetForegroundWindow() != hwnd {
+            SwitchToThisWindow(hwnd, 1);
+        }
+        if attached {
+            AttachThreadInput(current, foreground_thread, 0);
+        }
         SetWindowPos(
             hwnd,
             HWND_TOPMOST,
@@ -804,7 +834,7 @@ unsafe extern "system" fn prompt_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPAR
                 // The prompt field matches the settings editors: rounded corners
                 // over the dialog surface and vertically centred text.
                 let field = GetDlgItem(hwnd, 101);
-                crate::panels::style_card_edit(field, FIELD, SURFACE);
+                style_card_edit(field, FIELD, SURFACE);
                 let margin =
                     crate::settings_backdrop::scaled(10, GetDpiForWindow(hwnd).max(96) as i32);
                 SendMessageW(
@@ -899,82 +929,66 @@ impl Template {
     }
 }
 
-pub struct Panel(pub HWND);
+const EDIT_CORNER: windows_sys::core::PCWSTR = windows_sys::core::w!("Wordy.EditCorner");
+const EDIT_SUBCLASS: usize = 12;
+// Same focus border as the settings edits, so every text field reacts alike.
+const FOCUS_ACCENT: u32 = 0x00ff_9c40;
 
-impl Panel {
-    pub fn new(owner: HWND, template: &Template, host: HWND, event: u32) -> std::io::Result<Self> {
-        let mut routing = [host as usize, event as usize];
-        let hwnd = unsafe {
-            CreateDialogIndirectParamW(
-                ptr::null_mut(),
-                template.words.as_ptr().cast(),
-                owner,
-                Some(panel_proc),
-                routing.as_mut_ptr() as isize,
-            )
-        };
-        if hwnd.is_null() {
-            Err(std::io::Error::last_os_error())
-        } else {
-            Ok(Self(hwnd))
-        }
-    }
-
-    pub fn child(&self, id: u16) -> HWND {
-        unsafe { GetDlgItem(self.0, i32::from(id)) }
-    }
-    pub fn text(&self, id: u16) -> String {
-        window_text(self.child(id))
-    }
-    pub fn set_text(&self, id: u16, text: &str) {
-        let text = wide(text);
-        unsafe { SetDlgItemTextW(self.0, i32::from(id), text.as_ptr()) };
-    }
-    pub fn show(&self) {
-        unsafe {
-            ShowWindow(self.0, SW_SHOW);
-            SetForegroundWindow(self.0);
-        }
-    }
-    pub fn accepts(&self, message: &MSG) -> bool {
-        // The wheel page can remain alive while a different settings tab is visible.
-        unsafe { IsWindowVisible(self.0) != 0 && IsDialogMessageW(self.0, message) != 0 }
-    }
-}
-
-impl Drop for Panel {
-    fn drop(&mut self) {
-        unsafe { DestroyWindow(self.0) };
-    }
-}
-
-unsafe extern "system" fn panel_proc(hwnd: HWND, message: u32, wp: WPARAM, lp: LPARAM) -> isize {
+/// Centres the single-line text and rounds the field: the corners outside the
+/// border show the card behind the edit instead of the edit's flat fill.
+fn style_card_edit(hwnd: HWND, fill_color: u32, corner: u32) {
     unsafe {
-        let message_id = match message {
-            WM_INITDIALOG => {
-                let routing = &*(lp as *const [usize; 2]);
-                SetWindowLongPtrW(hwnd, DWLP_USER, routing[0] as isize);
-                SetPropW(
-                    hwnd,
-                    windows_sys::core::w!("WordyPanelEvent"),
-                    ptr::without_provenance_mut(routing[1]),
-                );
-                return 1;
-            }
-            WM_COMMAND => wp,
-            WM_CLOSE => IDCANCEL as usize,
-            WM_NCDESTROY => {
-                RemovePropW(hwnd, windows_sys::core::w!("WordyPanelEvent"));
-                return 0;
-            }
-            _ => return 0,
-        };
-        let host = GetWindowLongPtrW(hwnd, DWLP_USER) as HWND;
-        let event = GetPropW(hwnd, windows_sys::core::w!("WordyPanelEvent")) as usize;
-        if !host.is_null() && event != 0 {
-            PostMessageW(host, event as u32, message_id, hwnd as isize);
+        SetPropW(hwnd, EDIT_CORNER, corner as usize as _);
+        SetWindowSubclass(hwnd, Some(card_edit_proc), EDIT_SUBCLASS, 0);
+    }
+    center_edit_text(hwnd, fill_color);
+}
+
+unsafe extern "system" fn card_edit_proc(
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    _id: usize,
+    _data: usize,
+) -> LRESULT {
+    unsafe {
+        let result = DefSubclassProc(hwnd, message, wparam, lparam);
+        if message == WM_NCDESTROY {
+            RemovePropW(hwnd, EDIT_CORNER);
         }
-        1
+        if matches!(message, WM_SETFOCUS | WM_KILLFOCUS) {
+            RedrawWindow(
+                hwnd,
+                ptr::null(),
+                ptr::null_mut(),
+                RDW_INVALIDATE | RDW_FRAME,
+            );
+        }
+        if !matches!(message, WM_PAINT | WM_NCPAINT) {
+            return result;
+        }
+        let corner = GetPropW(hwnd, EDIT_CORNER) as u32;
+        let dc = GetWindowDC(hwnd);
+        if dc.is_null() || corner == 0 {
+            return result;
+        }
+        let mut window = RECT::default();
+        GetWindowRect(hwnd, &mut window);
+        let rect = RECT {
+            left: 0,
+            top: 0,
+            right: window.right - window.left,
+            bottom: window.bottom - window.top,
+        };
+        let border = if GetFocus() == hwnd {
+            FOCUS_ACCENT
+        } else {
+            0x3a3838
+        };
+        paint_round_field(dc, rect, 9, border, |memory| fill(memory, &rect, corner));
+        ReleaseDC(hwnd, dc);
+        result
     }
 }
 
@@ -982,11 +996,16 @@ unsafe extern "system" fn panel_proc(hwnd: HWND, message: u32, wp: WPARAM, lp: L
 mod tests {
     use super::*;
     use crate::desktop::host_window;
+    use std::sync::Mutex;
     use std::time::Duration;
+
+    // 这些用例都会争抢系统前台；并行运行会让 recorder 的前台断言偶发失败。
+    static FOCUS: Mutex<()> = Mutex::new(());
     use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 
     #[test]
     fn hotkey_recorder_takes_the_foreground_and_returns_on_cancel() {
+        let _focus = FOCUS.lock().unwrap_or_else(|error| error.into_inner());
         let instance = unsafe { GetModuleHandleW(ptr::null()) };
         let owner = host_window(instance).unwrap();
         let title = wide("录制快捷键");
@@ -1033,6 +1052,7 @@ mod tests {
 
     #[test]
     fn confirmation_reports_which_button_was_pressed() {
+        let _focus = FOCUS.lock().unwrap_or_else(|error| error.into_inner());
         let instance = unsafe { GetModuleHandleW(ptr::null()) };
         let owner = host_window(instance).unwrap();
         for (title, command, expected) in [
@@ -1057,6 +1077,7 @@ mod tests {
 
     #[test]
     fn prompt_paints_the_dark_dialog_surface_and_field() {
+        let _focus = FOCUS.lock().unwrap_or_else(|error| error.into_inner());
         let instance = unsafe { GetModuleHandleW(ptr::null()) };
         let owner = host_window(instance).unwrap();
         let title = wide("输入框配色测试");
@@ -1117,6 +1138,7 @@ mod tests {
 
     #[test]
     fn prompt_returns_the_edited_value() {
+        let _focus = FOCUS.lock().unwrap_or_else(|error| error.into_inner());
         let instance = unsafe { GetModuleHandleW(ptr::null()) };
         let owner = host_window(instance).unwrap();
         let title = wide("输入框测试");

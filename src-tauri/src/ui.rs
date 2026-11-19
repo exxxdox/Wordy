@@ -23,12 +23,41 @@ pub const SNAPSHOT_EVENT: &str = "wordy://snapshot";
 pub const LOG_EVENT: &str = "wordy://log";
 /// 托盘请求打开日志面板。
 pub const OPEN_LOGS_EVENT: &str = "wordy://open-logs";
+/// 截取窗口生命周期与波形数据。
+pub const TRIM_OPEN_EVENT: &str = "wordy://trim-open";
+pub const TRIM_PEAKS_EVENT: &str = "wordy://trim-peaks";
+pub const TRIM_PROGRESS_EVENT: &str = "wordy://trim-progress";
+pub const TRIM_CLOSED_EVENT: &str = "wordy://trim-closed";
+pub const TRIM_SAVE_FAILED_EVENT: &str = "wordy://trim-save-failed";
 
 #[derive(Clone, Debug, Serialize)]
 pub struct ListenStatus {
     pub enabled: bool,
     pub output: Option<String>,
     pub output_available: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct TrimOpen {
+    pub id: u64,
+    pub duration: f64,
+    pub rolling: bool,
+    pub wheel: usize,
+    pub slot: usize,
+    pub label: String,
+    pub gain: f64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub struct TrimPeaks {
+    pub id: u64,
+    pub peaks: Vec<f32>,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+pub struct TrimProgress {
+    pub playing: bool,
+    pub seconds: Option<f64>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -260,6 +289,27 @@ pub enum UiAction {
         index: usize,
         slot: usize,
     },
+    TrimPreview {
+        id: u64,
+        start: f64,
+        end: f64,
+        gain: f64,
+    },
+    TrimStop {
+        id: u64,
+    },
+    TrimSave {
+        id: u64,
+        start: f64,
+        end: f64,
+        label: String,
+        gain: f64,
+        wheel: usize,
+        slot: usize,
+    },
+    TrimCancel {
+        id: u64,
+    },
     Closed,
 }
 
@@ -323,6 +373,23 @@ impl UiAction {
             Self::ImportSlotAudio { index, slot } => SettingsAction::ImportSlotAudio(index, slot),
             Self::CropSlotAudio { index, slot } => SettingsAction::CropSlotAudio(index, slot),
             Self::PreviewSlot { index, slot } => SettingsAction::PreviewSlot(index, slot),
+            Self::TrimPreview {
+                id,
+                start,
+                end,
+                gain,
+            } => SettingsAction::TrimPreview(id, start, end, gain),
+            Self::TrimStop { id } => SettingsAction::TrimStop(id),
+            Self::TrimSave {
+                id,
+                start,
+                end,
+                label,
+                gain,
+                wheel,
+                slot,
+            } => SettingsAction::TrimSave(id, start, end, label, gain, wheel, slot),
+            Self::TrimCancel { id } => SettingsAction::TrimCancel(id),
             Self::Closed => SettingsAction::Closed,
         })
     }

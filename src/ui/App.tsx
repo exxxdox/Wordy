@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import WheelEditor from "./WheelEditor";
+import TrimDialog from "./TrimDialog";
 
 type Provider = "Cartesia" | "Volcengine";
 
@@ -652,6 +653,8 @@ export default function App() {
           </ol>
         </section>
       )}
+
+      <TrimDialog snapshot={snapshot} run={run} />
 
       <footer className="mt-3 flex items-center justify-between gap-3 border-t border-white/10 pt-3 text-xs text-[var(--muted)]">
         <span>设置自动保存</span>
