@@ -80,7 +80,6 @@ export function Slider({ label, hint, value, min, max, step, display, disabled, 
 }
 
 const ICONS = {
-  brand: <path d="M2 7v2m3-4v6m3-8v10m3-8v6m3-4v2" />,
   local: (
     <>
       <rect x="2" y="3.5" width="12" height="9" rx="1.5" />

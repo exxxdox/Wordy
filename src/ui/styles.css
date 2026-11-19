@@ -154,14 +154,8 @@ input[type="number"],
   }
 
   .brand-mark {
-    display: grid;
     flex: none;
-    place-items: center;
-    width: 40px;
-    height: 40px;
-    border-radius: 10px;
-    background: linear-gradient(155deg, var(--accent-hi), #d8953a);
-    color: var(--accent-ink);
+    object-fit: contain;
   }
 
   .brand-caption {

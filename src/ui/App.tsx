@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+// 与 Windows 打包共用源文件，更新应用图标时会同步更新设置页。
+import appIcon from "../../src-tauri/icons/icon.ico?url";
 import WheelEditor from "./WheelEditor";
 import TrimDialog from "./TrimDialog";
 import DialogHost from "./DialogHost";
@@ -234,9 +236,7 @@ export default function App() {
     <main className="app-shell">
       <aside className="rail">
         <div className="brand">
-          <span className="brand-mark">
-            <Icon name="brand" size={24} />
-          </span>
+          <img className="brand-mark" src={appIcon} width={40} height={40} alt="" />
           <div>
             <strong>Wordy</strong>
             <span className="brand-caption">设置</span>
