@@ -1,12 +1,19 @@
 use std::{io, ptr};
 
 use windows_sys::Win32::{
-    Foundation::{HWND, RECT},
-    Graphics::Gdi::InvalidateRect,
+    Foundation::{ERROR_CLASS_ALREADY_EXISTS, GetLastError, HWND, POINT, RECT},
+    Graphics::Gdi::{
+        GetMonitorInfoW, InvalidateRect, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint,
+    },
+    System::LibraryLoader::GetModuleHandleW,
     UI::{
-        Controls::EM_SETLIMITTEXT, Input::KeyboardAndMouse::EnableWindow, WindowsAndMessaging::*,
+        Controls::EM_SETLIMITTEXT,
+        HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI},
+        Input::KeyboardAndMouse::EnableWindow,
+        WindowsAndMessaging::*,
     },
 };
+use windows_sys::core::{PCWSTR, w};
 
 use crate::{
     config::Settings,
@@ -26,14 +33,20 @@ pub struct Editor {
     preview: Preview,
     chrome: Chrome,
     pub panel: Panel,
+    /// 设置页改为 Web 界面后，轮盘编辑器仍是原生控件，改为独立顶层窗口。
+    container: HWND,
     pub wheel: usize,
     pub slot: usize,
     pub empty_text_mode: bool,
     busy: bool,
 }
 
+const CONTAINER_CLASS: PCWSTR = w!("Wordy.WheelEditor");
+const CLIENT_WIDTH: i32 = 760;
+const CLIENT_HEIGHT: i32 = 500;
+
 impl Editor {
-    pub fn new_embedded(host: HWND, parent: HWND, settings: &Settings) -> io::Result<Self> {
+    pub fn new(host: HWND, settings: &Settings) -> io::Result<Self> {
         let mut template = Template::embedded(500, 264);
         label(&mut template, 300, "轮盘", [4, 11, 27, 14]);
         combo(&mut template, WHEEL, [31, 7, 108, 100]);
@@ -61,14 +74,17 @@ impl Editor {
         button(&mut template, PLAY, "试听", [255, 152, 32, 32]);
         button(&mut template, CROP, "截取", [293, 152, 32, 32]);
         button(&mut template, CLEAR, "清空", [331, 152, 32, 32]);
-        let panel = Panel::new(parent, &template, host, EDITOR_MESSAGE)?;
+        let (container, client) = create_container(host)?;
+        let panel = Panel::new(container, &template, host, EDITOR_MESSAGE)?;
         let chrome = Chrome::attach(&panel, false, false)?;
         layout_editor(panel.0, &chrome.state);
+        resize_panel(panel.0, client);
         let preview = Preview::new(panel.child(PICK), true)?;
         let mut editor = Self {
             preview,
             chrome,
             panel,
+            container,
             wheel: settings.chat_wheel_last_index,
             slot: 0,
             empty_text_mode: false,
@@ -84,6 +100,18 @@ impl Editor {
 
     pub fn take_slot(&mut self) -> Option<usize> {
         self.preview.take_slot()
+    }
+
+    pub fn show(&self) {
+        unsafe {
+            ShowWindow(self.container, SW_SHOW);
+            SetForegroundWindow(self.container);
+            InvalidateRect(self.panel.0, ptr::null(), 1);
+        }
+    }
+
+    pub fn hide(&self) {
+        unsafe { ShowWindow(self.container, SW_HIDE) };
     }
 
     pub fn refresh(&mut self, settings: &Settings) -> io::Result<()> {
@@ -192,6 +220,139 @@ impl Editor {
                 EnableWindow(self.panel.child(id), i32::from(!active));
             }
             EnableWindow(self.chrome.state.gain, i32::from(!active));
+        }
+    }
+}
+
+impl Drop for Editor {
+    fn drop(&mut self) {
+        unsafe { DestroyWindow(self.container) };
+    }
+}
+
+fn cursor_scale() -> i32 {
+    let mut cursor = POINT::default();
+    unsafe { GetCursorPos(&mut cursor) };
+    let monitor = unsafe { MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST) };
+    let (mut x, mut y) = (96, 96);
+    if unsafe { GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut x, &mut y) } >= 0 && x >= 96 {
+        x as i32
+    } else {
+        96
+    }
+}
+
+/// 独立窗口要容纳 400 单位的轮盘预览和右侧控制卡，比原先嵌入设置页时略窄。
+fn create_container(host: HWND) -> io::Result<(HWND, RECT)> {
+    let instance = unsafe { GetModuleHandleW(ptr::null()) };
+    let class = WNDCLASSW {
+        lpfnWndProc: Some(container_proc),
+        hInstance: instance,
+        hCursor: unsafe { LoadCursorW(ptr::null_mut(), IDC_ARROW) },
+        lpszClassName: CONTAINER_CLASS,
+        ..Default::default()
+    };
+    if unsafe { RegisterClassW(&class) } == 0
+        && unsafe { GetLastError() } != ERROR_CLASS_ALREADY_EXISTS
+    {
+        return Err(io::Error::last_os_error());
+    }
+    let scale = cursor_scale();
+    let client = RECT {
+        left: 0,
+        top: 0,
+        right: (CLIENT_WIDTH * scale + 48) / 96,
+        bottom: (CLIENT_HEIGHT * scale + 48) / 96,
+    };
+    let style = WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_CLIPCHILDREN;
+    let mut outer = client;
+    unsafe { AdjustWindowRectEx(&mut outer, style, 0, 0) };
+    let (width, height) = (outer.right - outer.left, outer.bottom - outer.top);
+    let mut cursor = POINT::default();
+    unsafe { GetCursorPos(&mut cursor) };
+    let monitor = unsafe { MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST) };
+    let mut info = MONITORINFO {
+        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
+    let (mut x, mut y) = (0, 0);
+    if unsafe { GetMonitorInfoW(monitor, &mut info) } != 0 {
+        let work = info.rcWork;
+        x = work.left + ((work.right - work.left - width) / 2).max(0);
+        y = work.top + ((work.bottom - work.top - height) / 2).max(0);
+    }
+    let hwnd = unsafe {
+        CreateWindowExW(
+            0,
+            CONTAINER_CLASS,
+            w!("轮盘"),
+            style,
+            x,
+            y,
+            width,
+            height,
+            host,
+            ptr::null_mut(),
+            instance,
+            ptr::null(),
+        )
+    };
+    if hwnd.is_null() {
+        return Err(io::Error::last_os_error());
+    }
+    unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, host as isize) };
+    Ok((hwnd, client))
+}
+
+fn resize_panel(panel: HWND, client: RECT) {
+    unsafe {
+        SetWindowPos(
+            panel,
+            ptr::null_mut(),
+            0,
+            0,
+            client.right - client.left,
+            client.bottom - client.top,
+            SWP_NOZORDER | SWP_NOACTIVATE,
+        );
+    }
+}
+
+unsafe extern "system" fn container_proc(
+    hwnd: HWND,
+    message: u32,
+    wparam: usize,
+    lparam: isize,
+) -> isize {
+    unsafe {
+        match message {
+            WM_CLOSE => {
+                // 关闭按钮只隐藏编辑器；设置界面继续运行。
+                ShowWindow(hwnd, SW_HIDE);
+                let host = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as HWND;
+                let panel = GetWindow(hwnd, GW_CHILD);
+                if !host.is_null() && !panel.is_null() {
+                    PostMessageW(host, EDITOR_MESSAGE, IDCANCEL as usize, panel as isize);
+                }
+                0
+            }
+            WM_SIZE => {
+                let panel = GetWindow(hwnd, GW_CHILD);
+                if !panel.is_null() {
+                    resize_panel(
+                        panel,
+                        RECT {
+                            left: 0,
+                            top: 0,
+                            right: (lparam & 0xffff) as i32,
+                            bottom: ((lparam >> 16) & 0xffff) as i32,
+                        },
+                    );
+                }
+                0
+            }
+            WM_ERASEBKGND => 1,
+            _ => DefWindowProcW(hwnd, message, wparam, lparam),
         }
     }
 }
@@ -333,9 +494,7 @@ mod tests {
     #[test]
     fn emoji_support_is_checked_per_font() {
         let settings = Settings::default();
-        let window =
-            crate::settings_window::SettingsWindow::new(ptr::null_mut(), &settings).unwrap();
-        let _editor = Editor::new_embedded(ptr::null_mut(), window.hwnd(), &settings).unwrap();
+        let _editor = Editor::new(ptr::null_mut(), &settings).unwrap();
         assert!(super::super::font_has_glyph("Segoe UI Emoji", "📥"));
         assert!(!super::super::font_has_glyph("Consolas", "📥"));
     }
@@ -347,18 +506,14 @@ mod tests {
         wheel.name = "轮盘 2".into();
         settings.additional_chat_wheels.push(wheel);
         settings.chat_wheel_last_index = 1;
-        let window =
-            crate::settings_window::SettingsWindow::new(ptr::null_mut(), &settings).unwrap();
-        let editor = Editor::new_embedded(ptr::null_mut(), window.hwnd(), &settings).unwrap();
+        let editor = Editor::new(ptr::null_mut(), &settings).unwrap();
         assert_eq!(editor.panel.text(HOTKEY), "录制快捷键");
     }
 
     #[test]
     fn editor_icon_buttons_are_equal_squares() {
         let settings = Settings::default();
-        let window =
-            crate::settings_window::SettingsWindow::new(ptr::null_mut(), &settings).unwrap();
-        let editor = Editor::new_embedded(ptr::null_mut(), window.hwnd(), &settings).unwrap();
+        let editor = Editor::new(ptr::null_mut(), &settings).unwrap();
         let size = |id| {
             let mut rect = RECT::default();
             unsafe { GetWindowRect(editor.panel.child(id), &mut rect) };
@@ -374,9 +529,7 @@ mod tests {
     #[test]
     fn rename_follows_remove_with_the_same_gap_as_add() {
         let settings = Settings::default();
-        let window =
-            crate::settings_window::SettingsWindow::new(ptr::null_mut(), &settings).unwrap();
-        let editor = Editor::new_embedded(ptr::null_mut(), window.hwnd(), &settings).unwrap();
+        let editor = Editor::new(ptr::null_mut(), &settings).unwrap();
         let bounds = |id| {
             let mut rect = RECT::default();
             unsafe { GetWindowRect(editor.panel.child(id), &mut rect) };
@@ -391,9 +544,7 @@ mod tests {
     #[test]
     fn editor_card_is_vertically_centered_on_the_wheel_preview() {
         let settings = Settings::default();
-        let window =
-            crate::settings_window::SettingsWindow::new(ptr::null_mut(), &settings).unwrap();
-        let editor = Editor::new_embedded(ptr::null_mut(), window.hwnd(), &settings).unwrap();
+        let editor = Editor::new(ptr::null_mut(), &settings).unwrap();
         let mut pick = RECT::default();
         unsafe {
             GetWindowRect(editor.panel.child(PICK), &mut pick);
@@ -418,9 +569,7 @@ mod tests {
             UI::Controls::{DRAWITEMSTRUCT, ODS_COMBOBOXEDIT, ODT_COMBOBOX},
         };
         let settings = Settings::default();
-        let window =
-            crate::settings_window::SettingsWindow::new(ptr::null_mut(), &settings).unwrap();
-        let editor = Editor::new_embedded(ptr::null_mut(), window.hwnd(), &settings).unwrap();
+        let editor = Editor::new(ptr::null_mut(), &settings).unwrap();
         let combo = editor.panel.child(STYLE);
         // The panel is hidden, so the combo's surface has never been painted.
         let mut item = DRAWITEMSTRUCT {
@@ -481,9 +630,7 @@ mod tests {
         let writes = Cell::new(0usize);
         let mut settings = Settings::default();
         settings.chat_wheel_slots[0] = "test.wav".into();
-        let window =
-            crate::settings_window::SettingsWindow::new(ptr::null_mut(), &settings).unwrap();
-        let editor = Editor::new_embedded(ptr::null_mut(), window.hwnd(), &settings).unwrap();
+        let editor = Editor::new(ptr::null_mut(), &settings).unwrap();
         let gain = editor.chrome.state.gain;
         let readout = editor.panel.child(GAIN_VALUE);
         unsafe {

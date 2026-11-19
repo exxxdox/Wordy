@@ -13,6 +13,7 @@
 - VB-CABLE（主播放输出与[音频侦听](#音频侦听vb-cable)需要；可在音频设置中关闭「启用主播放输出」）
 - FFmpeg（用于 MP3、FLAC 等格式及非 PCM16 WAV。缺少时可在 Wordy 提示中通过 WinGet 安装）
 - Rust stable（MSVC 工具链）：源码开发与打包
+- Node.js 20+ 与 pnpm、`cargo install tauri-cli --locked --version "^2"`：设置界面（Tauri + React）开发与打包
 
 ## 功能介绍
 
@@ -103,29 +104,32 @@ cargo add <crate>
 
 | 路径 | 说明 |
 |------|------|
-| `rust/main.rs` / `rust/app.rs` | 进程入口、单实例、热键分发与窗口消息循环 |
-| `rust/app/recording.rs` | 后台录制、音频截取、试听和保存 |
-| `rust/audio.rs` + `rust/audio/` | WASAPI 设备枚举、播放/返听、VB-CABLE 路由、Windows 侦听策略、回环录制、裁剪与波形、托管音频 |
-| `rust/tts.rs` + `rust/tts/` | TTS 引擎、Cartesia HTTP/WebSocket、Volcengine SSE、音色标签 |
-| `rust/desktop.rs` | 宿主窗口、托盘、Windows 通知 |
-| `rust/desktop/overlay.rs` | 悬浮输入框和绘制 |
-| `rust/settings_window.rs` / `rust/settings_window/controls.rs` | 设置窗口、DPI 布局和控件绘制 |
-| `rust/settings_backdrop.rs` | 设置窗口和嵌入控件共用的玻璃背景 |
-| `rust/panels.rs` / `rust/panels/` | 共用面板控件、轮盘编辑器、截取对话框和轮盘预览 |
-| `rust/wheel*.rs` | 轮盘运行窗口、四种样式绘制与设置预览 |
-| `rust/playback.rs` / `rust/ffmpeg.rs` | 播放调度、FFmpeg 查找与 WinGet 安装 |
-| `rust/config.rs`/`backup*.rs`/`credentials.rs` | 配置持久化、加密备份、凭据库 |
-| `rust/hotkey.rs`/`instance.rs`/`file_log.rs` | 快捷键解析与注册、单实例、日志轮转 |
-| `rust/log_window.rs`/`status_toast.rs`/`dialog.rs` | 日志窗口、反馈提示、原生对话框 |
+| `src-tauri/src/main.rs` | Tauri 入口：单实例、WebView 设置窗口、启动原生工作线程 |
+| `src-tauri/src/app.rs` | 原生工作线程：热键分发、窗口消息循环、设置动作、日志 |
+| `src-tauri/src/ui.rs` | WebView 与原生线程的桥：动作枚举、配置快照、命令 |
+| `src-tauri/src/app/recording.rs` | 后台录制、音频截取、试听和保存 |
+| `src-tauri/src/audio.rs` + `src-tauri/src/audio/` | WASAPI 设备枚举、播放/返听、VB-CABLE 路由、Windows 侦听策略、回环录制、裁剪与波形、托管音频 |
+| `src-tauri/src/tts.rs` + `src-tauri/src/tts/` | TTS 引擎、Cartesia HTTP/WebSocket、Volcengine SSE、音色标签 |
+| `src-tauri/src/desktop.rs` | 宿主窗口、托盘、Windows 通知 |
+| `src-tauri/src/desktop/overlay.rs` | 悬浮输入框和绘制 |
+| `src-tauri/src/fonts.rs` | 系统字体枚举与回退 |
+| `src-tauri/src/panels.rs` / `src-tauri/src/panels/` | 共用面板控件、轮盘编辑器、截取对话框和轮盘预览 |
+| `src-tauri/src/wheel*.rs` | 轮盘运行窗口、四种样式绘制与设置预览 |
+| `src-tauri/src/playback.rs` / `ffmpeg.rs` | 播放调度、FFmpeg 查找与 WinGet 安装 |
+| `src-tauri/src/config.rs` / `backup*.rs` / `credentials.rs` | 配置持久化、加密备份、凭据库 |
+| `src-tauri/src/hotkey.rs` / `instance.rs` / `file_log.rs` | 快捷键解析与注册、单实例、日志轮转 |
+| `src-tauri/src/log_window.rs` / `status_toast.rs` / `dialog.rs` | 日志窗口、反馈提示、原生对话框 |
+| `src/` | React 设置界面（Vite + Tailwind），由 `src-tauri` 内嵌构建 |
+| `src-tauri/tauri.conf.json` | 窗口、构建命令、CSP 与图标配置 |
 
 ### 技术栈
 
 - **Rust（edition 2024）**，`windows-sys` / `windows` 直接调用 Win32、Direct2D、WASAPI
-- **GUI**: 自绘 Win32 窗口（玻璃外壳、悬浮输入框、轮盘）
+- **GUI**: 设置页为 Tauri 2 + React 19 + Tailwind；托盘、悬浮输入框、轮盘、编辑器与截取窗口为自绘 Win32
 - **音频**: WASAPI（设备、回环录制、Windows 侦听策略）
 - **TTS**: reqwest（Cartesia bytes、Volcengine SSE）、tungstenite（Cartesia realtime）
 - **密钥**: Windows 凭据管理器（Credential Manager）
-- **包管理**: Cargo
+- **包管理**: Cargo + pnpm
 
 ## 许可证
 

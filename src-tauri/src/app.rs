@@ -9,11 +9,10 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
-use windows_sys::Win32::Foundation::{HINSTANCE, HWND};
+use tauri::{AppHandle, Emitter, Manager};
+use windows_sys::Win32::Foundation::{HANDLE, HINSTANCE, HWND, RECT, WAIT_FAILED, WAIT_OBJECT_0};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows_sys::Win32::UI::HiDpi::{
-    DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext,
-};
+use windows_sys::Win32::System::Threading::INFINITE;
 use windows_sys::Win32::UI::Shell::ShellExecuteW;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 use windows_sys::core::w;
@@ -25,12 +24,12 @@ use crate::desktop::*;
 use crate::ffmpeg;
 use crate::file_log::FileLog;
 use crate::hotkey::{display_hotkey, parse_hotkey, windows::Registration};
-use crate::instance::{acquire_single_instance, show_duplicate_instance_message};
 use crate::log_window::LogWindow;
 use crate::panels::{self, Editor, Trim};
 use crate::playback::{EngineSettings, Event, Playback};
-use crate::settings_window::{SETTINGS_ACTION_MESSAGE, SettingsAction, SettingsWindow};
+use crate::settings_action::SettingsAction;
 use crate::status_toast::{Toasts, Tone};
+use crate::ui::{self, ListenStatus, Snapshot, UiRequest};
 use crate::wheel::WheelStyle;
 use crate::wheel_window::WheelWindow;
 use crate::{backup, dialog};
@@ -50,15 +49,17 @@ const CONTROLS_TIMER: usize = 1;
 const LOG_LIMIT: usize = 5000;
 const BACKUP_FILTER: &str = "Wordy 加密备份 (*.wordybackup)\0*.wordybackup\0";
 
-pub fn run() -> io::Result<()> {
-    if std::env::args_os().nth(1).as_deref() == Some(std::ffi::OsStr::new("--smoke-test")) {
-        return smoke_test();
-    }
-    if !acquire_single_instance()? {
-        show_duplicate_instance_message();
-        return Ok(());
-    }
-    unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
+/// 网页设置界面需要的数据与唤醒句柄。
+pub struct UiContext {
+    pub app: AppHandle,
+    pub hwnd: isize,
+    pub wake: isize,
+    pub requests: mpsc::Receiver<UiRequest>,
+}
+
+/// 在 Tauri 工作线程里运行原有 Win32 应用：
+/// 托盘、热键、悬浮输入框和轮盘保持原生，设置页由 WebView 承担。
+pub fn run_native(ui: UiContext) -> io::Result<()> {
     enable_dark_mode();
     let instance = unsafe { GetModuleHandleW(ptr::null()) };
     if instance.is_null() {
@@ -66,25 +67,23 @@ pub fn run() -> io::Result<()> {
     }
     let host = Host(host_window(instance)?);
     let config = ConfigStore::load_default()?;
-    let mut app = App::new(instance, host.0, config)?;
-    app.event_loop()
+    let mut app = App::new(instance, host.0, config, ui)?;
+    let result = app.event_loop();
+    // 托盘退出后关闭 WebView 事件循环。
+    app.handle.exit(0);
+    result
 }
 
-fn smoke_test() -> io::Result<()> {
+pub fn smoke_test() -> io::Result<()> {
     let instance = unsafe { GetModuleHandleW(ptr::null()) };
     let host = Host(host_window(instance)?);
     let settings = Settings::default();
-    let mut settings_window = SettingsWindow::new(host.0, &settings)?;
     let _input = Overlay::new(instance, host.0)?;
     let _wheel = WheelWindow::new(instance).map_err(io::Error::other)?;
-    let editor = Editor::new_embedded(host.0, settings_window.hwnd(), &settings)?;
-    settings_window.set_wheel_panel(editor.panel.0);
-    let trim = Trim::new(host.0, settings_window.hwnd(), &settings, None, 1.0, 1.0)?;
-    if unsafe { IsChild(settings_window.hwnd(), editor.panel.0) } == 0
-        || editor.panel.text(panels::GAIN) != "100"
-        || trim.panel.text(panels::END) != "1.000"
-    {
-        return Err(io::Error::other("设置或截取窗口未正确初始化"));
+    let editor = Editor::new(host.0, &settings)?;
+    let trim = Trim::new(host.0, host.0, &settings, None, 1.0, 1.0)?;
+    if editor.panel.text(panels::GAIN) != "100" || trim.panel.text(panels::END) != "1.000" {
+        return Err(io::Error::other("轮盘编辑器或截取窗口未正确初始化"));
     }
     Ok(())
 }
@@ -109,7 +108,20 @@ struct App {
     wheel: WheelWindow,
     active_wheel: Option<usize>,
     editor: Editor,
-    settings_window: SettingsWindow,
+    handle: AppHandle,
+    /// Tauri 窗口句柄：原生对话框的 owner、到托盘反馈的锚点。
+    hwnd: isize,
+    wake: HANDLE,
+    requests: mpsc::Receiver<UiRequest>,
+    outputs: Vec<AudioIdentity>,
+    microphones: Vec<String>,
+    cartesia_voices: Vec<Voice>,
+    cable_available: bool,
+    listen_state: Option<ListenStatus>,
+    font_families: Vec<String>,
+    published_revision: u64,
+    ui_dirty: bool,
+    ui_connected: bool,
     toasts: Toasts,
     recording: Option<Recording>,
     trim: Option<TrimSession>,
@@ -140,7 +152,12 @@ enum Background {
 }
 
 impl App {
-    fn new(instance: HINSTANCE, host: HWND, config: ConfigStore) -> io::Result<Self> {
+    fn new(
+        instance: HINSTANCE,
+        host: HWND,
+        config: ConfigStore,
+        ui: UiContext,
+    ) -> io::Result<Self> {
         let vault = WindowsCredentials;
         let mut credential_warning = None;
         // A locked or damaged vault must not stop unrelated features from running.
@@ -160,9 +177,7 @@ impl App {
         let tray = Tray::install(host)?;
         let overlay = Overlay::new(instance, host)?;
         let wheel = WheelWindow::new(instance).map_err(io::Error::other)?;
-        let mut settings_window = SettingsWindow::new(host, config.settings())?;
-        let editor = Editor::new_embedded(host, settings_window.hwnd(), config.settings())?;
-        settings_window.set_wheel_panel(editor.panel.0);
+        let editor = Editor::new(host, config.settings())?;
         let (jobs, results) = mpsc::channel();
         let mut app = Self {
             host,
@@ -176,7 +191,19 @@ impl App {
             wheel,
             active_wheel: None,
             editor,
-            settings_window,
+            handle: ui.app,
+            hwnd: ui.hwnd,
+            wake: ui.wake as HANDLE,
+            requests: ui.requests,
+            outputs: Vec::new(),
+            microphones: Vec::new(),
+            cartesia_voices: Vec::new(),
+            cable_available: false,
+            listen_state: None,
+            font_families: crate::fonts::installed_fonts(),
+            published_revision: 0,
+            ui_dirty: true,
+            ui_connected: false,
             toasts: Toasts::new(),
             recording: None,
             trim: None,
@@ -238,6 +265,26 @@ impl App {
         }
         let mut message = MSG::default();
         loop {
+            // 命令线程通过事件唤醒这条原生消息循环。
+            let wait = unsafe {
+                MsgWaitForMultipleObjectsEx(
+                    1,
+                    &self.wake,
+                    INFINITE,
+                    QS_ALLINPUT,
+                    MWMO_INPUTAVAILABLE,
+                )
+            };
+            if wait == WAIT_OBJECT_0 {
+                self.dispatch_ui();
+                continue;
+            }
+            if wait == WAIT_FAILED {
+                return Err(io::Error::last_os_error());
+            }
+            if wait != WAIT_OBJECT_0 + 1 {
+                continue;
+            }
             let result = unsafe { GetMessageW(&mut message, ptr::null_mut(), 0, 0) };
             if result == 0 {
                 break;
@@ -265,14 +312,6 @@ impl App {
                     _ => Ok(()),
                 },
                 OVERLAY_MESSAGE if message.hwnd == self.host => self.overlay_action(message.wParam),
-                SETTINGS_ACTION_MESSAGE if message.hwnd == self.host => {
-                    let action = self.settings_window.action(message.wParam as u16);
-                    let result = action.map_or(Ok(()), |action| self.settings_action(action));
-                    if result.is_err() {
-                        self.settings_window.refresh(self.config.settings());
-                    }
-                    result
-                }
                 panels::EDITOR_MESSAGE if message.hwnd == self.host => {
                     self.editor_action(message.wParam, message.lParam as HWND)
                 }
@@ -285,7 +324,7 @@ impl App {
                         .trim
                         .as_ref()
                         .is_some_and(|trim| trim.window.accepts(&message))
-                        || self.settings_window.handle_message(&message);
+                        || self.editor.panel.accepts(&message);
                     if !handled {
                         unsafe {
                             TranslateMessage(&message);
@@ -313,7 +352,7 @@ impl App {
         // A submitted save owns the only temporary recording. Finish it before
         // dropping results, but do not hang forever on a stuck decoder.
         let deadline = Instant::now() + Duration::from_secs(10);
-        let mut cancel_deadline = None;
+        let mut cancel_deadline: Option<Instant> = None;
         while self.pending_saves > 0 {
             let now = Instant::now();
             let wait = match cancel_deadline {
@@ -357,8 +396,8 @@ impl App {
 
     fn tick(&mut self) -> io::Result<()> {
         if let Err(error) = self.toasts.tick(
-            self.settings_window.hwnd(),
-            self.settings_window.toast_anchor(),
+            self.hwnd as HWND,
+            self.toast_anchor(),
             &self.config.settings().ui_font,
         ) {
             self.toasts.clear();
@@ -404,7 +443,8 @@ impl App {
                     match result {
                         Ok(voices) => {
                             let count = voices.len();
-                            self.settings_window.set_cartesia_voices(voices);
+                            self.cartesia_voices = voices;
+                            self.ui_dirty = true;
                             self.status(format!("已加载 {count} 个音色"));
                         }
                         Err(error) => self.failure(format!("获取音色列表失败：{error}")),
@@ -424,7 +464,91 @@ impl App {
         while let Ok(result) = self.results.try_recv() {
             self.complete_background(result, false)?;
         }
+        if self.ui_dirty || self.config.revision() != self.published_revision {
+            self.emit_snapshot();
+        }
         Ok(())
+    }
+
+    fn snapshot(&self) -> Snapshot {
+        Snapshot {
+            settings: self.config.settings().clone(),
+            outputs: self.outputs.clone(),
+            microphones: self.microphones.clone(),
+            voices: self.cartesia_voices.clone(),
+            cable_available: self.cable_available,
+            listen: self.listen_state.clone(),
+            fonts: self.font_families.clone(),
+            busy: self.backup_running,
+        }
+    }
+
+    fn emit_snapshot(&mut self) {
+        let snapshot = self.snapshot();
+        self.published_revision = self.config.revision();
+        self.ui_dirty = false;
+        if let Err(error) = self.handle.emit(ui::SNAPSHOT_EVENT, snapshot) {
+            eprintln!("无法更新设置界面：{error}");
+        }
+    }
+
+    /// 处理网页发来的请求。动作仍在原生线程执行，保持原有副作用顺序。
+    fn dispatch_ui(&mut self) {
+        while let Ok(request) = self.requests.try_recv() {
+            match request {
+                UiRequest::Snapshot(reply) => {
+                    if !self.ui_connected {
+                        // 首次快照说明 WebView 已加载并完成挂载。
+                        self.ui_connected = true;
+                        self.log("设置界面已连接".into());
+                    }
+                    let _ = reply.send(self.snapshot());
+                }
+                UiRequest::Action(action, reply) => {
+                    let result = self.settings_action(action);
+                    if let Err(error) = &result {
+                        let message = error.to_string();
+                        self.report_error("操作失败", io::Error::other(message));
+                    }
+                    self.emit_snapshot();
+                    let _ = reply.send(
+                        result
+                            .map(|()| self.snapshot())
+                            .map_err(|error| error.to_string()),
+                    );
+                }
+            }
+        }
+    }
+
+    pub(super) fn ui_hwnd(&self) -> HWND {
+        self.hwnd as HWND
+    }
+
+    pub(super) fn show_settings(&mut self) -> io::Result<()> {
+        self.overlay.hide(false);
+        self.refresh_editor()?;
+        if let Some(window) = self.handle.get_webview_window("settings") {
+            let _ = window.unminimize();
+            let _ = window.show();
+            let _ = window.set_focus();
+        }
+        Ok(())
+    }
+
+    pub(super) fn settings_visible(&self) -> bool {
+        let hwnd = self.ui_hwnd();
+        !hwnd.is_null() && unsafe { IsWindowVisible(hwnd) != 0 && IsIconic(hwnd) == 0 }
+    }
+
+    fn toast_anchor(&self) -> Option<RECT> {
+        let hwnd = self.ui_hwnd();
+        let mut rect = RECT::default();
+        if hwnd.is_null() || unsafe { GetWindowRect(hwnd, &mut rect) } == 0 {
+            None
+        } else {
+            Some(rect)
+        }
     }
 
     fn complete_background(&mut self, result: Background, exiting: bool) -> io::Result<()> {
@@ -566,8 +690,7 @@ mod tests {
         let instance = unsafe { GetModuleHandleW(ptr::null()) };
         let host = Host(host_window(instance).unwrap());
         let settings = Settings::default();
-        let settings_window = SettingsWindow::new(host.0, &settings).unwrap();
-        let editor = Editor::new_embedded(host.0, settings_window.hwnd(), &settings).unwrap();
+        let editor = Editor::new(host.0, &settings).unwrap();
         let mut captions = Vec::new();
         unsafe {
             let mut child = GetWindow(editor.panel.0, GW_CHILD);

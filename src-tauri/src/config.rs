@@ -6,7 +6,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use toml::{Table, Value};
 
 use crate::{
@@ -33,7 +33,7 @@ pub const CARTESIA_BYTES: &str = "Cartesia Bytes";
 pub const CARTESIA_REALTIME: &str = "Cartesia Realtime";
 pub const VOLCENGINE_STREAMING: &str = "Volcengine Streaming";
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AudioIdentity {
     pub name: String,
     pub host_api_name: Option<String>,
@@ -48,7 +48,7 @@ pub struct WindowPosition {
     pub y: i32,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Voice {
     pub id: String,
     pub name: String,
@@ -508,6 +508,8 @@ pub struct ConfigStore {
     settings: Settings,
     save_deadline: Option<Instant>,
     load_warning: Option<String>,
+    /// 每次配置内容变化递增，网页据此判断是否需要刷新快照。
+    revision: u64,
 }
 
 impl ConfigStore {
@@ -547,6 +549,7 @@ impl ConfigStore {
             settings,
             save_deadline: None,
             load_warning,
+            revision: 0,
         })
     }
 
@@ -558,6 +561,10 @@ impl ConfigStore {
         let mut config = Self::load(config_directory().join("config.toml"))?;
         config.refresh_credentials(&WindowsCredentials);
         Ok(config)
+    }
+
+    pub fn revision(&self) -> u64 {
+        self.revision
     }
 
     pub fn path(&self) -> &Path {
@@ -589,6 +596,7 @@ impl ConfigStore {
         write_atomic(&self.path, &next)?;
         self.settings = next;
         self.save_deadline = None;
+        self.revision += 1;
         Ok(())
     }
 
@@ -598,6 +606,7 @@ impl ConfigStore {
         next.prepare_write()?;
         self.settings = next;
         self.save_deadline = Some(Instant::now() + SAVE_DEBOUNCE);
+        self.revision += 1;
         Ok(())
     }
 

@@ -3,14 +3,13 @@ use super::*;
 impl App {
     fn edit(&mut self, update: impl FnOnce(&mut Settings)) -> io::Result<()> {
         self.config.update(update)?;
-        self.settings_window.refresh(self.config.settings());
+        self.ui_dirty = true;
         Ok(())
     }
 
     fn edit_debounced(&mut self, update: impl FnOnce(&mut Settings)) -> io::Result<()> {
         self.config.update_debounced(update)?;
-        self.settings_window
-            .sync_debounced_inputs(self.config.settings());
+        self.ui_dirty = true;
         Ok(())
     }
 
@@ -53,10 +52,6 @@ impl App {
             }
             SetUiFont(value) => {
                 self.edit(|s| s.ui_font = value)?;
-                self.settings_window.apply_panel_font(self.editor.panel.0);
-                if let Some(trim) = &self.trim {
-                    self.settings_window.apply_panel_font(trim.window.panel.0);
-                }
                 self.refresh_editor()?;
                 if let Some(trim) = &mut self.trim {
                     trim.window.refresh(self.config.settings())?;
@@ -70,9 +65,10 @@ impl App {
             SetLogLevel(level) => self.edit(|s| s.log_level = level)?,
             SetHoldKeyEnabled(enabled) => self.edit(|s| s.hold_key_enabled = enabled)?,
             RecordHoldKey | RecordHotkey | RecordRollingHotkey => {
+                let owner = self.ui_hwnd();
                 let Some(value) = capture_binding(
                     &mut self.hotkeys,
-                    self.settings_window.hwnd(),
+                    owner,
                     matches!(action, RecordHoldKey),
                     &self.config.settings().ui_font,
                 )?
@@ -90,7 +86,7 @@ impl App {
                     _ => unreachable!(),
                 }
                 self.hotkeys.update(&mut self.config, next)?;
-                self.settings_window.refresh(self.config.settings());
+                self.ui_dirty = true;
             }
             SetRollingSeconds(seconds) => self.edit(|s| s.rolling_buffer_seconds = seconds)?,
             SetOutputDevice(output) => self.edit(|s| {
@@ -134,7 +130,10 @@ impl App {
             })?,
             ExportBackup => self.backup(true)?,
             ImportBackup => self.backup(false)?,
-            EditWheels => self.refresh_editor()?,
+            EditWheels => {
+                self.refresh_editor()?;
+                self.editor.show();
+            }
             DownloadVbCable => self.open_url("https://vb-audio.com/Cable/")?,
             OpenLogs => self.show_logs()?,
             RequestAudioDevices => self.load_audio_settings()?,
@@ -172,7 +171,7 @@ impl App {
             write(previous.as_deref())?;
             return Err(error);
         }
-        self.settings_window.refresh(self.config.settings());
+        self.ui_dirty = true;
         self.rebuild_engine()?;
         if value.is_some() && provider == Provider::Cartesia {
             self.refresh_voices();
@@ -195,20 +194,17 @@ impl App {
         let outputs = audio::list_outputs().unwrap_or_default();
         let inputs = audio::list_inputs().unwrap_or_default();
         let legacy_main = self.config.settings().virtual_output_device.clone();
-        self.settings_window.set_vb_cable_available(
-            audio::cable_endpoint_for(&outputs, legacy_main.as_deref()).is_some(),
-        );
-        self.settings_window.set_output_devices(
-            outputs
-                .into_iter()
-                .filter(|e| !audio::is_cable_device(&e.name))
-                .map(|e| AudioIdentity {
-                    name: e.name,
-                    host_api_name: Some("WASAPI".into()),
-                    id: Some(e.id),
-                })
-                .collect(),
-        );
+        self.cable_available =
+            audio::cable_endpoint_for(&outputs, legacy_main.as_deref()).is_some();
+        self.outputs = outputs
+            .into_iter()
+            .filter(|e| !audio::is_cable_device(&e.name))
+            .map(|e| AudioIdentity {
+                name: e.name,
+                host_api_name: Some("WASAPI".into()),
+                id: Some(e.id),
+            })
+            .collect();
         let state = self
             .config
             .settings()
@@ -216,11 +212,13 @@ impl App {
             .as_deref()
             .and_then(|name| audio::find_endpoint(&inputs, name))
             .and_then(|input| audio::read_listen(input).ok());
-        self.settings_window
-            .set_input_devices(inputs.into_iter().map(|e| e.name).collect());
-        self.settings_window.set_listen_state(
-            state.map(|state| (state.enabled, state.output_name, state.output_id.is_some())),
-        );
+        self.microphones = inputs.into_iter().map(|e| e.name).collect();
+        self.listen_state = state.map(|state| ListenStatus {
+            enabled: state.enabled,
+            output: state.output_name,
+            output_available: state.output_id.is_some(),
+        });
+        self.ui_dirty = true;
         Ok(())
     }
 
@@ -325,7 +323,7 @@ impl App {
         if self.backup_running {
             return Err(io::Error::other("正在处理备份，请稍候"));
         }
-        let owner = self.settings_window.hwnd();
+        let owner = self.ui_hwnd();
         if !export && (self.recording.is_some() || self.pending_saves > 0 || self.trim.is_some()) {
             return Err(io::Error::other("请先结束录制或音频导入，再导入备份"));
         }
@@ -435,7 +433,7 @@ impl App {
         let url = wide(url);
         let result = unsafe {
             ShellExecuteW(
-                self.settings_window.hwnd(),
+                self.ui_hwnd(),
                 w!("open"),
                 url.as_ptr(),
                 ptr::null(),

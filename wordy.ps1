@@ -1,4 +1,4 @@
-﻿# Wordy 统一入口：.\wordy.ps1 [init|dev|build] [-Clean] [-NoPause]
+# Wordy 统一入口：.\wordy.ps1 [init|dev|build] [-Clean] [-NoPause]
 # 默认 dev；-Clean 仅用于 build，-NoPause 用于非交互执行。
 param(
     [Parameter(Position = 0)]
@@ -16,14 +16,19 @@ function Invoke-Pause {
     }
 }
 
-function Invoke-Cargo {
-    & $cargoCommand @args
+function Invoke-Step {
+    param([string]$Command, [string[]]$Arguments)
+    & $Command @Arguments
     $commandExitCode = $LASTEXITCODE
     if ($commandExitCode -ne 0) {
-        Write-Host "[ERROR] cargo exited with code $commandExitCode"
+        Write-Host "[ERROR] $Command exited with code $commandExitCode"
         Invoke-Pause
         exit $commandExitCode
     }
+}
+
+function Invoke-Cargo {
+    Invoke-Step $cargoCommand $args
 }
 
 Push-Location -LiteralPath $PSScriptRoot
@@ -38,26 +43,43 @@ try {
             throw 'cargo not found. Install the Rust toolchain first.'
         }
     }
+    $pnpm = Get-Command pnpm -ErrorAction SilentlyContinue
+    if (-not $pnpm) {
+        throw 'pnpm not found. Install pnpm before building the settings UI.'
+    }
+    $frontend = Join-Path $PSScriptRoot 'node_modules'
+    $crate = Join-Path $PSScriptRoot 'src-tauri'
 
     switch ($Action) {
         'init' {
             Invoke-Cargo --version
-            Write-Host '[INFO] Fetching dependencies...'
-            Invoke-Cargo fetch
+            Write-Host '[INFO] Fetching Rust dependencies...'
+            Invoke-Cargo fetch --manifest-path (Join-Path $crate 'Cargo.toml')
+            Write-Host '[INFO] Installing frontend dependencies...'
+            Invoke-Step $pnpm.Source @('install', '--allow-build=esbuild')
             Write-Host '[INFO] Environment ready. Run: .\wordy.ps1 dev'
         }
         'dev' {
+            if (-not (Test-Path -LiteralPath $frontend)) {
+                Invoke-Step $pnpm.Source @('install', '--allow-build=esbuild')
+            }
             Write-Host '[dev] Starting Wordy...'
-            Invoke-Cargo run
+            Invoke-Step $cargoCommand.Source @('tauri', 'dev')
         }
         'build' {
             $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-            if ($Clean) { Invoke-Cargo clean }
+            if (-not (Test-Path -LiteralPath $frontend)) {
+                Invoke-Step $pnpm.Source @('install', '--allow-build=esbuild')
+            }
+            Write-Host '[INFO] Building settings UI...'
+            Invoke-Step $pnpm.Source @('build')
+            $target = Join-Path $crate 'target'
+            if ($Clean) { Invoke-Cargo clean --manifest-path (Join-Path $crate 'Cargo.toml') }
             Write-Host '[INFO] Building release...'
-            Invoke-Cargo build --release --features packaged
+            Invoke-Cargo build --manifest-path (Join-Path $crate 'Cargo.toml') --release --features packaged
             $distDir = Join-Path $PSScriptRoot 'dist'
             New-Item -ItemType Directory -Force -Path $distDir | Out-Null
-            $sourceExe = Join-Path $PSScriptRoot 'target\release\wordy.exe'
+            $sourceExe = Join-Path $target 'release\wordy.exe'
             $outputPath = Join-Path $distDir 'Wordy.exe'
             Copy-Item -LiteralPath $sourceExe -Destination $outputPath -Force
             $stopwatch.Stop()

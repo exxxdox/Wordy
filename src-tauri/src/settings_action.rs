@@ -1,0 +1,38 @@
+use crate::credentials::Provider;
+
+/// 设置页发出的动作。原生设置窗口已由 React 界面取代，但动作语义不变，
+/// 这样引擎重建、快捷键注册、音频路由等行为仍集中在后端一处。
+pub enum SettingsAction {
+    SetProvider(Provider),
+    SetBackend(String),
+    SetVolume(f64),
+    SetOpacity(f64),
+    SetPlaceholder(String),
+    SetUiFont(String),
+    SetFixedCenter(bool),
+    SetLogLevel(String),
+    SetHoldKeyEnabled(bool),
+    RecordHoldKey,
+    RecordHotkey,
+    RecordRollingHotkey,
+    SetRollingSeconds(f64),
+    SetOutputDevice(Option<crate::config::AudioIdentity>),
+    SetMic(Option<String>),
+    SetMainPlayback(bool),
+    SetSidetone(bool),
+    SetListen(bool),
+    SaveKey(Provider, String),
+    DeleteKey(Provider),
+    RefreshVoices,
+    SelectVoice(Provider, crate::config::Voice),
+    SaveVolcengineVoice(crate::config::Voice),
+    DeleteVolcengineVoice(String),
+    ExportBackup,
+    ImportBackup,
+    EditWheels,
+    DownloadVbCable,
+    OpenLogs,
+    RequestAudioDevices,
+    Closed,
+    Feedback(String),
+}

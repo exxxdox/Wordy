@@ -74,7 +74,7 @@ impl App {
         let owner = if let Some(trim) = &self.trim {
             trim.window.panel.0
         } else if self.settings_visible() {
-            self.settings_window.hwnd()
+            self.ui_hwnd()
         } else {
             ptr::null_mut()
         };
@@ -112,9 +112,7 @@ impl App {
     pub(super) fn failure(&mut self, message: String) {
         // Report through the toast/tray only; forcing the settings window open
         // on every background error made a plain launch look like a request for it.
-        let settings_visible =
-            self.settings_visible() && unsafe { IsIconic(self.settings_window.hwnd()) == 0 };
-        if settings_visible {
+        if self.settings_visible() {
             self.toasts.push(&message, Tone::Error);
         } else {
             // Toast cards only exist over the settings window; without it the
@@ -122,10 +120,6 @@ impl App {
             self.tray.notify(&message);
         }
         self.log_at("ERROR", message);
-    }
-
-    pub(super) fn settings_visible(&self) -> bool {
-        unsafe { IsWindowVisible(self.settings_window.hwnd()) != 0 }
     }
 
     pub(super) fn notify(&mut self, message: String) {

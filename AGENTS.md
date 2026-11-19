@@ -2,38 +2,51 @@
 
 ## 架构
 
-纯 Rust（edition 2024）Win32 应用，Cargo 管理。入口 `rust/main.rs` → `rust/app.rs:run()`。所有 UI、音频、TTS 均为原生实现，不再依赖 Python/Qt。
+Rust（edition 2024）+ Tauri 2 桌面应用。设置界面是 React（Vite + Tailwind），托盘、悬浮输入框、轮盘、编辑器、截取与日志窗口仍是原生 Win32。入口 `src-tauri/src/main.rs` → 工作线程 `src-tauri/src/app.rs:run_native()`。
 
 | 路径 | 职责 |
 |------|------|
-| `rust/app.rs` | 单实例、热键分发、窗口消息循环、设置动作、日志 |
-| `rust/app/recording.rs` | 后台录制、音频截取与试听、异步导入与保存 |
-| `rust/desktop.rs` | Win32 宿主窗口、托盘、通知和共用控件辅助函数 |
-| `rust/desktop/overlay.rs` | 悬浮输入框、输入事件、背景和按钮绘制 |
-| `rust/settings_window.rs` / `rust/settings_window/controls.rs` | 设置窗口、DPI 布局、设置控件绘制 |
-| `rust/settings_backdrop.rs` | 设置窗口和嵌入控件共用的玻璃背景及绘制缓存 |
-| `rust/panels.rs` / `rust/panels/` | 共用面板控件、轮盘编辑器、截取对话框和轮盘预览 |
-| `rust/wheel.rs` / `wheel_paint.rs` / `wheel_window.rs` | 轮盘状态、四种样式绘制、运行时窗口 |
-| `rust/audio.rs` + `rust/audio/` | WASAPI 设备枚举、播放/返听、VB-CABLE 路由、Windows 侦听、回环录制、裁剪/波形、托管音频 |
-| `rust/tts.rs` + `rust/tts/realtime.rs` | TTS 引擎、Cartesia HTTP/WebSocket、Volcengine SSE、音色标签 |
-| `rust/config.rs` | `Settings` 单一数据源、钳位、原子写入、150ms 防抖写盘 |
-| `rust/backup.rs` / `backup_crypto.rs` / `credentials.rs` | 加密备份、AES-256-GCM/PBKDF2、Windows 凭据管理器 |
-| `rust/hotkey.rs` / `instance.rs` / `file_log.rs` / `log_window.rs` | 快捷键解析与注册、单实例互斥体、日志轮转与日志窗口 |
+| `src-tauri/src/main.rs` | Tauri 入口：单实例、WebView 设置窗口、启动原生工作线程 |
+| `src-tauri/src/app.rs` | 原生工作线程：热键分发、窗口消息循环、设置动作、日志 |
+| `src-tauri/src/ui.rs` | WebView 与原生线程的桥：动作枚举、配置快照、命令 |
+| `src-tauri/src/app/recording.rs` | 后台录制、音频截取与试听、异步导入与保存 |
+| `src-tauri/src/desktop.rs` | Win32 宿主窗口、托盘、通知和共用控件辅助函数 |
+| `src-tauri/src/desktop/overlay.rs` | 悬浮输入框、输入事件、背景和按钮绘制 |
+| `src-tauri/src/settings_backdrop.rs` | 原生面板共用的玻璃背景及绘制缓存 |
+| `src-tauri/src/panels.rs` / `src-tauri/src/panels/` | 共用面板控件、轮盘编辑器、截取对话框和轮盘预览 |
+| `src-tauri/src/wheel.rs` / `wheel_paint.rs` / `wheel_window.rs` | 轮盘状态、四种样式绘制、运行时窗口 |
+| `src-tauri/src/audio.rs` + `src-tauri/src/audio/` | WASAPI 设备枚举、播放/返听、VB-CABLE 路由、Windows 侦听、回环录制、裁剪/波形、托管音频 |
+| `src-tauri/src/tts.rs` + `src-tauri/src/tts/realtime.rs` | TTS 引擎、Cartesia HTTP/WebSocket、Volcengine SSE、音色标签 |
+| `src-tauri/src/config.rs` | `Settings` 单一数据源、钳位、原子写入、150ms 防抖写盘 |
+| `src-tauri/src/backup.rs` / `backup_crypto.rs` / `credentials.rs` | 加密备份、AES-256-GCM/PBKDF2、Windows 凭据管理器 |
+| `src-tauri/src/hotkey.rs` / `instance.rs` / `file_log.rs` / `log_window.rs` | 快捷键解析与注册、单实例互斥体、日志轮转与日志窗口 |
+| `src/` | React 设置界面（Vite + Tailwind），构建产物 `dist-ui/` 内嵌进 exe |
+| `src-tauri/tauri.conf.json` | 窗口、构建命令、CSP 与图标配置 |
 
-持久化目录：`config_directory()`（`XDG_CONFIG_HOME/wordy`，未设置时 `%USERPROFILE%\.config\wordy`），含 `config.toml` 与 `audio_clips/`；托管音频从配置文件父目录推导。日志仅 `packaged` 构建在 exe 同目录写 `wordy.log`（5 MiB × 5）。图标资源在 `rust/assets/wordy.ico`，通过 `include_bytes!` 打入。
+## 设置界面（Tauri + React）
+
+设置页由 WebView 渲染，原生逻辑不变：网页通过 `wordy_action` 发送动作，原生线程执行后回传完整 `Snapshot`，再用 `wordy://snapshot` 事件推送变化。配置仍以 `ConfigStore` 为唯一数据源，网页不做本地持久化。`ConfigStore::revision` 决定是否推送。
+
+- 关闭设置窗口只隐藏，托盘应用继续运行；`wordy_hide` 与窗口关闭事件都只隐藏。
+- 原生对话框（录制快捷键、确认、备份密码）的 owner 使用 WebView 窗口句柄。
+- 反馈提示仍由原生 `status_toast` 绘制在设置窗口底部；设置页隐藏时错误改走托盘通知。
+- 轮盘编辑器改为独立原生窗口，由「编辑聊天轮盘」动作打开；关闭只隐藏。
+- 设置页文案保持中文，不写内部实现说明。
+
+持久化目录：`config_directory()`（`XDG_CONFIG_HOME/wordy`，未设置时 `%USERPROFILE%\.config\wordy`），含 `config.toml` 与 `audio_clips/`；托管音频从配置文件父目录推导。日志仅 `packaged` 构建在 exe 同目录写 `wordy.log`（5 MiB × 5）。图标资源在 `src-tauri/src/assets/wordy.ico`，运行时经 `include_bytes!` 使用；exe 图标由 `src-tauri/icons/icon.ico` 经 tauri-build 嵌入。
 
 ## 构建与验证
 
 ```powershell
-.\wordy.ps1 init                # cargo fetch
-.\wordy.ps1 dev                 # cargo run，保留控制台
-.\wordy.ps1 build -Clean -NoPause # release + packaged → dist/Wordy.exe
-cargo test                       # 全部 Rust 测试
+.\wordy.ps1 init                 # cargo fetch + pnpm install
+.\wordy.ps1 dev                  # cargo tauri dev（Vite + 原生工作线程）
+.\wordy.ps1 build -Clean -NoPause # pnpm build + release → dist/Wordy.exe
+cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
-`build.rs` 用 `embed-resource` 编译 `wordy.rc`，把 `rust/assets/wordy.ico` 写入 exe 图标资源；缺失时资源管理器只显示默认图标。`tests/rust_icon.rs` 回归检查构建产物的 RT_ICON/RT_GROUP_ICON。
+`src-tauri/build.rs` 调用 `tauri_build::build()`，把 `src-tauri/icons/icon.ico` 写入 exe 图标资源并生成权限清单；缺失时资源管理器只显示默认图标。`src-tauri/tests/rust_icon.rs` 回归检查构建产物的 RT_ICON/RT_GROUP_ICON。
 
-发布工作流 `.github/workflows/release.yml` 使用 Rust stable、`cargo test --locked`，再调用 `wordy.ps1 build`。`dev.cmd` 仍转发 `wordy.ps1` 参数。
+发布工作流 `.github/workflows/release.yml` 使用 Rust stable、pnpm 与 Node、`cargo test --locked --manifest-path src-tauri/Cargo.toml`，再调用 `wordy.ps1 build`。`dev.cmd` 仍转发 `wordy.ps1` 参数。
 
 ## 配置备份
 
@@ -73,7 +86,7 @@ cargo test                       # 全部 Rust 测试
 
 ## 测试
 
-`cargo test`；UI/音频测试使用真实 Win32 句柄在进程内创建，不依赖外部显示器。涉及配置的测试用临时目录，不读真实用户配置。新增/修改行为先补测试。禁止在日志或测试中写入真实 API Key。
+`cargo test --manifest-path src-tauri/Cargo.toml`；UI/音频测试使用真实 Win32 句柄在进程内创建，不依赖外部显示器。涉及配置的测试用临时目录，不读真实用户配置。新增/修改行为先补测试。禁止在日志或测试中写入真实 API Key。
 
 ## Win32 界面防闪烁
 

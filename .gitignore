@@ -26,3 +26,4 @@ __pycache__
 /src-tauri/target/
 /node_modules/
 /dist-ui/
+/src-tauri/gen/

@@ -10,6 +10,7 @@ impl App {
             }
         }
         self.editor.panel.set_text(panels::PLAY, "试听");
+        self.editor.hide();
         Ok(())
     }
 

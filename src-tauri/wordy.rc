@@ -1,2 +1,0 @@
-// exe 文件图标资源；路径相对于 crate 根目录（rc.exe 工作目录）。
-1 ICON "src/assets/wordy.ico"

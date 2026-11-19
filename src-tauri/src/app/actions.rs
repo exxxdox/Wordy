@@ -89,7 +89,7 @@ impl App {
             }
             OVERLAY_SETTINGS => self.show_settings()?,
             OVERLAY_DISMISS => self.overlay.hide(false),
-            OVERLAY_DEACTIVATED if unsafe { IsWindowVisible(self.settings_window.hwnd()) } == 0 => {
+            OVERLAY_DEACTIVATED if !self.settings_visible() => {
                 self.overlay.hide(false);
             }
             OVERLAY_POSITION => {
@@ -100,15 +100,6 @@ impl App {
             }
             _ => (),
         }
-        Ok(())
-    }
-
-    pub(super) fn show_settings(&mut self) -> io::Result<()> {
-        // Settings takes over the foreground; the floating bar must not stay on top of it.
-        self.overlay.hide(false);
-        self.settings_window.refresh(self.config.settings());
-        self.refresh_editor()?;
-        self.settings_window.show();
         Ok(())
     }
 

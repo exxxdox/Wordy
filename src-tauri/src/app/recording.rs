@@ -120,13 +120,12 @@ impl App {
             .unwrap_or(1.0);
         let window = Trim::new(
             self.host,
-            self.settings_window.hwnd(),
+            self.ui_hwnd(),
             self.config.settings(),
             target,
             duration,
             gain,
         )?;
-        self.settings_window.apply_panel_font(window.panel.0);
         if let Some((wheel, slot)) = target
             && let Some(wheel) = self.config.settings().wheel(wheel)
         {

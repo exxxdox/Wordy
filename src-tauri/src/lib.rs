@@ -13,6 +13,7 @@ pub mod desktop;
 mod dialog;
 mod ffmpeg;
 pub mod file_log;
+pub mod fonts;
 pub mod hotkey;
 #[cfg(windows)]
 pub mod instance;
@@ -24,16 +25,17 @@ mod panels;
 pub mod playback;
 #[cfg(windows)]
 mod selector;
+pub mod settings_action;
 #[cfg(windows)]
 mod settings_backdrop;
-#[cfg(windows)]
-pub mod settings_window;
 #[cfg(windows)]
 mod slider;
 #[cfg(windows)]
 mod status_toast;
 #[cfg(windows)]
 pub mod tts;
+#[cfg(windows)]
+pub mod ui;
 pub mod wheel;
 #[cfg(windows)]
 pub mod wheel_paint;

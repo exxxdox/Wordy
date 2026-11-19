@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "设置窗口只调用应用自己的命令。",
+  "windows": ["settings"],
+  "permissions": ["core:default"]
+}
