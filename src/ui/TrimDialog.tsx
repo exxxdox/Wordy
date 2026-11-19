@@ -84,6 +84,8 @@ export default function TrimDialog({ snapshot, run }: Props) {
   useEffect(() => {
     if (!trim) return;
     const onKey = (event: KeyboardEvent) => {
+      // 输入框里的空格是文字，不能触发试听。
+      if (isEditable(event.target)) return;
       if (event.code === "Space") {
         event.preventDefault();
         previewOrStop(trim, start, end, gain, run);
@@ -368,6 +370,11 @@ type Drag =
 
 const clamp = (value: number, min: number, max: number) =>
   Number.isFinite(value) ? Math.min(Math.max(value, min), max) : min;
+
+/// 文本类控件（含下拉）获得焦点时，快捷键让位给正常输入。
+const isEditable = (target: EventTarget | null) =>
+  target instanceof HTMLElement &&
+  (target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName));
 
 const round = (value: number) => Math.round(value * 1000) / 1000;
 
