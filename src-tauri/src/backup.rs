@@ -115,6 +115,35 @@ pub fn export_backup(
     Ok(())
 }
 
+/// 手动导出与定时备份的默认目录：配置目录下的 backup。
+pub fn backup_directory(config_path: &Path) -> PathBuf {
+    parent(config_path).join("backup")
+}
+
+/// 只清理自动备份，保留文件名最新的 keep 份；手动导出的文件不动。
+pub fn prune_backups(directory: &Path, keep: usize) -> io::Result<()> {
+    let mut names = Vec::new();
+    for entry in fs::read_dir(directory)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if name.starts_with("auto-")
+            && name.ends_with(".wordybackup")
+            && entry.file_type()?.is_file()
+        {
+            names.push(name.to_owned());
+        }
+    }
+    names.sort_unstable();
+    let remove = names.len().saturating_sub(keep.max(1));
+    for name in &names[..remove] {
+        fs::remove_file(directory.join(name))?;
+    }
+    Ok(())
+}
+
 pub fn import_backup(
     config: &mut ConfigStore,
     credentials: &dyn CredentialStore,
@@ -330,10 +359,16 @@ fn validate_settings(table: &Table) -> io::Result<Settings> {
     let default_fields = template
         .as_table_mut()
         .ok_or_else(|| invalid("配置模板无效"))?;
-    if default_fields
-        .keys()
-        .any(|key| key != "main_playback_enabled" && !table.contains_key(key))
-    {
+    if default_fields.keys().any(|key| {
+        !matches!(
+            key.as_str(),
+            // 旧备份没有这些字段：保留默认值即可，不整份拒绝。
+            "main_playback_enabled"
+                | "auto_backup_enabled"
+                | "auto_backup_interval_hours"
+                | "auto_backup_keep"
+        ) && !table.contains_key(key)
+    }) {
         return Err(invalid("备份配置不完整"));
     }
     let optional_strings = [

@@ -174,6 +174,10 @@ pub struct Snapshot {
     pub listen: Option<ListenStatus>,
     pub fonts: Vec<String>,
     pub busy: bool,
+    /// 是否已保存自动备份密码。
+    pub backup_password_set: bool,
+    /// 手动与定时备份的默认目录。
+    pub backup_folder: String,
     /// 导入、保存或截取阻塞编辑控件。
     pub locked: bool,
     pub preview: Option<PreviewState>,
@@ -318,6 +322,16 @@ pub enum UiAction {
     },
     ExportBackup,
     ImportBackup,
+    SetAutoBackupEnabled {
+        value: bool,
+    },
+    SetAutoBackupInterval {
+        value: f64,
+    },
+    SetAutoBackupKeep {
+        value: usize,
+    },
+    SetBackupPassword,
     DownloadVbCable,
     OpenLogs,
     RequestAudioDevices,
@@ -430,6 +444,10 @@ impl UiAction {
             Self::DeleteVolcengineVoice { id } => SettingsAction::DeleteVolcengineVoice(id),
             Self::ExportBackup => SettingsAction::ExportBackup,
             Self::ImportBackup => SettingsAction::ImportBackup,
+            Self::SetAutoBackupEnabled { value } => SettingsAction::SetAutoBackupEnabled(value),
+            Self::SetAutoBackupInterval { value } => SettingsAction::SetAutoBackupInterval(value),
+            Self::SetAutoBackupKeep { value } => SettingsAction::SetAutoBackupKeep(value),
+            Self::SetBackupPassword => SettingsAction::SetBackupPassword,
             Self::DownloadVbCable => SettingsAction::DownloadVbCable,
             Self::OpenLogs => SettingsAction::OpenLogs,
             Self::RequestAudioDevices => SettingsAction::RequestAudioDevices,

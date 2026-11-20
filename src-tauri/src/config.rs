@@ -212,6 +212,9 @@ pub struct Settings {
     pub mic_input_device: Option<String>,
     pub virtual_output_device: Option<String>,
     pub sidetone_enabled: bool,
+    pub auto_backup_enabled: bool,
+    pub auto_backup_interval_hours: f64,
+    pub auto_backup_keep: usize,
 }
 
 impl Default for Settings {
@@ -249,6 +252,9 @@ impl Default for Settings {
             mic_input_device: None,
             virtual_output_device: None,
             sidetone_enabled: false,
+            auto_backup_enabled: false,
+            auto_backup_interval_hours: 24.0,
+            auto_backup_keep: 7,
         }
     }
 }
@@ -364,6 +370,25 @@ impl Settings {
             mic_input_device: nonempty_text(raw, "mic_input_device").map(str::to_owned),
             virtual_output_device: nonempty_text(raw, "virtual_output_device").map(str::to_owned),
             sidetone_enabled: read_bool(raw, "sidetone_enabled", defaults.sidetone_enabled),
+            auto_backup_enabled: read_bool(
+                raw,
+                "auto_backup_enabled",
+                defaults.auto_backup_enabled,
+            ),
+            auto_backup_interval_hours: read_float(
+                raw,
+                "auto_backup_interval_hours",
+                1.0,
+                168.0,
+                defaults.auto_backup_interval_hours,
+            ),
+            auto_backup_keep: read_integer(
+                raw,
+                "auto_backup_keep",
+                1,
+                100,
+                defaults.auto_backup_keep,
+            ),
         };
         settings.normalize();
         settings
@@ -527,6 +552,9 @@ impl Settings {
             .ok_or_else(|| invalid("配置数值必须是有限值"))?;
         self.rolling_buffer_seconds = finite_clamp(self.rolling_buffer_seconds, 5.0, 300.0)
             .ok_or_else(|| invalid("配置数值必须是有限值"))?;
+        self.auto_backup_interval_hours = finite_clamp(self.auto_backup_interval_hours, 1.0, 168.0)
+            .ok_or_else(|| invalid("配置数值必须是有限值"))?;
+        self.auto_backup_keep = self.auto_backup_keep.clamp(1, 100);
         self.normalize();
         Ok(())
     }
@@ -808,6 +836,14 @@ fn read_bool(table: &Table, key: &str, default: bool) -> bool {
     table.get(key).and_then(Value::as_bool).unwrap_or(default)
 }
 
+fn read_integer(table: &Table, key: &str, min: usize, max: usize, default: usize) -> usize {
+    table
+        .get(key)
+        .and_then(Value::as_integer)
+        .map(|value| value.clamp(min as i64, max as i64) as usize)
+        .unwrap_or(default)
+}
+
 fn clamp_index(index: i64, max: usize) -> usize {
     index.clamp(0, max as i64) as usize
 }
@@ -958,6 +994,22 @@ mod tests {
                 .is_none()
         );
         assert_eq!(settings, Settings::from_toml(&serialized).unwrap());
+    }
+
+    #[test]
+    fn auto_backup_fields_default_and_clamp() {
+        let defaults = Settings::default();
+        assert!(!defaults.auto_backup_enabled);
+        assert_eq!(defaults.auto_backup_interval_hours, 24.0);
+        assert_eq!(defaults.auto_backup_keep, 7);
+
+        let settings = Settings::from_toml(
+            "auto_backup_enabled = true\nauto_backup_interval_hours = 0\nauto_backup_keep = 999\n",
+        )
+        .unwrap();
+        assert!(settings.auto_backup_enabled);
+        assert_eq!(settings.auto_backup_interval_hours, 1.0);
+        assert_eq!(settings.auto_backup_keep, 100);
     }
 
     #[test]

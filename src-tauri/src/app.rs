@@ -1,6 +1,5 @@
 use std::collections::{HashMap, VecDeque};
 use std::io;
-use std::path::PathBuf;
 use std::ptr;
 use std::sync::{
     Arc,
@@ -132,6 +131,8 @@ struct App {
     pending_saves: usize,
     background_cancel: Arc<AtomicBool>,
     backup_running: bool,
+    auto_backup_last: Instant,
+    backup_password_set: bool,
     exiting: bool,
     skip_config_flush: bool,
     voices_request: Option<u64>,
@@ -145,6 +146,7 @@ enum Background {
     NotificationFailed(String),
     Backup {
         import: bool,
+        auto: bool,
         result: io::Result<()>,
     },
 }
@@ -157,6 +159,10 @@ impl App {
         ui: UiContext,
     ) -> io::Result<Self> {
         let vault = WindowsCredentials;
+        // 锁定或损坏的凭据库只影响自动备份，不影响其他功能。
+        let backup_password_set = vault
+            .load_backup_password()
+            .is_ok_and(|password| password.is_some());
         let mut credential_warning = None;
         // A locked or damaged vault must not stop unrelated features from running.
         let api_key = vault
@@ -212,6 +218,8 @@ impl App {
             pending_saves: 0,
             background_cancel: Arc::default(),
             backup_running: false,
+            auto_backup_last: Instant::now(),
+            backup_password_set,
             exiting: false,
             skip_config_flush: false,
             voices_request: None,
@@ -391,6 +399,7 @@ impl App {
         if !self.backup_running {
             self.config.save_if_due(Instant::now())?;
         }
+        self.maybe_auto_backup()?;
         while let Ok(event) = self.playback.events.try_recv() {
             match event {
                 Event::Finished { id, result } => {
@@ -460,6 +469,10 @@ impl App {
             fonts: self.font_families.clone(),
             busy: self.backup_running,
             locked: self.ui_locked(),
+            backup_password_set: self.backup_password_set,
+            backup_folder: backup::backup_directory(self.config.path())
+                .to_string_lossy()
+                .into_owned(),
             preview: self
                 .editor_preview
                 .as_ref()
@@ -561,8 +574,13 @@ impl App {
                 self.tray.notify(&message);
                 self.log_at("WARNING", "Windows 通知发送失败，已改用托盘提示".into());
             }
-            Background::Backup { import, result } => {
+            Background::Backup {
+                import,
+                auto,
+                result,
+            } => {
                 self.backup_running = false;
+                self.ui_dirty = true;
                 match result {
                     Ok(()) if import => {
                         // The worker wrote the imported config. Reload it so the
@@ -577,6 +595,15 @@ impl App {
                         self.skip_config_flush = true;
                         self.status("备份已导入，请重新启动 Wordy".into());
                         unsafe { PostQuitMessage(0) };
+                    }
+                    Ok(()) if auto => {
+                        // 清理失败只记日志：新备份已经写入，不能提示成整体失败。
+                        let directory = backup::backup_directory(self.config.path());
+                        let keep = self.config.settings().auto_backup_keep;
+                        if let Err(error) = backup::prune_backups(&directory, keep) {
+                            self.log_at("WARNING", format!("清理旧自动备份失败：{error}"));
+                        }
+                        self.log("自动备份完成".into());
                     }
                     Ok(()) => self.status("备份已导出".into()),
                     Err(error) => self.failure(format!("备份失败：{error}")),

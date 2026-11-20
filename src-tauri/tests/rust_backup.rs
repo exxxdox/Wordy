@@ -5,7 +5,7 @@ use std::fs;
 use std::io;
 use std::io::Write;
 use std::path::Path;
-use wordy::backup::{export_backup, import_backup};
+use wordy::backup::{export_backup, import_backup, prune_backups};
 use wordy::backup_crypto::EncryptedWriter;
 use wordy::config::{ConfigStore, Settings, Wheel, WindowPosition};
 use wordy::credentials::{CredentialStore, Provider};
@@ -147,6 +147,57 @@ fn import_entries(entries: &[(&str, &[u8])]) -> io::Result<()> {
     encrypted_zip(&backup, entries);
     let mut config = ConfigStore::load(workspace.path().join("config.toml")).unwrap();
     import_backup(&mut config, &Vault::default(), &backup, "pw")
+}
+
+#[test]
+fn accepts_a_backup_from_before_timed_backup_settings() {
+    let config = Settings::default().to_toml().unwrap();
+    let legacy = config
+        .lines()
+        .filter(|line| !line.starts_with("auto_backup_"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let result = import_entries(&[
+        ("manifest.json", MANIFEST),
+        ("config.toml", legacy.as_bytes()),
+        ("secrets.json", SECRETS),
+    ]);
+    assert!(result.is_ok());
+}
+
+#[test]
+fn pruning_keeps_newest_automatic_backups_and_leaves_manual_files() {
+    let directory = tempfile::tempdir().unwrap();
+    for name in [
+        "auto-20260101-000000.wordybackup",
+        "auto-20260102-000000.wordybackup",
+        "auto-20260103-000000.wordybackup",
+        "manual.wordybackup",
+        "note.txt",
+    ] {
+        fs::write(directory.path().join(name), b"x").unwrap();
+    }
+    prune_backups(directory.path(), 2).unwrap();
+    assert!(
+        !directory
+            .path()
+            .join("auto-20260101-000000.wordybackup")
+            .exists()
+    );
+    assert!(
+        directory
+            .path()
+            .join("auto-20260102-000000.wordybackup")
+            .exists()
+    );
+    assert!(
+        directory
+            .path()
+            .join("auto-20260103-000000.wordybackup")
+            .exists()
+    );
+    assert!(directory.path().join("manual.wordybackup").exists());
+    assert!(directory.path().join("note.txt").exists());
 }
 
 #[test]

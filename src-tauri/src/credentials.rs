@@ -41,6 +41,9 @@ pub fn normalize_api_key_input(raw: &str) -> &str {
 
 #[cfg(any(windows, test))]
 const SERVICE: &str = "Wordy";
+/// 自动备份密码与 API 密钥同库存放，避免无人值守备份时弹窗。
+#[cfg(any(windows, test))]
+const BACKUP_PASSWORD: &str = "backup_password";
 
 #[cfg(any(windows, test))]
 #[derive(Clone)]
@@ -62,8 +65,7 @@ fn compound_target(username: &str) -> String {
 }
 
 #[cfg(any(windows, test))]
-fn read_provider(vault: &impl Vault, provider: Provider) -> io::Result<Option<String>> {
-    let username = provider.username();
+fn read_named(vault: &impl Vault, username: &str) -> io::Result<Option<String>> {
     if let Some(record) = vault
         .read(SERVICE)?
         .filter(|entry| entry.username == username)
@@ -77,13 +79,15 @@ fn read_provider(vault: &impl Vault, provider: Provider) -> io::Result<Option<St
 }
 
 #[cfg(any(windows, test))]
-fn write_provider(vault: &mut impl Vault, provider: Provider, secret: &str) -> io::Result<()> {
+fn read_provider(vault: &impl Vault, provider: Provider) -> io::Result<Option<String>> {
+    read_named(vault, provider.username())
+}
+
+#[cfg(any(windows, test))]
+fn write_named(vault: &mut impl Vault, username: &str, secret: &str) -> io::Result<()> {
     let secret = secret.trim();
     if secret.is_empty() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "API 密钥不能为空",
-        ));
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "密钥不能为空"));
     }
     // Preserve Python WinVault's primary target and collision layout so both
     // applications can access credentials saved under either target.
@@ -93,10 +97,15 @@ fn write_provider(vault: &mut impl Vault, provider: Provider, secret: &str) -> i
     vault.write(
         SERVICE,
         &Record {
-            username: provider.username().into(),
+            username: username.into(),
             secret: secret.into(),
         },
     )
+}
+
+#[cfg(any(windows, test))]
+fn write_provider(vault: &mut impl Vault, provider: Provider, secret: &str) -> io::Result<()> {
+    write_named(vault, provider.username(), secret)
 }
 
 #[cfg(any(windows, test))]
@@ -278,6 +287,16 @@ mod win32 {
         }
     }
 
+    impl WindowsCredentials {
+        pub fn load_backup_password(&self) -> io::Result<Option<String>> {
+            locked(|vault| read_named(vault, BACKUP_PASSWORD))
+        }
+
+        pub fn save_backup_password(&self, secret: &str) -> io::Result<()> {
+            locked(|vault| write_named(vault, BACKUP_PASSWORD, secret))
+        }
+    }
+
     #[cfg(test)]
     #[test]
     fn decodes_native_utf16_and_older_utf8_blobs() {
@@ -290,6 +309,17 @@ mod win32 {
             Some("中")
         );
         assert_eq!(decode_secret(b"old").as_deref(), Some("old"));
+    }
+}
+
+#[cfg(not(windows))]
+impl WindowsCredentials {
+    pub fn load_backup_password(&self) -> io::Result<Option<String>> {
+        Err(io::ErrorKind::Unsupported.into())
+    }
+
+    pub fn save_backup_password(&self, _: &str) -> io::Result<()> {
+        Err(io::ErrorKind::Unsupported.into())
     }
 }
 

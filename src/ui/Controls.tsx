@@ -101,6 +101,12 @@ const ICONS = {
       <circle cx="8" cy="8" r="2.5" fill="currentColor" stroke="none" />
     </>
   ),
+  backup: (
+    <>
+      <rect x="2.5" y="2.5" width="11" height="11" rx="1.5" />
+      <path d="M5 2.5v4h6v-4M5 13.5v-4h6v4" />
+    </>
+  ),
   display: <path d="M2 3h12v8H2Zm6 8v2.5m-3 0h6" />,
   mic: (
     <>

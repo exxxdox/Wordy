@@ -66,6 +66,9 @@ export type Settings = {
   audio_routing_enabled: boolean;
   mic_input_device: string | null;
   sidetone_enabled: boolean;
+  auto_backup_enabled: boolean;
+  auto_backup_interval_hours: number;
+  auto_backup_keep: number;
   additional_chat_wheels: Wheel[];
 };
 
@@ -80,6 +83,8 @@ export type Snapshot = {
   listen: ListenStatus | null;
   fonts: string[];
   busy: boolean;
+  backup_password_set: boolean;
+  backup_folder: string;
   locked: boolean;
   preview: { wheel: number; slot: number; text: boolean } | null;
 };
@@ -90,7 +95,7 @@ const BACKENDS: Record<Provider, string[]> = {
   Volcengine: ["Volcengine Streaming"],
 };
 
-type Tab = "local" | "audio" | "tts" | "wheels" | "rolling";
+type Tab = "local" | "audio" | "tts" | "wheels" | "rolling" | "backup";
 
 const TABS: { id: Tab; label: string; hint: string }[] = [
   { id: "local", label: "通用", hint: "快捷键、朗读音量与界面显示。" },
@@ -98,6 +103,7 @@ const TABS: { id: Tab; label: string; hint: string }[] = [
   { id: "tts", label: "TTS", hint: "服务商、密钥与朗读音色。" },
   { id: "wheels", label: "轮盘", hint: "每个轮盘八个槽位，绑定快捷键后随时调用。" },
   { id: "rolling", label: "后台录制", hint: "循环保留最近一段录音，随时截取保存。" },
+  { id: "backup", label: "备份", hint: "手动导出、导入与定时备份。" },
 ];
 
 function providerInfo(settings: Settings, provider: Provider) {
@@ -195,6 +201,22 @@ export default function App() {
     (value) => {
       const seconds = Number(value);
       if (Number.isFinite(seconds)) run({ type: "set_rolling_seconds", value: seconds });
+    },
+  );
+
+  // 备份间隔与保留数量同样是数字输入；快照回来前用本地草稿。
+  const backupInterval = useSyncedInput(
+    snapshot ? String(snapshot.settings.auto_backup_interval_hours) : "",
+    (value) => {
+      const hours = Number(value);
+      if (Number.isFinite(hours)) run({ type: "set_auto_backup_interval", value: hours });
+    },
+  );
+  const backupKeep = useSyncedInput(
+    snapshot ? String(snapshot.settings.auto_backup_keep) : "",
+    (value) => {
+      const keep = Number(value);
+      if (Number.isInteger(keep)) run({ type: "set_auto_backup_keep", value: keep });
     },
   );
 
@@ -685,6 +707,67 @@ export default function App() {
                 <Row label="保存到轮盘" hint="拖选片段，试听后选择轮盘槽位并保存。" />
               </Panel>
             </>
+          )}
+
+          {tab === "backup" && (
+            <Panel title="定时备份" icon="export">
+              <Row label="启用自动备份" hint="按固定间隔把加密备份写入配置目录的 backup 文件夹。">
+                <Check
+                  id="auto-backup"
+                  checked={settings.auto_backup_enabled}
+                  onChange={(value) => run({ type: "set_auto_backup_enabled", value })}
+                />
+              </Row>
+              <Row label="备份间隔" htmlFor="backup-interval" hint="1–168 小时，开启后从下一次间隔开始计时。">
+                <div className="flex items-center gap-2">
+                  <input
+                    id="backup-interval"
+                    ref={backupInterval.ref}
+                    className="field w-28"
+                    type="number"
+                    min={1}
+                    max={168}
+                    value={backupInterval.draft}
+                    onChange={(event) => backupInterval.onChange(event.target.value)}
+                    onBlur={backupInterval.flush}
+                  />
+                  <span className="whitespace-nowrap text-sm text-[var(--muted)]">小时</span>
+                </div>
+              </Row>
+              <Row
+                label="保留数量"
+                htmlFor="backup-keep"
+                hint="只保留最新的自动备份，手动导出的文件不受影响。"
+              >
+                <div className="flex items-center gap-2">
+                  <input
+                    id="backup-keep"
+                    ref={backupKeep.ref}
+                    className="field w-28"
+                    type="number"
+                    min={1}
+                    max={100}
+                    value={backupKeep.draft}
+                    onChange={(event) => backupKeep.onChange(event.target.value)}
+                    onBlur={backupKeep.flush}
+                  />
+                  <span className="whitespace-nowrap text-sm text-[var(--muted)]">份</span>
+                </div>
+              </Row>
+              <Row
+                label="备份密码"
+                hint={
+                  snapshot.backup_password_set
+                    ? "已设置。自动备份使用此密码，手动导入时需再次输入。"
+                    : "未设置。开启自动备份时会要求设置密码。"
+                }
+              >
+                <button className="btn" onClick={() => run({ type: "set_backup_password" })}>
+                  {snapshot.backup_password_set ? "修改密码" : "设置密码"}
+                </button>
+              </Row>
+              <Row label="备份位置" hint={snapshot.backup_folder} />
+            </Panel>
           )}
         </div>
 

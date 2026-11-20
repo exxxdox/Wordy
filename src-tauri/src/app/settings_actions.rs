@@ -126,6 +126,24 @@ impl App {
             }
             ExportBackup => self.backup(true)?,
             ImportBackup => self.backup(false)?,
+            SetAutoBackupEnabled(enabled) => {
+                // 自动备份无人值守，必须先有密码才能开启。
+                if enabled
+                    && !self.backup_password_set
+                    && !self.prompt_backup_password("自动备份")?
+                {
+                    return Ok(());
+                }
+                self.edit(|s| s.auto_backup_enabled = enabled)?;
+                self.auto_backup_last = Instant::now();
+            }
+            SetAutoBackupInterval(hours) => {
+                self.edit_debounced(|s| s.auto_backup_interval_hours = hours)?
+            }
+            SetAutoBackupKeep(keep) => self.edit(|s| s.auto_backup_keep = keep)?,
+            SetBackupPassword => {
+                self.prompt_backup_password("备份密码")?;
+            }
             DownloadVbCable => self.open_url("https://vb-audio.com/Cable/")?,
             OpenLogs => self.show_logs()?,
             RequestAudioDevices => self.load_audio_settings()?,
@@ -335,11 +353,9 @@ impl App {
         if !export && (self.recording.is_some() || self.pending_saves > 0 || self.trim.is_some()) {
             return Err(io::Error::other("请先结束录制或音频导入，再导入备份"));
         }
-        let base = if cfg!(feature = "packaged") {
-            std::env::current_exe()?.parent().unwrap().to_owned()
-        } else {
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        };
+        let base = backup::backup_directory(self.config.path());
+        // OFN_PATHMUSTEXIST：首次使用时先建好默认目录。
+        std::fs::create_dir_all(&base)?;
         let title = if export {
             "导出备份"
         } else {
@@ -392,6 +408,7 @@ impl App {
                     );
                     let _ = events.send(Background::Backup {
                         import: false,
+                        auto: false,
                         result,
                     });
                 })?;
@@ -412,12 +429,82 @@ impl App {
                     })();
                     let _ = events.send(Background::Backup {
                         import: true,
+                        auto: false,
                         result,
                     });
                 })?;
             self.backup_running = true;
             self.status("正在导入备份…".into());
         }
+        Ok(())
+    }
+
+    /// 设置或修改自动备份密码；返回是否已保存，取消时调用方不应继续开启。
+    fn prompt_backup_password(&mut self, title: &str) -> io::Result<bool> {
+        let Some(password) = self.prompt_dialog(title, "备份密码", true) else {
+            return Ok(false);
+        };
+        if password.is_empty() {
+            return Err(io::Error::other("备份密码不能为空"));
+        }
+        let Some(check) = self.prompt_dialog(title, "确认备份密码", true) else {
+            return Ok(false);
+        };
+        if check != password {
+            return Err(io::Error::other("两次输入的密码不一致"));
+        }
+        self.vault.save_backup_password(&password)?;
+        self.backup_password_set = true;
+        self.ui_dirty = true;
+        self.status("已更新备份密码".into());
+        Ok(true)
+    }
+
+    /// 定时备份：从上次触发开始计算间隔；失败或缺少密码时下一间隔重试。
+    pub(super) fn maybe_auto_backup(&mut self) -> io::Result<()> {
+        let settings = self.config.settings();
+        if self.backup_running || !settings.auto_backup_enabled {
+            return Ok(());
+        }
+        let interval = Duration::from_secs_f64(settings.auto_backup_interval_hours * 3600.0);
+        if self.auto_backup_last.elapsed() < interval {
+            return Ok(());
+        }
+        self.auto_backup_last = Instant::now();
+        let Some(password) = self.vault.load_backup_password()? else {
+            self.log_at("WARNING", "自动备份已开启，但未设置备份密码".into());
+            return Ok(());
+        };
+        self.config.flush()?;
+        let settings = self.config.settings().clone();
+        let config_path = self.config.path().to_path_buf();
+        let directory = backup::backup_directory(&config_path);
+        std::fs::create_dir_all(&directory)?;
+        let now = local_time();
+        let path = directory.join(format!(
+            "auto-{:04}{:02}{:02}-{:02}{:02}{:02}.wordybackup",
+            now.wYear, now.wMonth, now.wDay, now.wHour, now.wMinute, now.wSecond
+        ));
+        let events = self.jobs.clone();
+        std::thread::Builder::new()
+            .name("WordyAutoBackup".into())
+            .spawn(move || {
+                let result = backup::export_backup(
+                    &config_path,
+                    &settings,
+                    &WindowsCredentials,
+                    &path,
+                    &password,
+                );
+                let _ = events.send(Background::Backup {
+                    import: false,
+                    auto: true,
+                    result,
+                });
+            })?;
+        self.backup_running = true;
+        self.ui_dirty = true;
+        self.log("正在自动备份".into());
         Ok(())
     }
 
