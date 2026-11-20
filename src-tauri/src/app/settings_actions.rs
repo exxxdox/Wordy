@@ -525,7 +525,7 @@ impl App {
         let Some(password) = self.prompt_dialog(title, "备份密码", true) else {
             return Ok(false);
         };
-        if password.is_empty() {
+        if password.trim().is_empty() {
             return Err(io::Error::other("备份密码不能为空"));
         }
         let Some(check) = self.prompt_dialog(title, "确认备份密码", true) else {

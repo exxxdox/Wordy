@@ -1066,6 +1066,34 @@ mod tests {
     }
 
     #[test]
+    fn auto_backup_settings_survive_reopening_the_config_store() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let mut config = ConfigStore::load(&path).unwrap();
+        config
+            .update(|settings| settings.auto_backup_enabled = true)
+            .unwrap();
+        config
+            .update(|settings| settings.auto_backup_keep = 13)
+            .unwrap();
+        config
+            .update_debounced(|settings| settings.auto_backup_interval_hours = 48.0)
+            .unwrap();
+        config.flush().unwrap();
+        drop(config);
+
+        let config = ConfigStore::load(&path).unwrap();
+        assert!(config.settings().auto_backup_enabled);
+        assert_eq!(config.settings().auto_backup_interval_hours, 48.0);
+        assert_eq!(config.settings().auto_backup_keep, 13);
+        assert!(
+            !fs::read_to_string(path)
+                .unwrap()
+                .contains("backup_password")
+        );
+    }
+
+    #[test]
     fn invalid_config_is_preserved_and_the_app_starts_with_defaults() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("config.toml");

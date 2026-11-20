@@ -85,8 +85,8 @@ fn read_provider(vault: &impl Vault, provider: Provider) -> io::Result<Option<St
 
 #[cfg(any(windows, test))]
 fn write_named(vault: &mut impl Vault, username: &str, secret: &str) -> io::Result<()> {
-    let secret = secret.trim();
-    if secret.is_empty() {
+    // 自动备份密码的首尾空格参与加密，存储时只校验是否为空白。
+    if secret.trim().is_empty() {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "密钥不能为空"));
     }
     // Preserve Python WinVault's primary target and collision layout so both
@@ -105,7 +105,7 @@ fn write_named(vault: &mut impl Vault, username: &str, secret: &str) -> io::Resu
 
 #[cfg(any(windows, test))]
 fn write_provider(vault: &mut impl Vault, provider: Provider, secret: &str) -> io::Result<()> {
-    write_named(vault, provider.username(), secret)
+    write_named(vault, provider.username(), secret.trim())
 }
 
 #[cfg(any(windows, test))]
@@ -408,6 +408,24 @@ mod tests {
             Some("new")
         );
         assert!(write_provider(&mut vault, Provider::Cartesia, "   ").is_err());
+    }
+
+    #[test]
+    fn automatic_backup_password_is_preserved_even_when_an_api_key_replaces_its_primary_target() {
+        let mut vault = MemoryVault::default();
+        let password = "  fixture password  ";
+        write_named(&mut vault, BACKUP_PASSWORD, password).unwrap();
+        assert!(
+            read_named(&vault, BACKUP_PASSWORD).unwrap().as_deref() == Some(password),
+            "the saved password must preserve its surrounding spaces"
+        );
+
+        write_provider(&mut vault, Provider::Cartesia, " fixture API key ").unwrap();
+        assert!(
+            read_named(&vault, BACKUP_PASSWORD).unwrap().as_deref() == Some(password),
+            "the fallback target must preserve the saved password"
+        );
+        assert!(write_named(&mut vault, BACKUP_PASSWORD, "  ").is_err());
     }
 
     #[test]
