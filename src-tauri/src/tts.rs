@@ -1,5 +1,5 @@
 use std::{
-    io::{self, BufRead, BufReader, Read},
+    io::{self, BufRead, BufReader, Cursor, Read},
     sync::atomic::{AtomicBool, Ordering},
     time::Duration,
 };
@@ -9,10 +9,7 @@ use base64::{
     alphabet::STANDARD,
     engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig},
 };
-use reqwest::{
-    blocking::{Client, Response},
-    redirect::Policy,
-};
+use reqwest::{Client, Response, redirect::Policy};
 use serde_json::{Value, json};
 
 use crate::{
@@ -145,16 +142,21 @@ impl TtsEngine {
         }
         let client = self.http()?;
         let key = self.require_key()?;
-        let response = client
+        let request = client
             .get(CARTESIA_VOICES_URL)
             .header("Cartesia-Version", CARTESIA_HTTP_VERSION)
             .bearer_auth(key)
-            .timeout(Duration::from_secs(20))
-            .send()
-            .map_err(|error| transport_error("获取音色列表失败", error))?;
-        let data = check_status(response, "获取音色列表失败", key)?
-            .json()
-            .map_err(|_| invalid("获取音色列表失败：Cartesia 返回的不是有效 JSON"))?;
+            .timeout(Duration::from_secs(20));
+        let cancel = AtomicBool::new(false);
+        let prefix = "获取音色列表失败";
+        let response = check_status(send_http(request, &cancel, prefix)?, prefix, key, &cancel)?;
+        let data = wait_http(response.json(), &cancel, prefix).map_err(|error| {
+            if error.kind() == io::ErrorKind::TimedOut {
+                error
+            } else {
+                invalid("获取音色列表失败：Cartesia 返回的不是有效 JSON")
+            }
+        })?;
         cartesia_voices(data)
     }
 
@@ -197,18 +199,16 @@ impl TtsEngine {
             DEFAULT_SAMPLE_RATE,
             None,
         );
-        let response = client
+        let request = client
             .post(CARTESIA_BYTES_URL)
             .header("Cartesia-Version", CARTESIA_HTTP_VERSION)
             .bearer_auth(key)
             .json(&payload)
-            // A whole-utterance cap; the blocking body read has no other deadline.
-            .timeout(Duration::from_secs(120))
-            .send()
-            .map_err(|error| transport_error("Cartesia bytes TTS 失败", error))?;
-        let wav = check_status(response, "Cartesia bytes TTS 失败", key)?
-            .bytes()
-            .map_err(|error| transport_error("读取 Cartesia 音频失败", error))?;
+            // 整段 WAV 的截止时间覆盖响应头和音频。
+            .timeout(Duration::from_secs(120));
+        let prefix = "Cartesia bytes TTS 失败";
+        let response = check_status(send_http(request, cancel, prefix)?, prefix, key, cancel)?;
+        let wav = wait_http(response.bytes(), cancel, "读取 Cartesia 音频失败")?;
         // The HTTP request produces a complete WAV before playback can begin.
         if cancelled(cancel) {
             return Ok(false);
@@ -233,19 +233,16 @@ impl TtsEngine {
         if cancelled(cancel) {
             return Ok(false);
         }
-        let response = client
+        let request = client
             .post(VOLCENGINE_SSE_URL)
             .header("X-Api-Key", key)
             .header("X-Api-Resource-Id", VOLCENGINE_RESOURCE_ID)
             .header("Accept", "text/event-stream")
-            .json(&payload)
-            // Blocking reqwest applies this per socket read, so long streams
-            // still work while a stalled socket can no longer block cancel.
-            .timeout(Duration::from_secs(30))
-            .send()
-            .map_err(|error| transport_error("火山引擎流式 TTS 失败", error))?;
-        let response = check_status(response, "火山引擎流式 TTS 失败", key)?;
-        play_sse(BufReader::new(response), key, cancel, emit)
+            .json(&payload);
+        let prefix = "火山引擎流式 TTS 失败";
+        let response = check_status(send_http(request, cancel, prefix)?, prefix, key, cancel)?;
+        let body = HttpBody::new(response, cancel, prefix);
+        play_sse(BufReader::new(body), key, cancel, emit)
     }
 
     fn speak_realtime(
@@ -355,14 +352,14 @@ impl TtsEngine {
         if let Some(client) = &self.http {
             return Ok(client.clone());
         }
-        let client = Client::builder()
+        let mut builder = Client::builder()
             .connect_timeout(Duration::from_secs(10))
-            // The blocking timeout is applied per request/socket operation, not
-            // as one total deadline for a streamed body. Keep the client default
-            // off and set a limit on each request instead: streaming gets a read
-            // timeout, bytes gets a whole-utterance cap.
-            .timeout(None::<Duration>)
-            .redirect(Policy::limited(10))
+            .redirect(Policy::limited(10));
+        // 流可以持续超过 30 秒，只限制一次等待响应数据的时间。
+        if self.backend == Backend::VolcengineStreaming {
+            builder = builder.read_timeout(Duration::from_secs(30));
+        }
+        let client = builder
             .build()
             .map_err(|error| transport_error("无法初始化 TTS HTTP 客户端", error))?;
         self.http = Some(client.clone());
@@ -372,6 +369,79 @@ impl TtsEngine {
 
 fn cancelled(cancel: &AtomicBool) -> bool {
     cancel.load(Ordering::Relaxed)
+}
+
+fn send_http(
+    request: reqwest::RequestBuilder,
+    cancel: &AtomicBool,
+    prefix: &str,
+) -> io::Result<Response> {
+    // Reqwest 在 send() 调用时就创建超时计时器，所以要在运行时内调用。
+    wait_http(async { request.send().await }, cancel, prefix)
+}
+
+fn wait_http<T>(
+    operation: impl std::future::Future<Output = reqwest::Result<T>>,
+    cancel: &AtomicBool,
+    prefix: &str,
+) -> io::Result<T> {
+    tauri::async_runtime::block_on(async {
+        let mut operation = std::pin::pin!(operation);
+        loop {
+            if cancelled(cancel) {
+                // 丢弃 HTTP future 即终止等待，播放线程可以立即处理下一项。
+                return Err(io::Error::new(io::ErrorKind::Interrupted, "朗读已取消"));
+            }
+            if let Ok(result) =
+                tokio::time::timeout(Duration::from_millis(25), &mut operation).await
+            {
+                return result.map_err(|error| transport_error(prefix, error));
+            }
+        }
+    })
+}
+
+struct HttpBody<'a> {
+    response: Response,
+    buffer: Cursor<Vec<u8>>,
+    cancel: &'a AtomicBool,
+    prefix: &'a str,
+}
+
+impl<'a> HttpBody<'a> {
+    fn new(response: Response, cancel: &'a AtomicBool, prefix: &'a str) -> Self {
+        Self {
+            response,
+            buffer: Cursor::new(Vec::new()),
+            cancel,
+            prefix,
+        }
+    }
+}
+
+impl Read for HttpBody<'_> {
+    fn read(&mut self, target: &mut [u8]) -> io::Result<usize> {
+        if target.is_empty() {
+            return Ok(0);
+        }
+        loop {
+            let read = self.buffer.read(target)?;
+            if read != 0 {
+                return Ok(read);
+            }
+            let chunk = match wait_http(self.response.chunk(), self.cancel, self.prefix) {
+                Ok(Some(chunk)) => chunk,
+                // 标准库的 read_line/read_to_end 会自动重试 Interrupted。
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => return Ok(0),
+                Ok(None) => return Ok(0),
+                Err(error) => return Err(error),
+            };
+            let buffer = self.buffer.get_mut();
+            buffer.clear();
+            buffer.extend_from_slice(&chunk);
+            self.buffer.set_position(0);
+        }
+    }
 }
 
 fn invalid(message: impl Into<String>) -> io::Error {
@@ -426,14 +496,24 @@ fn sanitize(message: &str, key: &str) -> String {
         .collect()
 }
 
-fn check_status(response: Response, prefix: &str, key: &str) -> io::Result<Response> {
+fn check_status(
+    response: Response,
+    prefix: &str,
+    key: &str,
+    cancel: &AtomicBool,
+) -> io::Result<Response> {
     let status = response.status();
     if status.is_success() {
         return Ok(response);
     }
     // Read just enough of the server error body to explain HTTP failures.
     let mut bytes = Vec::new();
-    let _ = response.take(4096).read_to_end(&mut bytes);
+    let _ = HttpBody::new(response, cancel, prefix)
+        .take(4096)
+        .read_to_end(&mut bytes);
+    if cancelled(cancel) {
+        return Err(io::Error::new(io::ErrorKind::Interrupted, "朗读已取消"));
+    }
     let message = sanitize(&String::from_utf8_lossy(&bytes), key);
     Err(io::Error::other(format!(
         "{prefix}：HTTP {} {message}",
@@ -598,6 +678,64 @@ fn ws_event(message: &str, context_id: &str, key: &str) -> io::Result<Event> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cancelling_http_drops_the_pending_operation() {
+        let cancel = AtomicBool::new(false);
+        let start = std::time::Instant::now();
+        let result = std::thread::scope(|scope| {
+            scope.spawn(|| {
+                std::thread::sleep(Duration::from_millis(40));
+                cancel.store(true, Ordering::Release);
+            });
+            wait_http(
+                std::future::pending::<Result<(), reqwest::Error>>(),
+                &cancel,
+                "测试",
+            )
+        });
+        assert_eq!(result.unwrap_err().kind(), io::ErrorKind::Interrupted);
+        assert!(start.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn cancelling_a_stalled_sse_body_stops_the_parser() {
+        use std::{io::Write, net::TcpListener, sync::mpsc};
+
+        let server = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", server.local_addr().unwrap());
+        let (release, held) = mpsc::channel::<()>();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = server.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .unwrap();
+            let mut request = [0; 1024];
+            assert!(stream.read(&mut request).unwrap() > 0);
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\ndata:")
+                .unwrap();
+            let _ = held.recv_timeout(Duration::from_secs(2));
+        });
+        let client = Client::builder().no_proxy().build().unwrap();
+        let cancel = AtomicBool::new(false);
+        let request = client.get(endpoint).timeout(Duration::from_secs(2));
+        let response = send_http(request, &cancel, "测试").unwrap();
+        let start = std::time::Instant::now();
+        let result = std::thread::scope(|scope| {
+            scope.spawn(|| {
+                std::thread::sleep(Duration::from_millis(40));
+                cancel.store(true, Ordering::Release);
+            });
+            let body = HttpBody::new(response, &cancel, "测试");
+            play_sse(BufReader::new(body), "", &cancel, |_| unreachable!())
+        });
+        let elapsed = start.elapsed();
+        let _ = release.send(());
+        server.join().unwrap();
+        assert!(!result.unwrap());
+        assert!(elapsed < Duration::from_secs(1));
+    }
 
     #[test]
     fn cartesia_bytes_and_websocket_use_existing_wire_payloads() {
