@@ -133,6 +133,8 @@ struct App {
     backup_running: bool,
     auto_backup_last: Instant,
     backup_password_set: bool,
+    /// 托管目录中未被任何轮盘引用的音频数量。
+    unused_clips: usize,
     exiting: bool,
     skip_config_flush: bool,
     voices_request: Option<u64>,
@@ -182,6 +184,7 @@ impl App {
         let overlay = Overlay::new(instance, host)?;
         let wheel = WheelWindow::new(instance).map_err(io::Error::other)?;
         let (jobs, results) = mpsc::channel();
+        let unused_clips = audio::unused_clips(&config).map_or(0, |paths| paths.len());
         let mut app = Self {
             host,
             config,
@@ -220,6 +223,7 @@ impl App {
             backup_running: false,
             auto_backup_last: Instant::now(),
             backup_password_set,
+            unused_clips,
             exiting: false,
             skip_config_flush: false,
             voices_request: None,
@@ -473,6 +477,7 @@ impl App {
             backup_folder: backup::backup_directory(self.config.path())
                 .to_string_lossy()
                 .into_owned(),
+            unused_clips: self.unused_clips,
             preview: self
                 .editor_preview
                 .as_ref()
@@ -529,6 +534,8 @@ impl App {
                 }
                 UiRequest::Action(action, reply) => {
                     let result = self.settings_action(action);
+                    // 槽位清空、替换或导入后未引用数量会变化。
+                    self.refresh_unused_clips();
                     if let Err(error) = &result {
                         let message = error.to_string();
                         self.report_error("操作失败", io::Error::other(message));
@@ -611,7 +618,12 @@ impl App {
             }
             Background::Recording(result) => self.complete_recording(result, exiting)?,
         }
+        self.refresh_unused_clips();
         Ok(())
+    }
+
+    pub(super) fn refresh_unused_clips(&mut self) {
+        self.unused_clips = audio::unused_clips(&self.config).map_or(0, |paths| paths.len());
     }
 }
 

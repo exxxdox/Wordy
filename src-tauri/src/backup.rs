@@ -190,6 +190,12 @@ pub fn import_backup(
 
     let directory = audio::clips_directory(config.path())?;
     let previous = Secrets::read(credentials)?;
+    // 旧配置被替换后，这些引用可能不再存在于新配置中。
+    let previous_clips: Vec<String> = config
+        .settings()
+        .referenced_audio()
+        .map(str::to_owned)
+        .collect();
     let mut changed = Vec::new();
     let mut created = Vec::new();
     let result = (|| {
@@ -238,7 +244,24 @@ pub fn import_backup(
             }
             restored.set_credential_status(provider, secret.is_some());
         }
-        config.replace(restored)
+        config.replace(restored)?;
+        // 导入已提交；只删除新配置不再引用的旧音频。清理失败不回滚，
+        // 与替换槽位时的旧音频处理一致。
+        for name in &previous_clips {
+            if config
+                .settings()
+                .referenced_audio()
+                .any(|slot| slot.eq_ignore_ascii_case(name))
+            {
+                continue;
+            }
+            if let Err(error) = fs::remove_file(directory.join(name))
+                && error.kind() != io::ErrorKind::NotFound
+            {
+                eprintln!("旧音频清理失败：{error}");
+            }
+        }
+        Ok(())
     })();
     if let Err(error) = result {
         let mut rollback_error = None;

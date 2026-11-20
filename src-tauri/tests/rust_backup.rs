@@ -150,6 +150,24 @@ fn import_entries(entries: &[(&str, &[u8])]) -> io::Result<()> {
 }
 
 #[test]
+fn import_deletes_audio_that_only_the_replaced_config_referenced() {
+    let workspace = tempfile::tempdir().unwrap();
+    let backup = workspace.path().join("fixture.wordybackup");
+    create_backup(&workspace.path().join("old"), &backup);
+    let new = workspace.path().join("new");
+    let mut config = ConfigStore::load(new.join("config.toml")).unwrap();
+    fs::create_dir_all(new.join("audio_clips")).unwrap();
+    fs::write(new.join("audio_clips/old.wav"), b"old fixture").unwrap();
+    config
+        .update(|settings| settings.chat_wheel_slots[0] = "old.wav".into())
+        .unwrap();
+    import_backup(&mut config, &Vault::default(), &backup, " 测试 ").unwrap();
+    assert!(!new.join("audio_clips/old.wav").exists());
+    let slot = &config.settings().chat_wheel_slots[7];
+    assert!(new.join("audio_clips").join(slot).is_file());
+}
+
+#[test]
 fn accepts_a_backup_from_before_timed_backup_settings() {
     let config = Settings::default().to_toml().unwrap();
     let legacy = config

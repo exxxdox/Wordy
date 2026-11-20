@@ -144,6 +144,23 @@ impl App {
             SetBackupPassword => {
                 self.prompt_backup_password("备份密码")?;
             }
+            CleanUnusedAudio => {
+                // 暂存中的音频尚未写入槽位，此时扫描会把它当成未引用文件。
+                if self.pending_saves > 0 || self.recording.is_some() || self.trim.is_some() {
+                    return Err(io::Error::other("请先结束录制或音频导入，再清理音频"));
+                }
+                let count = self.unused_clips;
+                if count > 0
+                    && self.confirm_dialog(
+                        "清理未引用音频",
+                        &format!("删除 {count} 个未被任何轮盘引用的音频文件？此操作不可撤销。"),
+                    )
+                {
+                    let removed = audio::remove_unused_clips(&self.config)?;
+                    self.refresh_unused_clips();
+                    self.status(format!("已清理 {removed} 个音频文件"));
+                }
+            }
             DownloadVbCable => self.open_url("https://vb-audio.com/Cable/")?,
             OpenLogs => self.show_logs()?,
             RequestAudioDevices => self.load_audio_settings()?,

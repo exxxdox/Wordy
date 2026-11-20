@@ -133,6 +133,58 @@ pub fn remove_unreferenced_clip(store: &ConfigStore, name: &str) -> io::Result<b
     }
 }
 
+/// 托管目录中未被任何轮盘槽位引用的文件；目录不存在时视为空。
+pub fn unused_clips(store: &ConfigStore) -> io::Result<Vec<PathBuf>> {
+    let folder = clips_directory(store.path())?;
+    let entries = match fs::read_dir(&folder) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error),
+    };
+    let mut paths = Vec::new();
+    for entry in entries {
+        let entry = entry?;
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if !referenced(store, name) {
+            paths.push(entry.path());
+        }
+    }
+    Ok(paths)
+}
+
+/// 删除所有未引用文件；删除前再次确认引用，配置变化时不会误删。
+pub fn remove_unused_clips(store: &ConfigStore) -> io::Result<usize> {
+    let mut removed = 0;
+    for path in unused_clips(store)? {
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default();
+        if referenced(store, name) {
+            continue;
+        }
+        match fs::remove_file(&path) {
+            Ok(()) => removed += 1,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => (),
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(removed)
+}
+
+fn referenced(store: &ConfigStore, name: &str) -> bool {
+    store
+        .settings()
+        .referenced_audio()
+        .any(|slot| slot.eq_ignore_ascii_case(name))
+}
+
 pub(crate) fn clips_directory(config: &Path) -> io::Result<PathBuf> {
     let folder = config
         .parent()

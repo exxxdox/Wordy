@@ -33,6 +33,7 @@ pub enum SettingsAction {
     SetAutoBackupInterval(f64),
     SetAutoBackupKeep(usize),
     SetBackupPassword,
+    CleanUnusedAudio,
     DownloadVbCable,
     OpenLogs,
     RequestAudioDevices,

@@ -178,6 +178,8 @@ pub struct Snapshot {
     pub backup_password_set: bool,
     /// 手动与定时备份的默认目录。
     pub backup_folder: String,
+    /// 托管目录中未被任何轮盘引用的音频数量。
+    pub unused_clips: usize,
     /// 导入、保存或截取阻塞编辑控件。
     pub locked: bool,
     pub preview: Option<PreviewState>,
@@ -332,6 +334,7 @@ pub enum UiAction {
         value: usize,
     },
     SetBackupPassword,
+    CleanUnusedAudio,
     DownloadVbCable,
     OpenLogs,
     RequestAudioDevices,
@@ -448,6 +451,7 @@ impl UiAction {
             Self::SetAutoBackupInterval { value } => SettingsAction::SetAutoBackupInterval(value),
             Self::SetAutoBackupKeep { value } => SettingsAction::SetAutoBackupKeep(value),
             Self::SetBackupPassword => SettingsAction::SetBackupPassword,
+            Self::CleanUnusedAudio => SettingsAction::CleanUnusedAudio,
             Self::DownloadVbCable => SettingsAction::DownloadVbCable,
             Self::OpenLogs => SettingsAction::OpenLogs,
             Self::RequestAudioDevices => SettingsAction::RequestAudioDevices,

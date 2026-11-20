@@ -9,7 +9,8 @@ mod managed;
 
 pub(crate) use managed::clips_directory;
 pub use managed::{
-    StagedClip, commit_slot_clip, remove_unreferenced_clip, resolve_clip, stage_clip,
+    StagedClip, commit_slot_clip, remove_unreferenced_clip, remove_unused_clips, resolve_clip,
+    stage_clip, unused_clips,
 };
 
 pub(crate) const AUDIO_EXTENSIONS: [&str; 10] = [

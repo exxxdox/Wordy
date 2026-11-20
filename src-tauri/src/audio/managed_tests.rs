@@ -56,6 +56,31 @@ fn failed_config_save_removes_staged_copy_and_retains_original_source() {
 }
 
 #[test]
+fn lists_and_removes_only_unreferenced_clips() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = ConfigStore::load(directory.path().join("config.toml")).unwrap();
+    let source = write_wave(&Pcm {
+        sample_rate: 24_000,
+        channels: 1,
+        samples: vec![10],
+    })
+    .unwrap();
+    let staged = stage_clip(source.path(), store.path(), &AtomicBool::new(false)).unwrap();
+    let kept = commit_slot_clip(&mut store, 0, 0, staged, "kept", None).unwrap();
+    let folder = clips_directory(store.path()).unwrap();
+    fs::write(folder.join("orphan.wav"), b"x").unwrap();
+
+    assert_eq!(
+        unused_clips(&store).unwrap(),
+        vec![folder.join("orphan.wav")]
+    );
+    assert_eq!(remove_unused_clips(&store).unwrap(), 1);
+    assert!(resolve_clip(store.path(), "orphan.wav").is_err());
+    assert!(resolve_clip(store.path(), &kept).is_ok());
+    assert!(unused_clips(&store).unwrap().is_empty());
+}
+
+#[test]
 fn removing_clip_keeps_other_wheel_references() {
     let directory = tempfile::tempdir().unwrap();
     let mut store = ConfigStore::load(directory.path().join("config.toml")).unwrap();
