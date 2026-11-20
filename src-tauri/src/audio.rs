@@ -9,7 +9,7 @@ mod managed;
 
 pub use managed::{
     AudioClip, StagedClip, assign_clip, commit_slot_clip, delete_clip, list_clips,
-    remove_unused_clips, resolve_clip, set_slot_label, stage_clip,
+    remove_unused_clips, resolve_clip, set_slot_label, stage_clip, unused_clips,
 };
 pub(crate) use managed::{clips_directory, is_clip_id};
 

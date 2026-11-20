@@ -188,7 +188,6 @@ pub struct Snapshot {
     pub backup_folder: String,
     /// 托管目录中未被任何轮盘引用的音频数量。
     pub unused_clips: usize,
-    pub last_cleaned_audio: Vec<String>,
     pub audio_clips: Vec<crate::audio::AudioClip>,
     /// 导入、保存或截取阻塞编辑控件。
     pub locked: bool,

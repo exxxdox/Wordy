@@ -149,16 +149,23 @@ impl App {
                 if self.pending_saves > 0 || self.recording.is_some() || self.trim.is_some() {
                     return Err(io::Error::other("请先结束录制或音频导入，再清理音频"));
                 }
-                let count = self.unused_clip_count();
-                if count > 0
-                    && self.confirm_dialog(
-                        "清理未引用音频",
-                        &format!("删除 {count} 个未被任何轮盘引用的音频文件？此操作不可撤销。"),
-                    )
-                {
-                    let report = audio::remove_unused_clips(&mut self.config)?;
-                    let count = report.names.len();
-                    self.last_cleaned_audio = report.names;
+                let clips = audio::unused_clips(&self.config)?;
+                if clips.is_empty() {
+                    self.status("没有可清理的音频文件".into());
+                    return Ok(());
+                }
+                let names = clips
+                    .iter()
+                    .map(|clip| format!("• {}", clip.name.replace(['\r', '\n'], " ")))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let message = format!(
+                    "删除以下 {} 个未被引用的音频文件？此操作不可撤销。\n\n{names}",
+                    clips.len()
+                );
+                if self.confirm_dialog("清理未引用音频", &message) {
+                    let report = audio::remove_unused_clips(&mut self.config, &clips)?;
+                    let count = report.removed;
                     if let Some(error) = report.error {
                         return Err(io::Error::other(format!(
                             "已清理 {count} 个音频文件；{error}"

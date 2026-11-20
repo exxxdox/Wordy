@@ -75,8 +75,16 @@ fn lists_and_removes_only_unreferenced_clips() {
     let folder = clips_directory(store.path()).unwrap();
     fs::write(folder.join("orphan.wav"), b"x").unwrap();
 
-    let report = remove_unused_clips(&mut store).unwrap();
-    assert_eq!(report.names, ["orphan.wav", "离开槽位的音频"]);
+    let confirmed = unused_clips(&store).unwrap();
+    assert_eq!(
+        confirmed
+            .iter()
+            .map(|clip| clip.name.as_str())
+            .collect::<Vec<_>>(),
+        ["orphan.wav", "离开槽位的音频"]
+    );
+    let report = remove_unused_clips(&mut store, &confirmed).unwrap();
+    assert_eq!(report.removed, 2);
     assert!(report.error.is_none());
     assert!(resolve_clip(store.path(), "orphan.wav").is_err());
     assert!(resolve_clip(store.path(), &detached).is_err());
@@ -87,7 +95,7 @@ fn lists_and_removes_only_unreferenced_clips() {
 
 #[cfg(windows)]
 #[test]
-fn partial_cleanup_reports_only_files_that_were_deleted() {
+fn partial_cleanup_counts_only_files_that_were_deleted() {
     use std::os::windows::fs::OpenOptionsExt;
     use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
 
@@ -114,8 +122,10 @@ fn partial_cleanup_reports_only_files_that_were_deleted() {
         .open(&locked_path)
         .unwrap();
 
-    let report = remove_unused_clips(&mut store).unwrap();
-    assert_eq!(report.names, ["成功删除"]);
+    let mut confirmed = unused_clips(&store).unwrap();
+    confirmed.sort_unstable_by(|a, b| a.id.cmp(&b.id));
+    let report = remove_unused_clips(&mut store, &confirmed).unwrap();
+    assert_eq!(report.removed, 1);
     assert!(report.error.is_some());
     let reopened = ConfigStore::load(store.path()).unwrap();
     assert!(
@@ -129,6 +139,29 @@ fn partial_cleanup_reports_only_files_that_were_deleted() {
         "正在使用"
     );
     assert!(locked_path.is_file());
+}
+
+#[test]
+fn cleanup_only_deletes_confirmed_files_that_are_still_unreferenced() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = ConfigStore::load(directory.path().join("config.toml")).unwrap();
+    let folder = clips_directory(store.path()).unwrap();
+    fs::create_dir(&folder).unwrap();
+    for id in ["confirmed.wav", "relinked.wav"] {
+        fs::write(folder.join(id), b"audio").unwrap();
+    }
+    let confirmed = unused_clips(&store).unwrap();
+    fs::write(folder.join("added.wav"), b"audio").unwrap();
+    store
+        .update_wheel(0, |wheel| wheel.slots[0] = "relinked.wav".into())
+        .unwrap();
+
+    let report = remove_unused_clips(&mut store, &confirmed).unwrap();
+    assert_eq!(report.removed, 1);
+    assert!(report.error.is_none());
+    assert!(!folder.join("confirmed.wav").exists());
+    assert!(folder.join("relinked.wav").is_file());
+    assert!(folder.join("added.wav").is_file());
 }
 
 #[test]
@@ -182,10 +215,15 @@ fn organizing_reuses_clips_and_preserves_the_text_slot_and_last_audio_name() {
     assert_eq!(wheel.volumes[0], 0.7);
     set_slot_label(&mut store, 1, 0, "新文字标题").unwrap();
     assert_eq!(store.settings().audio_clip_names[&id], "最后的名称");
-    assert!(remove_unused_clips(&mut store).unwrap().names.is_empty());
+    assert!(unused_clips(&store).unwrap().is_empty());
     assign_clip(&mut store, 0, 0, &id).unwrap();
     assert_eq!(store.settings().wheel(0).unwrap().labels[0], "最后的名称");
-    assert_eq!(remove_unused_clips(&mut store).unwrap().names, ["新音频"]);
+    let confirmed = unused_clips(&store).unwrap();
+    assert_eq!(confirmed[0].name, "新音频");
+    assert_eq!(
+        remove_unused_clips(&mut store, &confirmed).unwrap().removed,
+        1
+    );
     assert!(!store.settings().audio_clip_names.contains_key(&replacement));
     assert!(resolve_clip(store.path(), &id).unwrap().is_file());
 }

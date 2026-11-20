@@ -275,38 +275,37 @@ fn clip_paths(store: &ConfigStore) -> io::Result<Vec<PathBuf>> {
 }
 
 /// 托管目录中未被任何轮盘槽位引用的音频。
-fn unused_clips(store: &ConfigStore) -> io::Result<Vec<PathBuf>> {
+pub fn unused_clips(store: &ConfigStore) -> io::Result<Vec<AudioClip>> {
     let referenced: std::collections::HashSet<_> = store
         .settings()
         .referenced_audio()
-        .map(str::to_ascii_lowercase)
+        .map(str::to_lowercase)
         .collect();
-    let mut paths = clip_paths(store)?;
-    paths.retain(|path| {
-        path.file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|id| !referenced.contains(&id.to_ascii_lowercase()))
-    });
-    paths.sort_unstable();
-    Ok(paths)
+    let mut clips = list_clips(store)?;
+    clips.retain(|clip| !referenced.contains(&clip.id.to_lowercase()));
+    Ok(clips)
 }
 
 pub struct CleanupReport {
-    pub names: Vec<String>,
+    pub removed: usize,
     pub error: Option<io::Error>,
 }
 
-/// 以清理时的配置为准，避免清理确认后已重新引用的文件。
-pub fn remove_unused_clips(store: &mut ConfigStore) -> io::Result<CleanupReport> {
+/// 只删除确认时已列出、且此刻仍未被引用的文件。
+pub fn remove_unused_clips(
+    store: &mut ConfigStore,
+    confirmed: &[AudioClip],
+) -> io::Result<CleanupReport> {
+    let eligible: std::collections::HashSet<_> = unused_clips(store)?
+        .into_iter()
+        .map(|clip| clip.id)
+        .collect();
+    let folder = clips_directory(store.path())?;
     let mut removed = Vec::new();
     let mut error = None;
-    for path in unused_clips(store)? {
-        let name = path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or_default();
-        match fs::remove_file(&path) {
-            Ok(()) => removed.push(name.to_owned()),
+    for clip in confirmed.iter().filter(|clip| eligible.contains(&clip.id)) {
+        match fs::remove_file(folder.join(&clip.id)) {
+            Ok(()) => removed.push(&clip.id),
             Err(error) if error.kind() == io::ErrorKind::NotFound => (),
             Err(cause) => {
                 error = Some(cause);
@@ -314,15 +313,9 @@ pub fn remove_unused_clips(store: &mut ConfigStore) -> io::Result<CleanupReport>
             }
         }
     }
-    // 在删除名称映射前保留显示名，即使清理到一半失败也能如实反馈。
-    let mut names: Vec<_> = removed
-        .iter()
-        .map(|id| clip_name(store, id).to_owned())
-        .collect();
-    names.sort_unstable();
     if !removed.is_empty()
         && let Err(save) = store.update(|settings| {
-            for id in &removed {
+            for &id in &removed {
                 settings.audio_clip_names.remove(id);
             }
         })
@@ -332,7 +325,10 @@ pub fn remove_unused_clips(store: &mut ConfigStore) -> io::Result<CleanupReport>
             None => io::Error::other(format!("音频名称表保存失败：{save}")),
         });
     }
-    Ok(CleanupReport { names, error })
+    Ok(CleanupReport {
+        removed: removed.len(),
+        error,
+    })
 }
 
 pub(crate) fn clips_directory(config: &Path) -> io::Result<PathBuf> {

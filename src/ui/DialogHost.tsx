@@ -138,7 +138,12 @@ export default function DialogHost() {
           </>
         ) : (
           <>
-            <p className="mt-2 whitespace-pre-wrap text-sm text-[var(--text)]">{dialog.message}</p>
+            <p
+              className="mt-2 max-h-[50vh] overflow-y-auto break-words whitespace-pre-wrap text-sm text-[var(--text)]"
+              tabIndex={dialog.message.includes("\n") ? 0 : undefined}
+            >
+              {dialog.message}
+            </p>
             <div className="mt-4 flex justify-end gap-2">
               <button className="btn" autoFocus onClick={() => reply(false, null)}>
                 取消

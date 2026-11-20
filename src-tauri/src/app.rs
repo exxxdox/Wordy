@@ -135,7 +135,6 @@ struct App {
     auto_backup_schedule: backup_schedule::AutoBackupSchedule,
     backup_password_set: bool,
     audio_clips: Vec<audio::AudioClip>,
-    last_cleaned_audio: Vec<String>,
     exiting: bool,
     skip_config_flush: bool,
     voices_request: Option<u64>,
@@ -231,7 +230,6 @@ impl App {
             ),
             backup_password_set,
             audio_clips,
-            last_cleaned_audio: Vec::new(),
             exiting: false,
             skip_config_flush: false,
             voices_request: None,
@@ -496,7 +494,6 @@ impl App {
                 .to_string_lossy()
                 .into_owned(),
             unused_clips: self.unused_clip_count(),
-            last_cleaned_audio: self.last_cleaned_audio.clone(),
             audio_clips: self.audio_clips.clone(),
             preview: self
                 .editor_preview
@@ -664,11 +661,11 @@ impl App {
             .config
             .settings()
             .referenced_audio()
-            .map(str::to_ascii_lowercase)
+            .map(str::to_lowercase)
             .collect();
         self.audio_clips
             .iter()
-            .filter(|clip| !referenced.contains(&clip.id.to_ascii_lowercase()))
+            .filter(|clip| !referenced.contains(&clip.id.to_lowercase()))
             .count()
     }
 }
