@@ -165,6 +165,35 @@ fn cleanup_only_deletes_confirmed_files_that_are_still_unreferenced() {
 }
 
 #[test]
+fn library_reference_status_includes_audio_under_text_on_another_wheel() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = ConfigStore::load(directory.path().join("config.toml")).unwrap();
+    let folder = clips_directory(store.path()).unwrap();
+    fs::create_dir(&folder).unwrap();
+    fs::write(folder.join("clip.wav"), b"audio").unwrap();
+    let clip_is_referenced = |store: &ConfigStore| list_clips(store).unwrap()[0].referenced;
+    assert!(!clip_is_referenced(&store));
+
+    store
+        .update(|settings| {
+            let mut wheel = crate::config::Wheel::new("f7");
+            wheel.slots[0] = "CLIP.WAV".into();
+            wheel.texts[0] = "仍然朗读".into();
+            wheel.text_modes[0] = true;
+            settings.additional_chat_wheels.push(wheel);
+        })
+        .unwrap();
+    assert!(clip_is_referenced(&store));
+    assert!(unused_clips(&store).unwrap().is_empty());
+
+    store
+        .update_wheel(1, |wheel| wheel.slots[0].clear())
+        .unwrap();
+    assert!(!clip_is_referenced(&store));
+    assert_eq!(unused_clips(&store).unwrap()[0].id, "clip.wav");
+}
+
+#[test]
 fn organizing_reuses_clips_and_preserves_the_text_slot_and_last_audio_name() {
     let directory = tempfile::tempdir().unwrap();
     let mut store = ConfigStore::load(directory.path().join("config.toml")).unwrap();

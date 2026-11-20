@@ -11,22 +11,27 @@ type Props = {
   locked: boolean;
   assign: (slot: number, id: string) => void;
   deleteClip: (id: string) => void;
+  cleanUnused: () => void;
 };
 
 const CLIP_DRAG_TYPE = "application/x-wordy-audio";
 
 export default function WheelAudioOrganizer({
-  wheel, wheelSelect, clips, font, locked, assign, deleteClip,
+  wheel, wheelSelect, clips, font, locked, assign, deleteClip, cleanUnused,
 }: Props) {
   const [selected, setSelected] = useState<string | null>(null);
   const [dragSlot, setDragSlot] = useState<number | null>(null);
   const [keyboardSlot, setKeyboardSlot] = useState<number | null>(null);
   const [search, setSearch] = useState("");
+  const [unusedOnly, setUnusedOnly] = useState(false);
   const names = new Map(clips.map(({ id, name }) => [id, name]));
   const query = search.trim().toLocaleLowerCase();
+  const unused = clips.filter(({ referenced }) => !referenced);
+  // 清理针对整个音频库，搜索只影响当前显示。
+  const candidates = unusedOnly ? unused : clips;
   const visibleClips = query
-    ? clips.filter(({ name }) => name.toLocaleLowerCase().includes(query))
-    : clips;
+    ? candidates.filter(({ name }) => name.toLocaleLowerCase().includes(query))
+    : candidates;
   const selectedId = visibleClips.some(({ id }) => id === selected) ? selected : null;
   const labels = wheel.slots.map((id, slot) =>
     id ? names.get(id) ?? "音频不可用" : wheel.texts[slot] ? wheel.labels[slot] || wheel.texts[slot] : "",
@@ -103,6 +108,28 @@ export default function WheelAudioOrganizer({
             setSelected(null);
           }}
         />
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+          <label className="flex cursor-pointer items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              role="switch"
+              className="check"
+              checked={unusedOnly}
+              onChange={(event) => {
+                setUnusedOnly(event.target.checked);
+                setSelected(null);
+              }}
+            />
+            仅显示未引用
+          </label>
+          <button
+            className="btn"
+            disabled={locked || unused.length === 0}
+            onClick={cleanUnused}
+          >
+            清理未引用音频（{unused.length}）
+          </button>
+        </div>
         {visibleClips.length ? (
           <>
             <p className="mb-3 text-sm text-[var(--muted)]">
@@ -142,7 +169,11 @@ export default function WheelAudioOrganizer({
           </>
         ) : (
           <p className="text-sm text-[var(--muted)]">
-            {clips.length ? "未找到匹配的音频" : "暂无音频。可在编辑轮盘中导入，或通过录制添加。"}
+            {clips.length === 0
+              ? "暂无音频。可在编辑轮盘中导入，或通过录制添加。"
+              : candidates.length === 0
+                ? "没有未引用的音频"
+                : "未找到匹配的音频"}
           </p>
         )}
       </Panel>

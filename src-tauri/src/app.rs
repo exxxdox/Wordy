@@ -493,7 +493,6 @@ impl App {
             backup_folder: backup::backup_directory(self.config.path())
                 .to_string_lossy()
                 .into_owned(),
-            unused_clips: self.unused_clip_count(),
             audio_clips: self.audio_clips.clone(),
             preview: self
                 .editor_preview
@@ -654,19 +653,6 @@ impl App {
         if self.pending_saves == 0 && !self.backup_running {
             self.audio_clips = audio::list_clips(&self.config).unwrap_or_default();
         }
-    }
-
-    fn unused_clip_count(&self) -> usize {
-        let referenced: std::collections::HashSet<_> = self
-            .config
-            .settings()
-            .referenced_audio()
-            .map(str::to_lowercase)
-            .collect();
-        self.audio_clips
-            .iter()
-            .filter(|clip| !referenced.contains(&clip.id.to_lowercase()))
-            .count()
     }
 }
 

@@ -30,7 +30,7 @@ export type Wheel = {
   volumes: number[];
 };
 
-export type AudioClip = { id: string; name: string };
+export type AudioClip = { id: string; name: string; referenced: boolean };
 
 export type Settings = {
   hotkey: string;
@@ -92,7 +92,6 @@ export type Snapshot = {
   busy: boolean;
   backup_password_set: boolean;
   backup_folder: string;
-  unused_clips: number;
   audio_clips: AudioClip[];
   locked: boolean;
   preview: { wheel: number; slot: number; text: boolean } | null;
@@ -804,23 +803,6 @@ export default function App() {
                 </button>
               </Row>
               <Row label="备份位置" hint={snapshot.backup_folder} />
-              <Row
-                label="未引用音频"
-                hint="未被任何轮盘槽位引用的音频文件，可安全删除。"
-              >
-                <div className="flex items-center gap-2">
-                  <span className="whitespace-nowrap text-sm text-[var(--muted)]">
-                    {snapshot.unused_clips} 个
-                  </span>
-                  <button
-                    className="btn"
-                    disabled={snapshot.unused_clips === 0}
-                    onClick={() => run({ type: "clean_unused_audio" })}
-                  >
-                    清理
-                  </button>
-                </div>
-              </Row>
             </Panel>
           )}
         </div>

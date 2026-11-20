@@ -12,6 +12,7 @@ use crate::config::{ConfigStore, SLOT_COUNT};
 pub struct AudioClip {
     pub id: String,
     pub name: String,
+    pub referenced: bool,
 }
 
 pub struct StagedClip {
@@ -231,6 +232,12 @@ fn clip_name<'a>(store: &'a ConfigStore, id: &'a str) -> &'a str {
 }
 
 pub fn list_clips(store: &ConfigStore) -> io::Result<Vec<AudioClip>> {
+    // 引用包含所有轮盘中保存的音频，和槽位当前的播放模式无关。
+    let referenced: std::collections::HashSet<_> = store
+        .settings()
+        .referenced_audio()
+        .map(str::to_lowercase)
+        .collect();
     let mut clips: Vec<_> = clip_paths(store)?
         .into_iter()
         .filter_map(|path| {
@@ -238,6 +245,7 @@ pub fn list_clips(store: &ConfigStore) -> io::Result<Vec<AudioClip>> {
             Some(AudioClip {
                 id: id.to_owned(),
                 name: clip_name(store, id).to_owned(),
+                referenced: referenced.contains(&id.to_lowercase()),
             })
         })
         .collect();
@@ -276,13 +284,8 @@ fn clip_paths(store: &ConfigStore) -> io::Result<Vec<PathBuf>> {
 
 /// 托管目录中未被任何轮盘槽位引用的音频。
 pub fn unused_clips(store: &ConfigStore) -> io::Result<Vec<AudioClip>> {
-    let referenced: std::collections::HashSet<_> = store
-        .settings()
-        .referenced_audio()
-        .map(str::to_lowercase)
-        .collect();
     let mut clips = list_clips(store)?;
-    clips.retain(|clip| !referenced.contains(&clip.id.to_lowercase()));
+    clips.retain(|clip| !clip.referenced);
     Ok(clips)
 }
 
