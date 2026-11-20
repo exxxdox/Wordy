@@ -49,15 +49,10 @@ impl App {
         if !self.confirm_dialog("删除轮盘", "删除此轮盘及其槽位？") {
             return Ok(());
         }
-        let removed = next
-            .wheel(index)
-            .ok_or_else(|| io::Error::other("轮盘不存在"))?;
+        self.wheel_at(index)?;
         next.discard_wheel(index);
         next.chat_wheel_last_index = index.min(next.wheel_count() - 1);
         self.hotkeys.update(&mut self.config, next)?;
-        for path in removed.slots.iter().filter(|path| !path.is_empty()) {
-            let _ = audio::remove_unreferenced_clip(&self.config, path);
-        }
         self.ui_dirty = true;
         Ok(())
     }
@@ -92,8 +87,7 @@ impl App {
         value: &str,
     ) -> io::Result<()> {
         let label: String = value.trim().chars().take(SLOT_LABEL_LIMIT).collect();
-        self.config
-            .update_wheel(index, |wheel| wheel.labels[slot].clone_from(&label))?;
+        audio::set_slot_label(&mut self.config, index, slot, &label)?;
         self.ui_dirty = true;
         Ok(())
     }
@@ -148,23 +142,19 @@ impl App {
     }
 
     pub(super) fn slot_clear(&mut self, index: usize, slot: usize) -> io::Result<()> {
-        // 清空会删掉标签、文字和音频文件，先确认；只有标签的槽按空槽处理。
+        // 清空槽位会移除文字与标签，解除音频引用后仍可在整理页找回。
         if self.slot_has_content(index, slot)
-            && !self.confirm_dialog("清空槽位", "清空该槽的文字、标签与音频？")
+            && !self.confirm_dialog("清空槽位", "清空该槽的文字、标签和音频关联？")
         {
             return Ok(());
         }
         self.stop_editor_preview();
-        let old = self.wheel_at(index)?.slots[slot].clone();
         self.config.update_wheel(index, |wheel| {
             wheel.slots[slot].clear();
             wheel.labels[slot].clear();
             wheel.texts[slot].clear();
             wheel.text_modes[slot] = false;
         })?;
-        if !old.is_empty() {
-            let _ = audio::remove_unreferenced_clip(&self.config, &old);
-        }
         self.ui_dirty = true;
         Ok(())
     }

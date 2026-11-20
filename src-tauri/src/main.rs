@@ -40,6 +40,8 @@ fn main() -> std::process::ExitCode {
             .inner_size(1280.0, 880.0)
             .min_inner_size(1080.0, 760.0)
             .theme(Some(tauri::Theme::Dark))
+            // 让 WebView 处理整理页的 HTML 拖放。
+            .disable_drag_drop_handler()
             // 去掉系统标题栏和窗口边框，改用 React 顶栏提供拖动、最小化与关闭。
             .decorations(false)
             // WebView 首次绘制前用窗口底色兜底，避免白屏闪烁。

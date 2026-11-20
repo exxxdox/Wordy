@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::{BTreeMap, HashSet},
     fs,
     io::{self, Write},
     path::{Path, PathBuf},
@@ -190,6 +190,9 @@ pub struct Settings {
     pub chat_wheel_volumes: [f64; SLOT_COUNT],
     pub additional_chat_wheels: Vec<Wheel>,
     pub chat_wheel_last_index: usize,
+    /// 托管文件名作为唯一 ID，音频名称独立于轮盘槽位。
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub audio_clip_names: BTreeMap<String, String>,
     pub rolling_buffer_hotkey: String,
     pub rolling_buffer_seconds: f64,
     pub hold_key_enabled: bool,
@@ -231,6 +234,7 @@ impl Default for Settings {
             chat_wheel_volumes: [1.0; SLOT_COUNT],
             additional_chat_wheels: Vec::new(),
             chat_wheel_last_index: 0,
+            audio_clip_names: BTreeMap::new(),
             rolling_buffer_hotkey: "f10".into(),
             rolling_buffer_seconds: 30.0,
             hold_key_enabled: false,
@@ -302,6 +306,17 @@ impl Settings {
                 .get("chat_wheel_last_index")
                 .and_then(Value::as_integer)
                 .map_or(0, |index| clamp_index(index, last_wheel)),
+            audio_clip_names: raw
+                .get("audio_clip_names")
+                .and_then(Value::as_table)
+                .into_iter()
+                .flatten()
+                .filter_map(|(id, value)| {
+                    let name = value.as_str()?.trim();
+                    (crate::audio::is_clip_id(id) && !name.is_empty())
+                        .then(|| (id.clone(), name.to_owned()))
+                })
+                .collect(),
             rolling_buffer_hotkey: valid_hotkey(raw, "rolling_buffer_hotkey")
                 .unwrap_or(defaults.rolling_buffer_hotkey),
             rolling_buffer_seconds: read_float(
@@ -391,6 +406,23 @@ impl Settings {
             ),
         };
         settings.normalize();
+        // 旧版只有共用的槽位标签，迁移名称时优先取音频模式下的标签。
+        let first = settings.wheel(0).expect("the first wheel always exists");
+        for text_mode in [false, true] {
+            for wheel in std::iter::once(&first).chain(&settings.additional_chat_wheels) {
+                for (slot, (id, label)) in wheel.slots.iter().zip(&wheel.labels).enumerate() {
+                    if wheel.text_mode(slot) == text_mode
+                        && !label.is_empty()
+                        && crate::audio::is_clip_id(id)
+                    {
+                        settings
+                            .audio_clip_names
+                            .entry(id.clone())
+                            .or_insert_with(|| label.clone());
+                    }
+                }
+            }
+        }
         settings
     }
 

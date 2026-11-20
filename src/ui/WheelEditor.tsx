@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import type { Snapshot, Wheel } from "./App";
 import { Icon, Panel, Slider, displayHotkey, useSyncedInput } from "./Controls";
+import WheelAudioOrganizer from "./WheelAudioOrganizer";
 import WheelCanvas from "./WheelCanvas";
 
 type Props = {
@@ -45,6 +46,7 @@ export default function WheelEditor({ snapshot, run }: Props) {
   const wheels = wheelsOf(snapshot);
   const index = Math.min(settings.chat_wheel_last_index, wheels.length - 1);
   const wheel = wheels[index] ?? wheels[0];
+  const [organizing, setOrganizing] = useState(false);
   const [slot, setSlot] = useState(0);
   const [gain, setGain] = useState(Math.round((wheel?.volumes[slot] ?? 1) * 100));
 
@@ -71,24 +73,55 @@ export default function WheelEditor({ snapshot, run }: Props) {
 
   if (!wheel) return null;
 
+  const modeSwitch = (
+    <div className="seg col-span-full w-fit" role="group" aria-label="轮盘设置视图">
+      <button className="seg-item px-4" aria-pressed={!organizing} onClick={() => setOrganizing(false)}>
+        编辑轮盘
+      </button>
+      <button className="seg-item px-4" aria-pressed={organizing} onClick={() => setOrganizing(true)}>
+        整理音频
+      </button>
+    </div>
+  );
+  const wheelSelect = (
+    <select
+      className="field min-w-0 flex-1"
+      aria-label={organizing ? "整理目标轮盘" : "当前轮盘"}
+      value={index}
+      disabled={locked}
+      onChange={(event) => run({ type: "select_wheel", index: Number(event.target.value) })}
+    >
+      {wheels.map((item, order) => (
+        <option key={order} value={order}>
+          {item.name || `轮盘 ${order + 1}`}
+        </option>
+      ))}
+    </select>
+  );
+
+  if (organizing) {
+    return (
+      <>
+        {modeSwitch}
+        <WheelAudioOrganizer
+          wheel={wheel}
+          wheelSelect={wheelSelect}
+          clips={snapshot.audio_clips}
+          locked={locked}
+          assign={(slot, id) => run({ type: "assign_wheel_audio", index, slot, id })}
+        />
+      </>
+    );
+  }
+
+  const clipName = snapshot.audio_clips.find((clip) => clip.id === wheel.slots[slot])?.name;
   return (
     <>
+      {modeSwitch}
       <Panel title="轮盘与快捷键" icon="wheels">
         <div className="flex flex-col gap-3">
           <div className="flex gap-2">
-            <select
-              className="field min-w-0 flex-1"
-              aria-label="当前轮盘"
-              value={index}
-              disabled={locked}
-              onChange={(event) => run({ type: "select_wheel", index: Number(event.target.value) })}
-            >
-              {wheels.map((item, order) => (
-                <option key={order} value={order}>
-                  {item.name || `轮盘 ${order + 1}`}
-                </option>
-              ))}
-            </select>
+            {wheelSelect}
             <button
               className="btn icon-btn"
               title="新增轮盘"
@@ -196,7 +229,7 @@ export default function WheelEditor({ snapshot, run }: Props) {
                   ? "当前槽以文字朗读"
                   : "输入文字后可试听朗读"
                 : hasAudio
-                  ? wheel.slots[slot]
+                  ? clipName ?? wheel.slots[slot]
                   : "导入音频后可试听"}
             </p>
           </div>

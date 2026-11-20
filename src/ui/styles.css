@@ -725,6 +725,12 @@ input[type="number"],
     border-color: rgba(235, 232, 222, 0.2);
   }
 
+  .wheel-grid .btn[aria-pressed="true"],
+  .wheel-grid .btn[data-drop-target="true"] {
+    border-color: var(--accent);
+    background: var(--accent-soft);
+  }
+
   .btn:active:not(:disabled) {
     transform: translateY(1px);
   }

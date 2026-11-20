@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs::{self, File};
 use std::io::{self, Read, Write};
 use std::os::windows::ffi::OsStrExt;
@@ -15,7 +16,7 @@ use windows_sys::Win32::Storage::FileSystem::{
     MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
 };
 
-use super::{Secrets, audio, invalid, parent, set_secret, valid_filename};
+use super::{Secrets, audio, backup_audio, invalid, parent, set_secret, valid_filename};
 use crate::config::Settings;
 use crate::credentials::{CredentialStore, Provider};
 
@@ -78,11 +79,14 @@ impl ImportJournal {
     }
 
     pub(super) fn clean_replaced_clips(&self, directory: &Path, settings: &Settings) {
+        // 仅音频库仍保有的文件，在恢复清理时也必须保留。
+        let retained: HashSet<_> = backup_audio(settings)
+            .into_iter()
+            .map(str::to_lowercase)
+            .collect();
         for name in &self.previous_clips {
             if valid_filename(name)
-                && !settings
-                    .referenced_audio()
-                    .any(|slot| slot.eq_ignore_ascii_case(name))
+                && !retained.contains(&name.to_lowercase())
                 && let Err(error) = remove_if_present(&directory.join(name))
             {
                 eprintln!("旧音频清理失败：{error}");
@@ -268,6 +272,8 @@ mod tests {
         fs::create_dir(&audio).unwrap();
         fs::write(audio.join("imported.wav"), b"audio fixture").unwrap();
         fs::write(audio.join("previous.wav"), b"old audio fixture").unwrap();
+        let detached = "f3e5c6af679945649305e251faa29539.wav";
+        fs::write(audio.join(detached), b"detached fixture").unwrap();
         let journal = ImportJournal::begin(
             &path,
             Secrets {
@@ -279,17 +285,20 @@ mod tests {
                 volcengine_access_key: None,
             },
             vec!["imported.wav".into()],
-            vec!["previous.wav".into()],
+            vec!["previous.wav".into(), detached.into()],
         )
         .unwrap();
         let mut next = config.settings().clone();
         next.chat_wheel_slots[0] = "imported.wav".into();
+        next.audio_clip_names
+            .insert(detached.into(), "未引用".into());
         config
             .replace_with_prefix(next, &journal.commit_marker())
             .unwrap();
         let vault = Vault::default();
         recover_import(&path, &vault).unwrap();
         assert!(audio.join("imported.wav").exists());
+        assert!(audio.join(detached).exists());
         assert!(!audio.join("previous.wav").exists());
         assert!(!import_pending(&path).unwrap());
         assert_eq!(

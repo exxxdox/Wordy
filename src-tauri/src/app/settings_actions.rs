@@ -149,15 +149,14 @@ impl App {
                 if self.pending_saves > 0 || self.recording.is_some() || self.trim.is_some() {
                     return Err(io::Error::other("请先结束录制或音频导入，再清理音频"));
                 }
-                let count = self.unused_clips;
+                let count = self.unused_clip_count();
                 if count > 0
                     && self.confirm_dialog(
                         "清理未引用音频",
                         &format!("删除 {count} 个未被任何轮盘引用的音频文件？此操作不可撤销。"),
                     )
                 {
-                    let removed = audio::remove_unused_clips(&self.config)?;
-                    self.refresh_unused_clips();
+                    let removed = audio::remove_unused_clips(&mut self.config)?;
                     self.status(format!("已清理 {removed} 个音频文件"));
                 }
             }
@@ -176,6 +175,16 @@ impl App {
             SetSlotMode(index, slot, text) => self.slot_set_mode(index, slot, text)?,
             ClearSlot(index, slot) => self.slot_clear(index, slot)?,
             ImportSlotAudio(index, slot) => self.slot_import(index, slot)?,
+            AssignWheelAudio(index, slot, id) => {
+                if self.ui_locked() {
+                    return Err(io::Error::other("请先完成当前音频操作"));
+                }
+                if !self.audio_clips.iter().any(|clip| clip.id == id) {
+                    return Err(io::Error::other("找不到这段音频"));
+                }
+                audio::assign_clip(&mut self.config, index, slot, &id)?;
+                self.stop_editor_preview();
+            }
             CropSlotAudio(index, slot) => self.slot_crop(index, slot)?,
             PreviewSlot(index, slot) => self.slot_preview(index, slot)?,
             TrimPreview(id, start, end, gain) => self.trim_preview(id, start, end, gain)?,

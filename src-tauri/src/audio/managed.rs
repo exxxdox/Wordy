@@ -8,6 +8,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::config::{ConfigStore, SLOT_COUNT};
 
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct AudioClip {
+    pub id: String,
+    pub name: String,
+}
+
 pub struct StagedClip {
     path: PathBuf,
     committed: bool,
@@ -67,13 +73,11 @@ pub fn commit_slot_clip(
     label: &str,
     gain: Option<f64>,
 ) -> io::Result<String> {
-    let previous = store
+    let mut wheel_state = store
         .settings()
         .wheel(wheel)
         .filter(|_| slot < SLOT_COUNT)
-        .ok_or_else(|| invalid("无效的轮盘槽位"))?
-        .slots[slot]
-        .clone();
+        .ok_or_else(|| invalid("无效的轮盘槽位"))?;
     if clip.path.parent() != Some(clips_directory(store.path())?.as_path()) {
         return Err(invalid("音频副本不属于当前设置"));
     }
@@ -83,31 +87,38 @@ pub fn commit_slot_clip(
         .and_then(|name| name.to_str())
         .ok_or_else(|| invalid("无效的音频文件名"))?
         .to_owned();
-    store.update_wheel(wheel, |wheel| {
-        wheel.slots[slot].clone_from(&name);
-        wheel.labels[slot] = label.to_owned();
-        // 导入音频只切到音频模式，原文字保留，切回文字模式即可恢复。
-        wheel.text_modes[slot] = false;
-        if let Some(gain) = gain {
-            wheel.volumes[slot] = gain;
-        }
+    wheel_state.slots[slot].clone_from(&name);
+    wheel_state.labels[slot] = label.to_owned();
+    // 导入音频只切到音频模式，原文字保留，切回文字模式即可恢复。
+    wheel_state.text_modes[slot] = false;
+    if let Some(gain) = gain {
+        wheel_state.volumes[slot] = gain;
+    }
+    store.update(|settings| {
+        settings.assign_wheel(wheel, wheel_state);
+        let display_name = if label.trim().is_empty() {
+            &name
+        } else {
+            label.trim()
+        };
+        settings
+            .audio_clip_names
+            .insert(name.clone(), display_name.to_owned());
     })?;
     clip.committed = true;
-    if !previous.is_empty()
-        && let Err(error) = remove_unreferenced_clip(store, &previous)
-    {
-        eprintln!("旧音频清理失败：{error}");
-    }
     Ok(name)
 }
 
+pub(crate) fn is_clip_id(name: &str) -> bool {
+    !name.is_empty()
+        && !name.contains(['/', '\\', ':', '<', '>', '"', '|', '?', '*'])
+        && !name.chars().any(|c| c < ' ')
+        && !name.ends_with(['.', ' '])
+        && super::audio_extension(Path::new(name)).is_some()
+}
+
 pub fn resolve_clip(config: &Path, name: &str) -> io::Result<PathBuf> {
-    if name.is_empty()
-        || name.contains(['/', '\\', ':', '<', '>', '"', '|', '?', '*'])
-        || name.chars().any(|c| c < ' ')
-        || name.ends_with(['.', ' '])
-        || super::audio_extension(Path::new(name)).is_none()
-    {
+    if !is_clip_id(name) {
         return Err(invalid("无效的音频文件名"));
     }
     let folder = clips_directory(config)?.canonicalize()?;
@@ -118,23 +129,83 @@ pub fn resolve_clip(config: &Path, name: &str) -> io::Result<PathBuf> {
     Ok(file)
 }
 
-pub fn remove_unreferenced_clip(store: &ConfigStore, name: &str) -> io::Result<bool> {
-    if store
+pub fn assign_clip(store: &mut ConfigStore, wheel: usize, slot: usize, id: &str) -> io::Result<()> {
+    let mut state = store
         .settings()
-        .referenced_audio()
-        .any(|slot| slot.eq_ignore_ascii_case(name))
-    {
-        return Ok(false);
+        .wheel(wheel)
+        .filter(|_| slot < SLOT_COUNT)
+        .ok_or_else(|| invalid("无效的轮盘槽位"))?;
+    resolve_clip(store.path(), id)?;
+    if state.slots[slot] == id {
+        return Ok(());
     }
-    match resolve_clip(store.path(), name).and_then(fs::remove_file) {
-        Ok(()) => Ok(true),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(false),
-        Err(error) => Err(error),
+    // 只有文字的槽位原本会直接朗读，增加音频后需要显式保留文字模式。
+    if !state.texts[slot].is_empty() && state.text_mode(slot) {
+        state.text_modes[slot] = true;
     }
+    state.slots[slot] = id.to_owned();
+    let name = clip_name(store, id).to_owned();
+    // 槽位标签由两种模式共用，有文字时保留该标题。
+    if state.texts[slot].is_empty() {
+        state.labels[slot].clone_from(&name);
+    }
+    store.update(|settings| {
+        settings.assign_wheel(wheel, state);
+        settings
+            .audio_clip_names
+            .entry(id.to_owned())
+            .or_insert(name);
+    })
 }
 
-/// 托管目录中未被任何轮盘槽位引用的文件；目录不存在时视为空。
-pub fn unused_clips(store: &ConfigStore) -> io::Result<Vec<PathBuf>> {
+pub fn set_slot_label(
+    store: &mut ConfigStore,
+    wheel: usize,
+    slot: usize,
+    label: &str,
+) -> io::Result<()> {
+    let mut state = store
+        .settings()
+        .wheel(wheel)
+        .filter(|_| slot < SLOT_COUNT)
+        .ok_or_else(|| invalid("无效的轮盘槽位"))?;
+    let id = &state.slots[slot];
+    // 空标签用于清除槽位显示，不抹去音频的最后一个名称。
+    let renamed =
+        (!state.text_mode(slot) && !label.is_empty() && is_clip_id(id)).then(|| id.clone());
+    state.labels[slot] = label.to_owned();
+    store.update(|settings| {
+        if let Some(id) = renamed {
+            settings.audio_clip_names.insert(id, label.to_owned());
+        }
+        settings.assign_wheel(wheel, state);
+    })
+}
+
+fn clip_name<'a>(store: &'a ConfigStore, id: &'a str) -> &'a str {
+    store
+        .settings()
+        .audio_clip_names
+        .get(id)
+        .map_or(id, String::as_str)
+}
+
+pub fn list_clips(store: &ConfigStore) -> io::Result<Vec<AudioClip>> {
+    let mut clips: Vec<_> = clip_paths(store)?
+        .into_iter()
+        .filter_map(|path| {
+            let id = path.file_name()?.to_str()?;
+            Some(AudioClip {
+                id: id.to_owned(),
+                name: clip_name(store, id).to_owned(),
+            })
+        })
+        .collect();
+    clips.sort_unstable_by(|a, b| a.name.cmp(&b.name).then_with(|| a.id.cmp(&b.id)));
+    Ok(clips)
+}
+
+fn clip_paths(store: &ConfigStore) -> io::Result<Vec<PathBuf>> {
     let folder = clips_directory(store.path())?;
     let entries = match fs::read_dir(&folder) {
         Ok(entries) => entries,
@@ -144,45 +215,63 @@ pub fn unused_clips(store: &ConfigStore) -> io::Result<Vec<PathBuf>> {
     let mut paths = Vec::new();
     for entry in entries {
         let entry = entry?;
-        if !entry.file_type()?.is_file() {
+        let metadata = match entry.metadata() {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error),
+        };
+        if !metadata.is_file() || is_reparse(&metadata) {
             continue;
         }
         let name = entry.file_name();
         let Some(name) = name.to_str() else {
             continue;
         };
-        if !referenced(store, name) {
+        if is_clip_id(name) {
             paths.push(entry.path());
         }
     }
     Ok(paths)
 }
 
-/// 删除所有未引用文件；删除前再次确认引用，配置变化时不会误删。
-pub fn remove_unused_clips(store: &ConfigStore) -> io::Result<usize> {
-    let mut removed = 0;
+/// 托管目录中未被任何轮盘槽位引用的音频。
+fn unused_clips(store: &ConfigStore) -> io::Result<Vec<PathBuf>> {
+    let referenced: std::collections::HashSet<_> = store
+        .settings()
+        .referenced_audio()
+        .map(str::to_ascii_lowercase)
+        .collect();
+    let mut paths = clip_paths(store)?;
+    paths.retain(|path| {
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|id| !referenced.contains(&id.to_ascii_lowercase()))
+    });
+    Ok(paths)
+}
+
+/// 以清理时的配置为准，避免清理确认后已重新引用的文件。
+pub fn remove_unused_clips(store: &mut ConfigStore) -> io::Result<usize> {
+    let mut removed = Vec::new();
     for path in unused_clips(store)? {
         let name = path
             .file_name()
             .and_then(|name| name.to_str())
             .unwrap_or_default();
-        if referenced(store, name) {
-            continue;
-        }
         match fs::remove_file(&path) {
-            Ok(()) => removed += 1,
+            Ok(()) => removed.push(name.to_owned()),
             Err(error) if error.kind() == io::ErrorKind::NotFound => (),
             Err(error) => return Err(error),
         }
     }
-    Ok(removed)
-}
-
-fn referenced(store: &ConfigStore, name: &str) -> bool {
-    store
-        .settings()
-        .referenced_audio()
-        .any(|slot| slot.eq_ignore_ascii_case(name))
+    if !removed.is_empty() {
+        store.update(|settings| {
+            for id in &removed {
+                settings.audio_clip_names.remove(id);
+            }
+        })?;
+    }
+    Ok(removed.len())
 }
 
 pub(crate) fn clips_directory(config: &Path) -> io::Result<PathBuf> {

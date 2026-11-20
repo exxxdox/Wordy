@@ -30,6 +30,8 @@ export type Wheel = {
   volumes: number[];
 };
 
+export type AudioClip = { id: string; name: string };
+
 export type Settings = {
   hotkey: string;
   chat_wheel_hotkey: string;
@@ -91,6 +93,7 @@ export type Snapshot = {
   backup_password_set: boolean;
   backup_folder: string;
   unused_clips: number;
+  audio_clips: AudioClip[];
   locked: boolean;
   preview: { wheel: number; slot: number; text: boolean } | null;
 };

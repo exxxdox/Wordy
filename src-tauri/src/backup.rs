@@ -23,7 +23,8 @@ const MAX_SIZE: u64 = 2 * 1024_u64.pow(3);
 const MAX_METADATA: u64 = 4 * 1024_u64.pow(2);
 const MAX_ENTRIES: usize = 10_000;
 const REQUIRED: [&str; 3] = ["manifest.json", "config.toml", "secrets.json"];
-const MANIFEST: &[u8] = br#"{"format":"wordy-backup","version":1}"#;
+const MANIFEST_V1: &[u8] = br#"{"format":"wordy-backup","version":1}"#;
+const MANIFEST_V2: &[u8] = br#"{"format":"wordy-backup","version":2}"#;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -76,9 +77,25 @@ pub fn export_backup(
     {
         return Err(invalid("备份不能覆盖配置文件或保存到音频托管目录"));
     }
+    let mut snapshot = settings.clone();
+    for name in settings.audio_clip_names.keys() {
+        if !valid_filename(name) {
+            return Err(invalid("音频库包含无效文件名"));
+        }
+        // 文件可能在外部被删除，未被槽位引用的失效记录不应阻止备份。
+        if !audio_dir.join(name).try_exists()? {
+            snapshot.audio_clip_names.remove(name);
+        }
+    }
+    let has_catalog = !snapshot.audio_clip_names.is_empty();
+    let manifest = if has_catalog {
+        MANIFEST_V2
+    } else {
+        MANIFEST_V1
+    };
     let secrets = serde_json::to_vec(&Secrets::read(credentials)?).map_err(io::Error::other)?;
-    let config_text = settings.to_toml().map_err(io::Error::other)?;
-    let names: BTreeSet<_> = settings.referenced_audio().collect();
+    let config_text = snapshot.to_toml().map_err(io::Error::other)?;
+    let names = backup_audio(&snapshot);
     let mut seen = HashSet::new();
     if names.len() + REQUIRED.len() > MAX_ENTRIES
         || names
@@ -90,8 +107,11 @@ pub fn export_backup(
     {
         return Err(invalid("备份超过限制或包含无效文件名"));
     }
-    // 避免新版应用写出标为 V1、但按 V1 规则无法读取的配置。
-    validate_settings_v1(config_text.parse::<Table>().map_err(io::Error::other)?)?;
+    // 导出与导入用同一套规则，避免生成无法恢复的备份。
+    validate_settings(
+        config_text.parse::<Table>().map_err(io::Error::other)?,
+        has_catalog,
+    )?;
     fs::create_dir_all(folder)?;
     let mut staging = NamedTempFile::new_in(folder)?;
     let encrypted = EncryptedWriter::new(staging.as_file_mut(), password)?;
@@ -99,14 +119,14 @@ pub fn export_backup(
     let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
     for (name, content) in REQUIRED
         .into_iter()
-        .zip([MANIFEST, config_text.as_bytes(), &secrets])
+        .zip([manifest, config_text.as_bytes(), &secrets])
     {
         archive
             .start_file(name, options)
             .map_err(io::Error::other)?;
         archive.write_all(content)?;
     }
-    let mut remaining = MAX_SIZE - (MANIFEST.len() + config_text.len() + secrets.len()) as u64;
+    let mut remaining = MAX_SIZE - (manifest.len() + config_text.len() + secrets.len()) as u64;
     for name in names {
         let path = audio_dir.join(name);
         if !same_path(parent(&path.canonicalize()?), &audio_dir) {
@@ -209,10 +229,13 @@ pub fn import_backup(
     let manifest: Manifest = serde_json::from_slice(&read_metadata(&mut archive, REQUIRED[0])?)
         .map_err(io::Error::other)?;
     let mut restored = match (manifest.format.as_str(), manifest.version) {
-        ("wordy-backup", 1) => {
+        ("wordy-backup", 1 | 2) => {
             let text = String::from_utf8(read_metadata(&mut archive, REQUIRED[1])?)
                 .map_err(io::Error::other)?;
-            validate_settings_v1(text.parse::<Table>().map_err(io::Error::other)?)?
+            validate_settings(
+                text.parse::<Table>().map_err(io::Error::other)?,
+                manifest.version == 2,
+            )?
         }
         _ => return Err(invalid("不支持此备份版本")),
     };
@@ -228,11 +251,9 @@ pub fn import_backup(
         }
     }
     let imported: Secrets = serde_json::from_slice(&key_data).map_err(io::Error::other)?;
-    if restored
-        .referenced_audio()
-        .map(str::to_owned)
-        .collect::<BTreeSet<_>>()
-        != names
+    if backup_audio(&restored)
+        .into_iter()
+        .ne(names.iter().map(String::as_str))
     {
         return Err(invalid("备份音频与配置不匹配"));
     }
@@ -258,6 +279,26 @@ pub fn import_backup(
         }
         replacements.insert(name, replacement);
     }
+    // 槽位与名称表必须使用同一批导入 ID；本机未引用的文件会保留原名称。
+    restored.audio_clip_names = std::mem::take(&mut restored.audio_clip_names)
+        .into_iter()
+        .map(|(name, label)| (replacements[&name].clone(), label))
+        .collect();
+    let previous_refs: HashSet<_> = previous_clips
+        .iter()
+        .map(|name| name.to_lowercase())
+        .collect();
+    restored.audio_clip_names.extend(
+        config
+            .settings()
+            .audio_clip_names
+            .iter()
+            .filter(|(name, _)| {
+                !previous_refs.contains(&name.to_lowercase())
+                    && audio::resolve_clip(config.path(), name).is_ok()
+            })
+            .map(|(name, label)| (name.clone(), label.clone())),
+    );
     let journal = recovery::ImportJournal::begin(
         config.path(),
         previous,
@@ -401,7 +442,14 @@ fn zip_entry_count(file: &mut File) -> io::Result<usize> {
     Err(invalid("备份文件数量或目录无效"))
 }
 
-fn validate_settings_v1(mut table: Table) -> io::Result<Settings> {
+fn backup_audio(settings: &Settings) -> BTreeSet<&str> {
+    settings
+        .referenced_audio()
+        .chain(settings.audio_clip_names.keys().map(String::as_str))
+        .collect()
+}
+
+fn validate_settings(mut table: Table, has_catalog: bool) -> io::Result<Settings> {
     let template = include_str!("backup/config-v1.toml")
         .parse::<Table>()
         .map_err(io::Error::other)?;
@@ -428,7 +476,20 @@ fn validate_settings_v1(mut table: Table) -> io::Result<Settings> {
     }
     table.remove("chat_wheel_style");
     table.remove("rolling_buffer_target");
+    let catalog = has_catalog
+        .then(|| table.remove("audio_clip_names"))
+        .flatten();
     validate_fields(&table, &template)?;
+    if let Some(catalog) = catalog {
+        if !catalog.as_table().is_some_and(|names| {
+            names.iter().all(|(id, name)| {
+                valid_filename(id) && name.as_str().is_some_and(|name| !name.trim().is_empty())
+            })
+        }) {
+            return Err(invalid("备份包含无效音频库"));
+        }
+        table.insert("audio_clip_names".into(), catalog);
+    }
     let settings = Settings::from_table(&table);
     let mut bindings = HashSet::new();
     for binding in [

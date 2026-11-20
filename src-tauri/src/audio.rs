@@ -7,11 +7,11 @@ use crate::config::{AudioIdentity, Settings};
 #[path = "audio/managed.rs"]
 mod managed;
 
-pub(crate) use managed::clips_directory;
 pub use managed::{
-    StagedClip, commit_slot_clip, remove_unreferenced_clip, remove_unused_clips, resolve_clip,
-    stage_clip, unused_clips,
+    AudioClip, StagedClip, assign_clip, commit_slot_clip, list_clips, remove_unused_clips,
+    resolve_clip, set_slot_label, stage_clip,
 };
+pub(crate) use managed::{clips_directory, is_clip_id};
 
 pub(crate) const AUDIO_EXTENSIONS: [&str; 10] = [
     "wav", "mp3", "ogg", "flac", "m4a", "aac", "wma", "aiff", "aif", "opus",

@@ -168,6 +168,7 @@ fn interrupted_import_is_rolled_back_on_the_next_start() {
 }
 
 const MANIFEST: &[u8] = br#"{"format":"wordy-backup","version":1}"#;
+const MANIFEST_V2: &[u8] = br#"{"format":"wordy-backup","version":2}"#;
 const SECRETS: &[u8] = br#"{"cartesia_api_key":null,"volcengine_access_key":null}"#;
 
 fn encrypted_zip(path: &Path, files: &[(&str, &[u8])]) {
@@ -187,6 +188,84 @@ fn import_entries(entries: &[(&str, &[u8])]) -> io::Result<()> {
     encrypted_zip(&backup, entries);
     let mut config = ConfigStore::load(workspace.path().join("config.toml")).unwrap();
     import_backup(&mut config, &Vault::default(), &backup, "pw")
+}
+
+#[test]
+fn restores_named_audio_with_and_without_slots_and_preserves_local_unused_names() {
+    let workspace = tempfile::tempdir().unwrap();
+    let backup = workspace.path().join("catalog.wordybackup");
+    let old = workspace.path().join("old");
+    let mut source = ConfigStore::load(old.join("config.toml")).unwrap();
+    fs::create_dir_all(old.join("audio_clips")).unwrap();
+    let attached = "87139cf956c046e597ae6d367abbf279f.wav";
+    let detached = "caed62e60d37441a9f08a96a10cc02db.wav";
+    fs::write(old.join("audio_clips").join(attached), b"attached").unwrap();
+    fs::write(old.join("audio_clips").join(detached), b"detached").unwrap();
+    source
+        .update(|settings| {
+            settings.chat_wheel_slots[0] = attached.into();
+            settings
+                .audio_clip_names
+                .insert(attached.into(), "开场".into());
+            settings
+                .audio_clip_names
+                .insert(detached.into(), "结尾".into());
+        })
+        .unwrap();
+    let vault = Vault::default();
+    export_backup(source.path(), source.settings(), &vault, &backup, "pw").unwrap();
+
+    let new = workspace.path().join("new");
+    let mut target = ConfigStore::load(new.join("config.toml")).unwrap();
+    fs::create_dir_all(new.join("audio_clips")).unwrap();
+    let local = "f3e5c6af679945649305e251faa29539.wav";
+    fs::write(new.join("audio_clips").join(local), b"local").unwrap();
+    target
+        .update(|settings| {
+            settings
+                .audio_clip_names
+                .insert(local.into(), "本地音频".into());
+        })
+        .unwrap();
+    import_backup(&mut target, &vault, &backup, "pw").unwrap();
+
+    let settings = target.settings();
+    assert_eq!(settings.audio_clip_names.len(), 3);
+    assert_eq!(
+        settings.audio_clip_names[&settings.chat_wheel_slots[0]],
+        "开场"
+    );
+    assert_eq!(settings.audio_clip_names[local], "本地音频");
+    let (detached_id, _) = settings
+        .audio_clip_names
+        .iter()
+        .find(|(_, name)| name.as_str() == "结尾")
+        .unwrap();
+    assert_eq!(
+        fs::read(new.join("audio_clips").join(detached_id)).unwrap(),
+        b"detached"
+    );
+    assert!(!settings.referenced_audio().any(|id| id == detached_id));
+}
+
+#[test]
+fn rejects_invalid_or_unmatched_audio_catalog_entries() {
+    let base = Settings::default().to_toml().unwrap();
+    for entry in [
+        r#""../bad.wav" = "越界""#,
+        r#""test.wav" = 1"#,
+        r#""test.wav" = "缺少文件""#,
+    ] {
+        let config = format!("{base}\n[audio_clip_names]\n{entry}\n");
+        assert!(
+            import_entries(&[
+                ("manifest.json", MANIFEST_V2),
+                ("config.toml", config.as_bytes()),
+                ("secrets.json", SECRETS),
+            ])
+            .is_err()
+        );
+    }
 }
 
 #[test]

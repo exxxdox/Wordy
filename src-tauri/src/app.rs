@@ -134,8 +134,7 @@ struct App {
     backup_running: bool,
     auto_backup_schedule: backup_schedule::AutoBackupSchedule,
     backup_password_set: bool,
-    /// 托管目录中未被任何轮盘引用的音频数量。
-    unused_clips: usize,
+    audio_clips: Vec<audio::AudioClip>,
     exiting: bool,
     skip_config_flush: bool,
     voices_request: Option<u64>,
@@ -185,7 +184,7 @@ impl App {
         let overlay = Overlay::new(instance, host)?;
         let wheel = WheelWindow::new(instance).map_err(io::Error::other)?;
         let (jobs, results) = mpsc::channel();
-        let unused_clips = audio::unused_clips(&config).map_or(0, |paths| paths.len());
+        let audio_clips = audio::list_clips(&config).unwrap_or_default();
         let auto_backup_age = backup_schedule::previous_age(
             &backup::auto_backup_directory(config.path()),
             SystemTime::now(),
@@ -230,7 +229,7 @@ impl App {
                 auto_backup_age.as_ref().ok().copied().flatten(),
             ),
             backup_password_set,
-            unused_clips,
+            audio_clips,
             exiting: false,
             skip_config_flush: false,
             voices_request: None,
@@ -494,7 +493,8 @@ impl App {
             backup_folder: backup::backup_directory(self.config.path())
                 .to_string_lossy()
                 .into_owned(),
-            unused_clips: self.unused_clips,
+            unused_clips: self.unused_clip_count(),
+            audio_clips: self.audio_clips.clone(),
             preview: self
                 .editor_preview
                 .as_ref()
@@ -552,10 +552,9 @@ impl App {
                 UiRequest::Action(action, reply) => {
                     let audio_refresh = matches!(action, SettingsAction::RequestAudioDevices);
                     let result = self.settings_action(action);
-                    // 槽位清空、替换或导入后未引用数量会变化。
-                    // 音频设备会随窗口获焦刷新，无需扫描托管文件。
+                    // 设备刷新无需扫描托管文件。
                     if !audio_refresh {
-                        self.refresh_unused_clips();
+                        self.refresh_audio_clips();
                     }
                     if let Err(error) = &result {
                         let message = error.to_string();
@@ -646,12 +645,28 @@ impl App {
             }
             Background::Recording(result) => self.complete_recording(result, exiting)?,
         }
-        self.refresh_unused_clips();
+        self.refresh_audio_clips();
         Ok(())
     }
 
-    pub(super) fn refresh_unused_clips(&mut self) {
-        self.unused_clips = audio::unused_clips(&self.config).map_or(0, |paths| paths.len());
+    fn refresh_audio_clips(&mut self) {
+        // 后台暂存结束后文件才可供整理，导入备份期间也不扫描中间状态。
+        if self.pending_saves == 0 && !self.backup_running {
+            self.audio_clips = audio::list_clips(&self.config).unwrap_or_default();
+        }
+    }
+
+    fn unused_clip_count(&self) -> usize {
+        let referenced: std::collections::HashSet<_> = self
+            .config
+            .settings()
+            .referenced_audio()
+            .map(str::to_ascii_lowercase)
+            .collect();
+        self.audio_clips
+            .iter()
+            .filter(|clip| !referenced.contains(&clip.id.to_ascii_lowercase()))
+            .count()
     }
 }
 

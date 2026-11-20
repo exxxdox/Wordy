@@ -48,6 +48,7 @@ pub enum SettingsAction {
     SetSlotMode(usize, usize, bool),
     ClearSlot(usize, usize),
     ImportSlotAudio(usize, usize),
+    AssignWheelAudio(usize, usize, String),
     CropSlotAudio(usize, usize),
     PreviewSlot(usize, usize),
     TrimPreview(u64, f64, f64, f64),

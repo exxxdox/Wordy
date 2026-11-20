@@ -188,6 +188,7 @@ pub struct Snapshot {
     pub backup_folder: String,
     /// 托管目录中未被任何轮盘引用的音频数量。
     pub unused_clips: usize,
+    pub audio_clips: Vec<crate::audio::AudioClip>,
     /// 导入、保存或截取阻塞编辑控件。
     pub locked: bool,
     pub preview: Option<PreviewState>,
@@ -388,6 +389,11 @@ pub enum UiAction {
         index: usize,
         slot: usize,
     },
+    AssignWheelAudio {
+        index: usize,
+        slot: usize,
+        id: String,
+    },
     CropSlotAudio {
         index: usize,
         slot: usize,
@@ -482,6 +488,9 @@ impl UiAction {
             }
             Self::ClearSlot { index, slot } => SettingsAction::ClearSlot(index, slot),
             Self::ImportSlotAudio { index, slot } => SettingsAction::ImportSlotAudio(index, slot),
+            Self::AssignWheelAudio { index, slot, id } => {
+                SettingsAction::AssignWheelAudio(index, slot, id)
+            }
             Self::CropSlotAudio { index, slot } => SettingsAction::CropSlotAudio(index, slot),
             Self::PreviewSlot { index, slot } => SettingsAction::PreviewSlot(index, slot),
             Self::TrimPreview {
