@@ -24,7 +24,7 @@ use crate::file_log::FileLog;
 use crate::hotkey::{display_hotkey, parse_hotkey, windows::Registration};
 use crate::playback::{EngineSettings, Event, Playback};
 use crate::settings_action::SettingsAction;
-use crate::ui::{self, ListenStatus, Snapshot, UiRequest};
+use crate::ui::{self, CableStatus, ListenStatus, Snapshot, UiRequest};
 use crate::wheel_window::WheelWindow;
 use crate::{backup, dialog};
 
@@ -115,7 +115,7 @@ struct App {
     outputs: Vec<AudioIdentity>,
     microphones: Vec<String>,
     cartesia_voices: Vec<Voice>,
-    cable_available: bool,
+    cable_status: CableStatus,
     listen_state: Option<ListenStatus>,
     font_families: Vec<String>,
     published_revision: u64,
@@ -209,7 +209,7 @@ impl App {
             outputs: Vec::new(),
             microphones: Vec::new(),
             cartesia_voices: Vec::new(),
-            cable_available: false,
+            cable_status: CableStatus::CheckFailed,
             listen_state: None,
             font_families: crate::fonts::installed_fonts(),
             published_revision: 0,
@@ -256,13 +256,20 @@ impl App {
         for failure in failures {
             app.notify(failure);
         }
-        let legacy_main = app.config.settings().virtual_output_device.clone();
-        if app.config.settings().main_playback_enabled
-            && audio::list_outputs().ok().is_none_or(|outputs| {
-                audio::cable_endpoint_for(&outputs, legacy_main.as_deref()).is_none()
-            })
-        {
-            app.notify("未检测到 VB-CABLE，请在 Wordy 的音频设置中下载并安装。".into());
+        app.load_audio_settings();
+        if app.config.settings().main_playback_enabled {
+            let message = match app.cable_status {
+                CableStatus::Ready(_) => None,
+                CableStatus::Unavailable => Some(
+                    "找不到可用的 VB-CABLE 播放设备。请在 Windows 声音设置中检查是否已启用，或在 Wordy 的音频设置中下载。",
+                ),
+                CableStatus::CheckFailed => {
+                    Some("无法读取 Windows 播放设备。请在 Wordy 的音频设置中刷新设备。")
+                }
+            };
+            if let Some(message) = message {
+                app.notify(message.into());
+            }
         }
         if app.config.settings().active_voice_id().is_some() && app.engine.api_key.is_some() {
             app.playback.prewarm(app.engine.clone());
@@ -478,7 +485,7 @@ impl App {
             outputs: self.outputs.clone(),
             microphones: self.microphones.clone(),
             voices: self.cartesia_voices.clone(),
-            cable_available: self.cable_available,
+            cable_status: self.cable_status.clone(),
             listen: self.listen_state.clone(),
             fonts: self.font_families.clone(),
             busy: self.backup_running,
@@ -543,9 +550,13 @@ impl App {
                     let _ = reply.send(self.snapshot());
                 }
                 UiRequest::Action(action, reply) => {
+                    let audio_refresh = matches!(action, SettingsAction::RequestAudioDevices);
                     let result = self.settings_action(action);
                     // 槽位清空、替换或导入后未引用数量会变化。
-                    self.refresh_unused_clips();
+                    // 音频设备会随窗口获焦刷新，无需扫描托管文件。
+                    if !audio_refresh {
+                        self.refresh_unused_clips();
+                    }
                     if let Err(error) = &result {
                         let message = error.to_string();
                         self.report_error("操作失败", io::Error::other(message));

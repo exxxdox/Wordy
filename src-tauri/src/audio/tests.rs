@@ -1,24 +1,25 @@
 use super::*;
-use crate::config::AudioIdentity;
 
 fn endpoint(id: &str, name: &str, is_default: bool) -> Endpoint {
     Endpoint {
         id: id.into(),
         name: name.into(),
         is_default,
+        cable_priority: cable_priority(name, None, None),
     }
 }
 
 #[test]
 fn absent_main_endpoint_keeps_only_independently_enabled_local_output() {
     let endpoints = [endpoint("speakers", "Speakers", true)];
-    let selected = route(true, true, false, None, &endpoints, None);
+    let settings = Settings {
+        sidetone_enabled: true,
+        ..Settings::default()
+    };
+    let selected = route(&settings, false, &endpoints);
     assert_eq!(selected.main, None);
     assert_eq!(selected.local, Some(&endpoints[0]));
-    assert_eq!(
-        route(true, false, false, None, &endpoints, None).local,
-        None
-    );
+    assert_eq!(route(&Settings::default(), false, &endpoints).local, None);
 }
 
 #[test]
@@ -27,16 +28,23 @@ fn preview_bypasses_switches_and_never_uses_cable() {
         endpoint("cable", "CABLE Input (VB-Audio Virtual Cable)", true),
         endpoint("speakers", "Speakers", false),
     ];
-    let selected = route(true, true, false, None, &endpoints, None);
+    let settings = Settings {
+        sidetone_enabled: true,
+        ..Settings::default()
+    };
+    let selected = route(&settings, false, &endpoints);
     assert_eq!(selected.main, Some(&endpoints[0]));
     assert_eq!(selected.local, None);
-    let preview = route(false, false, true, Some("Speakers"), &endpoints, None);
+    let mut settings = Settings {
+        main_playback_enabled: false,
+        audio_output_device_name: Some("Speakers".into()),
+        ..Settings::default()
+    };
+    let preview = route(&settings, true, &endpoints);
     assert_eq!(preview.main, None);
     assert_eq!(preview.local, Some(&endpoints[1]));
-    assert_eq!(
-        route(false, false, true, Some("Unplugged"), &endpoints, None).local,
-        None
-    );
+    settings.audio_output_device_name = Some("Unplugged".into());
+    assert_eq!(route(&settings, true, &endpoints).local, None);
 }
 
 #[test]
@@ -80,12 +88,52 @@ fn saved_endpoint_id_wins_over_a_renamed_device() {
 
 #[test]
 fn renamed_virtual_cable_is_still_the_main_route() {
-    let endpoints = [endpoint("cable", "VB-Audio Virtual Cable", true)];
-    let selected = route(true, false, false, None, &endpoints, None);
+    let endpoints = [Endpoint {
+        cable_priority: cable_priority(
+            "My output",
+            Some("VB-Audio Virtual Cable"),
+            Some("CABLE Input"),
+        ),
+        ..endpoint("cable", "My output", true)
+    }];
+    let selected = route(&Settings::default(), false, &endpoints);
     assert_eq!(selected.main.map(|e| e.id.as_str()), Some("cable"));
     assert_eq!(
         cable_endpoint_for(&endpoints, None).map(|e| e.id.as_str()),
         Some("cable")
+    );
+    assert_eq!(route(&Settings::default(), true, &endpoints).local, None);
+}
+
+#[test]
+fn standard_cable_input_beats_the_multichannel_endpoint() {
+    let endpoints = [
+        endpoint("multi", "CABLE In 16ch (VB-Audio Virtual Cable)", true),
+        endpoint("standard", "CABLE Input (VB-Audio Virtual Cable)", false),
+    ];
+    assert_eq!(cable_endpoint_for(&endpoints, None), Some(&endpoints[1]));
+}
+
+#[test]
+fn an_unrelated_output_does_not_become_the_cable_through_its_name_or_legacy_setting() {
+    let endpoints = [endpoint("speakers", "Speakers - cable input", true)];
+    assert_eq!(cable_endpoint_for(&endpoints, Some("Speakers")), None);
+    let settings = Settings {
+        sidetone_enabled: true,
+        virtual_output_device: Some("Speakers".into()),
+        ..Settings::default()
+    };
+    assert_eq!(
+        route(&settings, false, &endpoints).local,
+        Some(&endpoints[0])
+    );
+    assert_eq!(
+        cable_priority(
+            "CABLE Input (VB-Audio Virtual Cable)",
+            Some("Realtek Audio"),
+            None
+        ),
+        None
     );
 }
 

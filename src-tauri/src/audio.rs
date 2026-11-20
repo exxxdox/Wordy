@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use std::io;
 use std::path::Path;
 
-use crate::config::AudioIdentity;
+use crate::config::{AudioIdentity, Settings};
 
 #[path = "audio/managed.rs"]
 mod managed;
@@ -60,6 +60,13 @@ pub struct Endpoint {
     pub id: String,
     pub name: String,
     pub is_default: bool,
+    pub(crate) cable_priority: Option<u8>,
+}
+
+impl Endpoint {
+    pub fn is_cable(&self) -> bool {
+        self.cable_priority.is_some()
+    }
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -69,39 +76,47 @@ pub struct PlaybackRoute<'a> {
     pub preview_local: bool,
 }
 
-pub fn is_cable_device(name: &str) -> bool {
-    let name = name.to_lowercase();
-    [
-        "cable input",
-        "cable in ",
-        "vb-cable",
-        "vb-audio virtual cable",
-    ]
-    .iter()
-    .any(|part| name.contains(part))
+fn cable_priority(name: &str, adapter: Option<&str>, description: Option<&str>) -> Option<u8> {
+    let (label, friendly_adapter) = name
+        .trim()
+        .rsplit_once(" (")
+        .and_then(|(label, suffix)| Some((label, suffix.strip_suffix(')')?)))
+        .unwrap_or((name.trim(), name.trim()));
+    // Windows reports the adapter separately, so renaming an endpoint does not
+    // turn a speaker into VB-CABLE or hide a real VB-CABLE endpoint.
+    let adapter = adapter
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .unwrap_or(friendly_adapter)
+        .to_ascii_lowercase();
+    match adapter.as_str() {
+        "vb-audio virtual cable" => Some(u8::from(
+            !label.eq_ignore_ascii_case("CABLE Input")
+                && !description.is_some_and(|desc| desc.trim().eq_ignore_ascii_case("CABLE Input")),
+        )),
+        "vb-audio cable a" | "vb-audio cable b" | "vb-audio cable c" | "vb-audio cable d" => {
+            Some(2)
+        }
+        _ => None,
+    }
 }
 
-/// Legacy builds stored a custom VB-CABLE friendly name; keep it working when
-/// the endpoint no longer contains the default "CABLE Input" marker.
 pub fn cable_endpoint_for<'a>(
     outputs: &'a [Endpoint],
     preferred: Option<&str>,
 ) -> Option<&'a Endpoint> {
-    // One rule for every VB-CABLE check, so a renamed cable endpoint is still
-    // recognized by the main route and hidden from the local device list.
+    // A legacy preference can break a tie between verified cable destinations.
     outputs
         .iter()
-        .find(|endpoint| is_cable_device(&endpoint.name))
-        .or_else(|| {
-            let preferred = preferred?.trim().to_lowercase();
-            if preferred.is_empty() {
-                None
-            } else {
-                outputs
-                    .iter()
-                    .find(|endpoint| endpoint.name.to_lowercase().contains(&preferred))
-            }
+        .filter_map(|endpoint| {
+            endpoint.cable_priority.map(|priority| {
+                let preferred = preferred
+                    .is_some_and(|name| name.trim().eq_ignore_ascii_case(endpoint.name.trim()));
+                (priority, !preferred, endpoint.id.as_str(), endpoint)
+            })
         })
+        .min_by_key(|&(priority, not_preferred, id, _)| (priority, not_preferred, id))
+        .map(|(_, _, _, endpoint)| endpoint)
 }
 
 /// Exact name match first, then a unique case-insensitive substring. A renamed
@@ -158,28 +173,29 @@ pub fn resolve_output<'a>(
 }
 
 pub fn route<'a>(
-    main_enabled: bool,
-    sidetone_enabled: bool,
+    settings: &Settings,
     preview_local: bool,
-    selected_name: Option<&str>,
     outputs: &'a [Endpoint],
-    preferred_main: Option<&str>,
 ) -> PlaybackRoute<'a> {
-    let main = if main_enabled && !preview_local {
-        cable_endpoint_for(outputs, preferred_main)
+    let main = if settings.main_playback_enabled && !preview_local {
+        cable_endpoint_for(outputs, settings.virtual_output_device.as_deref())
     } else {
         None
     };
-    let local = if sidetone_enabled || preview_local {
-        // Older configurations could explicitly select the virtual endpoint as the local device.
-        let selected_name = selected_name.filter(|name| !is_cable_device(name));
-        outputs
-            .iter()
-            .find(|endpoint| match selected_name {
-                Some(name) => endpoint.name == name,
-                None => endpoint.is_default,
-            })
-            .filter(|endpoint| !is_cable_device(&endpoint.name))
+    let local = if settings.sidetone_enabled || preview_local {
+        let identity = settings.audio_output_device.as_ref();
+        let legacy_name = settings.audio_output_device_name.as_deref();
+        let selected = resolve_output(outputs, identity, legacy_name);
+        // Resolve the saved ID first so a renamed cable cannot shadow a same-named monitor.
+        // A stale selection stays silent; a legacy selection of the cable uses the local default.
+        if (identity.is_none() && legacy_name.is_none()) || selected.is_some_and(Endpoint::is_cable)
+        {
+            outputs
+                .iter()
+                .find(|endpoint| endpoint.is_default && !endpoint.is_cable())
+        } else {
+            selected
+        }
     } else {
         None
     };

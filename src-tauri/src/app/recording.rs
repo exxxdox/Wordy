@@ -73,13 +73,8 @@ impl App {
                 let Ok(outputs) = audio::list_outputs() else {
                     return;
                 };
-                let selected = settings
-                    .audio_output_device
-                    .as_ref()
-                    .map(|device| device.name.as_str())
-                    .or(settings.audio_output_device_name.as_deref());
                 // preview_local 让 route 只解析本地设备，不会送到 VB-CABLE。
-                let route = audio::route(false, false, true, selected, &outputs, None);
+                let route = audio::route(&settings, true, &outputs);
                 let cancel = AtomicBool::new(false);
                 let _ = audio::play_routed_pcm(&route, &cue_tone(start), &cancel);
             });

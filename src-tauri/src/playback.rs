@@ -334,29 +334,15 @@ fn select_route<'a>(
     settings: &Settings,
     preview: bool,
     endpoints: &'a [audio::Endpoint],
-) -> PlaybackRoute<'a> {
-    let saved = settings.audio_output_device.as_ref();
-    let resolved = audio::resolve_output(
-        endpoints,
-        saved,
-        settings.audio_output_device_name.as_deref(),
-    );
-    // A stale saved selection must stay stale (route then plays nowhere local),
-    // not turn into "no selection" and silently use the default device.
-    let selected_name = match resolved {
-        Some(endpoint) => Some(endpoint.name.as_str()),
-        None => saved
-            .map(|identity| identity.name.as_str())
-            .or(settings.audio_output_device_name.as_deref()),
-    };
-    audio::route(
-        settings.main_playback_enabled,
-        settings.sidetone_enabled,
-        preview,
-        selected_name,
-        endpoints,
-        settings.virtual_output_device.as_deref(),
-    )
+) -> io::Result<PlaybackRoute<'a>> {
+    let route = audio::route(settings, preview, endpoints);
+    // Report a missing main device before decoding, contacting TTS or pressing a key.
+    if !preview && settings.main_playback_enabled && route.main.is_none() && route.local.is_none() {
+        return Err(io::Error::other(
+            "找不到可用的 VB-CABLE 播放设备，请在音频设置中刷新设备",
+        ));
+    }
+    Ok(route)
 }
 
 fn hold_key(
@@ -386,7 +372,7 @@ fn speak(engine: &mut TtsEngine, job: &Speech, events: &mpsc::Sender<Event>) -> 
         message: format!("开始朗读 {} 字", job.text.chars().count()),
     });
     let output = audio::list_outputs()?;
-    let route = select_route(&job.settings, false, &output);
+    let route = select_route(&job.settings, false, &output)?;
     engine.set_volume(job.settings.volume);
     engine.set_voice(job.settings.active_voice_id().map(str::to_owned));
     engine.set_device_sample_rate(
@@ -442,7 +428,7 @@ fn play_clip(job: &Clip, events: &mpsc::Sender<Event>) -> io::Result<()> {
         },
     });
     let endpoints = audio::list_outputs()?;
-    let route = select_route(&job.settings, job.preview, &endpoints);
+    let route = select_route(&job.settings, job.preview, &endpoints)?;
     let _pressed = hold_key(&job.settings, job.preview, events);
     let clip = audio::decode_clip(&job.path, &job.cancel)?;
     let mut progress = |seconds| {
@@ -520,20 +506,53 @@ mod tests {
         };
         let outputs = vec![
             audio::Endpoint {
+                cable_priority: None,
                 id: "system".into(),
                 name: "System".into(),
                 is_default: true,
             },
             audio::Endpoint {
+                cable_priority: None,
                 id: "speakers".into(),
                 name: "Speakers".into(),
                 is_default: false,
             },
         ];
-        let route = select_route(&settings, false, &outputs);
+        let route = select_route(&settings, false, &outputs).unwrap();
         assert_eq!(
             route.local.map(|endpoint| endpoint.name.as_str()),
             Some("Speakers")
+        );
+    }
+
+    #[test]
+    fn a_same_named_cable_does_not_override_a_saved_monitor_endpoint() {
+        let outputs = [
+            audio::Endpoint {
+                id: "cable".into(),
+                name: "Shared label".into(),
+                is_default: false,
+                cable_priority: Some(0),
+            },
+            audio::Endpoint {
+                id: "monitor".into(),
+                name: "Shared label".into(),
+                is_default: false,
+                cable_priority: None,
+            },
+        ];
+        let settings = Settings {
+            sidetone_enabled: true,
+            audio_output_device: Some(crate::config::AudioIdentity {
+                id: Some(outputs[1].id.clone()),
+                name: outputs[1].name.clone(),
+                host_api_name: None,
+            }),
+            ..Settings::default()
+        };
+        assert_eq!(
+            select_route(&settings, false, &outputs).unwrap().local,
+            Some(&outputs[1])
         );
     }
 
@@ -546,5 +565,23 @@ mod tests {
         assert!(!cancel.load(Ordering::Acquire));
         queue.stop_clip(false);
         assert!(cancel.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn missing_cable_stops_formal_output_unless_monitoring_is_available() {
+        let mut settings = Settings::default();
+        let outputs = [audio::Endpoint {
+            id: "speakers".into(),
+            name: "Speakers".into(),
+            is_default: true,
+            cable_priority: None,
+        }];
+        let error = select_route(&settings, false, &outputs).unwrap_err();
+        assert!(error.to_string().contains("VB-CABLE"));
+        settings.sidetone_enabled = true;
+        let route = select_route(&settings, false, &outputs).unwrap();
+        assert_eq!(route.main, None);
+        assert_eq!(route.local, Some(&outputs[0]));
+        assert!(select_route(&settings, true, &outputs).is_ok());
     }
 }

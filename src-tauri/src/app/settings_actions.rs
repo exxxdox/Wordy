@@ -15,8 +15,8 @@ impl App {
 
     pub(super) fn settings_action(&mut self, action: SettingsAction) -> io::Result<()> {
         use SettingsAction::*;
-        // 后台备份独占配置与凭据；Closed 只清理临时 UI 状态。
-        if self.backup_running && !matches!(action, SettingsAction::Closed) {
+        // 后台备份独占配置与凭据，设备刷新仅读取 Windows 音频状态。
+        if self.backup_running && !matches!(action, Closed | RequestAudioDevices) {
             return Ok(());
         }
         match action {
@@ -163,7 +163,7 @@ impl App {
             }
             DownloadVbCable => self.open_url("https://vb-audio.com/Cable/")?,
             OpenLogs => self.show_logs()?,
-            RequestAudioDevices => self.load_audio_settings()?,
+            RequestAudioDevices => self.load_audio_settings(),
             Feedback(message) => self.failure(message),
             SelectWheel(index) => self.wheel_select(index)?,
             AddWheel => self.wheel_add()?,
@@ -232,22 +232,32 @@ impl App {
         self.playback.fetch_voices(id, self.engine.clone());
     }
 
-    fn load_audio_settings(&mut self) -> io::Result<()> {
-        // A transient WASAPI failure must not empty the whole settings page.
-        let outputs = audio::list_outputs().unwrap_or_default();
+    pub(super) fn load_audio_settings(&mut self) {
+        let legacy_main = self.config.settings().virtual_output_device.as_deref();
+        self.cable_status = match audio::list_outputs() {
+            Ok(outputs) => {
+                let status = audio::cable_endpoint_for(&outputs, legacy_main)
+                    .map_or(CableStatus::Unavailable, |endpoint| {
+                        CableStatus::Ready(endpoint.name.clone())
+                    });
+                self.outputs = outputs
+                    .into_iter()
+                    .filter(|endpoint| !endpoint.is_cable())
+                    .map(|endpoint| AudioIdentity {
+                        name: endpoint.name,
+                        host_api_name: Some("WASAPI".into()),
+                        id: Some(endpoint.id),
+                    })
+                    .collect();
+                status
+            }
+            Err(error) => {
+                // Keep the last device choices when Windows temporarily cannot enumerate them.
+                self.log_at("WARNING", format!("无法读取 Windows 播放设备：{error}"));
+                CableStatus::CheckFailed
+            }
+        };
         let inputs = audio::list_inputs().unwrap_or_default();
-        let legacy_main = self.config.settings().virtual_output_device.clone();
-        self.cable_available =
-            audio::cable_endpoint_for(&outputs, legacy_main.as_deref()).is_some();
-        self.outputs = outputs
-            .into_iter()
-            .filter(|e| !audio::is_cable_device(&e.name))
-            .map(|e| AudioIdentity {
-                name: e.name,
-                host_api_name: Some("WASAPI".into()),
-                id: Some(e.id),
-            })
-            .collect();
         let state = self
             .config
             .settings()
@@ -262,12 +272,10 @@ impl App {
             output_available: state.output_id.is_some(),
         });
         self.ui_dirty = true;
-        Ok(())
     }
 
     fn set_listen(&mut self, enabled: bool) -> io::Result<()> {
         let inputs = audio::list_inputs()?;
-        let outputs = audio::list_outputs()?;
         let name = self
             .config
             .settings()
@@ -277,16 +285,8 @@ impl App {
         let input = audio::find_endpoint(&inputs, name)
             .ok_or_else(|| io::Error::other("请先选择麦克风"))?;
         let before = audio::read_listen(input)?;
-        let legacy_main = self.config.settings().virtual_output_device.clone();
-        let target = if enabled {
-            Some(
-                audio::cable_endpoint_for(&outputs, legacy_main.as_deref())
-                    .ok_or_else(|| io::Error::other("未检测到 VB-CABLE"))?,
-            )
-        } else {
-            None
-        };
-        audio::set_listen(input, target, enabled)?;
+        let target = enabled.then(|| self.listen_target()).transpose()?;
+        audio::set_listen(input, target.as_ref(), enabled)?;
         if let Err(error) = self.edit(|s| s.audio_routing_enabled = enabled) {
             audio::restore_listen(input, &before)?;
             return Err(error);
@@ -299,7 +299,17 @@ impl App {
             }
             .into(),
         );
-        self.load_audio_settings()
+        self.load_audio_settings();
+        Ok(())
+    }
+
+    fn listen_target(&self) -> io::Result<audio::Endpoint> {
+        let outputs = audio::list_outputs()
+            .map_err(|error| io::Error::other(format!("无法读取 Windows 播放设备：{error}")))?;
+        let preferred = self.config.settings().virtual_output_device.as_deref();
+        audio::cable_endpoint_for(&outputs, preferred)
+            .cloned()
+            .ok_or_else(|| io::Error::other("找不到可用的 VB-CABLE 播放设备，请刷新设备"))
     }
 
     fn switch_microphone(&mut self, name: Option<String>) -> io::Result<()> {
@@ -328,12 +338,9 @@ impl App {
         } else {
             (None, None)
         };
-        let outputs = audio::list_outputs().unwrap_or_default();
-        let legacy_main = self.config.settings().virtual_output_device.clone();
-        let cable = audio::cable_endpoint_for(&outputs, legacy_main.as_deref());
-        if enabled && new.is_some() && cable.is_none() {
-            return Err(io::Error::other("未检测到 VB-CABLE"));
-        }
+        let cable = (enabled && new.is_some())
+            .then(|| self.listen_target())
+            .transpose()?;
         // Without Wordy routing, the old microphone's Windows listen state is the
         // user's own setting; switching the Wordy selection must not turn it off.
         if enabled
@@ -344,7 +351,7 @@ impl App {
         }
         let result = (|| {
             if enabled && let Some(new) = new {
-                audio::set_listen(new, cable, true)?;
+                audio::set_listen(new, cable.as_ref(), true)?;
             }
             self.edit(|s| s.mic_input_device = name)
         })();
@@ -359,7 +366,8 @@ impl App {
             }
             return Err(error);
         }
-        self.load_audio_settings()
+        self.load_audio_settings();
+        Ok(())
     }
 
     fn backup(&mut self, export: bool) -> io::Result<()> {

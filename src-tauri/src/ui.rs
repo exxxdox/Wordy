@@ -165,12 +165,20 @@ pub struct PreviewState {
 }
 
 #[derive(Clone, Debug, Serialize)]
+#[serde(tag = "state", content = "output", rename_all = "snake_case")]
+pub enum CableStatus {
+    Ready(String),
+    Unavailable,
+    CheckFailed,
+}
+
+#[derive(Clone, Debug, Serialize)]
 pub struct Snapshot {
     pub settings: Settings,
     pub outputs: Vec<AudioIdentity>,
     pub microphones: Vec<String>,
     pub voices: Vec<Voice>,
-    pub cable_available: bool,
+    pub cable_status: CableStatus,
     pub listen: Option<ListenStatus>,
     pub fonts: Vec<String>,
     pub busy: bool,

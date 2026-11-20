@@ -24,6 +24,7 @@ use windows::Win32::System::Com::{
     CoTaskMemAlloc, CoTaskMemFree, CoUninitialize, STGM_READ, STGM_READWRITE,
 };
 use windows::Win32::System::Variant::{VT_BOOL, VT_LPWSTR};
+use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
 use windows::core::{GUID, PCWSTR, PWSTR};
 
 use super::wave::WaveFile;
@@ -32,6 +33,14 @@ use super::{CaptureBuffer, Endpoint, Pcm, apply_gain, invalid_audio};
 const FRIENDLY_NAME: PROPERTYKEY = PROPERTYKEY {
     fmtid: GUID::from_u128(0xa45c254e_df1c_4efd_8020_67d146a850e0),
     pid: 14,
+};
+const DEVICE_DESCRIPTION: PROPERTYKEY = PROPERTYKEY {
+    fmtid: FRIENDLY_NAME.fmtid,
+    pid: 2,
+};
+const ADAPTER_NAME: PROPERTYKEY = PROPERTYKEY {
+    fmtid: GUID::from_u128(0x026e516e_b814_414b_83cd_856d6fef4822),
+    pid: 2,
 };
 const LISTEN_GUID: GUID = GUID::from_u128(0x24dbb0fc_9311_4b3d_9cf0_18ff155639d4);
 const LISTEN_TARGET: PROPERTYKEY = PROPERTYKEY {
@@ -93,7 +102,11 @@ fn device_id(device: &IMMDevice) -> io::Result<String> {
 
 fn device_name(device: &IMMDevice) -> io::Result<String> {
     let properties = native(unsafe { device.OpenPropertyStore(STGM_READ) })?;
-    let value = native(unsafe { properties.GetValue(&FRIENDLY_NAME) })?;
+    property_string(&properties, &FRIENDLY_NAME)
+}
+
+fn property_string(properties: &IPropertyStore, key: &PROPERTYKEY) -> io::Result<String> {
+    let value = native(unsafe { properties.GetValue(key) })?;
     task_string(native(unsafe { PropVariantToStringAlloc(&value) })?)
 }
 
@@ -114,14 +127,27 @@ fn list_endpoints(flow: EDataFlow) -> io::Result<Vec<Endpoint>> {
         let Ok(device) = (unsafe { devices.Item(index) }) else {
             continue;
         };
-        let (Ok(id), Ok(name)) = (device_id(&device), device_name(&device)) else {
+        let (Ok(id), Ok(properties)) = (device_id(&device), unsafe {
+            device.OpenPropertyStore(STGM_READ)
+        }) else {
+            continue;
+        };
+        let Ok(name) = property_string(&properties, &FRIENDLY_NAME) else {
             continue;
         };
         if !name.is_empty() {
+            let cable_priority = if flow == eRender {
+                let adapter = property_string(&properties, &ADAPTER_NAME).ok();
+                let description = property_string(&properties, &DEVICE_DESCRIPTION).ok();
+                super::cable_priority(&name, adapter.as_deref(), description.as_deref())
+            } else {
+                None
+            };
             result.push(Endpoint {
                 is_default: default.as_ref() == Some(&id),
                 id,
                 name,
+                cable_priority,
             });
         }
     }
@@ -195,7 +221,7 @@ impl PcmStream {
             return Err(invalid_audio("无效的 PCM 输出格式"));
         }
         // VB-CABLE expects L/R frames. Preserve mono on ordinary devices.
-        let device_channels = if channels == 1 && super::is_cable_device(&endpoint.name) {
+        let device_channels = if channels == 1 && endpoint.is_cable() {
             2
         } else {
             channels

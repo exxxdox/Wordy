@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { listen, TauriEvent } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 // 与 Windows 打包共用源文件，更新应用图标时会同步更新设置页。
 import appIcon from "../../src-tauri/icons/icon.ico?url";
@@ -74,12 +74,17 @@ export type Settings = {
 
 type ListenStatus = { enabled: boolean; output: string | null; output_available: boolean };
 
+type CableStatus =
+  | { state: "ready"; output: string }
+  | { state: "unavailable" }
+  | { state: "check_failed" };
+
 export type Snapshot = {
   settings: Settings;
   outputs: AudioIdentity[];
   microphones: string[];
   voices: Voice[];
-  cable_available: boolean;
+  cable_status: CableStatus;
   listen: ListenStatus | null;
   fonts: string[];
   busy: boolean;
@@ -121,6 +126,7 @@ export default function App() {
   const [voiceDraft, setVoiceDraft] = useState<{ id: string; name: string } | null>(null);
   const [placeholder, setPlaceholder] = useState("");
   const [logs, setLogs] = useState<string[] | null>(null);
+  const [audioRefreshing, setAudioRefreshing] = useState(false);
   const content = useRef<HTMLDivElement>(null);
   const logsButton = useRef<HTMLButtonElement>(null);
   const pending = useRef<Record<string, number>>({});
@@ -179,14 +185,28 @@ export default function App() {
     }
   }, [uiFont]);
 
-  const audioRequested = useRef(false);
+  const audioRefreshInFlight = useRef(false);
+  const refreshAudio = useCallback(() => {
+    // 切换页签、窗口获焦和手动刷新可能同时触发，共用一次设备枚举。
+    if (audioRefreshInFlight.current) return;
+    audioRefreshInFlight.current = true;
+    setAudioRefreshing(true);
+    const finish = () => {
+      audioRefreshInFlight.current = false;
+      setAudioRefreshing(false);
+    };
+    run({ type: "request_audio_devices" }).then(finish, finish);
+  }, [run]);
+  const hasSnapshot = snapshot !== null;
   useEffect(() => {
-    // 设备列表由原生线程枚举；设置页第一次拿到快照后请求一次。
-    if (snapshot && !audioRequested.current) {
-      audioRequested.current = true;
-      run({ type: "request_audio_devices" });
-    }
-  }, [snapshot, run]);
+    if (!hasSnapshot || tab !== "audio") return;
+    refreshAudio();
+    // 从 Windows 声音设置或驱动安装程序返回时，由原生窗口焦点触发刷新。
+    const unlistenFocus = listen(TauriEvent.WINDOW_FOCUS, refreshAudio).catch(console.error);
+    return () => {
+      unlistenFocus.then((stop) => stop?.());
+    };
+  }, [hasSnapshot, refreshAudio, tab]);
 
   const sendDebounced = useCallback(
     (key: string, delay: number, action: Record<string, unknown>) => {
@@ -263,11 +283,19 @@ export default function App() {
       ? `界面使用「${settings.ui_font}」。`
       : `未安装「${settings.ui_font}」，已回退到内置字体。`;
   const current = TABS.find((item) => item.id === tab) ?? TABS[0];
+  const cable = snapshot.cable_status;
+  const cableOutput = cable.state === "ready" ? cable.output : null;
+  const cableHint = cable.state === "unavailable"
+    ? "未找到可用的 VB-CABLE 播放设备。请在 Windows 声音设置中启用 CABLE Input，或安装 VB-CABLE 后刷新。"
+    : "无法读取 Windows 播放设备，请刷新设备重试。";
+  const listenEnabled = snapshot.listen?.enabled ?? settings.audio_routing_enabled;
   const outputChip = !settings.main_playback_enabled
     ? { tone: "", text: "主输出已关闭" }
-    : snapshot.cable_available
+    : cable.state === "ready"
       ? { tone: "ok", text: "CABLE 就绪" }
-      : { tone: "off", text: "CABLE 未安装" };
+      : cable.state === "check_failed"
+        ? { tone: "off", text: "音频设备检测失败" }
+        : { tone: "off", text: "VB-CABLE 不可用" };
   const openLogs = () =>
     invoke<string[]>("wordy_logs")
       .then(setLogs)
@@ -448,19 +476,24 @@ export default function App() {
           {tab === "audio" && (
             <>
               <Panel title="播放与返听" icon="audio">
-                <Row
-                  label="启用主播放输出"
-                  htmlFor="main-playback"
-                  hint={snapshot.cable_available
-                    ? "输出至 CABLE Input。语音软件的输入设备请选择 CABLE Output。"
-                    : "未检测到 VB-CABLE。安装后即可使用主播放输出。"}
-                >
-                  <div className="switch-control">
-                    {!snapshot.cable_available && (
+                <Row label="VB-CABLE 播放设备" hint={cableOutput ?? cableHint}>
+                  <div className="switch-control flex-wrap">
+                    {cable.state === "unavailable" && (
                       <button className="btn" onClick={() => run({ type: "download_vb_cable" })}>
                         下载 VB-CABLE
                       </button>
                     )}
+                    <button className="btn" disabled={audioRefreshing} onClick={refreshAudio}>
+                      {audioRefreshing ? "正在检测…" : "刷新设备"}
+                    </button>
+                  </div>
+                </Row>
+                <Row
+                  label="启用主播放输出"
+                  htmlFor="main-playback"
+                  hint="将朗读和轮盘音频送到 VB-CABLE。语音软件的输入设备请选择 CABLE Output。"
+                >
+                  <div className="switch-control">
                     <Check
                       id="main-playback"
                       checked={settings.main_playback_enabled}
@@ -509,13 +542,13 @@ export default function App() {
                   <div className="switch-control">
                     <Check
                       id="listen"
-                      disabled={!snapshot.cable_available}
-                      checked={snapshot.listen?.enabled ?? settings.audio_routing_enabled}
+                      disabled={cable.state !== "ready" && !listenEnabled}
+                      checked={listenEnabled}
                       onChange={(value) => run({ type: "set_listen", value })}
                     />
                   </div>
                 </Row>
-                <Row label="侦听麦克风" htmlFor="microphone" hint="将所选麦克风的声音通过 Windows 送至 CABLE Input。">
+                <Row label="侦听麦克风" htmlFor="microphone" hint="通过 Windows 侦听将麦克风声音送到 VB-CABLE。">
                   <select
                     id="microphone"
                     className="field"
@@ -531,9 +564,9 @@ export default function App() {
                     ))}
                   </select>
                 </Row>
-                <Row label="侦听输出设备">
+                <Row label="启用侦听时输出到">
                   <output className="device-output">
-                    {snapshot.cable_available ? "CABLE Input" : "未检测到 VB-CABLE"}
+                    {cableOutput ?? (cable.state === "check_failed" ? "检测失败" : "无可用设备")}
                   </output>
                 </Row>
               </Panel>
