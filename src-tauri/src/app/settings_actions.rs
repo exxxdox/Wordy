@@ -361,12 +361,20 @@ impl App {
         } else {
             "导入备份"
         };
+        let default_name = export.then(|| {
+            let now = local_time();
+            format!(
+                "wordy-{:04}{:02}{:02}-{:02}{:02}{:02}.wordybackup",
+                now.wYear, now.wMonth, now.wDay, now.wHour, now.wMinute, now.wSecond
+            )
+        });
         let Some(path) = dialog::file(
             owner,
             title,
             BACKUP_FILTER,
             &base,
             Some("wordybackup"),
+            default_name.as_deref(),
             export,
         ) else {
             return Ok(());

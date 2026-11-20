@@ -172,7 +172,7 @@ impl App {
     pub(super) fn slot_import(&mut self, index: usize, slot: usize) -> io::Result<()> {
         let filter = "音频文件\0*.wav;*.mp3;*.ogg;*.flac;*.m4a;*.aac;*.wma;*.aiff;*.aif;*.opus\0";
         let directory = std::env::current_dir()?;
-        let Some(path) = dialog::file(self.host, "导入音频", filter, &directory, None, false)
+        let Some(path) = dialog::file(self.host, "导入音频", filter, &directory, None, None, false)
         else {
             return Ok(());
         };

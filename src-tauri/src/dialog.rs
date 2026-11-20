@@ -15,13 +15,18 @@ pub fn file(
     filter: &str,
     directory: &Path,
     extension: Option<&str>,
+    default_name: Option<&str>,
     save: bool,
 ) -> Option<PathBuf> {
     let title = wide(title);
     let filter = wide(filter);
     let directory = wide(&directory.to_string_lossy());
     let extension = extension.map(wide);
-    let mut name = vec![0; 32_768];
+    // 预填文件名；其余保持零，供系统写回所选完整路径。
+    let mut name: Vec<u16> = default_name
+        .map(|text| text.encode_utf16().collect())
+        .unwrap_or_default();
+    name.resize(32_768, 0);
     let mut info = OPENFILENAMEW {
         lStructSize: mem::size_of::<OPENFILENAMEW>() as u32,
         hwndOwner: owner,
