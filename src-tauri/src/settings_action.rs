@@ -49,6 +49,7 @@ pub enum SettingsAction {
     ClearSlot(usize, usize),
     ImportSlotAudio(usize, usize),
     AssignWheelAudio(usize, usize, String),
+    DeleteLibraryAudio(String),
     CropSlotAudio(usize, usize),
     PreviewSlot(usize, usize),
     TrimPreview(u64, f64, f64, f64),

@@ -164,3 +164,106 @@ fn older_slot_labels_supply_names_when_no_catalog_was_saved() {
             .any(|clip| { clip.id == "orphan.wav" && clip.name == "orphan.wav" })
     );
 }
+
+#[test]
+fn deleting_library_audio_removes_file_and_all_references_but_keeps_text() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = ConfigStore::load(directory.path().join("config.toml")).unwrap();
+    let folder = clips_directory(store.path()).unwrap();
+    fs::create_dir(&folder).unwrap();
+    let id = "clip.wav";
+    let path = folder.join(id);
+    fs::write(&path, b"audio").unwrap();
+    fs::write(folder.join("other.wav"), b"other audio").unwrap();
+    store
+        .update(|settings| {
+            settings.chat_wheel_slots[0] = id.into();
+            settings.chat_wheel_labels[0] = "仅音频".into();
+            settings.chat_wheel_slots[1] = "other.wav".into();
+            let mut wheel = crate::config::Wheel::new("f7");
+            wheel.slots[2] = id.to_uppercase();
+            wheel.texts[2] = "仍然朗读".into();
+            wheel.labels[2] = "文字标题".into();
+            wheel.text_modes[2] = true;
+            wheel.volumes[2] = 0.7;
+            settings.additional_chat_wheels.push(wheel);
+            settings
+                .audio_clip_names
+                .insert(id.into(), "待删除音频".into());
+            settings
+                .audio_clip_names
+                .insert("other.wav".into(), "其他音频".into());
+        })
+        .unwrap();
+    assert!(delete_clip(&mut store, "../other.wav").is_err());
+    delete_clip(&mut store, id).unwrap();
+    let restored = ConfigStore::load(store.path()).unwrap();
+    assert!(!path.exists());
+    assert!(folder.join("other.wav").is_file());
+    assert!(restored.settings().chat_wheel_slots[0].is_empty());
+    assert!(restored.settings().chat_wheel_labels[0].is_empty());
+    assert_eq!(restored.settings().chat_wheel_slots[1], "other.wav");
+    let wheel = restored.settings().wheel(1).unwrap();
+    assert!(wheel.slots[2].is_empty());
+    assert_eq!(wheel.texts[2], "仍然朗读");
+    assert_eq!(wheel.labels[2], "文字标题");
+    assert!(wheel.text_modes[2]);
+    assert_eq!(wheel.volumes[2], 0.7);
+    assert!(!restored.settings().audio_clip_names.contains_key(id));
+    assert!(
+        restored
+            .settings()
+            .audio_clip_names
+            .contains_key("other.wav")
+    );
+}
+
+#[test]
+fn failed_library_delete_does_not_lose_the_audio_file_or_references() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = ConfigStore::load(directory.path().join("config.toml")).unwrap();
+    let folder = clips_directory(store.path()).unwrap();
+    fs::create_dir(&folder).unwrap();
+    let id = "clip.wav";
+    let path = folder.join(id);
+    fs::write(&path, b"audio").unwrap();
+    store
+        .update_wheel(0, |wheel| wheel.slots[0] = id.into())
+        .unwrap();
+    fs::remove_file(store.path()).unwrap();
+    fs::create_dir(store.path()).unwrap();
+    assert!(delete_clip(&mut store, id).is_err());
+    assert!(path.is_file());
+    assert_eq!(store.settings().chat_wheel_slots[0], id);
+}
+
+#[cfg(windows)]
+#[test]
+fn failed_file_removal_restores_persisted_wheel_references() {
+    use std::os::windows::fs::OpenOptionsExt;
+    use windows_sys::Win32::Storage::FileSystem::FILE_SHARE_READ;
+
+    let directory = tempfile::tempdir().unwrap();
+    let mut store = ConfigStore::load(directory.path().join("config.toml")).unwrap();
+    let folder = clips_directory(store.path()).unwrap();
+    fs::create_dir(&folder).unwrap();
+    let id = "clip.wav";
+    let path = folder.join(id);
+    fs::write(&path, b"audio").unwrap();
+    store
+        .update_wheel(0, |wheel| wheel.slots[0] = id.into())
+        .unwrap();
+    // 模拟仍有程序读取该文件，Windows 拒绝删除。
+    let source = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(FILE_SHARE_READ)
+        .open(&path)
+        .unwrap();
+    resolve_clip(store.path(), id).unwrap();
+    assert!(delete_clip(&mut store, id).is_err());
+    drop(source);
+    assert!(path.is_file());
+    assert_eq!(store.settings().chat_wheel_slots[0], id);
+    let restored = ConfigStore::load(store.path()).unwrap();
+    assert_eq!(restored.settings().chat_wheel_slots[0], id);
+}

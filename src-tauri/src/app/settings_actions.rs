@@ -185,6 +185,32 @@ impl App {
                 audio::assign_clip(&mut self.config, index, slot, &id)?;
                 self.stop_editor_preview();
             }
+            DeleteLibraryAudio(id) => {
+                if self.ui_locked() {
+                    return Err(io::Error::other("请先完成当前音频操作"));
+                }
+                let clip = self
+                    .audio_clips
+                    .iter()
+                    .find(|clip| clip.id == id)
+                    .ok_or_else(|| io::Error::other("找不到这段音频"))?;
+                let normalized_id = id.to_lowercase();
+                let references = self
+                    .config
+                    .settings()
+                    .referenced_audio()
+                    .filter(|reference| reference.to_lowercase() == normalized_id)
+                    .count();
+                let mut message = format!("永久删除「{}」的音频文件？此操作不可撤销。", clip.name);
+                if references > 0 {
+                    message.push_str(&format!("将同时移除 {references} 个槽位的音频引用。"));
+                }
+                if self.confirm_dialog("永久删除音频", &message) {
+                    self.stop_editor_preview();
+                    audio::delete_clip(&mut self.config, &id)?;
+                    self.status("已删除音频文件".into());
+                }
+            }
             CropSlotAudio(index, slot) => self.slot_crop(index, slot)?,
             PreviewSlot(index, slot) => self.slot_preview(index, slot)?,
             TrimPreview(id, start, end, gain) => self.trim_preview(id, start, end, gain)?,

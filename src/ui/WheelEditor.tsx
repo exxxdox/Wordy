@@ -107,8 +107,10 @@ export default function WheelEditor({ snapshot, run }: Props) {
           wheel={wheel}
           wheelSelect={wheelSelect}
           clips={snapshot.audio_clips}
-          locked={locked}
+          font={settings.ui_font}
+          locked={locked || snapshot.busy}
           assign={(slot, id) => run({ type: "assign_wheel_audio", index, slot, id })}
+          deleteClip={(id) => run({ type: "delete_library_audio", id })}
         />
       </>
     );

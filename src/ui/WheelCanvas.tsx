@@ -1,11 +1,16 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, type MouseEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
 
 type Props = {
   labels: string[];
   font: string;
-  selected: number;
+  selected: number | null;
   onSelectSlot?: (slot: number) => void;
+  drop?: {
+    type: string;
+    onHover: (slot: number | null) => void;
+    onDrop: (slot: number, value: string) => void;
+  };
   className?: string;
 };
 
@@ -18,7 +23,18 @@ const CENTER_Y = CANVAS_HEIGHT / 2;
 const RING_INNER = 62;
 const RING_OUTER = 256;
 
-export default function WheelCanvas({ labels, font, selected, onSelectSlot, className }: Props) {
+function slotAt({ currentTarget, clientX, clientY }: MouseEvent<HTMLCanvasElement>) {
+  const rect = currentTarget.getBoundingClientRect();
+  if (!rect.width || !rect.height) return null;
+  const dx = ((clientX - rect.left) * CANVAS_WIDTH) / rect.width - CENTER_X;
+  const dy = ((clientY - rect.top) * CANVAS_HEIGHT) / rect.height - CENTER_Y;
+  const radius = Math.hypot(dx, dy);
+  if (radius < RING_INNER || radius > RING_OUTER) return null;
+  const angle = ((Math.atan2(dx, -dy) * 180) / Math.PI + 360) % 360;
+  return Math.floor(((angle + 22.5) % 360) / 45);
+}
+
+export default function WheelCanvas({ labels, font, selected, onSelectSlot, drop, className }: Props) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const latest = useRef(0);
   // 数组每次渲染都是新引用，用拼接值判断标签是否真的变化。
@@ -76,15 +92,25 @@ export default function WheelCanvas({ labels, font, selected, onSelectSlot, clas
       className={className ?? "h-auto w-full"}
       onClick={(event) => {
         if (!onSelectSlot) return;
-        const rect = event.currentTarget.getBoundingClientRect();
-        const x = ((event.clientX - rect.left) * CANVAS_WIDTH) / rect.width;
-        const y = ((event.clientY - rect.top) * CANVAS_HEIGHT) / rect.height;
-        const dx = x - CENTER_X;
-        const dy = y - CENTER_Y;
-        const radius = Math.hypot(dx, dy);
-        if (radius < RING_INNER || radius > RING_OUTER) return;
-        const angle = ((Math.atan2(dx, -dy) * 180) / Math.PI + 360) % 360;
-        onSelectSlot(Math.floor(((angle + 22.5) % 360) / 45) % 8);
+        const slot = slotAt(event);
+        if (slot !== null) onSelectSlot(slot);
+      }}
+      onDragOver={(event) => {
+        if (!drop || !event.dataTransfer.types.includes(drop.type)) return;
+        const slot = slotAt(event);
+        drop.onHover(slot);
+        if (slot !== null) {
+          event.preventDefault();
+          event.dataTransfer.dropEffect = "copy";
+        }
+      }}
+      onDragLeave={() => drop?.onHover(null)}
+      onDrop={(event) => {
+        if (!drop || !event.dataTransfer.types.includes(drop.type)) return;
+        event.preventDefault();
+        drop.onHover(null);
+        const slot = slotAt(event);
+        if (slot !== null) drop.onDrop(slot, event.dataTransfer.getData(drop.type));
       }}
     />
   );

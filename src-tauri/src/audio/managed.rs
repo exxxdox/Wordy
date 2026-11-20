@@ -158,6 +158,46 @@ pub fn assign_clip(store: &mut ConfigStore, wheel: usize, slot: usize, id: &str)
     })
 }
 
+pub fn delete_clip(store: &mut ConfigStore, id: &str) -> io::Result<()> {
+    let path = resolve_clip(store.path(), id)?;
+    if is_reparse(&fs::symlink_metadata(&path)?) {
+        return Err(invalid("只能删除托管目录中的音频文件"));
+    }
+
+    let previous = store.settings().clone();
+    let normalized_id = id.to_lowercase();
+    // 先保存解除引用的配置，避免配置保存失败时丢失文件。
+    store.update(|settings| {
+        for index in 0..settings.wheel_count() {
+            let mut wheel = settings.wheel(index).expect("index within wheel count");
+            for (slot, reference) in wheel.slots.iter_mut().enumerate() {
+                if reference.to_lowercase() == normalized_id {
+                    reference.clear();
+                    if wheel.texts[slot].is_empty() {
+                        wheel.labels[slot].clear();
+                    }
+                }
+            }
+            settings.assign_wheel(index, wheel);
+        }
+        settings
+            .audio_clip_names
+            .retain(|name, _| name.to_lowercase() != normalized_id);
+    })?;
+
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => {
+            // Windows 可能拒绝删除正在使用的文件，恢复原有槽位与名称后允许重试。
+            store.replace(previous).map_err(|restore| {
+                io::Error::other(format!("删除音频失败：{error}；恢复槽位失败：{restore}"))
+            })?;
+            Err(error)
+        }
+    }
+}
+
 pub fn set_slot_label(
     store: &mut ConfigStore,
     wheel: usize,

@@ -394,6 +394,9 @@ pub enum UiAction {
         slot: usize,
         id: String,
     },
+    DeleteLibraryAudio {
+        id: String,
+    },
     CropSlotAudio {
         index: usize,
         slot: usize,
@@ -491,6 +494,7 @@ impl UiAction {
             Self::AssignWheelAudio { index, slot, id } => {
                 SettingsAction::AssignWheelAudio(index, slot, id)
             }
+            Self::DeleteLibraryAudio { id } => SettingsAction::DeleteLibraryAudio(id),
             Self::CropSlotAudio { index, slot } => SettingsAction::CropSlotAudio(index, slot),
             Self::PreviewSlot { index, slot } => SettingsAction::PreviewSlot(index, slot),
             Self::TrimPreview {
