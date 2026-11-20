@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use super::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

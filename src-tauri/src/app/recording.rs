@@ -49,7 +49,7 @@ impl App {
             self.pending_saves += 1;
             // The save window is the next step; keep the log short like the old toast.
             self.log("后台录制已结束，正在准备保存窗口".into());
-        } else if self.pending_saves == 0 && self.trim.is_none() {
+        } else if self.pending_saves == 0 && self.trim.is_none() && self.pending_trim.is_none() {
             let seconds = self.config.settings().rolling_buffer_seconds;
             self.recording = Some(Recording::start(Duration::from_secs_f64(seconds))?);
             self.tray.set_recording(true);
@@ -262,7 +262,7 @@ fn trim_input(decoded: audio::DecodedClip<'_>) -> io::Result<tempfile::NamedTemp
     }
 }
 
-fn preserve_rolling(file: tempfile::NamedTempFile) -> io::Result<PathBuf> {
+pub(super) fn preserve_rolling(file: tempfile::NamedTempFile) -> io::Result<PathBuf> {
     file.keep()
         .map(|(_, path)| path)
         .map_err(|error| error.error)

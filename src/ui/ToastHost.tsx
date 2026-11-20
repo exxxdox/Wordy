@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
 
 type Feedback = { message: string; tone: "success" | "error" };
 
@@ -10,6 +11,7 @@ export default function ToastHost() {
   const next = useRef(0);
 
   useEffect(() => {
+    let disposed = false;
     const stop = listen<Feedback>("wordy://feedback", (event) => {
       const card = { ...event.payload, id: ++next.current };
       setCards((current) => [...current.slice(-2), card]);
@@ -17,7 +19,11 @@ export default function ToastHost() {
         setCards((current) => current.filter((item) => item.id !== card.id));
       }, 2800);
     });
+    stop
+      .then(() => !disposed && invoke("wordy_listeners_ready", { surface: "feedback" }))
+      .catch(console.error);
     return () => {
+      disposed = true;
       stop.then((off) => off());
     };
   }, []);

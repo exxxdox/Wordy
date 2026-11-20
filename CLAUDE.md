@@ -25,7 +25,7 @@ Rust（edition 2024）+ Tauri 2 桌面应用。设置界面是 React（Vite + Ta
 
 ## 设置界面（Tauri + React）
 
-设置页由 WebView 渲染，原生逻辑不变：网页通过 `wordy_action` 发送动作，原生线程执行后回传完整 `Snapshot`，再用 `wordy://snapshot` 事件推送变化。配置仍以 `ConfigStore` 为唯一数据源，网页不做本地持久化。`ConfigStore::revision` 决定是否推送。
+设置窗口首次打开时才创建 WebView，原生热键和托盘独立启动。网页用 `wordy_snapshot` 读取初始状态，`wordy_action` 返回执行结果，后续变化只通过 `wordy://snapshot` 推送一次。快照序号用于拒绝迟到的响应。配置以 `ConfigStore` 为唯一数据源。
 
 - 关闭设置窗口只隐藏，托盘应用继续运行；`wordy_hide` 与窗口关闭事件都只隐藏。
 - 设置窗口无系统标题栏和窗口边框（`decorations(false)`）：拖动窗口用侧栏品牌区与页头的 `data-tauri-drag-region`，缩放用页面四周 8 条透明把手调用 `startResizeDragging`；关闭仍走底部「关闭设置」（`wordy_hide`）。对应权限在 `src-tauri/capabilities/default.json`。
@@ -34,8 +34,9 @@ Rust（edition 2024）+ Tauri 2 桌面应用。设置界面是 React（Vite + Ta
 - 桥命令 `wordy_action`/`wordy_snapshot`/`wordy_wheel_preview` 必须是 async：同步命令会占住 Tauri 主线程，弹窗事件无法送达，表现为“弹窗弹不出来”。
 - 状态提示由 React `wordy://feedback` 渲染；设置页隐藏时错误仍走托盘通知。
 - 轮盘编辑器由 React「轮盘」页签提供；设置里的轮盘预览通过 `wordy_wheel_preview` 调用原生 `wheel_paint` 渲染，与运行时轮盘使用同一套绘制。
-- 截取窗口由 React 渲染波形（Canvas）、拖选、试听与保存；原生只保留临时 WAV、裁剪与托管音频。
+- 截取窗口由 React 渲染波形、拖选、试听与保存。首次打开时，波形事件等待页面监听器就绪。试听直接读取临时 WAV 的选区，保存时才生成裁剪文件。
 - 日志面板由 React 渲染：`wordy_logs` 取历史，`wordy://log` 逐行推送，托盘动作会打开设置窗口并发出 `wordy://open-logs`。
+- 音频库在首次加载、打开整理页或文件、名称、引用变化时刷新。普通设置操作复用现有列表。
 - 设置页文案保持中文，不写内部实现说明。
 
 持久化目录：`config_directory()`（`XDG_CONFIG_HOME/wordy`，未设置时 `%USERPROFILE%\.config\wordy`），含 `config.toml`、`audio_clips/` 与解包出来的 `bin/ffmpeg.exe`；托管音频从配置文件父目录推导。日志仅 `packaged` 构建在 exe 同目录写 `wordy.log`（5 MiB × 5）。图标资源在 `src-tauri/src/assets/wordy.ico`，运行时经 `include_bytes!` 使用；exe 图标由 `src-tauri/icons/icon.ico` 经 tauri-build 嵌入。精简 FFmpeg 在 `src-tauri/assets/ffmpeg.exe`（约 3.2 MB，7.1.1 交叉编译），`build.rs` 复制到 `OUT_DIR` 后同样经 `include_bytes!` 嵌入；缺失时构建仍通过，但运行时退回系统 FFmpeg。
@@ -67,9 +68,9 @@ cargo test --manifest-path src-tauri/Cargo.toml
 
 ## 轮盘
 
-轮盘导入、播放和截取原生以外的音频格式时需要 FFmpeg。只使用随 exe 打包的精简版：构建时从 `src-tauri/assets/ffmpeg.exe` 复制并由 `include_bytes!` 嵌入，首次使用时解包到配置目录 `bin/ffmpeg.exe`（SHA-256 一致即复用）。不查找系统 FFmpeg，也不在应用内联网安装；内嵌解码器不支持的编码或损坏文件按「不支持导入此音频格式」拒绝。有效的 PCM16 WAV 直接读取，不经过 FFmpeg。发布产物仍只有 `Wordy.exe`。
+轮盘导入、播放和截取原生以外的音频格式时需要 FFmpeg。只使用随 exe 打包的精简版：构建时从 `src-tauri/assets/ffmpeg.exe` 复制并由 `include_bytes!` 嵌入，首次使用时解包到配置目录 `bin/ffmpeg.exe`（SHA-256 一致即复用）。压缩音频播放通过绑定到解码进程的本地管道分块接收 PCM，截取仍通过临时 WAV 支持任意位置读取。不查找系统 FFmpeg，也不在应用内联网安装；有效的 PCM16 WAV 直接读取。发布产物只有 `Wordy.exe`。
 
-设置中的轮盘 UI 与运行时轮盘必须保持一致。只保留竞技样式，由 `wheel_paint` 绘制；设置页预览调用同一渲染器（`wordy_wheel_preview`）。画布 634×540（盘体 540×540 居中），名称居中 hover 放大仍完整显示。动画仅影响显示：120ms 淡入、90ms 淡出、90ms 高亮；松键立即提交播放，淡出停止接收选择。
+设置中的轮盘 UI 与运行时轮盘必须保持一致。竞技样式由 `wheel_paint` 绘制。原生动画复用同尺寸绘制目标，设置页预览调用同一渲染器并合并在途更新。画布 634×540（盘体 540×540 居中），名称居中 hover 放大仍完整显示。动画仅影响显示：120ms 淡入、90ms 淡出、90ms 高亮；松键提交播放，淡出停止接收选择。原生线程仅在轮盘活动或淡出时按帧唤醒，后台结果和到期任务独立唤醒。
 
 每盘八槽、独立快捷键、任意数量、至少一个。第一盘存 `chat_wheel_name/hotkey/slots/labels/texts/text_modes`，后续在 `additional_chat_wheels`。快捷键不得与输入框/其他轮盘/后台录制重复。槽位可同时保存文字与音频，`text_modes` 决定播放/试听哪一类，切换模式不清空另一类；只有「清空」会同时清掉标签、文字与音频引用。选中的一类为空时回退到另一类。音频槽 `volumes` 0–300%，播放时快照传主输出与返听。托管音频在 `audio_clips`，导入时复制为独立文件。清空槽保留音量。替换音频、清空槽位或删除轮盘后，音频文件仍留在音频库，可在「轮盘 → 整理音频」的音频库清理未引用音频。新增轮盘直接在编辑器或截取窗口追加（默认名「轮盘 N」），创建时不要求录制快捷键；之后用「录制快捷键」按钮补录（与设置页热键同一录制器，录制期间临时注销现有全局热键），校验通过再注册。未绑定快捷键的轮盘不产生启动警告。所有快捷键（全局、按住键、轮盘）只通过录制弹窗设置，不接受文本输入；弹窗、确认框和文本输入共用 `rust/dialog.rs` 的深色外观，Esc 取消且不记录为快捷键。
 
@@ -83,7 +84,7 @@ cargo test --manifest-path src-tauri/Cargo.toml
 
 - Cartesia：bytes（HTTP 整段）与 realtime（WebSocket，PCM16）；realtime 支持后台 keepalive、`ctx.cancel`，base URL 可被 `CARTESIA_BASE_URL` 覆盖；仅正常空闲关闭允许重连，其他关闭按错误处理。
 - Volcengine：SSE 返回 `pcm_s16le`（base64），播放必须按 int16 打开。
-- HTTP 使用 connect timeout，不设整请求总期限；最多跟随 10 次重定向。
+- HTTP 最多跟随 10 次重定向。Cartesia bytes 使用整段截止时间，Volcengine SSE 使用单次读取超时，均可在等待响应或数据时打断。Cartesia 音色查询在独立后台任务中执行，合并重复请求。
 - 音量 0.50–2.00 由 TTS 引擎应用；音频槽增益独立，不叠乘。
 - 「播放时自动按住某键」：正式播放前按下，结束/失败/取消后松开；F10 试用跳过。输入框提交先收起窗口再提交。
 - API Key 存 Windows 凭据管理器，不写入 TOML。

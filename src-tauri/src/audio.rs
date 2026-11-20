@@ -43,7 +43,9 @@ mod wasapi;
 mod sidetone;
 
 #[cfg(windows)]
-pub use sidetone::{RoutedStream, play_routed_pcm, play_routed_wave};
+pub(crate) use sidetone::play_routed_clip;
+#[cfg(windows)]
+pub use sidetone::{RoutedStream, play_routed_pcm};
 
 #[cfg(windows)]
 pub use wasapi::{

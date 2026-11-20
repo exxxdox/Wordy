@@ -1,5 +1,6 @@
 import { useEffect, useEffectEvent, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
 import type { Snapshot } from "./App";
 import { Icon, Slider } from "./Controls";
 import WheelCanvas from "./WheelCanvas";
@@ -40,6 +41,7 @@ export default function TrimDialog({ snapshot, run }: Props) {
   const drag = useRef<Drag | null>(null);
 
   useEffect(() => {
+    let disposed = false;
     const stops = [
       listen<TrimOpen>("wordy://trim-open", (event) => {
         const next = { ...event.payload, peaks: [], playing: false, seconds: null };
@@ -76,7 +78,11 @@ export default function TrimDialog({ snapshot, run }: Props) {
       }),
       listen("wordy://trim-save-failed", () => setSaving(false)),
     ];
+    Promise.all(stops)
+      .then(() => !disposed && invoke("wordy_listeners_ready", { surface: "trim" }))
+      .catch(console.error);
     return () => {
+      disposed = true;
       stops.forEach((stop) => stop.then((off) => off()));
     };
   }, []);

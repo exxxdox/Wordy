@@ -4,6 +4,7 @@ use std::sync::{
 };
 
 use super::*;
+use crate::playback::ClipSource;
 use crate::ui::{TrimOpen, TrimPeaks, TrimProgress};
 
 /// React 截取窗口的原生会话：临时 WAV、波形与试听状态。
@@ -49,6 +50,26 @@ impl App {
             item.map_or(1.0, |wheel| wheel.volumes[slot]) * 100.0
         };
         let cancel = Arc::new(AtomicBool::new(false));
+        // A background recording can finish while the settings window is closed.
+        if !self.settings_visible()
+            && let Err(error) = self.show_settings()
+        {
+            return Err(if rolling {
+                match super::recording::preserve_rolling(source) {
+                    Ok(path) => {
+                        io::Error::other(format!("{error}（录音保留在 {}）", path.display()))
+                    }
+                    Err(retain) => io::Error::other(format!("{error}（无法保留录音：{retain}）")),
+                }
+            } else {
+                error
+            });
+        }
+        // Keep the source alive until the new WebView can show its trim session.
+        if self.ui_hwnd().is_null() {
+            self.pending_trim = Some((source, target));
+            return Ok(());
+        }
         let source = Arc::new(source);
         let path = source.path().to_path_buf();
         self.trim = Some(TrimSession {
@@ -60,22 +81,15 @@ impl App {
             preview: None,
             busy: false,
         });
-        // 后台录制可能在设置窗口隐藏时结束；截取窗口在网页里，必须先把设置窗口唤出。
-        if !self.settings_visible() {
-            let _ = self.show_settings();
-        }
-        let _ = self.handle.emit(
-            ui::TRIM_OPEN_EVENT,
-            TrimOpen {
-                id,
-                duration,
-                rolling,
-                wheel,
-                slot,
-                label,
-                gain,
-            },
-        );
+        self.emit_trim_open(TrimOpen {
+            id,
+            duration,
+            rolling,
+            wheel,
+            slot,
+            label,
+            gain,
+        });
         let events = self.jobs.clone();
         std::thread::Builder::new()
             .name("WordyWaveform".into())
@@ -99,9 +113,7 @@ impl App {
         } else {
             peaks
         };
-        let _ = self
-            .handle
-            .emit(ui::TRIM_PEAKS_EVENT, TrimPeaks { id, peaks });
+        self.emit_trim_peaks(TrimPeaks { id, peaks });
     }
 
     fn active_trim(&mut self, id: u64) -> io::Result<&mut TrimSession> {
@@ -120,25 +132,17 @@ impl App {
     ) -> io::Result<()> {
         let duration = self.active_trim(id)?.duration;
         let (start, end) = trim_range(duration, start, end)?;
-        let (path, rolling, previous) = {
-            let session = self.active_trim(id)?;
-            (
-                session.source.path().to_path_buf(),
-                session.rolling,
-                session.preview,
-            )
-        };
-        if previous.is_some() {
-            self.playback.stop_clip();
-        }
-        let clip = audio::trim_recording(&path, start, end)?;
-        let clip_path = clip.path().to_path_buf();
         let preview = self.id();
-        self.previews.insert(preview, clip);
-        self.active_trim(id)?.preview = Some(preview);
-        self.playback.play_clip(
+        let session = self.active_trim(id)?;
+        let source = session.source.clone();
+        let rolling = session.rolling;
+        session.preview = Some(preview);
+        self.playback.play_source(
             preview,
-            clip_path,
+            ClipSource::Trim {
+                source,
+                range: (start, end),
+            },
             gain.clamp(0.0, 300.0) / 100.0,
             rolling,
             self.config.settings(),

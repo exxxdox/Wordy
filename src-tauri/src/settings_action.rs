@@ -37,6 +37,7 @@ pub enum SettingsAction {
     DownloadVbCable,
     OpenLogs,
     RequestAudioDevices,
+    RefreshAudioLibrary,
     SelectWheel(usize),
     AddWheel,
     RemoveWheel(usize),
@@ -58,4 +59,50 @@ pub enum SettingsAction {
     TrimCancel(u64),
     Closed,
     Feedback(String),
+}
+
+impl SettingsAction {
+    pub(crate) fn refreshes_audio_library(&self) -> bool {
+        use SettingsAction::*;
+        // 后台导入和保存由完成事件刷新。常规设置无需遍历托管目录。
+        matches!(
+            self,
+            RefreshAudioLibrary
+                | RemoveWheel(_)
+                | SetSlotLabel(..)
+                | ClearSlot(..)
+                | AssignWheelAudio(..)
+                | DeleteLibraryAudio(_)
+                | CleanUnusedAudio
+        )
+    }
+}
+
+#[cfg(test)]
+mod audio_library_tests {
+    use super::SettingsAction::*;
+
+    #[test]
+    fn refreshes_for_library_changes_and_explicit_open_only() {
+        for action in [
+            RefreshAudioLibrary,
+            RemoveWheel(1),
+            SetSlotLabel(0, 1, "名称".into()),
+            ClearSlot(0, 1),
+            AssignWheelAudio(0, 1, "a.wav".into()),
+            DeleteLibraryAudio("a.wav".into()),
+            CleanUnusedAudio,
+        ] {
+            assert!(action.refreshes_audio_library());
+        }
+        for action in [
+            SetVolume(1.0),
+            SetOpacity(0.5),
+            SelectWheel(0),
+            Closed,
+            ImportSlotAudio(0, 1),
+        ] {
+            assert!(!action.refreshes_audio_library());
+        }
+    }
 }

@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Manager};
 use windows_sys::Win32::System::Threading::SetEvent;
 
 use crate::config::{AudioIdentity, Settings, Voice};
@@ -174,6 +175,7 @@ pub enum CableStatus {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Snapshot {
+    pub sequence: u64,
     pub settings: Settings,
     pub outputs: Vec<AudioIdentity>,
     pub microphones: Vec<String>,
@@ -195,9 +197,11 @@ pub struct Snapshot {
 pub enum UiRequest {
     Snapshot(SyncSender<Snapshot>),
     Logs(SyncSender<Vec<String>>),
-    Action(SettingsAction, SyncSender<Result<Snapshot, String>>),
+    Action(SettingsAction, SyncSender<Result<(), String>>),
     /// 设置窗口移动后的物理坐标；只更新配置，不需要回复。
     SettingsMoved(i32, i32),
+    TrimReady,
+    FeedbackReady,
 }
 
 /// 网页侧持有的原生线程句柄。事件句柄跨线程仅用于 SetEvent，语义安全。
@@ -242,7 +246,7 @@ impl NativeHandle {
             .map_err(|_| "读取日志超时".to_string())
     }
 
-    pub fn action(&self, action: SettingsAction) -> Result<Snapshot, String> {
+    pub fn action(&self, action: SettingsAction) -> Result<(), String> {
         let (reply, receiver) = mpsc::sync_channel(1);
         self.send(UiRequest::Action(action, reply))?;
         receiver
@@ -256,8 +260,72 @@ impl NativeHandle {
     }
 }
 
+/// Win32 热键和托盘不依赖 WebView，窗口只在首次打开设置时创建。
+pub(crate) fn build_settings_window(app: &AppHandle) -> tauri::Result<()> {
+    let window = tauri::WebviewWindowBuilder::new(
+        app,
+        "settings",
+        tauri::WebviewUrl::App("index.html".into()),
+    )
+    .title("Wordy 设置")
+    .inner_size(1280.0, 880.0)
+    .min_inner_size(1080.0, 760.0)
+    .theme(Some(tauri::Theme::Dark))
+    .disable_drag_drop_handler()
+    .decorations(false)
+    .background_color(tauri::window::Color(19, 19, 22, 255))
+    .visible(false)
+    .build()?;
+    let closable = window.clone();
+    let events = app.clone();
+    window.on_window_event(move |event| match event {
+        tauri::WindowEvent::CloseRequested { api, .. } => {
+            api.prevent_close();
+            let _ = closable.hide();
+        }
+        // 程序化居中和恢复发生在显示前，不能覆盖已保存的位置。
+        tauri::WindowEvent::Moved(position) => {
+            if closable.is_visible().unwrap_or(false)
+                && let Some(native) = events.try_state::<NativeHandle>()
+            {
+                native.settings_moved(position.x, position.y);
+            }
+        }
+        _ => (),
+    });
+    Ok(())
+}
+
 pub fn channel() -> (Sender<UiRequest>, Receiver<UiRequest>) {
     mpsc::channel()
+}
+
+pub(crate) struct WakeSender<T> {
+    sender: Sender<T>,
+    wake: isize,
+}
+
+impl<T> Clone for WakeSender<T> {
+    fn clone(&self) -> Self {
+        Self {
+            sender: self.sender.clone(),
+            wake: self.wake,
+        }
+    }
+}
+
+impl<T> WakeSender<T> {
+    pub(crate) fn send(&self, message: T) -> Result<(), mpsc::SendError<T>> {
+        self.sender.send(message)?;
+        // Post after enqueueing so the native loop can drain all producers on one wake.
+        unsafe { SetEvent(self.wake as _) };
+        Ok(())
+    }
+}
+
+pub(crate) fn wake_channel<T>(wake: isize) -> (WakeSender<T>, Receiver<T>) {
+    let (sender, receiver) = mpsc::channel();
+    (WakeSender { sender, wake }, receiver)
 }
 
 #[derive(Debug, Deserialize)]
@@ -345,6 +413,7 @@ pub enum UiAction {
     DownloadVbCable,
     OpenLogs,
     RequestAudioDevices,
+    RefreshAudioLibrary,
     SelectWheel {
         index: usize,
     },
@@ -470,6 +539,7 @@ impl UiAction {
             Self::DownloadVbCable => SettingsAction::DownloadVbCable,
             Self::OpenLogs => SettingsAction::OpenLogs,
             Self::RequestAudioDevices => SettingsAction::RequestAudioDevices,
+            Self::RefreshAudioLibrary => SettingsAction::RefreshAudioLibrary,
             Self::SelectWheel { index } => SettingsAction::SelectWheel(index),
             Self::AddWheel => SettingsAction::AddWheel,
             Self::RemoveWheel { index } => SettingsAction::RemoveWheel(index),
@@ -531,10 +601,23 @@ pub async fn wordy_snapshot(state: tauri::State<'_, NativeHandle>) -> Result<Sna
 }
 
 #[tauri::command]
+pub async fn wordy_listeners_ready(
+    surface: String,
+    state: tauri::State<'_, NativeHandle>,
+) -> Result<(), String> {
+    let request = match surface.as_str() {
+        "trim" => UiRequest::TrimReady,
+        "feedback" => UiRequest::FeedbackReady,
+        _ => return Err("未知设置窗口监听器".into()),
+    };
+    state.send(request)
+}
+
+#[tauri::command]
 pub async fn wordy_action(
     action: UiAction,
     state: tauri::State<'_, NativeHandle>,
-) -> Result<Snapshot, String> {
+) -> Result<(), String> {
     state.action(action.into_action()?)
 }
 
@@ -591,7 +674,6 @@ fn with_preview_renderer<T>(
 /// 网页里的「关闭」按钮只隐藏设置窗口，托盘应用继续运行。
 #[tauri::command]
 pub fn wordy_hide(app: tauri::AppHandle) -> Result<(), String> {
-    use tauri::Manager;
     let window = app
         .get_webview_window("settings")
         .ok_or_else(|| "设置窗口不存在".to_string())?;
@@ -601,6 +683,22 @@ pub fn wordy_hide(app: tauri::AppHandle) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn background_result_wakes_the_native_loop_with_its_message_available() {
+        use windows_sys::Win32::{
+            Foundation::{CloseHandle, WAIT_OBJECT_0},
+            System::Threading::{CreateEventW, WaitForSingleObject},
+        };
+        let event = unsafe { CreateEventW(std::ptr::null(), 0, 0, std::ptr::null()) };
+        assert!(!event.is_null());
+        let (sender, receiver) = wake_channel(event as isize);
+        sender.send(42).unwrap();
+        let wait = unsafe { WaitForSingleObject(event, 0) };
+        unsafe { CloseHandle(event) };
+        assert_eq!(wait, WAIT_OBJECT_0);
+        assert_eq!(receiver.try_recv().unwrap(), 42);
+    }
 
     #[test]
     fn parses_ui_actions_and_rejects_unknown_providers() {

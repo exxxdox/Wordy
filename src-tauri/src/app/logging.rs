@@ -37,7 +37,9 @@ impl App {
         }
         self.logs.push_back(message.clone());
         // 设置页打开日志面板时依赖逐行事件，而不是整份历史。
-        let _ = self.handle.emit(crate::ui::LOG_EVENT, message);
+        if self.ui_connected {
+            let _ = self.handle.emit(crate::ui::LOG_EVENT, message);
+        }
     }
 
     pub(super) fn status(&mut self, message: String) {
@@ -56,7 +58,7 @@ impl App {
         }
         // Report through the toast/tray only; forcing the settings window open
         // on every background error made a plain launch look like a request for it.
-        if self.settings_visible() {
+        if self.settings_visible() && self.feedback_ready {
             self.feedback(&message, "error");
         } else {
             self.tray.notify(&message);

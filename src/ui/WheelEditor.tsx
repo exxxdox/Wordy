@@ -78,7 +78,14 @@ export default function WheelEditor({ snapshot, run }: Props) {
       <button className="seg-item px-4" aria-pressed={!organizing} onClick={() => setOrganizing(false)}>
         编辑轮盘
       </button>
-      <button className="seg-item px-4" aria-pressed={organizing} onClick={() => setOrganizing(true)}>
+      <button
+        className="seg-item px-4"
+        aria-pressed={organizing}
+        onClick={() => {
+          if (!organizing) run({ type: "refresh_audio_library" });
+          setOrganizing(true);
+        }}
+      >
         整理音频
       </button>
     </div>

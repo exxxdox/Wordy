@@ -7,9 +7,10 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use crate::audio::{self, PlaybackRoute, RoutedStream};
-use crate::config::{Settings, Voice};
+use crate::config::Settings;
 use crate::hotkey::windows::PressedKey;
 use crate::tts::{TtsAudio, TtsEngine};
+use crate::ui::{WakeSender, wake_channel};
 
 pub struct EngineSettings {
     pub settings: Settings,
@@ -24,10 +25,6 @@ pub enum Event {
     Progress {
         id: u64,
         seconds: f64,
-    },
-    Voices {
-        id: u64,
-        result: io::Result<Vec<Voice>>,
     },
     Warning {
         target: &'static str,
@@ -50,18 +47,26 @@ struct Speech {
 
 struct Clip {
     id: u64,
-    path: PathBuf,
+    source: ClipSource,
     gain: f64,
     preview: bool,
     settings: Settings,
     cancel: Arc<AtomicBool>,
 }
 
+pub(crate) enum ClipSource {
+    File(PathBuf),
+    Trim {
+        // The queued playback can outlive the trim session that owns this file.
+        source: Arc<tempfile::NamedTempFile>,
+        range: (f64, f64),
+    },
+}
+
 enum Work {
     Speech(Speech),
     Clip(Clip),
     Prewarm(Arc<EngineSettings>),
-    Voices(u64, Arc<EngineSettings>),
 }
 
 #[derive(Default)]
@@ -118,13 +123,13 @@ impl Queue {
 pub struct Playback {
     shared: Arc<(Mutex<Queue>, Condvar)>,
     worker: Option<JoinHandle<()>>,
-    sender: mpsc::Sender<Event>,
+    sender: WakeSender<Event>,
     pub events: mpsc::Receiver<Event>,
 }
 
 impl Playback {
-    pub fn start() -> io::Result<Self> {
-        let (sender, events) = mpsc::channel();
+    pub fn start(wake: isize) -> io::Result<Self> {
+        let (sender, events) = wake_channel(wake);
         let shared = Arc::new((Mutex::new(Queue::default()), Condvar::new()));
         let (worker_queue, worker_events) = (shared.clone(), sender.clone());
         let worker = thread::Builder::new()
@@ -162,6 +167,17 @@ impl Playback {
     }
 
     pub fn play_clip(&self, id: u64, path: PathBuf, gain: f64, preview: bool, settings: &Settings) {
+        self.play_source(id, ClipSource::File(path), gain, preview, settings);
+    }
+
+    pub(crate) fn play_source(
+        &self,
+        id: u64,
+        source: ClipSource,
+        gain: f64,
+        preview: bool,
+        settings: &Settings,
+    ) {
         let mut queue = self.shared.0.lock().unwrap();
         queue.stop_clip(false);
         if !(preview || settings.main_playback_enabled || settings.sidetone_enabled) {
@@ -172,7 +188,7 @@ impl Playback {
         queue.clip = Some((preview, cancel.clone()));
         queue.jobs.push_back(Work::Clip(Clip {
             id,
-            path,
+            source,
             gain,
             preview,
             settings: settings.clone(),
@@ -198,10 +214,6 @@ impl Playback {
 
     pub fn prewarm(&self, engine: Arc<EngineSettings>) {
         self.push(Work::Prewarm(engine));
-    }
-
-    pub fn fetch_voices(&self, id: u64, engine: Arc<EngineSettings>) {
-        self.push(Work::Voices(id, engine));
     }
 
     fn push(&self, work: Work) {
@@ -232,11 +244,11 @@ impl Drop for Playback {
     }
 }
 
-fn finished(events: &mpsc::Sender<Event>, id: u64, result: io::Result<()>) {
+fn finished(events: &WakeSender<Event>, id: u64, result: io::Result<()>) {
     let _ = events.send(Event::Finished { id, result });
 }
 
-fn run(shared: &(Mutex<Queue>, Condvar), events: &mpsc::Sender<Event>) {
+fn run(shared: &(Mutex<Queue>, Condvar), events: &WakeSender<Event>) {
     let mut current: Option<(Arc<EngineSettings>, TtsEngine)> = None;
     loop {
         let queue = shared.0.lock().unwrap();
@@ -300,10 +312,6 @@ fn run(shared: &(Mutex<Queue>, Condvar), events: &mpsc::Sender<Event>) {
                     });
                 }
             }
-            Some(Work::Voices(id, spec)) => {
-                let result = TtsEngine::new(&spec.settings, spec.api_key.clone()).fetch_voices();
-                let _ = events.send(Event::Voices { id, result });
-            }
         }
     }
     if let Some((_, mut engine)) = current {
@@ -345,11 +353,7 @@ fn select_route<'a>(
     Ok(route)
 }
 
-fn hold_key(
-    settings: &Settings,
-    preview: bool,
-    events: &mpsc::Sender<Event>,
-) -> Option<PressedKey> {
+fn hold_key(settings: &Settings, preview: bool, events: &WakeSender<Event>) -> Option<PressedKey> {
     if preview || !settings.main_playback_enabled || !settings.hold_key_enabled {
         return None;
     }
@@ -365,7 +369,7 @@ fn hold_key(
     }
 }
 
-fn speak(engine: &mut TtsEngine, job: &Speech, events: &mpsc::Sender<Event>) -> io::Result<()> {
+fn speak(engine: &mut TtsEngine, job: &Speech, events: &WakeSender<Event>) -> io::Result<()> {
     let _ = events.send(Event::Log {
         target: "wordy.tts",
         level: "INFO",
@@ -417,7 +421,7 @@ fn speak(engine: &mut TtsEngine, job: &Speech, events: &mpsc::Sender<Event>) -> 
     }
 }
 
-fn play_clip(job: &Clip, events: &mpsc::Sender<Event>) -> io::Result<()> {
+fn play_clip(job: &Clip, events: &WakeSender<Event>) -> io::Result<()> {
     let _ = events.send(Event::Log {
         target: "wordy.audio",
         level: "INFO",
@@ -430,19 +434,23 @@ fn play_clip(job: &Clip, events: &mpsc::Sender<Event>) -> io::Result<()> {
     let endpoints = audio::list_outputs()?;
     let route = select_route(&job.settings, job.preview, &endpoints)?;
     let _pressed = hold_key(&job.settings, job.preview, events);
-    let clip = audio::decode_clip(&job.path, &job.cancel)?;
+    let (path, range) = match &job.source {
+        ClipSource::File(path) => (path.as_path(), None),
+        ClipSource::Trim { source, range } => (source.path(), Some(*range)),
+    };
     let mut progress = |seconds| {
         let _ = events.send(Event::Progress {
             id: job.id,
             seconds,
         });
     };
-    audio::play_routed_wave(
+    audio::play_routed_clip(
         &route,
-        clip.as_ref(),
+        path,
+        range,
         job.gain,
         job.cancel.clone(),
-        Some(&mut progress),
+        range.is_some().then_some(&mut progress),
     )
 }
 

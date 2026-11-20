@@ -31,26 +31,6 @@ fn main() -> std::process::ExitCode {
         .setup(|app| {
             use tauri::Manager;
 
-            let window = tauri::WebviewWindowBuilder::new(
-                app,
-                "settings",
-                tauri::WebviewUrl::App("index.html".into()),
-            )
-            .title("Wordy 设置")
-            .inner_size(1280.0, 880.0)
-            .min_inner_size(1080.0, 760.0)
-            .theme(Some(tauri::Theme::Dark))
-            // 让 WebView 处理整理页的 HTML 拖放。
-            .disable_drag_drop_handler()
-            // 去掉系统标题栏和窗口边框，改用 React 顶栏提供拖动、最小化与关闭。
-            .decorations(false)
-            // WebView 首次绘制前用窗口底色兜底，避免白屏闪烁。
-            .background_color(tauri::window::Color(19, 19, 22, 255))
-            // 与原应用一致：启动只驻留托盘，设置窗口由托盘或悬浮输入框唤出。
-            .visible(false)
-            .build()?;
-            let hwnd = window.hwnd().map(|handle| handle.0 as isize).unwrap_or(0);
-
             let (requests, receiver) = wordy::ui::channel();
             let wake = unsafe { CreateEventW(std::ptr::null(), 0, 0, std::ptr::null()) };
             if wake.is_null() {
@@ -62,32 +42,11 @@ fn main() -> std::process::ExitCode {
             app.manage(dialogs.clone());
 
             let handle = app.handle().clone();
-            let closable = window.clone();
-            let events = app.handle().clone();
-            window.on_window_event(move |event| match event {
-                tauri::WindowEvent::CloseRequested { api, .. } => {
-                    // 关闭设置窗口只隐藏，托盘应用继续运行。
-                    api.prevent_close();
-                    let _ = closable.hide();
-                }
-                // 位置交给原生线程写配置；拖动时事件密集，原生侧会防抖。
-                // 只记录看得见的移动：程序化居中/恢复发生在显示前，不能覆盖配置。
-                tauri::WindowEvent::Moved(position) => {
-                    if closable.is_visible().unwrap_or(false)
-                        && let Some(native) = events.try_state::<NativeHandle>()
-                    {
-                        native.settings_moved(position.x, position.y);
-                    }
-                }
-                _ => (),
-            });
-
             std::thread::Builder::new()
                 .name("WordyNative".into())
                 .spawn(move || {
                     let context = UiContext {
                         app: handle.clone(),
-                        hwnd,
                         wake: wake_value,
                         requests: receiver,
                         dialogs,
@@ -102,6 +61,7 @@ fn main() -> std::process::ExitCode {
         })
         .invoke_handler(tauri::generate_handler![
             wordy::ui::wordy_snapshot,
+            wordy::ui::wordy_listeners_ready,
             wordy::ui::wordy_action,
             wordy::ui::wordy_hide,
             wordy::ui::wordy_logs,

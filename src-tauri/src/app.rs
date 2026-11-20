@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::io;
 use std::ptr;
 use std::sync::{
@@ -41,14 +41,13 @@ use hotkeys::*;
 
 use self::recording::RecordingResult;
 
-const CONTROLS_TIMER: usize = 1;
+const WHEEL_TICK: Duration = Duration::from_millis(crate::wheel::POLL_MS);
 const LOG_LIMIT: usize = 5000;
 const BACKUP_FILTER: &str = "Wordy 加密备份 (*.wordybackup)\0*.wordybackup\0";
 
 /// 网页设置界面需要的数据与唤醒句柄。
 pub struct UiContext {
     pub app: AppHandle,
-    pub hwnd: isize,
     pub wake: isize,
     pub requests: mpsc::Receiver<UiRequest>,
     pub dialogs: ui::DialogBroker,
@@ -121,13 +120,19 @@ struct App {
     published_revision: u64,
     published_locked: bool,
     published_preview: Option<(usize, usize, bool)>,
+    snapshot_sequence: u64,
     ui_dirty: bool,
     ui_connected: bool,
+    feedback_ready: bool,
+    settings_window_creating: bool,
+    open_logs_on_connect: bool,
+    // 截取可先于首次设置页加载完成。先存事件，等波形监听器注册后按顺序送达。
+    pending_trim_events: Option<Vec<TrimEvent>>,
     recording: Option<Recording>,
+    pending_trim: Option<(tempfile::NamedTempFile, Option<(usize, usize)>)>,
     trim: Option<trim::TrimSession>,
-    previews: HashMap<u64, tempfile::NamedTempFile>,
     editor_preview: Option<EditorPreview>,
-    jobs: mpsc::Sender<Background>,
+    jobs: ui::WakeSender<Background>,
     results: mpsc::Receiver<Background>,
     pending_saves: usize,
     background_cancel: Arc<AtomicBool>,
@@ -135,6 +140,7 @@ struct App {
     auto_backup_schedule: backup_schedule::AutoBackupSchedule,
     backup_password_set: bool,
     audio_clips: Vec<audio::AudioClip>,
+    audio_clips_dirty: bool,
     exiting: bool,
     skip_config_flush: bool,
     voices_request: Option<u64>,
@@ -146,11 +152,27 @@ struct App {
 enum Background {
     Recording(RecordingResult),
     NotificationFailed(String),
+    SettingsWindow(io::Result<()>),
+    Voices(u64, io::Result<Vec<Voice>>),
     Backup {
         import: bool,
         auto: bool,
         result: io::Result<()>,
     },
+}
+
+enum TrimEvent {
+    Open(ui::TrimOpen),
+    Peaks(ui::TrimPeaks),
+}
+
+impl TrimEvent {
+    fn emit(self, handle: &AppHandle) {
+        let _ = match self {
+            Self::Open(open) => handle.emit(ui::TRIM_OPEN_EVENT, open),
+            Self::Peaks(peaks) => handle.emit(ui::TRIM_PEAKS_EVENT, peaks),
+        };
+    }
 }
 
 impl App {
@@ -177,14 +199,13 @@ impl App {
             settings: config.settings().clone(),
             api_key,
         });
-        let playback = Playback::start()?;
+        let playback = Playback::start(ui.wake)?;
         let mut hotkeys = Hotkeys::default();
         let failures = hotkeys.startup(config.settings());
         let tray = Tray::install(host)?;
         let overlay = Overlay::new(instance, host)?;
         let wheel = WheelWindow::new(instance).map_err(io::Error::other)?;
-        let (jobs, results) = mpsc::channel();
-        let audio_clips = audio::list_clips(&config).unwrap_or_default();
+        let (jobs, results) = ui::wake_channel(ui.wake);
         let auto_backup_age = backup_schedule::previous_age(
             &backup::auto_backup_directory(config.path()),
             SystemTime::now(),
@@ -201,7 +222,7 @@ impl App {
             wheel,
             active_wheel: None,
             handle: ui.app,
-            hwnd: ui.hwnd,
+            hwnd: 0,
             wake: ui.wake as HANDLE,
             requests: ui.requests,
             dialogs: ui.dialogs,
@@ -210,15 +231,20 @@ impl App {
             cartesia_voices: Vec::new(),
             cable_status: CableStatus::CheckFailed,
             listen_state: None,
-            font_families: crate::fonts::installed_fonts(),
+            font_families: Vec::new(),
             published_revision: 0,
             published_locked: false,
             published_preview: None,
+            snapshot_sequence: 0,
             ui_dirty: true,
             ui_connected: false,
+            feedback_ready: false,
+            settings_window_creating: false,
+            open_logs_on_connect: false,
+            pending_trim_events: Some(Vec::new()),
             recording: None,
+            pending_trim: None,
             trim: None,
-            previews: HashMap::new(),
             editor_preview: None,
             jobs,
             results,
@@ -229,7 +255,8 @@ impl App {
                 auto_backup_age.as_ref().ok().copied().flatten(),
             ),
             backup_password_set,
-            audio_clips,
+            audio_clips: Vec::new(),
+            audio_clips_dirty: false,
             exiting: false,
             skip_config_flush: false,
             voices_request: None,
@@ -285,17 +312,43 @@ impl App {
 
     fn event_loop(&mut self) -> io::Result<()> {
         let explorer_restart = unsafe { RegisterWindowMessageW(w!("TaskbarCreated")) };
-        if unsafe { SetTimer(self.host, CONTROLS_TIMER, 16, None) } == 0 {
-            return Err(io::Error::last_os_error());
-        }
         let mut message = MSG::default();
+        let mut wheel_tick = Instant::now();
         while !self.skip_config_flush {
-            // 命令线程通过事件唤醒这条原生消息循环。
+            let now = Instant::now();
+            if self.wheel.is_visible() && now >= wheel_tick {
+                wheel_tick = now + WHEEL_TICK;
+                if let Err(error) = self.tick_wheel() {
+                    self.report_error("轮盘操作失败", error);
+                }
+            }
+            self.tick();
+            if self.skip_config_flush {
+                break;
+            }
+            // 后台事件和设置命令主动唤醒。只有轮盘活动或有任务到期才设超时。
+            let deadline = [
+                self.wheel.is_visible().then_some(wheel_tick),
+                (!self.backup_running)
+                    .then(|| self.config.save_deadline())
+                    .flatten(),
+                self.auto_backup_deadline(),
+            ]
+            .into_iter()
+            .flatten()
+            .min();
+            let timeout = deadline.map_or(INFINITE, |at| {
+                let remaining = at.saturating_duration_since(Instant::now());
+                remaining
+                    .as_nanos()
+                    .div_ceil(1_000_000)
+                    .min(u128::from(INFINITE - 1)) as u32
+            });
             let wait = unsafe {
                 MsgWaitForMultipleObjectsEx(
                     1,
                     &self.wake,
-                    INFINITE,
+                    timeout,
                     QS_ALLINPUT,
                     MWMO_INPUTAVAILABLE,
                 )
@@ -310,16 +363,15 @@ impl App {
             if wait != WAIT_OBJECT_0 + 1 {
                 continue;
             }
-            let result = unsafe { GetMessageW(&mut message, ptr::null_mut(), 0, 0) };
-            if result == 0 {
-                break;
+            // 唤醒可能只有同步发送的消息。消化它后继续等待事件，避免 GetMessage 阻塞。
+            if unsafe { PeekMessageW(&mut message, ptr::null_mut(), 0, 0, PM_REMOVE) } == 0 {
+                continue;
             }
-            if result < 0 {
-                return Err(io::Error::last_os_error());
+            if message.message == WM_QUIT {
+                break;
             }
             let result = match message.message {
                 WM_HOTKEY => self.hotkey(message.wParam),
-                WM_TIMER if message.hwnd == self.host => self.tick(),
                 TRAY_EVENT if message.hwnd == self.host => match message.lParam as u32 {
                     WM_RBUTTONUP | WM_CONTEXTMENU => self.tray.open_menu(),
                     WM_LBUTTONDBLCLK => self.show_settings(),
@@ -352,11 +404,16 @@ impl App {
         }
         // 退出流程里的错误只写日志，不再弹失败提示。
         self.exiting = true;
-        unsafe { KillTimer(self.host, CONTROLS_TIMER) };
         self.wheel.cancel();
         self.playback.stop_speech();
         self.playback.stop_clip();
         self.trim = None;
+        if let Some((source, None)) = self.pending_trim.take() {
+            match recording::preserve_rolling(source) {
+                Ok(path) => self.log(format!("已停止的录音保存在 {}", path.display())),
+                Err(error) => self.log(format!("无法保留录音临时文件：{error}")),
+            }
+        }
         if let Some(recording) = self.recording.take() {
             self.tray.set_recording(false);
             if let Err(error) = recording.cancel() {
@@ -408,22 +465,28 @@ impl App {
         }
     }
 
-    fn tick(&mut self) -> io::Result<()> {
+    fn tick_wheel(&mut self) -> io::Result<()> {
         if let Some(slot) = self.wheel.tick()
             && let Some(wheel) = self.active_wheel.take()
         {
             self.play_slot(wheel, slot)?;
         }
-        self.wheel.present().map_err(io::Error::other)?;
+        self.wheel.present().map_err(io::Error::other)
+    }
+
+    fn tick(&mut self) {
         // The backup worker owns the file; do not flush a debounce over it.
-        if !self.backup_running {
-            self.config.save_if_due(Instant::now())?;
+        if !self.backup_running
+            && let Err(error) = self.config.save_if_due(Instant::now())
+        {
+            self.report_error("保存设置失败", error);
         }
-        self.maybe_auto_backup()?;
+        if let Err(error) = self.maybe_auto_backup() {
+            self.report_error("自动备份失败", error);
+        }
         while let Ok(event) = self.playback.events.try_recv() {
             match event {
                 Event::Finished { id, result } => {
-                    self.previews.remove(&id);
                     self.trim_progress(id, None);
                     if self
                         .editor_preview
@@ -440,18 +503,6 @@ impl App {
                 Event::Progress { id, seconds } => {
                     self.trim_progress(id, Some(seconds));
                 }
-                Event::Voices { id, result } if Some(id) == self.voices_request => {
-                    self.voices_request = None;
-                    match result {
-                        Ok(voices) => {
-                            let count = voices.len();
-                            self.cartesia_voices = voices;
-                            self.ui_dirty = true;
-                            self.status(format!("已加载 {count} 个音色"));
-                        }
-                        Err(error) => self.failure(format!("获取音色列表失败：{error}")),
-                    }
-                }
                 Event::Warning { target, message } => {
                     self.log_target("WARNING", target, message);
                 }
@@ -460,26 +511,33 @@ impl App {
                     level,
                     message,
                 } => self.log_target(level, target, message),
-                _ => (),
             }
         }
         while let Ok(result) = self.results.try_recv() {
-            self.complete_background(result, false)?;
+            if let Err(error) = self.complete_background(result, false) {
+                self.report_error("操作失败", error);
+            }
         }
+        self.publish_if_changed();
+    }
+
+    fn publish_if_changed(&mut self) {
         // 截取、保存与试听状态改变 locked/preview；这些不写配置，必须单独触发推送。
         if self.ui_locked() != self.published_locked
             || self.ui_preview_key() != self.published_preview
         {
             self.ui_dirty = true;
         }
-        if self.ui_dirty || self.config.revision() != self.published_revision {
+        if self.ui_connected && (self.ui_dirty || self.config.revision() != self.published_revision)
+        {
             self.emit_snapshot();
         }
-        Ok(())
     }
 
-    fn snapshot(&self) -> Snapshot {
+    fn snapshot(&mut self) -> Snapshot {
+        self.snapshot_sequence += 1;
         Snapshot {
+            sequence: self.snapshot_sequence,
             settings: self.config.settings().clone(),
             outputs: self.outputs.clone(),
             microphones: self.microphones.clone(),
@@ -508,6 +566,7 @@ impl App {
     fn ui_locked(&self) -> bool {
         self.pending_saves > 0
             || self.trim.is_some()
+            || self.pending_trim.is_some()
             || self
                 .editor_preview
                 .as_ref()
@@ -522,15 +581,19 @@ impl App {
 
     fn emit_snapshot(&mut self) {
         let snapshot = self.snapshot();
+        self.mark_snapshot_published(&snapshot);
+        if let Err(error) = self.handle.emit(ui::SNAPSHOT_EVENT, snapshot) {
+            eprintln!("无法更新设置界面：{error}");
+        }
+    }
+
+    fn mark_snapshot_published(&mut self, snapshot: &Snapshot) {
         self.published_revision = self.config.revision();
         self.published_locked = snapshot.locked;
         self.published_preview = snapshot
             .preview
             .map(|preview| (preview.wheel, preview.slot, preview.text));
         self.ui_dirty = false;
-        if let Err(error) = self.handle.emit(ui::SNAPSHOT_EVENT, snapshot) {
-            eprintln!("无法更新设置界面：{error}");
-        }
     }
 
     /// 处理网页发来的请求。动作仍在原生线程执行，保持原有副作用顺序。
@@ -544,32 +607,41 @@ impl App {
                     if !self.ui_connected {
                         // 首次快照说明 WebView 已加载并完成挂载。
                         self.ui_connected = true;
+                        self.font_families = crate::fonts::installed_fonts();
+                        self.refresh_audio_clips();
                         self.log("设置界面已连接".into());
                     }
-                    let _ = reply.send(self.snapshot());
+                    let snapshot = self.snapshot();
+                    self.mark_snapshot_published(&snapshot);
+                    let _ = reply.send(snapshot);
+                    if std::mem::take(&mut self.open_logs_on_connect) {
+                        let _ = self.handle.emit(ui::OPEN_LOGS_EVENT, ());
+                    }
                 }
                 UiRequest::Action(action, reply) => {
-                    let audio_refresh = matches!(action, SettingsAction::RequestAudioDevices);
+                    let audio_refresh = action.refreshes_audio_library();
                     let result = self.settings_action(action);
-                    // 设备刷新无需扫描托管文件。
-                    if !audio_refresh {
+                    if audio_refresh {
                         self.refresh_audio_clips();
                     }
                     if let Err(error) = &result {
                         let message = error.to_string();
                         self.report_error("操作失败", io::Error::other(message));
                     }
-                    self.emit_snapshot();
-                    let _ = reply.send(
-                        result
-                            .map(|()| self.snapshot())
-                            .map_err(|error| error.to_string()),
-                    );
+                    // 快照只走事件通道，动作回复只报告完成或失败。
+                    self.publish_if_changed();
+                    let _ = reply.send(result.map_err(|error| error.to_string()));
                 }
                 UiRequest::SettingsMoved(x, y) => {
                     self.config
                         .remember_settings_position(WindowPosition { x, y });
                 }
+                UiRequest::TrimReady => {
+                    for event in self.pending_trim_events.take().into_iter().flatten() {
+                        event.emit(&self.handle);
+                    }
+                }
+                UiRequest::FeedbackReady => self.feedback_ready = true,
             }
         }
     }
@@ -580,13 +652,47 @@ impl App {
 
     pub(super) fn show_settings(&mut self) -> io::Result<()> {
         self.overlay.hide(false);
-        if let Some(window) = self.handle.get_webview_window("settings") {
-            place_settings_window(&window, self.config.settings().settings_window_position);
-            let _ = window.unminimize();
-            let _ = window.show();
-            let _ = window.set_focus();
+        if self.settings_window_creating {
+            return Ok(());
         }
+        if let Some(window) = self.handle.get_webview_window("settings") {
+            return self.show_settings_window(&window);
+        }
+        let handle = self.handle.clone();
+        let events = self.jobs.clone();
+        // Tauri 在内部调度建窗。等待 WebView2 时，原生线程仍要处理热键和退出。
+        std::thread::Builder::new()
+            .name("WordySettings".into())
+            .spawn(move || {
+                let result = ui::build_settings_window(&handle).map_err(io::Error::other);
+                let _ = events.send(Background::SettingsWindow(result));
+            })?;
+        self.settings_window_creating = true;
         Ok(())
+    }
+
+    fn show_settings_window(&mut self, window: &tauri::WebviewWindow) -> io::Result<()> {
+        self.hwnd = window.hwnd().map_err(io::Error::other)?.0 as isize;
+        place_settings_window(window, self.config.settings().settings_window_position);
+        let _ = window.unminimize();
+        window.show().map_err(io::Error::other)?;
+        let _ = window.set_focus();
+        Ok(())
+    }
+
+    pub(super) fn emit_trim_open(&mut self, open: ui::TrimOpen) {
+        self.emit_trim(TrimEvent::Open(open));
+    }
+
+    pub(super) fn emit_trim_peaks(&mut self, peaks: ui::TrimPeaks) {
+        self.emit_trim(TrimEvent::Peaks(peaks));
+    }
+
+    fn emit_trim(&mut self, event: TrimEvent) {
+        match &mut self.pending_trim_events {
+            Some(pending) => pending.push(event),
+            None => event.emit(&self.handle),
+        }
     }
 
     pub(super) fn settings_visible(&self) -> bool {
@@ -595,6 +701,51 @@ impl App {
     }
     fn complete_background(&mut self, result: Background, exiting: bool) -> io::Result<()> {
         match result {
+            Background::SettingsWindow(result) => {
+                self.settings_window_creating = false;
+                if !exiting {
+                    let pending = self.pending_trim.take();
+                    let shown = result.and_then(|()| {
+                        let window = self
+                            .handle
+                            .get_webview_window("settings")
+                            .ok_or_else(|| io::Error::other("设置窗口创建后不可用"))?;
+                        self.show_settings_window(&window)
+                    });
+                    if let Err(error) = shown {
+                        self.open_logs_on_connect = false;
+                        if let Some((source, None)) = pending {
+                            return Err(match recording::preserve_rolling(source) {
+                                Ok(path) => io::Error::other(format!(
+                                    "{error}（录音保留在 {}）",
+                                    path.display()
+                                )),
+                                Err(retain) => {
+                                    io::Error::other(format!("{error}（无法保留录音：{retain}）"))
+                                }
+                            });
+                        }
+                        return Err(error);
+                    }
+                    if let Some((source, target)) = pending {
+                        self.open_trim(source, target)?;
+                    }
+                }
+            }
+            Background::Voices(id, result) => {
+                if self.voices_request == Some(id) {
+                    self.voices_request = None;
+                    match result {
+                        Ok(voices) => {
+                            let count = voices.len();
+                            self.cartesia_voices = voices;
+                            self.ui_dirty = true;
+                            self.status(format!("已加载 {count} 个音色"));
+                        }
+                        Err(error) => self.failure(format!("获取音色列表失败：{error}")),
+                    }
+                }
+            }
             Background::NotificationFailed(message) => {
                 // Fall back to the tray when the notification-center sender is unavailable.
                 self.tray.notify(&message);
@@ -642,16 +793,31 @@ impl App {
                     }
                 }
             }
-            Background::Recording(result) => self.complete_recording(result, exiting)?,
+            Background::Recording(result) => {
+                let refresh =
+                    self.audio_clips_dirty || matches!(result, RecordingResult::SlotClip { .. });
+                let result = self.complete_recording(result, exiting);
+                if refresh {
+                    self.refresh_audio_clips();
+                }
+                result?;
+            }
         }
-        self.refresh_audio_clips();
+        if self.audio_clips_dirty && !self.backup_running && self.pending_saves == 0 {
+            self.refresh_audio_clips();
+        }
         Ok(())
     }
 
     fn refresh_audio_clips(&mut self) {
         // 后台暂存结束后文件才可供整理，导入备份期间也不扫描中间状态。
-        if self.pending_saves == 0 && !self.backup_running {
-            self.audio_clips = audio::list_clips(&self.config).unwrap_or_default();
+        self.audio_clips_dirty = self.pending_saves != 0 || self.backup_running;
+        if !self.audio_clips_dirty {
+            let clips = audio::list_clips(&self.config).unwrap_or_default();
+            if self.audio_clips != clips {
+                self.audio_clips = clips;
+                self.ui_dirty = true;
+            }
         }
     }
 }

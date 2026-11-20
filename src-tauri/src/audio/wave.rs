@@ -14,7 +14,15 @@ use super::{Pcm, invalid_audio};
 #[path = "wave_tests.rs"]
 mod tests;
 
+#[cfg(windows)]
+#[path = "decoded_pcm.rs"]
+mod decoded_pcm;
+#[cfg(windows)]
+pub(super) use decoded_pcm::DecodedPcm;
+
 const BLOCK_FRAMES: usize = 1024;
+#[cfg(any(windows, test))]
+const DECODED_BLOCK_BYTES: usize = BLOCK_FRAMES * 4;
 const PCM_SUBTYPE: [u8; 16] = [1, 0, 0, 0, 0, 0, 16, 0, 128, 0, 0, 170, 0, 56, 155, 113];
 
 #[derive(Clone, Copy)]
@@ -52,12 +60,44 @@ impl WaveFile {
         })
     }
 
+    pub(super) fn open_pcm16(path: &Path) -> Option<Self> {
+        if clip_format(path) != Some("wav") {
+            return None;
+        }
+        Self::open(path)
+            .ok()
+            .filter(|wave| wave.format.sample_width == 2 && wave.total_frames > 0)
+    }
+
     pub(super) fn sample_rate(&self) -> u32 {
         self.format.sample_rate
     }
 
     pub(super) fn channels(&self) -> u16 {
         self.format.channels
+    }
+
+    pub(super) fn select_range(&mut self, start: f64, end: f64) -> io::Result<()> {
+        let rate = f64::from(self.sample_rate());
+        if !start.is_finite()
+            || !end.is_finite()
+            || start < 0.0
+            || start >= end
+            || end > self.total_frames as f64 / rate
+        {
+            return Err(invalid_audio("请选择录音范围内的有效起止时间"));
+        }
+        let first = (start * rate).round_ties_even() as u64;
+        let last = (end * rate).round_ties_even() as u64;
+        if first >= last {
+            return Err(invalid_audio("片段至少需要包含一帧音频"));
+        }
+        self.file.seek(SeekFrom::Start(
+            self.data_start + first * self.format.block_align() as u64,
+        ))?;
+        self.total_frames = last - first;
+        self.remaining_frames = self.total_frames;
+        Ok(())
     }
 
     pub(super) fn read_pcm16(
@@ -263,30 +303,14 @@ pub fn recording_duration(path: &Path) -> io::Result<f64> {
 
 pub fn trim_recording(path: &Path, start: f64, end: f64) -> io::Result<NamedTempFile> {
     let mut wave = WaveFile::open(path)?;
-    let rate = f64::from(wave.sample_rate());
-    if !start.is_finite()
-        || !end.is_finite()
-        || start < 0.0
-        || start >= end
-        || end > wave.total_frames as f64 / rate
-    {
-        return Err(invalid_audio("请选择录音范围内的有效起止时间"));
-    }
-    let first = (start * rate).round_ties_even() as u64;
-    let last = (end * rate).round_ties_even() as u64;
-    if first >= last {
-        return Err(invalid_audio("片段至少需要包含一帧音频"));
-    }
-    let align = wave.format.block_align() as u64;
-    let length = (last - first) * align;
+    wave.select_range(start, end)?;
+    let length = wave.total_frames * wave.format.block_align() as u64;
     let mut temporary = Builder::new()
         .prefix("wordy-trim-")
         .suffix(".wav")
         .tempfile()?;
     let file = temporary.as_file_mut();
     write_header(file, wave.format, length)?;
-    wave.file
-        .seek(SeekFrom::Start(wave.data_start + first * align))?;
     if io::copy(&mut wave.file.take(length), file)? != length {
         return Err(invalid_audio("录音文件不完整"));
     }
@@ -372,7 +396,7 @@ pub fn decode_clip<'a>(path: &'a Path, cancel: &AtomicBool) -> io::Result<Decode
 }
 
 /// Import validation only needs a short prefix. Decoding the whole file wrote a
-/// full PCM temporary copy (about 1.3 GB for a one-hour MP3) before the slot
+/// full PCM temporary copy (about 691 MB for a one-hour MP3) before the slot
 /// could be used.
 pub(crate) fn validate_clip(path: &Path, cancel: &AtomicBool) -> io::Result<()> {
     decode_with(path, cancel, crate::ffmpeg::find, Some(5)).map(drop)
@@ -398,11 +422,7 @@ fn decode_with<'a>(
         return Err(io::Error::new(io::ErrorKind::NotFound, "找不到音频文件"));
     }
     let format = clip_format(path).ok_or_else(|| invalid_audio("不支持此音频格式"))?;
-    if format == "wav"
-        && let Ok(wave) = WaveFile::open(path)
-        && wave.format.sample_width == 2
-        && wave.total_frames > 0
-    {
+    if WaveFile::open_pcm16(path).is_some() {
         return Ok(DecodedClip::Original(path));
     }
     // 只用随 exe 打包的解码器；没有它就无法导入/播放这些格式。
@@ -412,7 +432,38 @@ fn decode_with<'a>(
         .suffix(".wav")
         .tempfile()?;
     let diagnostic = Builder::new().prefix("wordy-decode-").tempfile()?;
-    // Force a known audio demuxer and local-only protocol for untrusted clip contents.
+    let mut command = decoder_command(&executable, path, format)?;
+    command.args(["-f", "wav"]);
+    if let Some(seconds) = limit_seconds {
+        command.args(["-t", &seconds.to_string()]);
+    }
+    command
+        .arg(output.path())
+        .stdout(Stdio::null())
+        .stderr(Stdio::from(diagnostic.as_file().try_clone()?));
+    let mut child = spawn_decoder(&mut command)?;
+    let status = wait_for_decoder(&mut child, output.as_file(), cancel);
+    if status.is_err() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    // 内嵌解码器不覆盖的编码/损坏文件统一按「不支持」处理，不引导安装其它 FFmpeg。
+    if !status?.success() {
+        return Err(invalid_audio("不支持导入此音频格式"));
+    }
+    let wave = WaveFile::open(output.path())?;
+    if wave.total_frames == 0
+        || wave.format.sample_width != 2
+        || wave.format.sample_rate != 48_000
+        || wave.format.channels != 2
+    {
+        return Err(invalid_audio("音频解码失败：文件没有有效的 PCM16 音频内容"));
+    }
+    Ok(DecodedClip::Temporary(output))
+}
+
+fn decoder_command(executable: &Path, path: &Path, format: &str) -> io::Result<Command> {
+    // Both output modes force an allowlisted demuxer and forbid non-file input.
     let mut command = Command::new(executable);
     command
         .args([
@@ -441,44 +492,47 @@ fn decode_with<'a>(
             "48000",
             "-c:a",
             "pcm_s16le",
-            "-f",
-            "wav",
-        ]);
-    if let Some(seconds) = limit_seconds {
-        command.args(["-t", &seconds.to_string()]);
-    }
-    command
-        .arg(output.path())
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::from(diagnostic.as_file().try_clone()?));
+        ])
+        .stdin(Stdio::null());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
         command.creation_flags(CREATE_NO_WINDOW);
     }
-    let mut child = command
+    Ok(command)
+}
+
+fn spawn_decoder(command: &mut Command) -> io::Result<Child> {
+    command
         .spawn()
-        .map_err(|error| io::Error::other(format!("无法启动音频解码器：{error}")))?;
-    let status = wait_for_decoder(&mut child, output.as_file(), cancel);
-    if status.is_err() {
-        let _ = child.kill();
-        let _ = child.wait();
+        .map_err(|error| io::Error::other(format!("无法启动音频解码器：{error}")))
+}
+
+#[cfg(any(windows, test))]
+fn read_decoded_block(
+    input: &mut impl Read,
+    buffer: &mut [u8; DECODED_BLOCK_BYTES],
+) -> io::Result<Vec<i16>> {
+    let mut size = 0;
+    while size < buffer.len() {
+        match input.read(&mut buffer[size..]) {
+            Ok(0) => break,
+            Ok(n) => size += n,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
+        }
     }
-    // 内嵌解码器不覆盖的编码/损坏文件统一按「不支持」处理，不引导安装其它 FFmpeg。
-    if !status?.success() {
-        return Err(invalid_audio("不支持导入此音频格式"));
+    if !size.is_multiple_of(4) {
+        return Err(invalid_audio("音频解码结果未对齐到 PCM 帧"));
     }
-    let wave = WaveFile::open(output.path())?;
-    if wave.total_frames == 0
-        || wave.format.sample_width != 2
-        || wave.format.sample_rate != 48_000
-        || wave.format.channels != 2
-    {
-        return Err(invalid_audio("音频解码失败：文件没有有效的 PCM16 音频内容"));
-    }
-    Ok(DecodedClip::Temporary(output))
+    Ok(buffer[..size]
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .copied()
+        .map(i16::from_le_bytes)
+        .collect())
 }
 
 fn check_cancelled(cancel: &AtomicBool) -> io::Result<()> {

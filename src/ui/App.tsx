@@ -82,6 +82,7 @@ type CableStatus =
   | { state: "check_failed" };
 
 export type Snapshot = {
+  sequence: number;
   settings: Settings;
   outputs: AudioIdentity[];
   microphones: string[];
@@ -132,8 +133,12 @@ export default function App() {
   const content = useRef<HTMLDivElement>(null);
   const logsButton = useRef<HTMLButtonElement>(null);
   const pending = useRef<Record<string, number>>({});
+  const latestSnapshot = useRef(0);
 
   const apply = useCallback((next: Snapshot) => {
+    // 首次读取的回复可能晚于更新事件，保留新快照。
+    if (next.sequence <= latestSnapshot.current) return;
+    latestSnapshot.current = next.sequence;
     setSnapshot(next);
     const value = next.settings.overlay_placeholder;
     // 只在后端值真正变化时覆盖正在编辑的输入框。
@@ -142,9 +147,6 @@ export default function App() {
 
   useEffect(() => {
     let disposed = false;
-    invoke<Snapshot>("wordy_snapshot")
-      .then((next) => !disposed && apply(next))
-      .catch((error) => console.error(error));
     const unlisten = listen<Snapshot>("wordy://snapshot", (event) => apply(event.payload));
     const unlistenLog = listen<string>("wordy://log", (event) =>
       setLogs((current) => (current ? [...current.slice(-4999), event.payload] : current)),
@@ -154,6 +156,13 @@ export default function App() {
         .then(setLogs)
         .catch((error) => console.error(error));
     });
+    Promise.all([unlisten, unlistenLog, unlistenOpen])
+      .then(async () => {
+        if (disposed) return;
+        const next = await invoke<Snapshot>("wordy_snapshot");
+        if (!disposed) apply(next);
+      })
+      .catch((error) => console.error(error));
     return () => {
       disposed = true;
       unlisten.then((stop) => stop());
@@ -165,11 +174,11 @@ export default function App() {
   // 返回 Promise：需要按结果复位自身状态的按钮（如截取保存）才能等原生回复。
   const run = useCallback(
     (action: Record<string, unknown>) => {
-      const request = invoke<Snapshot>("wordy_action", { action }).then(apply);
+      const request = invoke<void>("wordy_action", { action });
       request.catch((error) => console.error(error));
       return request;
     },
-    [apply],
+    [],
   );
 
   // 设置页、弹窗和截取窗都是 React 渲染，界面字体要同步到 CSS 变量才与原生窗口一致。

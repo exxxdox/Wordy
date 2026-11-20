@@ -16,6 +16,83 @@ fn trim_creates_new_wave_with_exact_interleaved_selection() {
 }
 
 #[test]
+fn wave_playback_seeks_and_stops_at_the_same_frames_as_trim() {
+    let source = write_wave(&Pcm {
+        sample_rate: 4,
+        channels: 2,
+        samples: vec![1, -1, 2, -2, 3, -3, 4, -4],
+    })
+    .unwrap();
+    let mut wave = WaveFile::open(source.path()).unwrap();
+    assert!(wave.select_range(0.1, 0.11).is_err());
+    wave.select_range(0.25, 0.75).unwrap();
+    let mut buffer = Vec::new();
+    assert_eq!(wave.total_frames, 2);
+    assert_eq!(wave.read_pcm16(1, &mut buffer).unwrap(), [2, -2]);
+    assert_eq!(wave.read_pcm16(100, &mut buffer).unwrap(), [3, -3]);
+    assert!(wave.read_pcm16(100, &mut buffer).unwrap().is_empty());
+}
+
+#[test]
+fn decoded_pcm_reads_whole_bounded_blocks_and_rejects_partial_frames() {
+    let raw = [1, 0, 254, 255].repeat(BLOCK_FRAMES + 1);
+    let mut input = raw.as_slice();
+    let mut buffer = [0; BLOCK_FRAMES * 4];
+    let samples = read_decoded_block(&mut input, &mut buffer).unwrap();
+    assert_eq!(samples.len(), BLOCK_FRAMES * 2);
+    assert!(
+        samples
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .all(|frame| *frame == [1, -2])
+    );
+    assert_eq!(
+        read_decoded_block(&mut input, &mut buffer).unwrap(),
+        [1, -2]
+    );
+    assert!(
+        read_decoded_block(&mut input, &mut buffer)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(read_decoded_block(&mut &[1_u8, 0][..], &mut buffer).is_err());
+}
+
+#[cfg(windows)]
+#[test]
+fn bundled_decoder_streams_wave_over_its_file_protocol_and_cancels() {
+    let source = write_wave(&Pcm {
+        sample_rate: 48_000,
+        channels: 2,
+        samples: [19, -23].repeat(BLOCK_FRAMES * 64),
+    })
+    .unwrap();
+    let cancel = AtomicBool::new(false);
+    let bundled = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/ffmpeg.exe");
+    let mut stream =
+        DecodedPcm::open_with(source.path(), &cancel, || Some(bundled.clone())).unwrap();
+    assert_eq!(
+        stream.next_block(&cancel).unwrap().unwrap(),
+        [19, -23].repeat(BLOCK_FRAMES)
+    );
+    cancel.store(true, Ordering::Release);
+    assert_eq!(
+        stream.next_block(&cancel).unwrap_err().kind(),
+        io::ErrorKind::Interrupted
+    );
+    drop(stream);
+
+    let directory = tempfile::tempdir().unwrap();
+    let corrupt = directory.path().join("clip.mp3");
+    std::fs::write(&corrupt, b"not an MP3").unwrap();
+    cancel.store(false, Ordering::Release);
+    let result = DecodedPcm::open_with(&corrupt, &cancel, || Some(bundled))
+        .and_then(|mut stream| stream.next_block(&cancel));
+    assert_eq!(result.unwrap_err().kind(), io::ErrorKind::InvalidInput);
+}
+
+#[test]
 fn waveform_uses_cross_channel_peak_without_overflow() {
     let pcm = Pcm {
         sample_rate: 4,
@@ -154,5 +231,48 @@ fn original_clip_formats_decode_with_system_ffmpeg_command() {
         let pcm = read_wave(decoded.as_ref()).unwrap();
         assert_eq!((pcm.sample_rate, pcm.channels), (48_000, 2), "{extension}");
         assert!(pcm.samples.iter().any(|&sample| sample != 0), "{extension}");
+
+        #[cfg(windows)]
+        {
+            let mut stream = DecodedPcm::open_with(&fixture, &cancel, || Some(ffmpeg.to_owned()))
+                .unwrap_or_else(|error| panic!("{extension}: {error}"));
+            let mut samples = Vec::new();
+            while let Some(block) = stream.next_block(&cancel).unwrap() {
+                assert!(block.len() <= BLOCK_FRAMES * 2);
+                samples.extend(block);
+            }
+            assert_eq!(samples, pcm.samples, "{extension}");
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        // The bundled build cannot resample. Supply native-rate integer PCM in a compressed file.
+        let pcm = Pcm {
+            sample_rate: 48_000,
+            channels: 2,
+            samples: [17, -11].repeat(BLOCK_FRAMES + 37),
+        };
+        let source = write_wave(&pcm).unwrap();
+        let fixture = directory.path().join("压缩片段.flac");
+        let result = Command::new(ffmpeg)
+            .args(["-hide_banner", "-loglevel", "error", "-y", "-i"])
+            .arg(source.path())
+            .args(["-c:a", "flac"])
+            .arg(&fixture)
+            .output()
+            .unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let bundled = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/ffmpeg.exe");
+        let mut stream = DecodedPcm::open_with(&fixture, &cancel, || Some(bundled)).unwrap();
+        let mut samples = Vec::new();
+        while let Some(block) = stream.next_block(&cancel).unwrap() {
+            samples.extend(block);
+        }
+        assert_eq!(samples, pcm.samples);
     }
 }

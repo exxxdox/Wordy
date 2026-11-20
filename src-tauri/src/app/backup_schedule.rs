@@ -22,12 +22,20 @@ impl AutoBackupSchedule {
         *self = Self::new(Some(Duration::ZERO));
     }
 
-    pub(super) fn is_due(&self, interval: Duration, pending_saves: usize) -> bool {
+    #[cfg(test)]
+    fn is_due(&self, interval: Duration, pending_saves: usize) -> bool {
+        self.deadline(interval, pending_saves)
+            .is_some_and(|deadline| Instant::now() >= deadline)
+    }
+
+    pub(super) fn deadline(&self, interval: Duration, pending_saves: usize) -> Option<Instant> {
         // Keep disk age separate: a backup can predate this boot's monotonic clock.
-        pending_saves == 0
-            && self
-                .previous_age
-                .is_none_or(|age| age.saturating_add(self.started.elapsed()) >= interval)
+        (pending_saves == 0).then(|| {
+            self.started
+                + self
+                    .previous_age
+                    .map_or(Duration::ZERO, |age| interval.saturating_sub(age))
+        })
     }
 }
 
@@ -55,6 +63,26 @@ mod tests {
     use super::*;
     use std::fs::{File, FileTimes};
     use std::time::UNIX_EPOCH;
+
+    #[test]
+    fn waits_until_due_and_does_not_wake_repeatedly_while_saving() {
+        let interval = Duration::from_secs(3600);
+        let started = Instant::now();
+        let schedule = AutoBackupSchedule {
+            started,
+            previous_age: Some(Duration::from_secs(3590)),
+        };
+        assert_eq!(
+            schedule.deadline(interval, 0),
+            Some(started + Duration::from_secs(10))
+        );
+        assert_eq!(schedule.deadline(interval, 1), None);
+        let missing = AutoBackupSchedule {
+            started,
+            previous_age: None,
+        };
+        assert_eq!(missing.deadline(interval, 0), Some(started));
+    }
 
     #[test]
     fn resumes_from_the_newest_automatic_backup_across_restart() {

@@ -29,7 +29,7 @@ impl App {
                     return Err(error);
                 }
                 if provider == Provider::Cartesia {
-                    self.refresh_voices();
+                    self.refresh_voices()?;
                 }
             }
             SetBackend(backend) => {
@@ -102,8 +102,7 @@ impl App {
                 }
             }
             RefreshVoices => {
-                self.status("正在加载音色…".into());
-                self.refresh_voices();
+                self.refresh_voices()?;
             }
             SelectVoice(Provider::Cartesia, voice) => self.edit(|s| {
                 s.tts_providers.cartesia.voice_id = (!voice.id.is_empty()).then_some(voice.id);
@@ -177,6 +176,7 @@ impl App {
             DownloadVbCable => self.open_url("https://vb-audio.com/Cable/")?,
             OpenLogs => self.show_logs()?,
             RequestAudioDevices => self.load_audio_settings(),
+            RefreshAudioLibrary => (),
             Feedback(message) => self.failure(message),
             SelectWheel(index) => self.wheel_select(index)?,
             AddWheel => self.wheel_add()?,
@@ -241,7 +241,11 @@ impl App {
     fn rebuild_engine(&mut self) -> io::Result<()> {
         let settings = self.config.settings().clone();
         let api_key = self.vault.load(settings.active_tts_provider)?;
-        self.voices_request = None;
+        if settings.active_tts_provider != self.engine.settings.active_tts_provider
+            || api_key != self.engine.api_key
+        {
+            self.voices_request = None;
+        }
         self.engine = Arc::new(EngineSettings { settings, api_key });
         Ok(())
     }
@@ -266,19 +270,32 @@ impl App {
         self.ui_dirty = true;
         self.rebuild_engine()?;
         if value.is_some() && provider == Provider::Cartesia {
-            self.refresh_voices();
+            self.refresh_voices()?;
         }
         self.status("已更新 API 密钥".into());
         Ok(())
     }
 
-    fn refresh_voices(&mut self) {
-        if self.config.settings().active_tts_provider != Provider::Cartesia {
-            return;
+    fn refresh_voices(&mut self) -> io::Result<()> {
+        if self.config.settings().active_tts_provider != Provider::Cartesia
+            || self.voices_request.is_some()
+        {
+            return Ok(());
         }
         let id = self.id();
+        let engine = self.engine.clone();
+        let events = self.jobs.clone();
+        // 网络查询在弱网时不能阻塞本地轮盘音频或朗读。
+        std::thread::Builder::new()
+            .name("WordyVoices".into())
+            .spawn(move || {
+                let result = crate::tts::TtsEngine::new(&engine.settings, engine.api_key.clone())
+                    .fetch_voices();
+                let _ = events.send(Background::Voices(id, result));
+            })?;
         self.voices_request = Some(id);
-        self.playback.fetch_voices(id, self.engine.clone());
+        self.status("正在加载音色…".into());
+        Ok(())
     }
 
     pub(super) fn load_audio_settings(&mut self) {
@@ -548,16 +565,21 @@ impl App {
         Ok(true)
     }
 
-    /// 定时备份：从上次触发开始计算间隔；失败或缺少密码时下一间隔重试。
-    pub(super) fn maybe_auto_backup(&mut self) -> io::Result<()> {
+    pub(super) fn auto_backup_deadline(&self) -> Option<Instant> {
         let settings = self.config.settings();
         if self.backup_running || !settings.auto_backup_enabled {
-            return Ok(());
+            return None;
         }
         let interval = Duration::from_secs_f64(settings.auto_backup_interval_hours * 3600.0);
+        self.auto_backup_schedule
+            .deadline(interval, self.pending_saves)
+    }
+
+    /// 定时备份：从上次触发开始计算间隔；失败或缺少密码时下一间隔重试。
+    pub(super) fn maybe_auto_backup(&mut self) -> io::Result<()> {
         if !self
-            .auto_backup_schedule
-            .is_due(interval, self.pending_saves)
+            .auto_backup_deadline()
+            .is_some_and(|deadline| Instant::now() >= deadline)
         {
             return Ok(());
         }

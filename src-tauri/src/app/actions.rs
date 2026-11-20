@@ -101,7 +101,11 @@ impl App {
 
     pub(super) fn show_logs(&mut self) -> io::Result<()> {
         self.show_settings()?;
-        let _ = self.handle.emit(crate::ui::OPEN_LOGS_EVENT, ());
+        if self.ui_connected {
+            let _ = self.handle.emit(crate::ui::OPEN_LOGS_EVENT, ());
+        } else {
+            self.open_logs_on_connect = true;
+        }
         Ok(())
     }
 }

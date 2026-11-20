@@ -6,8 +6,8 @@ use std::thread;
 use std::time::Duration;
 
 use super::wasapi::{cancellation_point, play_open_wave};
-use super::wave::WaveFile;
-use super::{Endpoint, Pcm, PcmStream, PlaybackRoute, invalid_audio, play_wave};
+use super::wave::{DecodedPcm, WaveFile};
+use super::{Endpoint, Pcm, PcmStream, PlaybackRoute, apply_gain, invalid_audio};
 
 static SIDETONE_ACTIVE: AtomicBool = AtomicBool::new(false);
 
@@ -45,20 +45,36 @@ fn start_sidetone(
     Some(result)
 }
 
-pub fn play_routed_wave(
+pub(crate) fn play_routed_clip(
     route: &PlaybackRoute<'_>,
     path: &Path,
+    range: Option<(f64, f64)>,
     gain: f64,
     cancel: Arc<AtomicBool>,
     mut progress: Option<&mut dyn FnMut(f64)>,
 ) -> io::Result<()> {
     cancellation_point(&cancel)?;
+    let open = || -> io::Result<WaveFile> {
+        let mut wave = WaveFile::open(path)?;
+        if let Some((start, end)) = range {
+            wave.select_range(start, end)?;
+        }
+        Ok(wave)
+    };
+    let wave = if range.is_some() {
+        open()?
+    } else if let Some(wave) = WaveFile::open_pcm16(path) {
+        wave
+    } else {
+        return play_decoded_clip(route, path, gain, &cancel);
+    };
+    let mut wave = Some(wave);
     let mut local = route.local;
     let mut monitor = None;
     let main = route.main.map(|endpoint| {
         let mut progress_callback = |elapsed| {
             if let Some(local) = local.take().filter(|local| local.id != endpoint.id)
-                && let Ok(wave) = WaveFile::open(path)
+                && let Ok(wave) = open()
             {
                 // Give the worker its own existing handle before the caller can drop the temporary path.
                 let local = local.clone();
@@ -69,7 +85,14 @@ pub fn play_routed_wave(
                 callback(elapsed);
             }
         };
-        play_wave(endpoint, path, gain, &cancel, Some(&mut progress_callback))
+        play_open_wave(
+            endpoint,
+            wave.take()
+                .expect("the primary endpoint opens the wave first"),
+            gain,
+            &cancel,
+            Some(&mut progress_callback),
+        )
     });
     if let Some(monitor) = monitor {
         let result = monitor.recv_timeout(Duration::from_secs(2)).ok();
@@ -87,9 +110,32 @@ pub fn play_routed_wave(
         } else {
             Some(SidetoneLease::take().ok_or_else(|| io::Error::other("上一段返听尚未收尾"))?)
         };
-        return play_wave(local, path, gain, &cancel, progress);
+        return play_open_wave(local, wave.map_or_else(open, Ok)?, gain, &cancel, progress);
     }
     main.unwrap_or_else(|| Err(io::Error::other("没有可用的播放设备")))
+}
+
+fn play_decoded_clip(
+    route: &PlaybackRoute<'_>,
+    path: &Path,
+    gain: f64,
+    cancel: &AtomicBool,
+) -> io::Result<()> {
+    let mut decoder = DecodedPcm::open(path, cancel)?;
+    let mut block = decoder
+        .next_block(cancel)?
+        .ok_or_else(|| invalid_audio("音频解码失败：文件没有有效的 PCM16 音频内容"))?;
+    let mut stream = RoutedStream::open(route, 48_000, 2)?;
+    loop {
+        if gain != 1.0 {
+            block = apply_gain(&block, gain)?;
+        }
+        stream.write(&block, cancel)?;
+        let Some(next) = decoder.next_block(cancel)? else {
+            return stream.finish(cancel);
+        };
+        block = next;
+    }
 }
 
 pub fn play_routed_pcm(
