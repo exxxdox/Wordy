@@ -156,8 +156,15 @@ impl App {
                         &format!("删除 {count} 个未被任何轮盘引用的音频文件？此操作不可撤销。"),
                     )
                 {
-                    let removed = audio::remove_unused_clips(&mut self.config)?;
-                    self.status(format!("已清理 {removed} 个音频文件"));
+                    let report = audio::remove_unused_clips(&mut self.config)?;
+                    let count = report.names.len();
+                    self.last_cleaned_audio = report.names;
+                    if let Some(error) = report.error {
+                        return Err(io::Error::other(format!(
+                            "已清理 {count} 个音频文件；{error}"
+                        )));
+                    }
+                    self.status(format!("已清理 {count} 个音频文件"));
                 }
             }
             DownloadVbCable => self.open_url("https://vb-audio.com/Cable/")?,

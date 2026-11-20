@@ -287,12 +287,19 @@ fn unused_clips(store: &ConfigStore) -> io::Result<Vec<PathBuf>> {
             .and_then(|name| name.to_str())
             .is_some_and(|id| !referenced.contains(&id.to_ascii_lowercase()))
     });
+    paths.sort_unstable();
     Ok(paths)
 }
 
+pub struct CleanupReport {
+    pub names: Vec<String>,
+    pub error: Option<io::Error>,
+}
+
 /// 以清理时的配置为准，避免清理确认后已重新引用的文件。
-pub fn remove_unused_clips(store: &mut ConfigStore) -> io::Result<usize> {
+pub fn remove_unused_clips(store: &mut ConfigStore) -> io::Result<CleanupReport> {
     let mut removed = Vec::new();
+    let mut error = None;
     for path in unused_clips(store)? {
         let name = path
             .file_name()
@@ -301,17 +308,31 @@ pub fn remove_unused_clips(store: &mut ConfigStore) -> io::Result<usize> {
         match fs::remove_file(&path) {
             Ok(()) => removed.push(name.to_owned()),
             Err(error) if error.kind() == io::ErrorKind::NotFound => (),
-            Err(error) => return Err(error),
+            Err(cause) => {
+                error = Some(cause);
+                break;
+            }
         }
     }
-    if !removed.is_empty() {
-        store.update(|settings| {
+    // 在删除名称映射前保留显示名，即使清理到一半失败也能如实反馈。
+    let mut names: Vec<_> = removed
+        .iter()
+        .map(|id| clip_name(store, id).to_owned())
+        .collect();
+    names.sort_unstable();
+    if !removed.is_empty()
+        && let Err(save) = store.update(|settings| {
             for id in &removed {
                 settings.audio_clip_names.remove(id);
             }
-        })?;
+        })
+    {
+        error = Some(match error {
+            Some(cause) => io::Error::other(format!("{cause}；音频名称表保存失败：{save}")),
+            None => io::Error::other(format!("音频名称表保存失败：{save}")),
+        });
     }
-    Ok(removed.len())
+    Ok(CleanupReport { names, error })
 }
 
 pub(crate) fn clips_directory(config: &Path) -> io::Result<PathBuf> {

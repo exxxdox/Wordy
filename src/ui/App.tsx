@@ -93,6 +93,7 @@ export type Snapshot = {
   backup_password_set: boolean;
   backup_folder: string;
   unused_clips: number;
+  last_cleaned_audio: string[];
   audio_clips: AudioClip[];
   locked: boolean;
   preview: { wheel: number; slot: number; text: boolean } | null;
@@ -821,6 +822,22 @@ export default function App() {
                   </button>
                 </div>
               </Row>
+              {snapshot.last_cleaned_audio.length > 0 && (
+                <section className="my-3 rounded-lg border border-[var(--line-soft)] p-3">
+                  <h3 id="cleaned-audio-heading" className="text-sm font-medium">
+                    最近清理的音频（{snapshot.last_cleaned_audio.length} 个）
+                  </h3>
+                  <ul
+                    aria-labelledby="cleaned-audio-heading"
+                    className="mt-2 max-h-44 list-disc space-y-1 overflow-y-auto pl-5 text-sm text-[var(--muted)]"
+                    tabIndex={0}
+                  >
+                    {snapshot.last_cleaned_audio.map((name, index) => (
+                      <li className="break-all" key={index}>{name}</li>
+                    ))}
+                  </ul>
+                </section>
+              )}
             </Panel>
           )}
         </div>
