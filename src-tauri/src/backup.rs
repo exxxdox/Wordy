@@ -11,15 +11,26 @@ use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
 use crate::audio;
 use crate::backup_crypto::{EncryptedWriter, decrypt_backup};
-use crate::config::{ConfigStore, Settings, Wheel};
+use crate::config::{ConfigStore, Settings};
 use crate::credentials::{CredentialStore, Provider};
 use crate::hotkey::parse_hotkey;
+
+mod recovery;
+pub use recovery::recover_import;
+pub(crate) use recovery::{import_pending, persist_durable};
 
 const MAX_SIZE: u64 = 2 * 1024_u64.pow(3);
 const MAX_METADATA: u64 = 4 * 1024_u64.pow(2);
 const MAX_ENTRIES: usize = 10_000;
 const REQUIRED: [&str; 3] = ["manifest.json", "config.toml", "secrets.json"];
 const MANIFEST: &[u8] = br#"{"format":"wordy-backup","version":1}"#;
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Manifest {
+    format: String,
+    version: u32,
+}
 
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -56,7 +67,13 @@ pub fn export_backup(
     let target = resolve_path(destination)?;
     let config_file = resolve_path(config_path)?;
     let audio_dir = resolve_path(&audio::clips_directory(config_path)?)?;
-    if same_path(&target, &config_file) || target.ancestors().any(|p| same_path(p, &audio_dir)) {
+    if same_path(&target, &config_file)
+        || same_path(
+            &target,
+            &resolve_path(&recovery::journal_path(config_path))?,
+        )
+        || target.ancestors().any(|p| same_path(p, &audio_dir))
+    {
         return Err(invalid("备份不能覆盖配置文件或保存到音频托管目录"));
     }
     let secrets = serde_json::to_vec(&Secrets::read(credentials)?).map_err(io::Error::other)?;
@@ -73,6 +90,8 @@ pub fn export_backup(
     {
         return Err(invalid("备份超过限制或包含无效文件名"));
     }
+    // 避免新版应用写出标为 V1、但按 V1 规则无法读取的配置。
+    validate_settings_v1(config_text.parse::<Table>().map_err(io::Error::other)?)?;
     fs::create_dir_all(folder)?;
     let mut staging = NamedTempFile::new_in(folder)?;
     let encrypted = EncryptedWriter::new(staging.as_file_mut(), password)?;
@@ -120,25 +139,54 @@ pub fn backup_directory(config_path: &Path) -> PathBuf {
     parent(config_path).join("backup")
 }
 
-/// 只清理自动备份，保留文件名最新的 keep 份；手动导出的文件不动。
-pub fn prune_backups(directory: &Path, keep: usize) -> io::Result<()> {
+pub fn auto_backup_directory(config_path: &Path) -> PathBuf {
+    backup_directory(config_path).join("auto")
+}
+
+pub fn validate_manual_destination(config_path: &Path, destination: &Path) -> io::Result<()> {
+    let auto = resolve_path(&auto_backup_directory(config_path))?;
+    let target = resolve_path(destination)?;
+    if target.ancestors().any(|path| same_path(path, &auto)) {
+        return Err(invalid("请将手动备份保存到自动备份目录之外"));
+    }
+    Ok(())
+}
+
+pub(crate) fn is_auto_backup_name(name: &str) -> bool {
+    let Some(timestamp) = name
+        .strip_prefix("auto-")
+        .and_then(|name| name.strip_suffix(".wordybackup"))
+    else {
+        return false;
+    };
+    let bytes = timestamp.as_bytes();
+    bytes.len() == 15
+        && bytes[8] == b'-'
+        && bytes[..8].iter().all(u8::is_ascii_digit)
+        && bytes[9..].iter().all(u8::is_ascii_digit)
+}
+
+/// 只清理专用目录中最旧的自动备份；旧版共享目录不动。
+pub fn prune_backups(config_path: &Path, keep: usize) -> io::Result<()> {
+    let directory = resolve_path(&auto_backup_directory(config_path))?;
+    let expected = resolve_path(&backup_directory(config_path))?.join("auto");
+    if !same_path(&directory, &expected) {
+        return Err(invalid("自动备份目录指向其他位置，已跳过清理"));
+    }
     let mut names = Vec::new();
-    for entry in fs::read_dir(directory)? {
+    for entry in fs::read_dir(&directory)? {
         let entry = entry?;
         let name = entry.file_name();
         let Some(name) = name.to_str() else {
             continue;
         };
-        if name.starts_with("auto-")
-            && name.ends_with(".wordybackup")
-            && entry.file_type()?.is_file()
-        {
-            names.push(name.to_owned());
+        if is_auto_backup_name(name) && entry.file_type()?.is_file() {
+            names.push((entry.metadata()?.modified()?, name.to_owned()));
         }
     }
     names.sort_unstable();
     let remove = names.len().saturating_sub(keep.max(1));
-    for name in &names[..remove] {
+    for (_, name) in &names[..remove] {
         fs::remove_file(directory.join(name))?;
     }
     Ok(())
@@ -151,22 +199,23 @@ pub fn import_backup(
     password: &str,
 ) -> io::Result<()> {
     validate_password(password)?;
+    recovery::ensure_idle(config.path())?;
     let folder = parent(config.path());
     fs::create_dir_all(folder)?;
     let mut plaintext = decrypt_backup(source, password, folder)?;
     let entry_count = zip_entry_count(&mut plaintext)?;
     let mut archive = ZipArchive::new(plaintext).map_err(io::Error::other)?;
     let names = validate_archive(&mut archive, entry_count)?;
-    let manifest: serde_json::Value =
-        serde_json::from_slice(&read_metadata(&mut archive, REQUIRED[0])?)
-            .map_err(io::Error::other)?;
-    if manifest != serde_json::json!({"format": "wordy-backup", "version": 1}) {
-        return Err(invalid("不支持此备份版本"));
-    }
-    let text =
-        String::from_utf8(read_metadata(&mut archive, REQUIRED[1])?).map_err(io::Error::other)?;
-    let table = text.parse::<Table>().map_err(io::Error::other)?;
-    let mut restored = validate_settings(&table)?;
+    let manifest: Manifest = serde_json::from_slice(&read_metadata(&mut archive, REQUIRED[0])?)
+        .map_err(io::Error::other)?;
+    let mut restored = match (manifest.format.as_str(), manifest.version) {
+        ("wordy-backup", 1) => {
+            let text = String::from_utf8(read_metadata(&mut archive, REQUIRED[1])?)
+                .map_err(io::Error::other)?;
+            validate_settings_v1(text.parse::<Table>().map_err(io::Error::other)?)?
+        }
+        _ => return Err(invalid("不支持此备份版本")),
+    };
     let key_data = read_metadata(&mut archive, REQUIRED[2])?;
     let key_table: serde_json::Value =
         serde_json::from_slice(&key_data).map_err(io::Error::other)?;
@@ -196,34 +245,38 @@ pub fn import_backup(
         .referenced_audio()
         .map(str::to_owned)
         .collect();
-    let mut changed = Vec::new();
-    let mut created = Vec::new();
+    let mut replacements = BTreeMap::new();
+    for name in names {
+        let extension = audio::audio_extension(Path::new(&name))
+            .ok_or_else(|| invalid("备份包含无效音频路径"))?;
+        let replacement = format!("{}.{extension}", uuid::Uuid::new_v4().simple());
+        if directory.join(&replacement).try_exists()? {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "音频名称已存在",
+            ));
+        }
+        replacements.insert(name, replacement);
+    }
+    let journal = recovery::ImportJournal::begin(
+        config.path(),
+        previous,
+        imported,
+        replacements.values().cloned().collect(),
+        previous_clips,
+    )?;
     let result = (|| {
         fs::create_dir_all(&directory)?;
-        let mut replacements = BTreeMap::new();
-        for name in names {
+        for (name, replacement) in &replacements {
             let mut entry = archive
                 .by_name(&format!("audio_clips/{name}"))
                 .map_err(io::Error::other)?;
-            let suffix = format!(
-                ".{}",
-                Path::new(&name)
-                    .extension()
-                    .and_then(|x| x.to_str())
-                    .unwrap_or_default()
-                    .to_lowercase()
-            );
-            let id = uuid::Uuid::new_v4().simple().to_string();
-            let replacement = format!("{id}{suffix}");
-            let path = directory.join(&replacement);
-            let mut output = File::create_new(&path)?;
-            created.push(path);
+            let mut output = File::create_new(directory.join(replacement))?;
             let size = entry.size();
             if io::copy(&mut (&mut entry).take(size + 1), &mut output)? != size {
                 return Err(invalid("备份音频大小无效"));
             }
             output.sync_all()?;
-            replacements.insert(name, replacement);
         }
         for slot in restored.chat_wheel_slots.iter_mut().chain(
             restored
@@ -235,52 +288,23 @@ pub fn import_backup(
                 slot.clone_from(replacement);
             }
         }
-        for provider in [Provider::Cartesia, Provider::Volcengine] {
-            let secret = imported.get(provider);
-            if secret != previous.get(provider) {
-                // A backend can report an error after partially updating a credential.
-                changed.push(provider);
-                set_secret(credentials, provider, secret)?;
-            }
-            restored.set_credential_status(provider, secret.is_some());
-        }
-        config.replace(restored)?;
-        // 导入已提交；只删除新配置不再引用的旧音频。清理失败不回滚，
-        // 与替换槽位时的旧音频处理一致。
-        for name in &previous_clips {
-            if config
-                .settings()
-                .referenced_audio()
-                .any(|slot| slot.eq_ignore_ascii_case(name))
-            {
-                continue;
-            }
-            if let Err(error) = fs::remove_file(directory.join(name))
-                && error.kind() != io::ErrorKind::NotFound
-            {
-                eprintln!("旧音频清理失败：{error}");
-            }
-        }
+        journal.apply_credentials(credentials, &mut restored)?;
+        // 配置与事务标记一次替换，重启后可判断应回滚还是完成提交。
+        config.replace_with_prefix(restored, &journal.commit_marker())?;
         Ok(())
     })();
     if let Err(error) = result {
-        let mut rollback_error = None;
-        for provider in changed.into_iter().rev() {
-            if let Err(error) = set_secret(credentials, provider, previous.get(provider)) {
-                rollback_error.get_or_insert(error);
-            }
-        }
-        for path in created {
-            if let Err(error) = fs::remove_file(path) {
-                rollback_error.get_or_insert(error);
-            }
-        }
-        return match rollback_error {
-            Some(rollback) => Err(io::Error::other(format!(
+        return match recover_import(config.path(), credentials) {
+            Err(rollback) => Err(io::Error::other(format!(
                 "导入失败，且未能完整回滚: {error} ({rollback})"
             ))),
-            None => Err(error),
+            Ok(()) => Err(error),
         };
+    }
+    // 清理失败不回滚已提交设置。进程中断后，启动恢复会再次清理旧引用。
+    journal.clean_replaced_clips(&directory, config.settings());
+    if let Err(error) = journal.clear(config.path()) {
+        eprintln!("导入已提交，恢复记录将在下次启动时清理：{error}");
     }
     Ok(())
 }
@@ -377,16 +401,24 @@ fn zip_entry_count(file: &mut File) -> io::Result<usize> {
     Err(invalid("备份文件数量或目录无效"))
 }
 
-fn validate_settings(table: &Table) -> io::Result<Settings> {
-    let mut template = Value::try_from(Settings::default()).map_err(io::Error::other)?;
-    let default_fields = template
-        .as_table_mut()
-        .ok_or_else(|| invalid("配置模板无效"))?;
-    if default_fields.keys().any(|key| {
+fn validate_settings_v1(mut table: Table) -> io::Result<Settings> {
+    let template = include_str!("backup/config-v1.toml")
+        .parse::<Table>()
+        .map_err(io::Error::other)?;
+    if template.keys().any(|key| {
         !matches!(
             key.as_str(),
-            // 旧备份没有这些字段：保留默认值即可，不整份拒绝。
-            "main_playback_enabled"
+            // V1 中从未必需、已移除或后来添加的字段由当前配置加载器处理。
+            "chat_wheel_style"
+                | "chat_wheel_text_modes"
+                | "rolling_buffer_target"
+                | "window_position"
+                | "settings_window_position"
+                | "main_playback_enabled"
+                | "audio_output_device_name"
+                | "audio_output_device"
+                | "mic_input_device"
+                | "virtual_output_device"
                 | "auto_backup_enabled"
                 | "auto_backup_interval_hours"
                 | "auto_backup_keep"
@@ -394,47 +426,10 @@ fn validate_settings(table: &Table) -> io::Result<Settings> {
     }) {
         return Err(invalid("备份配置不完整"));
     }
-    let optional_strings = [
-        "audio_output_device_name",
-        "mic_input_device",
-        "virtual_output_device",
-    ];
-    for key in optional_strings {
-        default_fields.insert(key.into(), Value::String(String::new()));
-    }
-    default_fields.insert(
-        "window_position".into(),
-        "x=0\ny=0".parse::<Value>().map_err(io::Error::other)?,
-    );
-    // 默认值为空时模板里没有这个键；有保存位置的新备份需要按位置表校验。
-    default_fields.insert(
-        "settings_window_position".into(),
-        "x=0\ny=0".parse::<Value>().map_err(io::Error::other)?,
-    );
-    default_fields.insert(
-        "audio_output_device".into(),
-        "name=''\nhost_api_name=''\nid=''"
-            .parse::<Value>()
-            .map_err(io::Error::other)?,
-    );
-    default_fields.insert(
-        "additional_chat_wheels".into(),
-        Value::Array(vec![
-            Value::try_from(Wheel::new("f8")).map_err(io::Error::other)?,
-        ]),
-    );
-    if let Some(cartesia) = default_fields
-        .get_mut("tts_providers")
-        .and_then(Value::as_table_mut)
-        .and_then(|providers| providers.get_mut("Cartesia"))
-        .and_then(Value::as_table_mut)
-    {
-        for key in ["voice_id", "voice_name"] {
-            cartesia.insert(key.into(), Value::String(String::new()));
-        }
-    }
-    validate_value(&Value::Table(table.clone()), &template)?;
-    let settings = Settings::from_table(table);
+    table.remove("chat_wheel_style");
+    table.remove("rolling_buffer_target");
+    validate_fields(&table, &template)?;
+    let settings = Settings::from_table(&table);
     let mut bindings = HashSet::new();
     for binding in [
         &settings.hotkey,
@@ -466,29 +461,25 @@ fn validate_value(value: &Value, template: &Value) -> io::Result<()> {
         (Value::Integer(_), Value::Integer(_) | Value::Float(_)) => Ok(()),
         (Value::Float(value), Value::Integer(_) | Value::Float(_)) if value.is_finite() => Ok(()),
         (Value::Array(items), Value::Array(template)) => {
-            let voice = Value::Table(Table::from_iter([
-                ("id".into(), Value::String(String::new())),
-                ("name".into(), Value::String(String::new())),
-            ]));
-            let expected = template.first().unwrap_or(&voice);
+            let expected = template
+                .first()
+                .ok_or_else(|| invalid("备份配置模板无效"))?;
             items
                 .iter()
                 .try_for_each(|item| validate_value(item, expected))
         }
-        (Value::Table(items), Value::Table(template)) => {
-            items.iter().try_for_each(|(key, item)| {
-                // 旧备份仍带已移除的默认保存位置；导入时忽略，避免整份备份被拒绝。
-                if key == "rolling_buffer_target" {
-                    return Ok(());
-                }
-                let expected = template
-                    .get(key)
-                    .ok_or_else(|| invalid("备份包含未知配置字段"))?;
-                validate_value(item, expected)
-            })
-        }
+        (Value::Table(items), Value::Table(template)) => validate_fields(items, template),
         _ => Err(invalid("备份配置字段类型无效")),
     }
+}
+
+fn validate_fields(items: &Table, template: &Table) -> io::Result<()> {
+    items.iter().try_for_each(|(key, item)| {
+        let expected = template
+            .get(key)
+            .ok_or_else(|| invalid("备份包含未知配置字段"))?;
+        validate_value(item, expected)
+    })
 }
 
 fn valid_filename(name: &str) -> bool {

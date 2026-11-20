@@ -1,0 +1,71 @@
+# V1 允许的字段及类型。新增应用配置字段时应明确决定是否升级备份版本。
+hotkey = ""
+name = ""
+chat_wheel_name = ""
+chat_wheel_hotkey = ""
+chat_wheel_style = ""
+chat_wheel_slots = [""]
+chat_wheel_labels = [""]
+chat_wheel_texts = [""]
+chat_wheel_text_modes = [false]
+chat_wheel_volumes = [0.0]
+chat_wheel_last_index = 0
+rolling_buffer_hotkey = ""
+rolling_buffer_seconds = 0.0
+rolling_buffer_target = [0]
+hold_key_enabled = false
+hold_key = ""
+volume = 0.0
+overlay_opacity = 0.0
+overlay_placeholder = ""
+ui_font = ""
+fixed_center = false
+log_level = ""
+main_playback_enabled = false
+audio_output_device_name = ""
+active_tts_provider = ""
+audio_routing_enabled = false
+mic_input_device = ""
+virtual_output_device = ""
+sidetone_enabled = false
+auto_backup_enabled = false
+auto_backup_interval_hours = 0.0
+auto_backup_keep = 0
+
+[window_position]
+x = 0
+y = 0
+
+[settings_window_position]
+x = 0
+y = 0
+
+[audio_output_device]
+name = ""
+host_api_name = ""
+id = ""
+
+[tts_providers.Cartesia]
+voice_id = ""
+voice_name = ""
+backend = ""
+api_key_set = false
+api_key_storage = ""
+
+[tts_providers.Volcengine]
+backend = ""
+api_key_set = false
+api_key_storage = ""
+
+[[tts_providers.Volcengine.voice_list]]
+id = ""
+name = ""
+
+[[additional_chat_wheels]]
+name = ""
+hotkey = ""
+slots = [""]
+labels = [""]
+texts = [""]
+text_modes = [false]
+volumes = [0.0]

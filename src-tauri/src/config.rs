@@ -625,7 +625,11 @@ impl ConfigStore {
     }
 
     pub fn load_default() -> io::Result<Self> {
-        let mut config = Self::load(config_directory().join("config.toml"))?;
+        let path = config_directory().join("config.toml");
+        #[cfg(windows)]
+        crate::backup::recover_import(&path, &WindowsCredentials)
+            .map_err(|error| io::Error::other(format!("无法恢复上次中断的备份导入：{error}")))?;
+        let mut config = Self::load(path)?;
         config.refresh_credentials(&WindowsCredentials);
         Ok(config)
     }
@@ -657,10 +661,18 @@ impl ConfigStore {
         self.replace(next)
     }
 
-    pub fn replace(&mut self, mut next: Settings) -> io::Result<()> {
+    pub fn replace(&mut self, next: Settings) -> io::Result<()> {
+        self.replace_with_prefix(next, "")
+    }
+
+    pub(crate) fn replace_with_prefix(
+        &mut self,
+        mut next: Settings,
+        prefix: &str,
+    ) -> io::Result<()> {
         next.prepare_write()?;
         // Publish the new snapshot after the original file has been replaced.
-        write_atomic(&self.path, &next)?;
+        write_atomic_with_prefix(&self.path, &next, prefix)?;
         self.settings = next;
         self.save_deadline = None;
         self.revision += 1;
@@ -729,6 +741,10 @@ impl ConfigStore {
 }
 
 fn write_atomic(path: &Path, settings: &Settings) -> io::Result<()> {
+    write_atomic_with_prefix(path, settings, "")
+}
+
+fn write_atomic_with_prefix(path: &Path, settings: &Settings, prefix: &str) -> io::Result<()> {
     let parent = path
         .parent()
         .filter(|dir| !dir.as_os_str().is_empty())
@@ -741,8 +757,13 @@ fn write_atomic(path: &Path, settings: &Settings) -> io::Result<()> {
         .prefix(".atomic_wordy_")
         .suffix(".toml")
         .tempfile_in(parent)?;
+    staging.write_all(prefix.as_bytes())?;
     staging.write_all(serialized.as_bytes())?;
     staging.flush()?;
+    #[cfg(windows)]
+    if !prefix.is_empty() {
+        return crate::backup::persist_durable(staging, path, true);
+    }
     staging.as_file().sync_all()?;
     staging.persist(path).map_err(|error| error.error)?;
     Ok(())

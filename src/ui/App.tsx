@@ -318,7 +318,7 @@ export default function App() {
           </button>
           <button
             className="rail-item"
-            disabled={snapshot.busy}
+            disabled={snapshot.busy || snapshot.locked}
             onClick={() => run({ type: "export_backup" })}
           >
             <Icon name="export" /> 导出备份
@@ -712,7 +712,7 @@ export default function App() {
 
           {tab === "backup" && (
             <Panel title="定时备份" icon="export">
-              <Row label="启用自动备份" hint="按固定间隔把加密备份写入配置目录的 backup 文件夹。">
+              <Row label="启用自动备份" hint="加密备份保存在备份目录下的 auto 文件夹，到期后会在 Wordy 运行时补做。">
                 <Check
                   id="auto-backup"
                   checked={settings.auto_backup_enabled}

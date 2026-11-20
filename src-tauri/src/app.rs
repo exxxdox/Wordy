@@ -6,7 +6,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
     mpsc,
 };
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use tauri::{AppHandle, Emitter, Manager};
 use windows_sys::Win32::Foundation::{HANDLE, HINSTANCE, HWND, WAIT_FAILED, WAIT_OBJECT_0};
@@ -29,6 +29,7 @@ use crate::wheel_window::WheelWindow;
 use crate::{backup, dialog};
 
 mod actions;
+mod backup_schedule;
 mod editor_actions;
 mod hotkeys;
 mod logging;
@@ -131,7 +132,7 @@ struct App {
     pending_saves: usize,
     background_cancel: Arc<AtomicBool>,
     backup_running: bool,
-    auto_backup_last: Instant,
+    auto_backup_schedule: backup_schedule::AutoBackupSchedule,
     backup_password_set: bool,
     /// 托管目录中未被任何轮盘引用的音频数量。
     unused_clips: usize,
@@ -185,6 +186,10 @@ impl App {
         let wheel = WheelWindow::new(instance).map_err(io::Error::other)?;
         let (jobs, results) = mpsc::channel();
         let unused_clips = audio::unused_clips(&config).map_or(0, |paths| paths.len());
+        let auto_backup_age = backup_schedule::previous_age(
+            &backup::auto_backup_directory(config.path()),
+            SystemTime::now(),
+        );
         let mut app = Self {
             host,
             config,
@@ -221,7 +226,9 @@ impl App {
             pending_saves: 0,
             background_cancel: Arc::default(),
             backup_running: false,
-            auto_backup_last: Instant::now(),
+            auto_backup_schedule: backup_schedule::AutoBackupSchedule::new(
+                auto_backup_age.as_ref().ok().copied().flatten(),
+            ),
             backup_password_set,
             unused_clips,
             exiting: false,
@@ -236,6 +243,9 @@ impl App {
                 Ok(log) => app.file_log = Some(log),
                 Err(error) => app.log(format!("无法写入日志文件：{error}")),
             }
+        }
+        if let Err(error) = auto_backup_age {
+            app.log_at("WARNING", format!("无法读取上次自动备份时间：{error}"));
         }
         if let Some(warning) = app.config.take_load_warning() {
             app.notify(warning);
@@ -273,7 +283,7 @@ impl App {
             return Err(io::Error::last_os_error());
         }
         let mut message = MSG::default();
-        loop {
+        while !self.skip_config_flush {
             // 命令线程通过事件唤醒这条原生消息循环。
             let wait = unsafe {
                 MsgWaitForMultipleObjectsEx(
@@ -601,19 +611,26 @@ impl App {
                         }
                         self.skip_config_flush = true;
                         self.status("备份已导入，请重新启动 Wordy".into());
-                        unsafe { PostQuitMessage(0) };
                     }
                     Ok(()) if auto => {
                         // 清理失败只记日志：新备份已经写入，不能提示成整体失败。
-                        let directory = backup::backup_directory(self.config.path());
+                        self.auto_backup_schedule.reset();
                         let keep = self.config.settings().auto_backup_keep;
-                        if let Err(error) = backup::prune_backups(&directory, keep) {
+                        if let Err(error) = backup::prune_backups(self.config.path(), keep) {
                             self.log_at("WARNING", format!("清理旧自动备份失败：{error}"));
                         }
                         self.log("自动备份完成".into());
                     }
                     Ok(()) => self.status("备份已导出".into()),
-                    Err(error) => self.failure(format!("备份失败：{error}")),
+                    Err(error) => {
+                        self.failure(format!("备份失败：{error}"));
+                        if import
+                            && !matches!(backup::import_pending(self.config.path()), Ok(false))
+                        {
+                            // 恢复记录保留时退出，避免后续编辑覆盖事务应恢复的状态。
+                            self.skip_config_flush = true;
+                        }
+                    }
                 }
             }
             Background::Recording(result) => self.complete_recording(result, exiting)?,

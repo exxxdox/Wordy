@@ -135,7 +135,7 @@ impl App {
                     return Ok(());
                 }
                 self.edit(|s| s.auto_backup_enabled = enabled)?;
-                self.auto_backup_last = Instant::now();
+                self.auto_backup_schedule = backup_schedule::AutoBackupSchedule::new(None);
             }
             SetAutoBackupInterval(hours) => {
                 self.edit_debounced(|s| s.auto_backup_interval_hours = hours)?
@@ -370,6 +370,9 @@ impl App {
         if !export && (self.recording.is_some() || self.pending_saves > 0 || self.trim.is_some()) {
             return Err(io::Error::other("请先结束录制或音频导入，再导入备份"));
         }
+        if export && self.pending_saves > 0 {
+            return Err(io::Error::other("音频保存完成后即可导出备份"));
+        }
         let base = backup::backup_directory(self.config.path());
         // OFN_PATHMUSTEXIST：首次使用时先建好默认目录。
         std::fs::create_dir_all(&base)?;
@@ -396,6 +399,9 @@ impl App {
         ) else {
             return Ok(());
         };
+        if export {
+            backup::validate_manual_destination(self.config.path(), &path)?;
+        }
         if !export
             && !self.confirm_dialog(
                 title,
@@ -492,10 +498,13 @@ impl App {
             return Ok(());
         }
         let interval = Duration::from_secs_f64(settings.auto_backup_interval_hours * 3600.0);
-        if self.auto_backup_last.elapsed() < interval {
+        if !self
+            .auto_backup_schedule
+            .is_due(interval, self.pending_saves)
+        {
             return Ok(());
         }
-        self.auto_backup_last = Instant::now();
+        self.auto_backup_schedule.reset();
         let Some(password) = self.vault.load_backup_password()? else {
             self.log_at("WARNING", "自动备份已开启，但未设置备份密码".into());
             return Ok(());
@@ -503,7 +512,7 @@ impl App {
         self.config.flush()?;
         let settings = self.config.settings().clone();
         let config_path = self.config.path().to_path_buf();
-        let directory = backup::backup_directory(&config_path);
+        let directory = backup::auto_backup_directory(&config_path);
         std::fs::create_dir_all(&directory)?;
         let now = local_time();
         let path = directory.join(format!(

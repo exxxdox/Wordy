@@ -17,6 +17,7 @@ struct Vault {
     keys: RefCell<[Option<String>; 2]>,
     access: Cell<usize>,
     reject_once: Cell<Option<Provider>>,
+    interrupt_once: Cell<Option<Provider>>,
 }
 
 impl Vault {
@@ -36,6 +37,10 @@ impl CredentialStore for Vault {
 
     fn save(&self, provider: Provider, secret: &str) -> io::Result<()> {
         self.keys.borrow_mut()[Self::index(provider)] = Some(secret.to_owned());
+        if self.interrupt_once.get() == Some(provider) {
+            self.interrupt_once.set(None);
+            panic!("simulated process interruption");
+        }
         if self.reject_once.get() == Some(provider) {
             self.reject_once.set(None);
             return Err(io::Error::other("test credential fault after write"));
@@ -127,6 +132,41 @@ fn rolls_back_both_credentials_and_new_audio_when_a_vault_write_partly_fails() {
     assert_eq!(fs::read_dir(new.join("audio_clips")).unwrap().count(), 0);
 }
 
+#[test]
+fn interrupted_import_is_rolled_back_on_the_next_start() {
+    let workspace = tempfile::tempdir().unwrap();
+    let backup = workspace.path().join("fixture.wordybackup");
+    create_backup(&workspace.path().join("old"), &backup);
+    let new = workspace.path().join("new");
+    let mut config = ConfigStore::load(new.join("config.toml")).unwrap();
+    config
+        .update(|settings| settings.name = "原有配置".into())
+        .unwrap();
+    let before = fs::read(config.path()).unwrap();
+    let vault = Vault::default();
+    vault.save(Provider::Cartesia, "old-key").unwrap();
+    vault.interrupt_once.set(Some(Provider::Volcengine));
+    let interrupted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        import_backup(&mut config, &vault, &backup, " 测试 ").unwrap();
+    }));
+    assert!(interrupted.is_err());
+    assert_eq!(
+        vault.load(Provider::Cartesia).unwrap().as_deref(),
+        Some("fixture-one")
+    );
+    assert_eq!(fs::read_dir(new.join("audio_clips")).unwrap().count(), 1);
+
+    wordy::backup::recover_import(config.path(), &vault).unwrap();
+    wordy::backup::recover_import(config.path(), &vault).unwrap();
+    assert_eq!(fs::read(config.path()).unwrap(), before);
+    assert_eq!(
+        vault.load(Provider::Cartesia).unwrap().as_deref(),
+        Some("old-key")
+    );
+    assert_eq!(vault.load(Provider::Volcengine).unwrap(), None);
+    assert_eq!(fs::read_dir(new.join("audio_clips")).unwrap().count(), 0);
+}
+
 const MANIFEST: &[u8] = br#"{"format":"wordy-backup","version":1}"#;
 const SECRETS: &[u8] = br#"{"cartesia_api_key":null,"volcengine_access_key":null}"#;
 
@@ -184,8 +224,33 @@ fn accepts_a_backup_from_before_timed_backup_settings() {
 }
 
 #[test]
+fn accepts_an_early_v1_backup_with_retired_wheel_style() {
+    let mut config = toml::Table::try_from(Settings::default()).unwrap();
+    config.retain(|key, _| key != "chat_wheel_text_modes" && !key.starts_with("auto_backup_"));
+    config.insert(
+        "chat_wheel_style".into(),
+        toml::Value::String("competitive".into()),
+    );
+    let legacy = toml::to_string(&config).unwrap();
+    import_entries(&[
+        ("manifest.json", MANIFEST),
+        ("config.toml", legacy.as_bytes()),
+        ("secrets.json", SECRETS),
+    ])
+    .unwrap();
+}
+
+#[test]
 fn pruning_keeps_newest_automatic_backups_and_leaves_manual_files() {
     let directory = tempfile::tempdir().unwrap();
+    let config_path = directory.path().join("config.toml");
+    let automatic = wordy::backup::auto_backup_directory(&config_path);
+    fs::create_dir_all(&automatic).unwrap();
+    let legacy = automatic
+        .parent()
+        .unwrap()
+        .join("auto-20250101-000000.wordybackup");
+    fs::write(&legacy, b"manual").unwrap();
     for name in [
         "auto-20260101-000000.wordybackup",
         "auto-20260102-000000.wordybackup",
@@ -193,29 +258,23 @@ fn pruning_keeps_newest_automatic_backups_and_leaves_manual_files() {
         "manual.wordybackup",
         "note.txt",
     ] {
-        fs::write(directory.path().join(name), b"x").unwrap();
+        fs::write(automatic.join(name), b"x").unwrap();
     }
-    prune_backups(directory.path(), 2).unwrap();
+    prune_backups(&config_path, 2).unwrap();
+    assert!(legacy.exists());
+    assert!(wordy::backup::validate_manual_destination(&config_path, &legacy).is_ok());
     assert!(
-        !directory
-            .path()
-            .join("auto-20260101-000000.wordybackup")
-            .exists()
+        wordy::backup::validate_manual_destination(
+            &config_path,
+            &automatic.join("manual.wordybackup")
+        )
+        .is_err()
     );
-    assert!(
-        directory
-            .path()
-            .join("auto-20260102-000000.wordybackup")
-            .exists()
-    );
-    assert!(
-        directory
-            .path()
-            .join("auto-20260103-000000.wordybackup")
-            .exists()
-    );
-    assert!(directory.path().join("manual.wordybackup").exists());
-    assert!(directory.path().join("note.txt").exists());
+    assert!(!automatic.join("auto-20260101-000000.wordybackup").exists());
+    assert!(automatic.join("auto-20260102-000000.wordybackup").exists());
+    assert!(automatic.join("auto-20260103-000000.wordybackup").exists());
+    assert!(automatic.join("manual.wordybackup").exists());
+    assert!(automatic.join("note.txt").exists());
 }
 
 #[test]
