@@ -1,4 +1,4 @@
-use std::ptr;
+use std::{cell::RefCell, ptr};
 
 use windows::Win32::Foundation::{E_INVALIDARG, RPC_E_CHANGED_MODE};
 use windows::Win32::Graphics::Direct2D::Common::*;
@@ -98,7 +98,14 @@ pub struct WheelRenderer {
     text: IDWriteFactory,
     imaging: IWICImagingFactory,
     dash_stroke: ID2D1StrokeStyle,
+    cached_target: RefCell<Option<PaintTarget>>,
     _apartment: Apartment,
+}
+
+struct PaintTarget {
+    target: ID2D1RenderTarget,
+    bitmap: IWICBitmap,
+    scale: f64,
 }
 
 impl WheelRenderer {
@@ -128,6 +135,7 @@ impl WheelRenderer {
             text,
             imaging,
             dash_stroke,
+            cached_target: RefCell::new(None),
             _apartment: apartment,
         })
     }
@@ -144,7 +152,11 @@ impl WheelRenderer {
         })
     }
 
-    fn paint_bitmap(&self, frame: WheelFrame<'_>, scale: f64) -> Result<(IWICBitmap, u32, u32)> {
+    pub(crate) fn paint_bitmap(
+        &self,
+        frame: WheelFrame<'_>,
+        scale: f64,
+    ) -> Result<(IWICBitmap, u32, u32)> {
         let width = (CANVAS_WIDTH * scale).round();
         let height = (CANVAS_HEIGHT * scale).round();
         if !scale.is_finite()
@@ -155,37 +167,52 @@ impl WheelRenderer {
             return Err(Error::from(E_INVALIDARG));
         }
         let (width, height) = (width as u32, height as u32);
-        let bitmap = unsafe {
-            self.imaging.CreateBitmap(
-                width,
-                height,
-                &GUID_WICPixelFormat32bppPBGRA,
-                WICBitmapCacheOnLoad,
-            )?
-        };
-        let target = unsafe {
-            self.factory.CreateWicBitmapRenderTarget(
-                &bitmap,
-                &D2D1_RENDER_TARGET_PROPERTIES {
-                    pixelFormat: COLOR_FORMAT,
-                    dpiX: 96.0 * scale as f32,
-                    dpiY: 96.0 * scale as f32,
-                    ..Default::default()
-                },
-            )?
-        };
+        let mut cached = self.cached_target.borrow_mut();
+        // DPI determines both pixel dimensions and the target's drawing coordinates.
+        if cached.as_ref().is_none_or(|buffer| buffer.scale != scale) {
+            let (bitmap, target) = unsafe {
+                let bitmap = self.imaging.CreateBitmap(
+                    width,
+                    height,
+                    &GUID_WICPixelFormat32bppPBGRA,
+                    WICBitmapCacheOnLoad,
+                )?;
+                let target = self.factory.CreateWicBitmapRenderTarget(
+                    &bitmap,
+                    &D2D1_RENDER_TARGET_PROPERTIES {
+                        pixelFormat: COLOR_FORMAT,
+                        dpiX: 96.0 * scale as f32,
+                        dpiY: 96.0 * scale as f32,
+                        ..Default::default()
+                    },
+                )?;
+                target.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
+                (bitmap, target)
+            };
+            *cached = Some(PaintTarget {
+                target,
+                bitmap,
+                scale,
+            });
+        }
+        let buffer = cached.as_ref().expect("paint target is initialized above");
+        let target = &buffer.target;
         unsafe {
-            target.SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
             target.BeginDraw();
             target.Clear(None);
         }
         let drawing = Drawing {
             renderer: self,
-            target: &target,
+            target,
             opacity: frame.opacity.clamp(0.0, 1.0) as f32,
         };
         let painted = drawing.paint(frame);
         let finished = unsafe { target.EndDraw(None, None) };
+        let bitmap = buffer.bitmap.clone();
+        // Direct2D can invalidate the render target. Recreate it on the next frame.
+        if finished.is_err() {
+            *cached = None;
+        }
         painted?;
         finished?;
         Ok((bitmap, width, height))
@@ -264,7 +291,41 @@ fn mix(start: f32, end: f32, factor: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::straight_rgba;
+    use super::{WheelFrame, WheelRenderer, straight_rgba};
+
+    #[test]
+    fn reuses_wheel_bitmap_until_dpi_changes() {
+        let renderer = WheelRenderer::new().unwrap();
+        let labels = std::array::from_fn(|_| String::new());
+        let (first, _, _) = renderer
+            .paint_bitmap(WheelFrame::new(&labels), 0.5)
+            .unwrap();
+        let (next, _, _) = renderer
+            .paint_bitmap(WheelFrame::new(&labels), 0.5)
+            .unwrap();
+        assert!(
+            first == next,
+            "same-scale frames should reuse the WIC bitmap"
+        );
+
+        let (resized, width, height) = renderer
+            .paint_bitmap(WheelFrame::new(&labels), 1.0)
+            .unwrap();
+        assert!(resized != first);
+        assert_eq!((width, height), (634, 540));
+    }
+
+    #[test]
+    fn reused_target_clears_the_previous_frame() {
+        let renderer = WheelRenderer::new().unwrap();
+        let labels = std::array::from_fn(|_| "测试".to_owned());
+        let shown = renderer.render(WheelFrame::new(&labels), 0.5).unwrap();
+        let mut hidden = WheelFrame::new(&labels);
+        hidden.opacity = 0.0;
+        let hidden = renderer.render(hidden, 0.5).unwrap();
+        assert!(shown.pixels.iter().any(|&value| value != 0));
+        assert!(hidden.pixels.iter().all(|&value| value == 0));
+    }
 
     #[test]
     fn straight_rgba_unpremultiplies_and_swaps_channels() {

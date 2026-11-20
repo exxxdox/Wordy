@@ -1,5 +1,6 @@
-import { useEffect, useRef, type MouseEvent } from "react";
+import { useEffectEvent, useLayoutEffect, useRef, type MouseEvent } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { watchWheelPreview } from "./wheel-preview";
 
 type Props = {
   labels: string[];
@@ -36,54 +37,45 @@ function slotAt({ currentTarget, clientX, clientY }: MouseEvent<HTMLCanvasElemen
 
 export default function WheelCanvas({ labels, font, selected, onSelectSlot, drop, className }: Props) {
   const canvas = useRef<HTMLCanvasElement>(null);
-  const latest = useRef(0);
-  // 数组每次渲染都是新引用，用拼接值判断标签是否真的变化。
-  const labelsKey = labels.join("\u0000");
+  const preview = useRef<ReturnType<typeof watchWheelPreview> | null>(null);
+  // 上层经常重建标签数组，只有标签值变化才需要新预览。
+  const labelsKey = JSON.stringify(labels);
+  const readPreview = useEffectEvent(() => {
+    const width = canvas.current?.clientWidth ?? 0;
+    if (width <= 0) return null;
+    const scale = (width * (window.devicePixelRatio || 1)) / CANVAS_WIDTH;
+    return { labels, selected, font, scale };
+  });
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const element = canvas.current;
     if (!element) return;
-    let disposed = false;
-    let scheduled = 0;
-
-    const draw = () => {
-      const width = element.clientWidth;
-      if (width <= 0) return;
-      const scale = (width * (window.devicePixelRatio || 1)) / CANVAS_WIDTH;
-      const id = ++latest.current;
-      invoke<ArrayBuffer>("wordy_wheel_preview", { labels, selected, font, scale })
-        .then((buffer) => {
-          if (disposed || id !== latest.current) return;
-          const header = new DataView(buffer);
-          const pixelWidth = header.getUint32(0, true);
-          const pixelHeight = header.getUint32(4, true);
-          if (element.width !== pixelWidth || element.height !== pixelHeight) {
-            element.width = pixelWidth;
-            element.height = pixelHeight;
-          }
-          // 原生已输出直通 RGBA，WebView 可直接交给 Canvas，无需逐像素转换。
-          const pixels = new Uint8ClampedArray(buffer, 8, pixelWidth * pixelHeight * 4);
-          element
-            .getContext("2d")
-            ?.putImageData(new ImageData(pixels, pixelWidth, pixelHeight), 0, 0);
-        })
-        .catch((error) => console.error(error));
-    };
-
-    // 窗口缩放时 ResizeObserver 连续触发，合并到下一帧只渲染一次。
-    const schedule = () => {
-      window.cancelAnimationFrame(scheduled);
-      scheduled = window.requestAnimationFrame(draw);
-    };
-
-    draw();
-    const observer = new ResizeObserver(schedule);
-    observer.observe(element);
+    const watcher = watchWheelPreview(
+      element,
+      () => readPreview(),
+      (input) => invoke<ArrayBuffer>("wordy_wheel_preview", input),
+      (buffer) => {
+        const header = new DataView(buffer);
+        const pixelWidth = header.getUint32(0, true);
+        const pixelHeight = header.getUint32(4, true);
+        if (element.width !== pixelWidth || element.height !== pixelHeight) {
+          element.width = pixelWidth;
+          element.height = pixelHeight;
+        }
+        // 原生已输出直通 RGBA，WebView 可直接交给 Canvas，无需逐像素转换。
+        const pixels = new Uint8ClampedArray(buffer, 8, pixelWidth * pixelHeight * 4);
+        element.getContext("2d")?.putImageData(new ImageData(pixels, pixelWidth, pixelHeight), 0, 0);
+      },
+    );
+    preview.current = watcher;
     return () => {
-      disposed = true;
-      window.cancelAnimationFrame(scheduled);
-      observer.disconnect();
+      preview.current = null;
+      watcher.dispose();
     };
+  }, []);
+
+  useLayoutEffect(() => {
+    preview.current?.update();
   }, [labelsKey, selected, font]);
 
   return (

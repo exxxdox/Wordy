@@ -4,6 +4,8 @@ use std::mem::size_of;
 use std::ptr;
 use std::time::Instant;
 
+use windows::Win32::Foundation::E_INVALIDARG;
+use windows::Win32::Graphics::Imaging::IWICBitmap;
 use windows::core::{Error, Result, w};
 use windows_sys::Win32::Foundation::{
     ERROR_CLASS_ALREADY_EXISTS, GetLastError, HINSTANCE, HWND, LPARAM, LRESULT, POINT, SIZE, WPARAM,
@@ -218,22 +220,21 @@ impl WheelWindow {
         frame.selected = visuals.selected;
         frame.highlights = Some(visuals.highlights);
         frame.anchor = self.state.anchor();
-        let bitmap = self.renderer.render(frame, self.scale)?;
+        let (bitmap, width, height) = self.renderer.paint_bitmap(frame, self.scale)?;
         if self
             .surface
             .as_ref()
-            .is_none_or(|surface| surface.width != bitmap.width || surface.height != bitmap.height)
+            .is_none_or(|surface| (surface.width, surface.height) != (width, height))
         {
-            self.surface = Some(LayeredSurface::new(bitmap.width, bitmap.height)?);
+            self.surface = Some(LayeredSurface::new(width, height)?);
         }
         let position = self
             .state
             .position()
             .to_physical(self.monitor_origin, self.scale);
-        self.surface
-            .as_mut()
-            .unwrap()
-            .present(self.hwnd, position, &bitmap)?;
+        let surface = self.surface.as_mut().unwrap();
+        surface.copy_wic_pixels(&bitmap)?;
+        surface.update(self.hwnd, position)?;
         if !self.visible {
             unsafe { ShowWindow(self.hwnd, SW_SHOWNOACTIVATE) };
             self.visible = true;
@@ -331,6 +332,12 @@ pub(crate) struct LayeredSurface {
 
 impl LayeredSurface {
     pub(crate) fn new(width: u32, height: u32) -> Result<Self> {
+        let length = width
+            .checked_mul(height)
+            .and_then(|pixels| pixels.checked_mul(4))
+            .filter(|&bytes| bytes > 0)
+            .and_then(|bytes| isize::try_from(bytes).ok())
+            .ok_or_else(|| Error::from(E_INVALIDARG))? as usize;
         let info = BITMAPINFO {
             bmiHeader: BITMAPINFOHEADER {
                 biSize: size_of::<BITMAPINFOHEADER>() as u32,
@@ -367,6 +374,8 @@ impl LayeredSurface {
             }
             return Err(error);
         }
+        // Initialize the DIB once before exposing its storage as a byte slice.
+        unsafe { ptr::write_bytes(pixels.cast::<u8>(), 0, length) };
         Ok(Self {
             dc,
             bitmap,
@@ -377,6 +386,18 @@ impl LayeredSurface {
         })
     }
 
+    fn pixels_mut(&mut self) -> &mut [u8] {
+        let length = self.width as usize * self.height as usize * 4;
+        // The initialized DIB is owned by this surface and lives for the whole borrow.
+        unsafe { std::slice::from_raw_parts_mut(self.pixels.cast(), length) }
+    }
+
+    fn copy_wic_pixels(&mut self, bitmap: &IWICBitmap) -> Result<()> {
+        let stride = self.width * 4;
+        // Both surfaces store top-down premultiplied BGRA, so no conversion is needed.
+        unsafe { bitmap.CopyPixels(ptr::null(), stride, self.pixels_mut()) }
+    }
+
     pub(crate) fn present(
         &mut self,
         window: HWND,
@@ -384,6 +405,11 @@ impl LayeredSurface {
         bitmap: &WheelBitmap,
     ) -> Result<()> {
         debug_assert_eq!((self.width, self.height), (bitmap.width, bitmap.height));
+        self.pixels_mut().copy_from_slice(&bitmap.pixels);
+        self.update(window, position)
+    }
+
+    fn update(&self, window: HWND, position: Point) -> Result<()> {
         let dest = POINT {
             x: position.x.round() as i32,
             y: position.y.round() as i32,
@@ -399,13 +425,7 @@ impl LayeredSurface {
             SourceConstantAlpha: 255,
             AlphaFormat: AC_SRC_ALPHA as u8,
         };
-        // DIB sections and the renderer both use top-down premultiplied BGRA rows.
         let updated = unsafe {
-            ptr::copy_nonoverlapping(
-                bitmap.pixels.as_ptr(),
-                self.pixels.cast(),
-                bitmap.pixels.len(),
-            );
             UpdateLayeredWindow(
                 window,
                 ptr::null_mut(),
@@ -471,15 +491,15 @@ mod tests {
     #[test]
     fn updates_layered_pixels_and_geometry_while_the_window_is_hidden() {
         let wheel = WheelWindow::new(ptr::null_mut()).unwrap();
-        let labels = std::array::from_fn(|_| String::new());
-        let bitmap = wheel
-            .renderer
-            .render(WheelFrame::new(&labels), 0.5)
-            .unwrap();
-        let mut surface = LayeredSurface::new(bitmap.width, bitmap.height).unwrap();
-        surface
-            .present(wheel.hwnd, Point::new(31.0, 32.0), &bitmap)
-            .unwrap();
+        let labels = std::array::from_fn(|_| "测试".to_owned());
+        let mut frame = WheelFrame::new(&labels);
+        frame.opacity = 0.4;
+        let reference = wheel.renderer.render(frame, 0.5).unwrap();
+        let (bitmap, width, height) = wheel.renderer.paint_bitmap(frame, 0.5).unwrap();
+        let mut surface = LayeredSurface::new(width, height).unwrap();
+        surface.copy_wic_pixels(&bitmap).unwrap();
+        assert_eq!(surface.pixels_mut(), reference.pixels);
+        surface.update(wheel.hwnd, Point::new(31.0, 32.0)).unwrap();
         let mut bounds = windows_sys::Win32::Foundation::RECT::default();
         assert_ne!(unsafe { GetWindowRect(wheel.hwnd, &mut bounds) }, 0);
         assert_eq!((bounds.left, bounds.top), (31, 32));
