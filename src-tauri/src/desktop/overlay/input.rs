@@ -14,7 +14,12 @@ pub(super) unsafe extern "system" fn overlay_proc(
                 READ => Some(OVERLAY_READ),
                 SETTINGS => Some(OVERLAY_SETTINGS),
                 ENTRY if wp >> 16 == EN_CHANGE as usize => {
+                    sync_hint(hwnd, lp as HWND);
                     enable_read(hwnd, !window_text(lp as HWND).trim().is_empty());
+                    None
+                }
+                ENTRY if wp >> 16 == EN_UPDATE as usize => {
+                    sync_hint(hwnd, lp as HWND);
                     None
                 }
                 _ => None,
@@ -79,7 +84,7 @@ pub(super) unsafe extern "system" fn overlay_proc(
             }
             WM_CTLCOLOREDIT | WM_CTLCOLORSTATIC | WM_CTLCOLORBTN => {
                 let dc = wp as HDC;
-                let text = if lp as HWND == GetDlgItem(hwnd, PROMPT) {
+                let text = if matches!(GetDlgCtrlID(lp as HWND), PROMPT | HINT) {
                     [152, 152, 157]
                 } else {
                     [245, 245, 247]
@@ -119,75 +124,55 @@ pub(super) unsafe extern "system" fn edit_proc(
     parent: usize,
 ) -> LRESULT {
     unsafe {
+        let parent = parent as HWND;
         if msg == WM_NCDESTROY {
-            RemovePropW(hwnd, w!("WordyPlaceholder"));
+            RemovePropW(hwnd, w!("WordyImeComposing"));
             RemoveWindowSubclass(hwnd, Some(edit_proc), id);
+        }
+        if msg == WM_IME_STARTCOMPOSITION {
+            // Inline IME preedit can be visible before EDIT contains any committed text.
+            SetPropW(
+                hwnd,
+                w!("WordyImeComposing"),
+                ptr::without_provenance_mut(1),
+            );
+            sync_hint(parent, hwnd);
         }
         if msg == WM_CHAR {
             match wp as u16 {
                 VK_RETURN => {
-                    post_overlay(parent as HWND, OVERLAY_SUBMIT);
+                    post_overlay(parent, OVERLAY_SUBMIT);
                     return 0;
                 }
                 VK_ESCAPE => {
-                    post_overlay(parent as HWND, OVERLAY_DISMISS);
+                    post_overlay(parent, OVERLAY_DISMISS);
                     return 0;
                 }
                 VK_TAB => {
-                    SetFocus(GetDlgItem(parent as HWND, SETTINGS));
+                    SetFocus(GetDlgItem(parent, SETTINGS));
                     return 0;
                 }
                 _ => (),
             }
         }
         let result = DefSubclassProc(hwnd, msg, wp, lp);
-        if msg == WM_PAINT || msg == WM_PRINTCLIENT {
-            paint_overlay_placeholder(hwnd, (msg == WM_PRINTCLIENT).then_some(wp as HDC));
+        if msg == WM_IME_ENDCOMPOSITION {
+            RemovePropW(hwnd, w!("WordyImeComposing"));
+            sync_hint(parent, hwnd);
         }
         result
     }
 }
 
-fn paint_overlay_placeholder(hwnd: HWND, print_dc: Option<HDC>) {
+pub(super) fn sync_hint(parent: HWND, entry: HWND) {
     unsafe {
-        let placeholder = GetPropW(hwnd, w!("WordyPlaceholder")).cast::<u16>();
-        if placeholder.is_null() || *placeholder == 0 || GetWindowTextLengthW(hwnd) != 0 {
-            return;
-        }
-        let dc = print_dc.unwrap_or_else(|| GetDC(hwnd));
-        if dc.is_null() {
-            return;
-        }
-        // The Win32 cue banner depends on a manifest. Drawing over EDIT keeps native IME and selection.
-        let mut rect = RECT::default();
-        GetClientRect(hwnd, &mut rect);
-        let saved = SaveDC(dc);
-        SetTextColor(dc, colorref([152, 152, 157]));
-        SetBkMode(dc, TRANSPARENT as i32);
-        let font = SendMessageW(hwnd, WM_GETFONT, 0, 0) as HFONT;
-        let previous = if font.is_null() {
-            ptr::null_mut()
-        } else {
-            SelectObject(dc, font)
-        };
-        let hidden = HideCaret(hwnd) != 0;
-        DrawTextW(
-            dc,
-            placeholder,
-            -1,
-            &mut rect,
-            DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX,
-        );
-        if hidden {
-            ShowCaret(hwnd);
-        }
-        if saved != 0 {
-            RestoreDC(dc, saved);
-        } else if !previous.is_null() {
-            SelectObject(dc, previous);
-        }
-        if print_dc.is_none() {
-            ReleaseDC(hwnd, dc);
+        let hint = GetDlgItem(parent, HINT);
+        let show = GetWindowTextLengthW(entry) == 0
+            && GetWindowTextLengthW(hint) != 0
+            && GetPropW(entry, w!("WordyImeComposing")).is_null();
+        let visible = GetWindowLongW(hint, GWL_STYLE) as u32 & WS_VISIBLE != 0;
+        if show != visible {
+            ShowWindow(hint, if show { SW_SHOWNA } else { SW_HIDE });
         }
     }
 }

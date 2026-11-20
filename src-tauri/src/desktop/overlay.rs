@@ -2,7 +2,7 @@ use std::{io, mem, ptr};
 use windows_sys::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Dwm::DWMWA_CLOAK;
 use windows_sys::Win32::Graphics::Gdi::*;
-use windows_sys::Win32::System::SystemServices::SS_CENTERIMAGE;
+use windows_sys::Win32::System::SystemServices::{SS_CENTERIMAGE, SS_ENDELLIPSIS, SS_NOPREFIX};
 use windows_sys::Win32::UI::Controls::{
     DRAWITEMSTRUCT, TOOLTIPS_CLASSW, TTF_IDISHWND, TTF_SUBCLASS, TTM_ADDTOOLW, TTS_ALWAYSTIP,
     TTTOOLINFOW,
@@ -35,6 +35,7 @@ const PROMPT: i32 = 10;
 const ENTRY: i32 = 11;
 const READ: i32 = 12;
 const SETTINGS: i32 = 13;
+const HINT: i32 = 14;
 const BODY_WIDTH: i32 = 540;
 const BODY_HEIGHT: i32 = 58;
 const SHADOW_PAD: i32 = 8;
@@ -46,7 +47,7 @@ const GLOW_STEPS: usize = 10;
 mod input;
 mod paint;
 
-use input::{edit_proc, enable_read, overlay_button_proc, overlay_proc};
+use input::{edit_proc, enable_read, overlay_button_proc, overlay_proc, sync_hint};
 use paint::{capsule_glow, draw_backdrop};
 // LWA_COLORKEY treats exactly this RGB as transparent; the input surface paints it everywhere text is not.
 // Matches the capsule mid-tone, so antialiased glyph edges blend into the backdrop.
@@ -61,7 +62,6 @@ pub struct Overlay {
     prompt_font: HFONT,
     // Family and DPI the two fonts were created for; reopening reuses them.
     font_key: Option<(String, u32)>,
-    placeholder: Vec<u16>,
     previous_foreground: HWND,
 }
 
@@ -101,7 +101,6 @@ impl Overlay {
                 font: ptr::null_mut(),
                 prompt_font: ptr::null_mut(),
                 font_key: None,
-                placeholder: vec![0],
                 previous_foreground: ptr::null_mut(),
             };
             // Configure transparency before any child paints and keep it stable across reopens.
@@ -140,8 +139,28 @@ impl Overlay {
                 w!("EDIT"),
                 w!(""),
                 ENTRY,
-                ES_AUTOHSCROLL as u32 | WS_TABSTOP,
+                ES_AUTOHSCROLL as u32 | WS_TABSTOP | WS_CLIPSIBLINGS,
             )?;
+            let hint = overlay.control(
+                instance,
+                w!("STATIC"),
+                w!(""),
+                HINT,
+                SS_CENTERIMAGE | SS_ENDELLIPSIS | SS_NOPREFIX,
+            )?;
+            // Above EDIT so its native focus and mouse drawing cannot erase the hint.
+            if SetWindowPos(
+                hint,
+                HWND_TOP,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_HIDEWINDOW,
+            ) == 0
+            {
+                return Err(io::Error::last_os_error());
+            }
             let read = overlay.control(
                 instance,
                 w!("BUTTON"),
@@ -269,6 +288,8 @@ impl Overlay {
             for (id, x, y, w, h) in [
                 (PROMPT, 18, 25, 18, 24),
                 (ENTRY, 40, 22, 396, 31),
+                // Leave room for the empty EDIT's caret.
+                (HINT, 44, 22, 392, 31),
                 (READ, 442, 19, 36, 36),
                 (SETTINGS, 496, 19, 36, 36),
             ] {
@@ -358,15 +379,11 @@ impl Overlay {
         let font_name = wide(family);
         let placeholder = wide(&settings.overlay_placeholder);
         unsafe {
-            if SetPropW(
-                self.entry,
-                w!("WordyPlaceholder"),
-                placeholder.as_ptr().cast_mut().cast(),
-            ) == 0
-            {
+            let hint = GetDlgItem(self.hwnd, HINT);
+            if SetWindowTextW(hint, placeholder.as_ptr()) == 0 {
                 return Err(io::Error::last_os_error());
             }
-            self.placeholder = placeholder;
+            sync_hint(self.hwnd, self.entry);
             if self.font_key.as_ref() != Some(&key) {
                 for (child, size, weight, slot) in [
                     (self.entry, 24, FW_NORMAL, &mut self.font),
@@ -380,6 +397,9 @@ impl Overlay {
                     let font = overlay_font(-pixel(size), weight as i32, &font_name);
                     if !font.is_null() {
                         SendMessageW(child, WM_SETFONT, font as usize, 0);
+                        if child == self.entry {
+                            SendMessageW(hint, WM_SETFONT, font as usize, 0);
+                        }
                         let old = mem::replace(slot, font);
                         if !old.is_null() {
                             DeleteObject(old);
@@ -605,6 +625,60 @@ mod overlay_visual_tests {
                 assert_eq!(GetBkColor(dc), OVERLAY_KEY);
             }
             DeleteDC(dc);
+        }
+    }
+
+    #[test]
+    fn empty_edit_keeps_its_hint_through_click_and_mouse_movement() {
+        unsafe {
+            let instance = windows_sys::Win32::System::LibraryLoader::GetModuleHandleW(ptr::null());
+            let mut overlay = Overlay::new(instance, ptr::null_mut()).unwrap();
+            let settings = Settings {
+                overlay_placeholder: "输入朗读文字".into(),
+                ..Settings::default()
+            };
+            overlay.set_visual_settings(&settings, 96).unwrap();
+
+            let hint = GetDlgItem(overlay.hwnd, HINT);
+            assert_eq!(window_text(hint), settings.overlay_placeholder);
+            let hint_visible = || GetWindowLongW(hint, GWL_STYLE) as u32 & WS_VISIBLE != 0;
+            assert!(hint_visible());
+            assert_eq!(GetTopWindow(overlay.hwnd), hint);
+            assert_ne!(
+                GetWindowLongW(overlay.entry, GWL_STYLE) as u32 & WS_CLIPSIBLINGS,
+                0
+            );
+            assert_eq!(
+                SendMessageW(hint, WM_NCHITTEST, 0, 0),
+                HTTRANSPARENT as LRESULT
+            );
+            SetFocus(overlay.entry);
+            SendMessageW(overlay.entry, WM_LBUTTONDOWN, 1, 0);
+            SendMessageW(overlay.entry, WM_MOUSEMOVE, 1, 10);
+            SendMessageW(overlay.entry, WM_LBUTTONUP, 0, 10);
+            assert!(hint_visible());
+            assert!(overlay.text().is_empty());
+
+            SendMessageW(overlay.entry, WM_IME_STARTCOMPOSITION, 0, 0);
+            assert!(!hint_visible());
+            SendMessageW(overlay.entry, WM_IME_ENDCOMPOSITION, 0, 0);
+            assert!(hint_visible());
+
+            SetWindowTextW(overlay.entry, w!("朗读内容"));
+            assert!(!hint_visible());
+            assert_eq!(overlay.text(), "朗读内容");
+            SetWindowTextW(overlay.entry, w!(""));
+            assert!(hint_visible());
+            overlay
+                .set_visual_settings(
+                    &Settings {
+                        overlay_placeholder: String::new(),
+                        ..settings
+                    },
+                    96,
+                )
+                .unwrap();
+            assert!(!hint_visible());
         }
     }
 
