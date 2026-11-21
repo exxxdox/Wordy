@@ -141,7 +141,7 @@ impl Drawing<'_> {
         let (sin, cos) = (index as f32 * 45.0).to_radians().sin_cos();
         let rotate = |x, y| point(CENTER.X + x * cos - y * sin, CENTER.Y + x * sin + y * cos);
         let pointer = drawing.path(|sink| unsafe {
-            sink.BeginFigure(rotate(0.0, -96.0), D2D1_FIGURE_BEGIN_FILLED);
+            sink.BeginFigure(rotate(0.0, -POINTER_REACH), D2D1_FIGURE_BEGIN_FILLED);
             sink.AddLine(rotate(-46.0, -54.0));
             sink.AddLine(rotate(46.0, -54.0));
             sink.EndFigure(D2D1_FIGURE_END_CLOSED);

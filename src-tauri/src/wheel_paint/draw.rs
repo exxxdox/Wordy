@@ -175,9 +175,18 @@ impl Drawing<'_> {
         color: Color,
         outline: bool,
     ) -> Result<()> {
-        let limit = (2.0 * center.X.min(CANVAS_WIDTH as f32 - center.X) - 12.0)
-            .round()
-            .max(60.0);
+        let (center, width) = if center.Y == CENTER.Y {
+            // Horizontal labels share the pointer's axis, so center them in the space past its tip.
+            let (left, right) = if center.X < CENTER.X {
+                (0.0, CENTER.X - POINTER_REACH)
+            } else {
+                (CENTER.X + POINTER_REACH, CANVAS_WIDTH as f32)
+            };
+            (point((left + right) / 2.0, center.Y), right - left)
+        } else {
+            (center, 2.0 * center.X.min(CANVAS_WIDTH as f32 - center.X))
+        };
+        let limit = (width - 12.0).round().max(60.0);
         let label = wheel_label_text(if label.is_empty() { "—" } else { label });
         let text = self.elide(&label, limit, format)?;
         self.draw_text(&text, center, format, color, outline)

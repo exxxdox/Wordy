@@ -24,6 +24,7 @@ mod styles;
 use draw::Drawing;
 
 const CENTER: Vector2 = point(317.0, 270.0);
+const POINTER_REACH: f32 = 96.0;
 const PAD: f32 = 47.0;
 const TEXT_WIDTH: f32 = 2048.0;
 const TEXT_HEIGHT: f32 = 56.0;
@@ -291,7 +292,43 @@ fn mix(start: f32, end: f32, factor: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{WheelFrame, WheelRenderer, straight_rgba};
+    use super::{CANVAS_WIDTH, WheelFrame, WheelRenderer, straight_rgba};
+
+    #[test]
+    fn long_horizontal_labels_clear_the_center_pointer() {
+        let renderer = WheelRenderer::new().unwrap();
+        let empty = std::array::from_fn(|_| String::new());
+
+        for index in [2, 6] {
+            let mut labels = empty.clone();
+            labels[index] = "测试轮盘槽位的长中文名称".into();
+            for selected in [None, Some(index)] {
+                let render = |labels| {
+                    let mut frame = WheelFrame::new(labels);
+                    frame.editing = true;
+                    frame.selected = selected;
+                    renderer.render(frame, 1.0).unwrap().pixels
+                };
+                let baseline = render(&empty);
+                let shown = render(&labels);
+                assert_ne!(shown, baseline);
+                for (pixel, (actual, before)) in shown
+                    .chunks_exact(4)
+                    .zip(baseline.chunks_exact(4))
+                    .enumerate()
+                {
+                    if actual != before {
+                        let x = pixel % CANVAS_WIDTH as usize;
+                        assert!(
+                            if index == 2 { x > 414 } else { x < 220 },
+                            "slot {} ({selected:?}) drew a label pixel at x={x}",
+                            index + 1,
+                        );
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn reuses_wheel_bitmap_until_dpi_changes() {
