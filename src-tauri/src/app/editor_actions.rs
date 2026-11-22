@@ -1,5 +1,6 @@
 use super::*;
 use crate::config::{WHEEL_NAME_MAX_LENGTH, Wheel};
+use windows_sys::Win32::UI::Shell::{ILCreateFromPathW, ILFree, SHOpenFolderAndSelectItems};
 
 const SLOT_LABEL_LIMIT: usize = 40;
 const SLOT_TEXT_LIMIT: usize = 200;
@@ -179,6 +180,8 @@ impl App {
     }
 
     /// 在资源管理器中定位槽位当前使用的托管音频。
+    /// 直接用外壳接口请求已运行的资源管理器；ShellExecuteW 启动 explorer.exe
+    /// 会多起一个进程再移交，任务栏和窗口会闪一下。
     pub(super) fn slot_reveal(&mut self, index: usize, slot: usize) -> io::Result<()> {
         let item = self.wheel_at(index)?;
         let id = &item.slots[slot];
@@ -186,18 +189,16 @@ impl App {
             return Ok(());
         }
         let path = audio::resolve_clip(self.config.path(), id)?;
-        let params = wide(&format!("/select,\"{}\"", path.display()));
-        let result = unsafe {
-            ShellExecuteW(
-                self.host,
-                w!("open"),
-                w!("explorer.exe"),
-                params.as_ptr(),
-                ptr::null(),
-                SW_SHOWNORMAL,
-            )
-        };
-        if result as isize <= 32 {
+        let path = wide(&path.to_string_lossy());
+        // 应用线程在创建轮盘渲染器时已按 STA 初始化 COM，外壳接口可直接调用。
+        let pidl = unsafe { ILCreateFromPathW(path.as_ptr()) };
+        if pidl.is_null() {
+            return Err(io::Error::other("无法打开文件夹"));
+        }
+        // cidl = 0：pidl 指向的文件就是要在打开的文件夹中选中的项。
+        let result = unsafe { SHOpenFolderAndSelectItems(pidl, 0, ptr::null(), 0) };
+        unsafe { ILFree(pidl) };
+        if result < 0 {
             return Err(io::Error::other("无法打开文件夹"));
         }
         Ok(())
