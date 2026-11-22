@@ -239,7 +239,10 @@ export default function WheelEditor({ snapshot, run }: Props) {
                   ? "当前槽以文字朗读"
                   : "输入文字后可试听朗读"
                 : hasAudio
-                  ? clipName ?? wheel.slots[slot]
+                  ? // 名称可能重复，附上文件 ID 才能唯一区分当前的音频文件。
+                    clipName
+                    ? `${clipName} · ${wheel.slots[slot]}`
+                    : wheel.slots[slot]
                   : "导入音频后可试听"}
             </p>
           </div>
