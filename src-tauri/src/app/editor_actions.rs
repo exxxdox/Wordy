@@ -189,9 +189,12 @@ impl App {
             return Ok(());
         }
         let path = audio::resolve_clip(self.config.path(), id)?;
-        let path = wide(&path.to_string_lossy());
+        let text = path.to_string_lossy();
+        // resolve_clip 的路径经过 canonicalize，带 \\?\ 前缀；外壳接口不接受，需转回普通绝对路径。
+        let plain = shell_path(&text);
+        let plain = wide(&plain);
         // 应用线程在创建轮盘渲染器时已按 STA 初始化 COM，外壳接口可直接调用。
-        let pidl = unsafe { ILCreateFromPathW(path.as_ptr()) };
+        let pidl = unsafe { ILCreateFromPathW(plain.as_ptr()) };
         if pidl.is_null() {
             return Err(io::Error::other("无法打开文件夹"));
         }
@@ -241,5 +244,28 @@ impl App {
             }
             self.ui_dirty = true;
         }
+    }
+}
+
+/// 外壳接口不接受 canonicalize 产生的 \\?\ 前缀；本地路径去掉前缀，UNC 转回 \\server\share。
+fn shell_path(text: &str) -> String {
+    match text.strip_prefix(r"\\?\UNC\") {
+        Some(rest) => format!(r"\\{rest}"),
+        None => text.strip_prefix(r"\\?\").unwrap_or(text).to_owned(),
+    }
+}
+
+#[cfg(test)]
+mod reveal_tests {
+    use super::shell_path;
+
+    #[test]
+    fn strips_verbatim_prefix_and_restores_unc() {
+        assert_eq!(shell_path(r"\\?\C:\audio\clip.wav"), r"C:\audio\clip.wav");
+        assert_eq!(
+            shell_path(r"\\?\UNC\server\share\clip.wav"),
+            r"\\server\share\clip.wav"
+        );
+        assert_eq!(shell_path(r"C:\audio\clip.wav"), r"C:\audio\clip.wav");
     }
 }
