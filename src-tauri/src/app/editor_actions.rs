@@ -178,6 +178,31 @@ impl App {
         self.prepare_trim(index, slot, path)
     }
 
+    /// 在资源管理器中定位槽位当前使用的托管音频。
+    pub(super) fn slot_reveal(&mut self, index: usize, slot: usize) -> io::Result<()> {
+        let item = self.wheel_at(index)?;
+        let id = &item.slots[slot];
+        if id.is_empty() {
+            return Ok(());
+        }
+        let path = audio::resolve_clip(self.config.path(), id)?;
+        let params = wide(&format!("/select,\"{}\"", path.display()));
+        let result = unsafe {
+            ShellExecuteW(
+                self.host,
+                w!("open"),
+                w!("explorer.exe"),
+                params.as_ptr(),
+                ptr::null(),
+                SW_SHOWNORMAL,
+            )
+        };
+        if result as isize <= 32 {
+            return Err(io::Error::other("无法打开文件夹"));
+        }
+        Ok(())
+    }
+
     pub(super) fn slot_preview(&mut self, index: usize, slot: usize) -> io::Result<()> {
         if self.editor_preview.is_some() {
             self.stop_editor_preview();

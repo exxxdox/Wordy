@@ -468,6 +468,10 @@ pub enum UiAction {
         index: usize,
         slot: usize,
     },
+    RevealSlotAudio {
+        index: usize,
+        slot: usize,
+    },
     PreviewSlot {
         index: usize,
         slot: usize,
@@ -564,6 +568,7 @@ impl UiAction {
             }
             Self::DeleteLibraryAudio { id } => SettingsAction::DeleteLibraryAudio(id),
             Self::CropSlotAudio { index, slot } => SettingsAction::CropSlotAudio(index, slot),
+            Self::RevealSlotAudio { index, slot } => SettingsAction::RevealSlotAudio(index, slot),
             Self::PreviewSlot { index, slot } => SettingsAction::PreviewSlot(index, slot),
             Self::TrimPreview {
                 id,

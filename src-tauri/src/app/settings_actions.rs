@@ -226,6 +226,7 @@ impl App {
                 }
             }
             CropSlotAudio(index, slot) => self.slot_crop(index, slot)?,
+            RevealSlotAudio(index, slot) => self.slot_reveal(index, slot)?,
             PreviewSlot(index, slot) => self.slot_preview(index, slot)?,
             TrimPreview(id, start, end, gain) => self.trim_preview(id, start, end, gain)?,
             TrimStop(id) => self.trim_stop(id),

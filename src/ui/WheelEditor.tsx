@@ -311,6 +311,15 @@ export default function WheelEditor({ snapshot, run }: Props) {
                 截取
               </button>
             )}
+            {!textMode && (
+              <button
+                className="btn"
+                disabled={locked || !hasAudio}
+                onClick={() => run({ type: "reveal_slot_audio", index, slot })}
+              >
+                打开文件夹
+              </button>
+            )}
             <button
               className="btn ghost"
               disabled={locked}
