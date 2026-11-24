@@ -1,6 +1,6 @@
 # 开发工具链版本；本地 mise install 与 CI（jdx/mise-action）读取同一份配置。
 [tools]
-rust = "1.100.0"
+rust = { version = "1.100.0", components = ["rust-analyzer"] }
 node = "26.13.1"
 pnpm = "12.22.0"
 "cargo:tauri-cli" = "2.12.6"
