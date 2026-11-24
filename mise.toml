@@ -4,3 +4,22 @@ rust = "1.100.0"
 node = "26.13.1"
 pnpm = "12.22.0"
 "cargo:tauri-cli" = "2.12.6"
+
+[tasks.init]
+description = "拉取 Cargo 依赖并安装前端依赖"
+run = "pwsh -NoProfile -File ./wordy.ps1 init -NoPause"
+
+[tasks.dev]
+description = "启动 Vite 与 Tauri 开发会话"
+run = "pwsh -NoProfile -File ./wordy.ps1 dev -NoPause"
+
+[tasks.build]
+description = "构建设置界面与 release 版 Wordy.exe"
+run = "pwsh -NoProfile -File ./wordy.ps1 build -NoPause"
+
+[tasks.test]
+description = "运行 Rust 测试与轮盘预览前端测试"
+run = [
+  "cargo test --manifest-path src-tauri/Cargo.toml",
+  "node --test tests/wheel-preview.test.mjs",
+]
