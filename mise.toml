@@ -1,4 +1,4 @@
-# 开发工具链版本；mise install 一次装齐，与 .github/workflows/release.yml 保持同一大版本。
+# 开发工具链版本；本地 mise install 与 CI（jdx/mise-action）读取同一份配置。
 [tools]
 rust = "1.100.0"
 node = "26.13.1"
@@ -20,6 +20,6 @@ run = "pwsh -NoProfile -File ./wordy.ps1 build -NoPause"
 [tasks.test]
 description = "运行 Rust 测试与轮盘预览前端测试"
 run = [
-  "cargo test --manifest-path src-tauri/Cargo.toml",
+  "cargo test --locked --manifest-path src-tauri/Cargo.toml",
   "node --test tests/wheel-preview.test.mjs",
 ]

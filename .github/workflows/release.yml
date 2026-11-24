@@ -11,35 +11,30 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
+    env:
+      # mise run 默认会自动安装配置中缺失的工具；CI 只装构建所需工具，
+      # 关闭以免额外编译仅供本地 dev 使用的 tauri-cli。
+      MISE_AUTO_INSTALL: "false"
     steps:
       # 升级到 node24 运行时版本，消除 Node.js 20 弃用告警
       - uses: actions/checkout@v5
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
+      # 版本由 mise.toml 固定，与本地开发一致。发布作业会产出可分发 exe，
+      # 按 mise-action 文档不在发布链路恢复缓存，避免缓存内容进入发布。
+      - name: Install toolchain
+        uses: jdx/mise-action@v5
         with:
-          version: 12
-
-      - name: Install Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
+          cache: false
+          install_args: "rust node pnpm"
 
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile --allow-build=esbuild
 
       - name: Test
-        run: cargo test --locked --manifest-path src-tauri/Cargo.toml
-
-      - name: Test wheel preview scheduling
-        run: node --test tests/wheel-preview.test.mjs
+        run: mise run test
 
       - name: Build
-        run: .\wordy.ps1 build -Clean -NoPause
+        run: mise run build
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v3

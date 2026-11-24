@@ -51,7 +51,7 @@ cargo test --manifest-path src-tauri/Cargo.toml
 
 `src-tauri/build.rs` 调用 `tauri_build::build()`，把 `src-tauri/icons/icon.ico` 写入 exe 图标资源并生成权限清单；缺失时资源管理器只显示默认图标。`src-tauri/tests/rust_icon.rs` 回归检查构建产物的 RT_ICON/RT_GROUP_ICON。
 
-发布工作流 `.github/workflows/release.yml` 使用 Rust stable、pnpm 与 Node、`cargo test --locked --manifest-path src-tauri/Cargo.toml`，再调用 `wordy.ps1 build`。`dev.cmd` 仍转发 `wordy.ps1` 参数。
+发布工作流 `.github/workflows/release.yml` 用 `jdx/mise-action` 按 `mise.toml` 安装 Rust、Node.js 与 pnpm，再执行 `mise run test` 与 `mise run build`（内部调用 `wordy.ps1 build`）；发布作业不恢复 mise 缓存。`dev.cmd` 仍转发 `wordy.ps1` 参数。
 
 ## 配置备份
 
