@@ -11,8 +11,9 @@
 
 - Windows 10/11
 - VB-CABLE（主播放输出与[音频侦听](#音频侦听vb-cable)需要；可在设置 → **音频** 中关闭「启用主播放输出」）
-- Rust stable（MSVC 工具链）：源码开发与打包
-- Node.js 20+ 与 pnpm、`cargo install tauri-cli --locked --version "^2"`：设置界面（Tauri + React）开发与打包
+- [mise](https://mise.jdx.dev/)：在项目根目录运行 `mise install`，按 `mise.toml` 装齐 Rust、Node.js、pnpm 与 tauri-cli
+- Rust（MSVC 工具链）：源码开发与打包，需先装好 MSVC 生成工具；版本由 `mise.toml` 固定
+- Node.js、pnpm 与 tauri-cli：设置界面（Tauri + React）开发与打包；版本由 `mise.toml` 固定
 
 ## 功能介绍
 
@@ -81,7 +82,10 @@
 ## 开发
 
 ```powershell
-# 初始化：拉取 Cargo 依赖并安装前端依赖
+# 初始化：安装 mise.toml 固定的 Rust / Node.js / pnpm / tauri-cli
+mise install
+
+# 拉取 Cargo 依赖并安装前端依赖
 .\wordy.ps1 init
 
 # 运行：同时启动 Vite 与 Tauri，保留控制台日志

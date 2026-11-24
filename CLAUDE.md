@@ -44,6 +44,7 @@ Rust（edition 2024）+ Tauri 2 桌面应用。设置界面是 React（Vite + Ta
 ## 构建与验证
 
 ```powershell
+mise install                     # 安装 mise.toml 固定的 Rust / Node.js / pnpm / tauri-cli
 .\wordy.ps1 init                 # cargo fetch + pnpm install
 .\wordy.ps1 dev [-Port 1420]     # 起始端口被占用时自动顺延（默认 1420）
 .\wordy.ps1 build -Clean -NoPause # pnpm build + release → dist/Wordy.exe

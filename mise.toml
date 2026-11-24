@@ -1,0 +1,6 @@
+# 开发工具链版本；mise install 一次装齐，与 .github/workflows/release.yml 保持同一大版本。
+[tools]
+rust = "1.100.0"
+node = "26.13.1"
+pnpm = "12.22.0"
+"cargo:tauri-cli" = "2.12.6"
